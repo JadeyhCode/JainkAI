@@ -51,11 +51,30 @@
 #define THINK_NAME_MAX   48     /* [自问:…] 这个名字最多多少字节（按 UTF-8 边界截） */
 #define THINK_CACHE_MAX   8     /* 一轮最多沉淀/撤销几条（和意图队列的预算一起限流） */
 
-/* 一条「事实」：A -[rid]-> B 还是它的否定 */
+/* 一条「事实」：A -[rid]-> B 还是它的否定
+ * ev/hops/cred 是**候选自己的证据**（只给"AI 自己想沉淀"那条路用，见 §6.43）：
+ *   ev   证据档（THINK_EV_*）：候选至少是规则推导
+ *   hops 推导链长（步数）：每多一跳多一个可能出错的地方
+ *   cred 链底那条边的逐条可信度（der_base_credibility，0..85；50 = 中性/不知道）
+ * 这三个数**不存盘**（存档格式不动）—— 它们是这一轮 deliberation 的产物。 */
 typedef struct {
     Token  *a, *b;
     uint8_t rid, neg;
+    uint8_t ev, hops;
+    uint8_t cred;
 } ThinkFact;
+
+/* 候选证据（在 think_finish 那条路上传递；hops=0 表示"不是推来的/不知道"） */
+typedef struct {
+    int ev, cache, hops, cred;
+} ThinkCand;
+
+/* 造一个候选证据（原地一行，省得每个调用点写四行赋值） */
+static inline ThinkCand think_cand_make(int ev, int cache, int hops, int cred) {
+    ThinkCand c;
+    c.ev = ev; c.cache = cache; c.hops = hops; c.cred = cred;
+    return c;
+}
 
 /* ============================ 类型 ============================ */
 
@@ -714,12 +733,14 @@ static inline int think_step_lookup(AI *ai, Think *t, const ThinkGoal *g,
 /* 推：交给求解器，再用**验证器**独立复核（gaps>0 就不算结论）。 */
 static inline int think_step_derive(AI *ai, Think *t, const ThinkGoal *g,
                                     char *chain, size_t chaincap, int *verified,
-                                    int *out_class, int *out_cache) {
+                                    int *out_class, int *out_cache, ThinkCand *out_cand) {
     Proof pf;
     rel_solve(ai, g->a, g->rid, g->b, g->want_neg, &pf);
     if (verified) *verified = 0;
     if (out_class) *out_class = THINK_EV_GUESS;
     if (out_cache) *out_cache = 0;
+    if (out_cand) { out_cand->ev = THINK_EV_GUESS; out_cand->cache = 0;
+                    out_cand->hops = 0; out_cand->cred = 50; }
     if (pf.status == 0) {
         char why[THINK_WHY];
         snprintf(why, sizeof why, "求解器给不出依据（%zu 步后停）", pf.n);
@@ -745,6 +766,14 @@ static inline int think_step_derive(AI *ai, Think *t, const ThinkGoal *g,
     if (verified) *verified = 1;
     if (out_class) *out_class = think_evidence_class(&d);
     if (out_cache) *out_cache = think_evidence_is_cache(&d);
+    /* **候选自己的证据**：链长 + 链底那条边多可信（`der_base_credibility` 是现成的量，
+     * 不新造判据）。这是闸门"判别力窄"的根因修复 —— 以前这两个数在这里就被丢掉了。 */
+    if (out_cand) {
+        out_cand->ev = think_evidence_class(&d);
+        out_cand->cache = think_evidence_is_cache(&d);
+        out_cand->hops = (d.n > 255) ? 255 : (int)d.n;
+        out_cand->cred = der_base_credibility(ai, &d);
+    }
     return pf.status;   /* 正关系的真值：+1 真 / -1 假（都是「有答案」） */
 }
 
@@ -845,7 +874,7 @@ static inline int think_step_opposite(AI *ai, Think *t, const ThinkGoal *g,
     int verified = 0;
     /* 注意：这一调用会在痕上留一条 TH_DERIVE（写的是「交给求解器」），
      * 所以紧接着补一条说明，免得看痕的人以为它把方向搞反了。 */
-    int d = think_step_derive(ai, t, &o, chain, chaincap, &verified, out_class, out_cache);
+    int d = think_step_derive(ai, t, &o, chain, chaincap, &verified, out_class, out_cache, NULL);
     /* `d` 是**正关系的真值**（+1 真 / -1 假）。原来的问法推不出来、
      * 换成问反方向就问出来了 —— 那说明「答案就在那个真值上」，
      * 由调用方按原来的问法换算（think_answer_of(d, g->want_neg)）。 */
@@ -865,7 +894,15 @@ static inline int think_step_opposite(AI *ai, Think *t, const ThinkGoal *g,
  * 那时候正确的行为不是「挑一条说」，而是不下断言、把矛盾说出来。 */
 static inline void think_finish(AI *ai, Think *t, const ThinkGoal *g,
                                 int concl, int conf, int guessed, const char *chain,
-                                int cls, int cache) {
+                                const ThinkCand *cand) {
+    /* 候选证据：以前这里只收 (cls, cache) 两个数，链长/链底可信度在这一步被丢掉，
+     * 于是闸门评分里根本没有"这条推论有多少底气"（§6.43 量出来的根因）。
+     * 现在统一走 `cand`；调用方给 NULL 时按中性算（cred=50、hops 不计分）。 */
+    ThinkCand def;
+    def.ev = THINK_EV_GUESS; def.cache = 0; def.hops = 0; def.cred = 50;
+    if (!cand) cand = &def;
+    int cls = cand->ev;
+    int cache = cand->cache;
     int truth = think_truth_of(concl, g->want_neg);
     t->concl = concl;
     t->conf = conf;
@@ -956,6 +993,9 @@ static inline void think_finish(AI *ai, Think *t, const ThinkGoal *g,
             ThinkFact *f = &t->pend_cache[t->n_pend_cache++];
             f->a = g->a; f->b = g->b; f->rid = g->rid;
             f->neg = (uint8_t)(truth < 0 ? 1 : 0);
+            f->ev = (uint8_t)(cand->ev < 0 ? 0 : (cand->ev > 255 ? 255 : cand->ev));
+            f->hops = (uint8_t)(cand->hops < 0 ? 0 : (cand->hops > 255 ? 255 : cand->hops));
+            f->cred = (uint8_t)(cand->cred < 0 ? 0 : (cand->cred > 255 ? 255 : cand->cred));
         }
     }
 }
@@ -975,7 +1015,7 @@ static inline int think_step_through(AI *ai, Think *t, const ThinkGoal *g,
     sub.rid = g->rid; sub.want_neg = 0; sub.depth = 2; sub.mech = -1;
     int scls = THINK_EV_GUESS, sver = 0, scache = 0;
     char hop[THINK_WHY];
-    int st = think_step_derive(ai, t, &sub, hop, sizeof hop, &sver, &scls, &scache);
+    int st = think_step_derive(ai, t, &sub, hop, sizeof hop, &sver, &scls, &scache, NULL);
     if (out_cache) *out_cache = scache;
     if (st != +1 || !sver) return 0;
     int hop_cls = g->via_hyp ? THINK_EV_HYP : THINK_EV_FACT;
@@ -1428,31 +1468,33 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                      * 两边都是事实 ⟹ 它自己就会判成矛盾（重复记账会算两次）。 */
                     char note[THINK_WHY];
                     snprintf(note, sizeof note, "%s", why);
-                    think_finish(ai, t, &g, 0, 0, 0, note, THINK_EV_FACT, 0);
+                    ThinkCand c = think_cand_make(THINK_EV_FACT, 0, 0, 50);
+                    think_finish(ai, t, &g, 0, 0, 0, note, &c);
                     decided = 1;
                     break;
                 }
                 /* 有一边来自假设层：**假设世界那边就是真值**（lov 是正关系的真值方向），
                  * 再按原来的问法换算成回答；强度记「假设」。
                  * think_finish 会照常去查反面，强度不够就不会判成矛盾。 */
-                think_finish(ai, t, &g, think_answer_of(lov, g.want_neg), 60, 0, why,
-                             THINK_EV_HYP, 0);
+                ThinkCand c = think_cand_make(THINK_EV_HYP, 0, 0, 50);
+                think_finish(ai, t, &g, think_answer_of(lov, g.want_neg), 60, 0, why, &c);
                 decided = 1;
                 break;
             }
             if (r != 0) {
-                think_finish(ai, t, &g, r, lcls >= THINK_EV_FACT ? 95 : 60, 0, why,
-                             lcls, lcache);
+                ThinkCand c = think_cand_make(lcls, lcache, 0, 50);
+                think_finish(ai, t, &g, r, lcls >= THINK_EV_FACT ? 95 : 60, 0, why, &c);
                 decided = 1;
                 break;
             }
             /* 查不到 → 推（先推问的那个方向） */
             int verified = 0, dcls = THINK_EV_GUESS, dcache = 0;
+            ThinkCand dcand;
             int d = think_step_derive(ai, t, &g, t->chain_text, sizeof t->chain_text,
-                                      &verified, &dcls, &dcache);
+                                      &verified, &dcls, &dcache, &dcand);
             if (d != 0 && verified) {
                 think_finish(ai, t, &g, think_answer_of(d, g.want_neg), 85, 0,
-                             t->chain_text, dcls, dcache);
+                             t->chain_text, &dcand);
                 decided = 1;
                 break;
             }
@@ -1469,9 +1511,12 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                 int truth = m->process(ai, t, &g, &mcls, &mcache, note, sizeof note);
                 if (truth != 0) {
                     int guessed = (mcls == THINK_EV_GUESS);
+                    /* ⚠ 机制路径（类比/串接等）的**链长与链底可信度还没接进来** ——
+                     * 这里按中性给（cred=50、hops 不计分），登记为已知局限（§6.43）。 */
+                    ThinkCand mc = think_cand_make(mcls, mcache, 0, 50);
                     think_finish(ai, t, &g, think_answer_of(truth, g.want_neg),
                                  guessed ? 45 : 80, guessed,
-                                 note[0] ? note : t->chain_text, mcls, mcache);
+                                 note[0] ? note : t->chain_text, &mc);
                     /* 猜测与断言并存不算「矛盾」：一个是猜的、一个是真的 */
                     if (guessed && t->conflict) {
                         t->conflict = 0;
@@ -1739,13 +1784,21 @@ static inline void think_settle(AI *ai) {
              * 实测教训：闸门放错地方（放到用户的观测上）会把 `猫 吃 鱼` 这种也挡掉，
              * 而且真模型上 167 条关系边全落在 0.47~0.61，0.40 阈值**根本打不着火**。 */
             if (!ai->write_gate_off) {
-                double imp = ai_write_importance(ai, f->a, f->b);
+                /* 候选自己的证据（链长 / 链底可信度 / 证据档）随 `f` 一起到这儿；
+                 * 新项开关关着时 ai_write_importance_ctx 与老公式**逐位相同**（§6.43）。 */
+                AiWriteCtx wc;
+                wc.ev = (int)f->ev; wc.hops = (int)f->hops; wc.cred = (int)f->cred;
+                double imp = ai_write_importance_ctx(ai, f->a, f->b, &wc);
                 ai->last_write_imp = imp;
-                if (imp < AI_WGATE_KNOWLEDGE) {
+                ai->last_write_hops = wc.hops;
+                ai->last_write_cred = wc.cred;
+                ai->last_write_ev = wc.ev;
+                if (imp < ai_wgate_knowledge(ai)) {
                     char why2[THINK_WHY];
                     snprintf(why2, sizeof why2,
-                             "这条太轻（重要度 %.2f，%s）——先不沉淀，想法留在痕上",
-                             imp, ai_write_layer(imp));
+                             "这条太轻（重要度 %.2f，%s；链 %d 跳/链底 %d 分）——"
+                             "先不沉淀，想法留在痕上",
+                             imp, ai_write_layer_of(ai, imp), wc.hops, wc.cred);
                     think_step(t, TH_LEARN, 0, 30, "写入闸门", why2);
                     t->n_cache_blocked++;
                     ai->n_write_blocked++;          /* 账要对得上：拦下的也算一次"想写" */

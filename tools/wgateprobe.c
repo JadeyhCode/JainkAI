@@ -32,13 +32,11 @@ typedef struct {
     double imp;                                   /* 现值评分 */
     double hits, ageb, aget, recb, rect;          /* 边的自身强度/年龄/新近 */
     double cont, rev, thin, lease, role;          /* 对立极性 / 改口痕迹 / 厚度 / 租约 / 角色 */
-    double stab;                                  /* 候选"稳定度"（下面的方案） */
-    double imp2;                                  /* 加了新项的评分 */
 } Row;
 
 enum { F_NOV, F_TRUST, F_MENT, F_INFO, F_SURP, F_AWAKE, F_IMP,
        F_HITS, F_AGEB, F_AGET, F_RECB, F_RECT, F_CONT, F_REV, F_THIN, F_LEASE, F_ROLE,
-       F_STAB, F_IMP2, F_N };
+       F_N };
 
 static double row_get(const Row *r, int f) {
     switch (f) {
@@ -59,8 +57,6 @@ static double row_get(const Row *r, int f) {
     case F_THIN:  return r->thin;
     case F_LEASE: return r->lease;
     case F_ROLE:  return r->role;
-    case F_STAB:  return r->stab;
-    case F_IMP2:  return r->imp2;
     default:      return 0.0;
     }
 }
@@ -187,46 +183,26 @@ int main(int argc, char **argv) {
     stats_print("租约 lease(0稳/1弱/2过)", rows, n, F_LEASE, NULL);
     stats_print("角色 role", rows, n, F_ROLE, NULL);
 
-    /* ---- 候选方案：稳定度 = 这条边"被反复印证 + 还新鲜 + 没被改口过"的程度 ----
-     * hits 用 1-exp(-hits/8) 归一（hits=8 到 0.63，饱和慢、区分度留得住），
-     * 再乘新近核，被改口过或同对对立极性则减半。取值 0..1，和别的项同量纲。 */
-    for (size_t i = 0; i < n; ++i) {
-        Row *r = &rows[i];
-        double h = 1.0 - exp(-r->hits / 8.0);
-        double s = 0.6 * h + 0.4 * r->rect;
-        if (r->cont > 0.5) s *= 0.5;
-        if (r->rev > 0.5)  s *= 0.5;
-        r->stab = s;
-        /* 新评分：把两颗"常数项"（trust/surprise/awake 合计 0.35）削到 0.15，
-         * 腾出 0.20 给稳定度 —— 语义上：自己想出来的东西值不值得长期留，
-         * 主要看"这条连带本身被印证得够不够、有没有被推翻过"。 */
-        r->imp2 = 0.20 * r->nov + 0.10 * r->trust + 0.15 * r->ment + 0.20 * r->info
-                + 0.15 * r->stab + 0.05 * r->surp + 0.05 * r->awake;
-    }
-    printf("\n== 候选方案：稳定度项与新评分（权重 0.20/0.10/0.15/0.20/0.15/0.05/0.05）==\n");
-    stats_print("稳定度 stab", rows, n, F_STAB, NULL);
-    stats_print("【新 imp2】", rows, n, F_IMP2, q);
-    printf("  新评分分位：最小 %.3f  p25 %.3f  中位 %.3f  p75 %.3f  最大 %.3f\n",
-           q[0], q[1], q[2], q[3], q[4]);
+    /* ---- 候选证据项 support 的**真实实现**长什么样 ----
+     * 分布要在**候选总体**上量：`tests/meas_wgate_cand.sh`（闸门只管候选，不管这批基准边）。
+     * 这里只摆公式的形状 —— 以前探针里抄过一份"候选方案"，抄一份就一定会飘（§6.43 踩过）。 */
+    printf("\n== 候选证据项 support = cred/85 − %.2f·(hops−1)（真实实现 ai_write_support）==\n",
+           AI_WGATE_HOP_PENALTY);
+    printf("  链底可信度 │   1 跳    2 跳    3 跳    4 跳    5 跳\n");
     {
-        /* 按分位定阈值：知识层门槛取"切掉最轻的 25%"，长期层门槛取"切掉最轻的 60%" */
-        double *v = (double *)malloc(n * sizeof *v);
-        if (v) {
-            for (size_t i = 0; i < n; ++i) v[i] = rows[i].imp2;
-            qsort(v, n, sizeof *v, cmp_double);
-            double t_know = v[n / 4];
-            double t_long = v[(n * 6) / 10];
-            size_t b1 = 0, b2 = 0;
-            for (size_t i = 0; i < n; ++i) {
-                if (rows[i].imp2 < t_know) b1++;
-                if (rows[i].imp2 < t_long) b2++;
+        static const int creds[] = { 30, 50, 56, 70, 85 };
+        for (size_t ci = 0; ci < sizeof creds / sizeof creds[0]; ++ci) {
+            printf("  %3d 分      │", creds[ci]);
+            for (int h = 1; h <= 5; ++h) {
+                AiWriteCtx c;
+                c.ev = DER_EV_RULE; c.hops = h; c.cred = creds[ci];
+                printf(" %.3f ", ai_write_support(&c));
             }
-            printf("  按分位定阈值：知识层 %.3f（切掉 %zu 条，%.1f%%）、长期层 %.3f（切掉 %zu 条，%.1f%%）\n",
-                   t_know, b1, 100.0 * (double)b1 / (double)n,
-                   t_long, b2, 100.0 * (double)b2 / (double)n);
-            free(v);
+            printf("\n");
         }
     }
+    printf("  生效阈值：新公式（证据项开）%.2f/%.2f；老公式 %.2f/%.2f\n",
+           AI_WGATE_EV_KNOWLEDGE, AI_WGATE_EV_LONGTERM, AI_WGATE_KNOWLEDGE, AI_WGATE_LONGTERM);
 
     free(rows);
     free(marks);

@@ -619,7 +619,13 @@ typedef struct {
     int     prem_hold_activate;   /* 0=只看注意窗口 1=图上也够得着 2=**有据**才算（第三档） */
     /* 写入分级闸门（借参考实现的 imp 评分）：默认关，`::wgate on` 打开。 */
     int     write_gate_off;
+    /* 闸门里的**候选证据项**（support）：**默认开**（闸门本身默认关，所以默认路径行为不变）。
+     * A/B 三种跑法都绿之后才翻的默认（§6.43）；`AIP_WGATE_EV=0` / `::wgate ev off` 可关回去。
+     * 只对"AI 自己想沉淀的候选"生效（那时才有 ctx）；观测/量测台扫图那条路不受影响。 */
+    int     wgate_ev;
     double  last_write_imp;       /* 最近一次写入的重要度（-1 = 还没写过；::wgate 看得到） */
+    /* 最近一次候选的**证据**（量测与 ::wgate 用；不存盘）：链长 / 链底可信度 / 证据档 */
+    int     last_write_hops, last_write_cred, last_write_ev;
     /* 唯一时间核的 γ（0 = 用默认）。衰减/新近**只许**通过 ai_recency_weight 走。 */
     float   time_gamma;
     int     affect_d_steps, affect_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
@@ -908,13 +914,43 @@ static inline const char *ai_lease_name(AiLease l) {
  * 名字不同、量纲不同，别当成同一个东西（这一条写在这里，免得以后误引）。
  * 另外加了一项他们式子里的"novelty"没有的、但在**图里**判别力强得多的量：
  * **信息量 = 1 − 两端邻居的 Jaccard**（重叠高＝这条连带是意料之中）。
- * 默认**关**：它会让某些"随口一说"不再进图，属行为改变，先实现先 A/B。 */
-/* 阈值**量出来的**（tools/wgateprobe.c 扫全图 167 条关系边）：
- *   实测分布 最小 0.587 / p25 0.652 / 中位 0.672 / p75 0.675 / 最大 0.725。
- *   所以借用来的 0.40 在这套评分上**永远打不着火**（一条都拦不住）；
- *   按实测取 p25 当"知识层"门槛、取前 ~4% 当"长期层"门槛。 */
+ * 默认**关**：它会让某些"随口一说"不再进图，属行为改变，先实现先 A/B。
+ *
+ * ⚠ 2026-10-07 量出来的两件事（§6.43，`tools/wgateprobe.c` + 40 条真候选）：
+ *   ① trust / 惊讶 / 不累 是**整个 AI 一个值**（标准差 0）→ 它们那 0.35 的权重
+ *      只贡献一个**对所有候选都相同**的偏移，对"选哪条"毫无贡献；
+ *   ② 更根本：闸门要判的是**AI 自己想沉淀的候选**，而候选自己的证据
+ *      （链有多长、链底那条边多可信）在 `think_finish` 那一步**被丢掉了** ——
+ *      评分里根本没有"这条推论有多少底气"这一项。
+ *   所以加了 `AiWriteCtx`（候选自己的证据）与**候选证据项 support**，
+ *   并给新公式单独一档阈值（在**候选总体**上按分位定，见 AI_WGATE_EV_*）。
+ *   老路子（ctx == NULL 或开关关着）**一个字节都不变** —— 先 A/B 再翻默认。 */
+
+typedef struct {
+    int ev;     /* 证据档（THINK_EV_* / DER_EV_*：4 观测事实 3 规则推导 2 默认 1 假设 0 猜） */
+    int hops;   /* 推导链长（步数）；0 = 不是推来的 / 不知道 */
+    int cred;   /* 链底那条边的**逐条可信度**（der_base_credibility，0..85） */
+} AiWriteCtx;
+
+/* 阈值**量出来的**：
+ *   老公式（扫全图 167 条关系边）：最小 0.587 / p25 0.652 / 中位 0.672 / p75 0.675 / 最大 0.725。
+ *   借用来的 0.40 在这套评分上**永远打不着火**（一条都拦不住）；
+ *   按实测取 p25 当"知识层"门槛、取前 ~4% 当"长期层"门槛。
+ *   ⚠ 那 167 条是**基准边**（闸门不管它们，见 §6.43）；新公式的阈值改在**候选总体**上量：
+ *     40 条真候选的新评分分位见 AI_WGATE_EV_*。 */
 #define AI_WGATE_LONGTERM  0.70
 #define AI_WGATE_KNOWLEDGE 0.65
+
+/* 新公式（带候选证据项）的阈值 —— **在候选总体上量的**（40 条真推导候选，
+ * `_t/meas/cand2.sh` 逐个开干净会话问出来的；§6.43）：
+ *   分布是**双峰**的：弱底那批（链底可信度 55/56）落在 0.62~0.63（4 条），
+ *   强底那批（85）落在 0.71~0.78（36 条）。
+ *   所以阈值取**空档中间**，不是取分位（分位在双峰上不稳：p10=0.71 就切到强候选了）：
+ *     知识层 0.67 = 空档 [0.63, 0.71] 的正中（上距 +0.04、下距 −0.04，两边都留余量）
+ *     长期层 0.75 ≈ 强底那批的 p75（显示用的分层边界，不是第二道闸门）
+ *   两套阈值各自服务一套公式；新项关着时**仍然**用上面那两个（老行为一位不变）。 */
+#define AI_WGATE_EV_KNOWLEDGE 0.67
+#define AI_WGATE_EV_LONGTERM  0.75
 
 /* 两个词的**邻居重叠**（有界采样版 Jaccard，0..1）：重叠高 = 这条连带是"意料之中"。
  * 放在这里而不是调 micro.h 的：ai.h 在 micro.h 之前，且这里只要一个近似值。 */
@@ -959,9 +995,67 @@ static inline double ai_write_importance(const AI *ai, const Token *a, const Tok
     if (imp > 1.0) imp = 1.0;
     return imp;
 }
+
+/* **候选证据项**（只在"AI 自己想沉淀"这条路上有）：这条推论有多少底气。
+ * 两个来源，都是**已有的**量，不新造判据：
+ *   · `cred` = 链底那条边的逐条可信度（`der_base_credibility`：基准/观测/推论 + hits + 唯一时间核）；
+ *   · `hops` = 链长：每多一跳就多一个可能出错的地方 → 按跳数**线性打折**（每跳 −0.08）。
+ * 归一：cred 以 85（来源档后验的上限）为满。取 0..1，和别的项同量纲。 */
+#define AI_WGATE_HOP_PENALTY 0.08
+static inline double ai_write_support(const AiWriteCtx *ctx) {
+    if (!ctx) return 0.0;
+    double cred = (double)ctx->cred / 85.0;
+    if (cred < 0.0) cred = 0.0;
+    if (cred > 1.0) cred = 1.0;
+    int hops = ctx->hops > 1 ? ctx->hops : 1;
+    double s = cred - AI_WGATE_HOP_PENALTY * (double)(hops - 1);
+    if (s < 0.0) s = 0.0;
+    return s;
+}
+
+/* 带候选证据的评分。`ctx == NULL`（观测/基准/量测台扫图那些调用）或开关关着时，
+ * 结果与 `ai_write_importance()` **逐位相同** —— 这是 A/B 的前提。 */
+static inline double ai_write_importance_ctx(const AI *ai, const Token *a, const Token *b,
+                                             const AiWriteCtx *ctx) {
+    double imp = ai_write_importance(ai, a, b);
+    if (!ai || !ctx || !ai->wgate_ev) return imp;
+    double sup = ai_write_support(ctx);
+    /* 权重：从三个**常数项**（trust 0.20 / 惊讶 0.075 / 不累 0.075）里各让一点，
+     * 腾出 0.20 给候选证据 —— 常数项对"选哪条"本来就没贡献（标准差 0，见 §6.43）。 */
+    size_t ea = a ? a->count : 0, eb = b ? b->count : 0;
+    double novelty = (ea < 6 && eb < 6) ? 1.0 : ((ea + eb < 40) ? 0.6 : 0.4);
+    double info = 1.0 - ai_pair_jaccard(a, b);
+    double trust = (double)ai->inner.predict_accuracy;
+    if (trust < 0.0) trust = 0.0;
+    if (trust > 1.0) trust = 1.0;
+    double mention = (double)((a ? token_hits_total(a) : 0) + (b ? token_hits_total(b) : 0));
+    mention = mention / 200.0; if (mention > 1.0) mention = 1.0;
+    double surprise = ai->inner.discomfort; if (surprise > 1.0) surprise = 1.0;
+    double awake = 1.0 - (double)ai->inner.fatigue; if (awake < 0.0) awake = 0.0;
+    double imp2 = 0.20 * novelty + 0.10 * trust + 0.20 * mention
+                + 0.20 * info + 0.20 * sup + 0.05 * surprise + 0.05 * awake;
+    if (imp2 < 0.0) imp2 = 0.0;
+    if (imp2 > 1.0) imp2 = 1.0;
+    return imp2;
+}
+static inline double ai_write_importance2(const AI *ai, const Token *a, const Token *b) {
+    return ai_write_importance_ctx(ai, a, b, NULL);
+}
 static inline const char *ai_write_layer(double imp) {
     if (imp >= AI_WGATE_LONGTERM)  return "长期层";
     if (imp >= AI_WGATE_KNOWLEDGE) return "知识层";
+    return "情境层（随口一说）";
+}
+/* 当前生效的阈值（新项开着就换新公式量出来的那一套）—— 取阈值只有这一处 */
+static inline double ai_wgate_knowledge(const AI *ai) {
+    return (ai && ai->wgate_ev) ? (double)AI_WGATE_EV_KNOWLEDGE : (double)AI_WGATE_KNOWLEDGE;
+}
+static inline double ai_wgate_longterm(const AI *ai) {
+    return (ai && ai->wgate_ev) ? (double)AI_WGATE_EV_LONGTERM : (double)AI_WGATE_LONGTERM;
+}
+static inline const char *ai_write_layer_of(const AI *ai, double imp) {
+    if (imp >= ai_wgate_longterm(ai))  return "长期层";
+    if (imp >= ai_wgate_knowledge(ai)) return "知识层";
     return "情境层（随口一说）";
 }
 
@@ -978,12 +1072,16 @@ static inline void ai_switches_init(AI *ai) {
     ai->time_gamma = AI_TIME_GAMMA_DEFAULT;
     ai->prem_hold_activate = 0;      /* 0=只看注意窗口（默认）/1=够得着/2=有据 */
     ai->write_gate_off = 1;          /* 写入分级闸门默认**关** */
+    ai->wgate_ev = 1;                /* 候选证据项默认**开**（A/B 三种跑法全绿后才翻的） */
     ai->last_write_imp = -1.0;       /* -1 = 还没写过任何关系事实 */
+    ai->last_write_hops = ai->last_write_cred = ai->last_write_ev = -1;
     ai->route_writes = 0;
     ai->affect_on = 0;
     { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
     { const char *af = getenv("AIP_AFFECT"); if (af && af[0] == '1') ai->affect_on = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
+    /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
+    { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }
     { const char *ph = getenv("AIP_PREMHOLD");
       if (ph && !strcmp(ph, "activate"))      ai->prem_hold_activate = 1;
       else if (ph && !strcmp(ph, "verified")) ai->prem_hold_activate = 2; }

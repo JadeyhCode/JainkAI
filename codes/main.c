@@ -634,7 +634,8 @@ static const CmdDef CMDS[] = {
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**（按首次见到的 tick），并给顺序证据", CMD_ORDER },
     { "wgate", NULL, 1, "基本",
-      "写入分级闸门：on = 情境层的随口一说**不落库**（借 imp 评分）；off（默认）", CMD_WGATE },
+      "写入分级闸门：on = 情境层的随口一说**不落库**（借 imp 评分）；off（默认）\n"
+      "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
     { "trust", NULL, 1, "基本",
@@ -2309,18 +2310,39 @@ int main(int argc, char **argv) {
                 if (arg && *arg) {
                     if (!strcmp(arg, "on"))       a->brain->write_gate_off = 0;
                     else if (!strcmp(arg, "off")) a->brain->write_gate_off = 1;
-                    else { printf("[用法] ::wgate on|off\n"); continue; }
+                    /* `::wgate ev on|off`：闸门里的**候选证据项**（默认关，先 A/B） */
+                    else if (!strncmp(arg, "ev", 2)) {
+                        const char *v = arg + 2;
+                        while (*v == ' ') v++;
+                        if (!strcmp(v, "on"))       a->brain->wgate_ev = 1;
+                        else if (!strcmp(v, "off")) a->brain->wgate_ev = 0;
+                        else { printf("[用法] ::wgate ev on|off\n"); continue; }
+                    }
+                    else { printf("[用法] ::wgate on|off | ::wgate ev on|off\n"); continue; }
                 }
                 printf("[写入分级闸门 = %s]\n", a->brain->write_gate_off ? "关（默认）" : "开");
-                printf("  评分：0.30·生词 + 0.25·来源后验 + 0.20·提及 + 0.15·惊讶 + 0.10·不累\n");
+                printf("  评分（与代码同一份）：0.25·生词 + 0.20·自模型信任 + 0.20·提及"
+                       " + 0.20·信息量 + 0.075·惊讶 + 0.075·不累\n");
+                if (a->brain->wgate_ev)
+                    printf("  候选证据项 = 开（默认）：再加 0.20·support（链底可信度 − 每跳 %.2f），"
+                           "并从三个常数项里各让一点；阈值同时也换成在候选总体上量的那一套"
+                           "（%.2f/%.2f）\n", AI_WGATE_HOP_PENALTY,
+                           AI_WGATE_EV_KNOWLEDGE, AI_WGATE_EV_LONGTERM);
+                else
+                    printf("  候选证据项 = 关（`::wgate ev on` 打开，AIP_WGATE_EV=1）\n");
                 printf("  分层：≥%.2f 长期 / ≥%.2f 知识 / 更低 = 情境层%s\n",
-                       AI_WGATE_LONGTERM, AI_WGATE_KNOWLEDGE,
+                       ai_wgate_longterm(a->brain), ai_wgate_knowledge(a->brain),
                        a->brain->write_gate_off ? "（关着时照写）" : "（**不落库**）");
                 if (a->brain->last_write_imp < 0.0)
                     printf("  最近一次关系写入的重要度：（还没写过）\n");
-                else
+                else {
                     printf("  最近一次关系写入的重要度：%.2f（%s）\n",
-                           a->brain->last_write_imp, ai_write_layer(a->brain->last_write_imp));
+                           a->brain->last_write_imp,
+                           ai_write_layer_of(a->brain, a->brain->last_write_imp));
+                    printf("  那条候选自己的证据：链 %d 跳 / 链底 %d 分 / 证据档 %s\n",
+                           a->brain->last_write_hops, a->brain->last_write_cred,
+                           think_evidence_name(a->brain->last_write_ev, 0));
+                }
                 continue;
             }
             case CMD_PREMHOLD: {
