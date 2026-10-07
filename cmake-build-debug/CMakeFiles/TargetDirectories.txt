@@ -1,0 +1,4 @@
+/home/jadeth/CLionProjects/AIPoject/cmake-build-debug/CMakeFiles/AIPoject.dir
+/home/jadeth/CLionProjects/AIPoject/cmake-build-debug/CMakeFiles/train.dir
+/home/jadeth/CLionProjects/AIPoject/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/jadeth/CLionProjects/AIPoject/cmake-build-debug/CMakeFiles/rebuild_cache.dir

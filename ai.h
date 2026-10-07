@@ -1,0 +1,3733 @@
+/* ai.h — 认知层
+ *
+ * 机制：预测编码 / 内生状态 / 稳态设定点 / 多焦点 / 自我模型
+ *       因果边 + 反事实 / 多信号元认知 / 表达自举 / 信用分配
+ *       想象 / 类比 / 内部对话 / 概念漂移 / 自我叙事
+ *       失败诊断 / 置信度校准 / 抽象形成 / 睡眠（增量）/ 遗忘（GC）
+ *
+ * 依赖：token.h
+ */
+#ifndef AI_H
+#define AI_H
+
+#include "token.h"
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <math.h>
+
+/* 游走跟踪（::wtrace）：把每条候选的路径按**名字**打出来。
+ * 名字而不是指针 —— 就是为了能跨进程 diff。 */
+static int g_walk_trace = 0;
+
+
+#define AI_DIALOG_SPLIT_NAME "[原语:分割]"   /* 语料里「输入/回复」的边界标记 */
+#define AI_REPLY_END_NAME   "[对话:结束]"   /* 回复结束标记：游走到它就收句 */
+
+/* ============================ 疑问词表（**只此一份**） ============================
+ * 这张表以前在 agent.h 里抄了三份（学关系时的「别把问句当陈述」、
+ * 检索门槛的「是不是问句」、拒答门槛的「是不是问句」），
+ * 三份还各不完全一样 —— 那种重复是 bug 的温床：改一处、忘一处，
+ * 表现就是「同一句话在一条路径上算问句、在另一条上不算」。
+ * 现在只有这一张表 + 两个查询函数。 */
+static const char *const AI_QUESTION_WORDS[] = {
+    "吗", "呢", "么", "吧", "?", "？",
+    "谁", "什么", "什么时候", "怎么", "怎么样", "哪", "哪里", "哪儿", "哪个",
+    "为什么", "几", "多少", "如何", "干什么", "是不是", "有没有", "对不对", "好不好",
+    NULL
+};
+static inline int ai_is_question_word(const char *w) {
+    if (!w || !w[0]) return 0;
+    for (size_t i = 0; AI_QUESTION_WORDS[i]; ++i)
+        if (strcmp(w, AI_QUESTION_WORDS[i]) == 0) return 1;
+    return 0;
+}
+/* 这句话里有没有疑问词（有一个就算问句） */
+static inline int ai_has_question_word(char *const *words, size_t n) {
+    for (size_t i = 0; i < n; ++i)
+        if (ai_is_question_word(words[i])) return 1;
+    return 0;
+}
+/* ============================ 参数区（ai.h 这一层的上界） ============================
+ *
+ * 按项目的「不要滥用硬编码」：**参数**（上界/阈值/频率）留在 `#define` 里，
+ * 但要**集中、有注释**，能一条命令改的就给一条命令 —— 不搬进数据文件
+ * （搬进去就把「调参」变成「改数据」，反而更难复现）。
+ *
+ * 这些常量原来散在结构体定义之间（上界跟着结构体走），改一个要满文件找；
+ * 现在集中在这里，一处就能看全 ai.h 这一层的账。其它层各自的参数区：
+ *   `rel.h`   REL_MAX_DEPTH / REL_MAX_PROOF / REL_EXCL_* / REL_GUESS_SIM
+ *   `derive.h` DER_MAX_STEP（链最多几步）
+ *   `think.h`  THINK_DEF_STEPS / THINK_STALL_LIM / THINK_MAX_OPEN /
+ *              THINK_MAX_GOAL / THINK_CACHE_MAX（步数预算可用 `::thinkbudget` 改）
+ *   `micro.h`  预算上限（MOD_BUDGET_*）、检测器阈值（D1/D2/D3）
+ *   `frame.h`  FR_ASSOC_SIM_MIN（Gate B 的 Dice 门槛）
+ */
+#define AI_MAX_TOPICS    80     /* 语料 [话题:N] 的上限（话题票表） */
+#define AI_MAX_SENT      24     /* 整句检索：一句话最多几个词 */
+#define AI_SLOT_SIG       8     /* 同位槽类签名长度：左边最多 4 个、右边最多 4 个邻居 */
+#define AI_MAX_SLOTS   1024     /* 同位槽类的上限 */
+#define AI_MAX_FOCUS      4     /* 一次「注意」最多几个焦点词 */
+#define AI_MAX_PATH      64     /* 逐词游走的路径上限（联想链最长走多少步） */
+#define AI_MAX_OTHERS     8     /* 最多维护几个「他者」模型 */
+#define AI_MAX_BELIEF    24     /* 每个「他」名下最多记几条信念 */
+#define AI_MAX_HISTORY   32     /* 内部对话/想象的历史环长度 */
+#define COT_MAX_STEP     10     /* 思维链最多记几步（一步=读入/骨架/校验/降级/成句之一） */
+#define AI_MAX_HYPO       8     /* 一层假设最多几条假设事实 */
+#define AI_MAX_HYPO_DEPTH 4     /* 假设最多嵌套几层 */
+/* 因果猜想（「我说了 X，对方接着说 Y」）：
+ * **一次巧合不算规律** —— 见够 MIN 次才从「暂时」升格成「可信的猜想」，
+ * 而且重复有上限（见得多不代表能把它刷成事实）。反事实（我没说 X，Y 照样发生）
+ * 会削弱它：hits 掉到 0 变「暂时」，在「暂时」上再来一次反例就雪藏。
+ * 它永远只是**猜想**：带 [因果] 标记、不参与走边、不进关系表（见 ai_learn_causal）。 */
+#define AI_CAUSAL_MIN_HITS 3    /* 协变几次才升格（参数，要调就调这里） */
+#define AI_CAUSAL_HITS_CAP 8    /* 重复计数上限：防止反复出现把它刷成「事实」 */
+
+/* 话题票：某话题下「出现过哪些词」。生成时用输入词投票选话题。 */
+typedef struct { Token *seen[192]; size_t n; uint32_t votes; } AITopic;
+
+
+/* 「我不知道」的说法池。
+ * 关键设计：检索**必须能拒答**。之前不管输入是什么都硬塞一个最像的句子，
+ * 于是「1加1等于几」会得到「先喝口水我在这里」—— 这比答不上来糟糕得多。
+ * 匹配不到就诚实说不知道，这才是正常交流。 */
+static const char *const AI_REFUSALS[] = {
+    "这个我 不 太 懂",
+    "我 不 知道 你 能 告诉 我 吗",
+    "我 还 没 学 过 这个",
+    "我 想 想 好像 不 太 会",
+    "这 个 问题 我 答 不 上",
+    "我 不 太 确定 你 说 给 我 听",
+    NULL
+};
+
+/* 整句检索：语料里「输入句 → 回复句」的成对记忆。
+ *
+ * 为什么要有它：逐词游走只能用「边的局部权重」决定下一个词，走到第三个词就开始漂。
+ * 整句检索换的是另一件事 —— 把语料里的整句当成候选，用输入去匹配，
+ * 匹配上就把那一整句原样吐出来。这是「记忆复述」而不是「生成」。
+ */
+typedef struct {
+    Token  *in[AI_MAX_SENT];  size_t in_n;   /* 输入句 */
+    Token  *out[AI_MAX_SENT]; size_t out_n;  /* 回复句 */
+    uint8_t topic;
+} AISentPair;
+
+/* 同位槽类：「在相同上下位里出现」的词算同一类。
+ * 例：`我 喜欢 猫` 和 `我 喜欢 狗` 里，猫/狗 的左邻都是 `喜欢`、右邻都是句尾
+ *     → 同一个槽类 → 可以互换。
+ * 生成时用它做**模板替换**：把学过的句子当骨架，槽位换成语料里没这样配过的词，
+ * 于是说出语料里没有的新句子，而句子骨架仍是学来的、所以通顺。 */
+typedef struct {
+    Token *members[48];
+    size_t n;
+    uint32_t sig;           /* 签名哈希，用来快速归类 */
+} AISlot;
+
+
+/* ============================ 思维链 ============================
+ *
+ * 这一轮里**每一步决策**都记下来：在做什么、成没成、为什么。
+ *
+ * 要点是它不能只是一份日志：后一步必须真的读前一步的结果。
+ * 现在的链条是这么咬合的 ——
+ *
+ *   读入 ──→ 骨架 ──→ 校验 ──→ 降级 ──→ 成句
+ *                      │        ↑
+ *                      └── 失败才走降级（成功直接成句，降级不参与）
+ *   联想 ─┘（给校验提供「这个槽位取值像不像这一类」的证据）
+ *   检索 ──┘（骨架和降级都没话说时才轮到它）
+ *
+ * 也就是说「降级」这一步**只因为「校验」失败才存在**，「检索」**只因为
+ * 前面都没话说才存在** —— 这才叫链，不是并列地试四种策略。
+ */
+typedef enum {
+    COT_READ = 1,   /* 读入：分词 + token 代数（拆解/合并/新建/中转） */
+    COT_ASSOC,      /* 联想：沿关联链想一遍，拿到候选 */
+    COT_PARSE,      /* 骨架：认出哪个帧、哪个槽位 */
+    COT_GATE,       /* 校验：槽位取值的类证据够不够 */
+    COT_FALL,       /* 降级：证据不够 → 改用不需要证据的诚实答复 */
+    COT_LEARN,      /* 记下：用户陈述了一条关系事实，现场学进图里 */
+    COT_INFER,      /* 推理：用关系规则推出来的结论（带推导路径） */
+    COT_HYP,        /* 假设：进入/退出反事实假设世界 */
+    COT_VIEW,       /* 视角：站到别人的立场上推理 */
+    COT_RECALL,     /* 检索：整句命中及其分数/覆盖率 */
+    COT_ADMIT,      /* 认输：拒答 + 理由 */
+    COT_DONE        /* 收尾：最终说了什么 */
+} CotKind;
+
+typedef struct {
+    CotKind kind;
+    int     ok;            /* 这一步成了吗 */
+    int     score;         /* 把握 0~100 */
+    char    what[80];      /* 在做什么 */
+    char    why[160];      /* 为什么 / 为什么没成（关系推导链会占满） */
+} CotStep;
+
+typedef struct {
+    CotStep step[COT_MAX_STEP];
+    size_t  n;
+} ChainOfThought;
+
+static inline const char *cot_kind_name(CotKind k) {
+    switch (k) {
+        case COT_READ:   return "读入";
+        case COT_ASSOC:  return "联想";
+        case COT_PARSE:  return "骨架";
+        case COT_GATE:   return "校验";
+        case COT_FALL:   return "降级";
+        case COT_LEARN:  return "记下";
+        case COT_INFER:  return "推理";
+        case COT_HYP:    return "假设";
+        case COT_VIEW:   return "视角";
+        case COT_RECALL: return "检索";
+        case COT_ADMIT:  return "认输";
+        case COT_DONE:   return "收尾";
+        default:         return "?";
+    }
+}
+
+
+typedef struct {
+    float predict_accuracy, surprise_level;
+    float comfort, discomfort, arousal, fatigue;
+} AIInner;
+
+typedef struct { float setpoint_comfort, setpoint_arousal, regulation_rate; } AISetpoint;
+typedef struct {
+    uint64_t gc_min_age, gc_time_scale;
+    float gc_upgrade_rate;
+    size_t gc_interval;
+    uint8_t gc_delete_state;
+} AIGCConfig;
+typedef struct {
+    float w_gap, w_conflict, w_activation, w_effort, w_novelty;
+    float certain_threshold, unknown_threshold;
+} UncertainConfig;
+typedef struct {
+    float confidence, familiarity, fluency, effort, gap_feel, total;
+} MetaCog;
+typedef enum {
+    EXPR_CONFIDENT = 0, EXPR_HEDGE, EXPR_TENTATIVE, EXPR_UNCERTAIN,
+    EXPR_LOST, EXPR_CURIOUS, EXPR_SILENT, EXPR_COUNT
+} ExprMode;
+typedef struct { Token *path[AI_MAX_PATH]; size_t n; } AIPath;
+
+/* 写入来源：**一张表**（谁在改图）。加一个来源 = 表里加一行。 */
+typedef enum {
+    AI_WSRC_PERCEIVE = 0,   /* 感知：对话里学到的共现（含 [时刻:] 链） */
+    AI_WSRC_RELATION,       /* 关系层现场学：听来的「X R Y」 */
+    AI_WSRC_INNER,          /* 内部对话 */
+    AI_WSRC_IMAGINE,        /* 想象 */
+    AI_WSRC_SLEEP,          /* 睡眠巩固 */
+    AI_WSRC_DECAY,          /* 衰减 / 巩固 */
+    AI_WSRC_MICRO,          /* 微内核：受审通过的意图落地 */
+    AI_WSRC_N
+} AiWriteSrc;
+
+static inline const char *ai_write_src_name(AiWriteSrc s) {
+    switch (s) {
+    case AI_WSRC_PERCEIVE: return "感知";
+    case AI_WSRC_RELATION: return "关系学习";
+    case AI_WSRC_INNER:    return "内部对话";
+    case AI_WSRC_IMAGINE:  return "想象";
+    case AI_WSRC_SLEEP:    return "睡眠";
+    case AI_WSRC_DECAY:    return "衰减";
+    case AI_WSRC_MICRO:    return "受审";
+    default:               return "?";
+    }
+}
+typedef struct {
+    Token  *a;
+    Token  *b;
+    uint8_t rid;
+    uint8_t neg;     /* 1 = 假设「不 R」 */
+} HypoFact;
+
+/* 一个「别人」的模型。
+ * 原来只有 who/trust/n_interactions 三个字段，谁都没用 —— 「他 以为 X」只是给假设层
+ * 贴个标签，轮末就没了，所以「归属」一直只是**标注**。
+ * 现在这里多了一张**他的信念表**：他说过的事实存在他名下（写进模型文件 v8），
+ * 问「他 觉得 … 吗」查的是它，而我自己的知识一点都不受影响 ——
+ * 他信什么是他的事，**我的视角永远不会因此改变**。 */
+typedef struct {
+    Token *who;
+    Token *belief_of_self;
+    float  trust;
+    size_t n_interactions;
+    HypoFact bel[AI_MAX_BELIEF];   /* 他相信的事实（不一定真） */
+    size_t   n_bel;
+    size_t   n_bel_learned;        /* 累计听他说过多少条 */
+} OtherModel;
+
+
+typedef struct {
+    float  prev_lexical_diversity;
+    size_t prev_perspective_n, prev_abstractions;
+    size_t prev_imaginations, prev_imagine_useful;
+    uint64_t last_diag_tick;
+} DiagState;
+typedef struct {
+    size_t n_confident, n_confident_wrong;
+    float  calibration_bias;
+} CalibState;
+
+/* ============================ 推导（Derivation） ============================
+ * 类型定义放在这里（AI 结构里要用），逻辑在 derive.h 末尾。
+ * 立场：**链才是产物，文字只是它的投影**。 */
+/* ============================ 假设层（反事实） ============================
+ *
+ * 「如果 猫 会 飞，那 猫 会 游泳 吗」需要一个**假设世界**：
+ * 往里放几条临时事实，在这个世界里推理，然后**原样撤回**。
+ *
+ * 铁律：假设**绝不写进图**。它只活在 ai->hypo 这个覆盖层里，
+ * 求解器查事实时先看覆盖层再看图；存盘不带它，::hypo clear 或换一句陈述就没了。
+ * 违反这条（把假设 tag 进边里）就会污染知识库 —— 那是最恶劣的一类 bug：
+ * 用户只是随口「如果」，系统却从此以为真。
+ *
+ * 每个假设事实在推导链上会被标成 DER_HYP，答复里写明「在假设下」。 */
+
+/* 一层假设 = 一组事实 + 这层归谁。
+ * `who` 就是「如果他以为…」里的那个「他」：NULL 表示「我自己的假设」。
+ * 多层叠起来就是一个栈 —— 「他以为我以为猫会飞」= 两层，
+ * 外层 who=他、内层 who=我。求解时**所有层都算数**（内层不能推翻外层，
+ * 那正是「他以为」的意思）。 */
+typedef struct {
+    HypoFact f[AI_MAX_HYPO];
+    size_t   n;
+    Token   *who;
+} HypoFrame;
+
+typedef struct {
+    HypoFrame fr[AI_MAX_HYPO_DEPTH];
+    size_t    depth;
+} Hypo;
+
+static inline void hypo_clear(Hypo *h) {
+    if (!h) return;
+    for (size_t i = 0; i < h->depth; ++i) { h->fr[i].n = 0; h->fr[i].who = NULL; }
+    h->depth = 0;
+}
+/* 压一层新的假设（who 可以是 NULL） */
+static inline int hypo_push(Hypo *h, Token *who) {
+    if (!h || h->depth >= AI_MAX_HYPO_DEPTH) return 0;
+    HypoFrame *f = &h->fr[h->depth++];
+    f->n = 0; f->who = who;
+    return 1;
+}
+/* 弹掉**最深**那一层（「算了」= 撤掉最近那条假设） */
+static inline int hypo_pop(Hypo *h) {
+    if (!h || h->depth == 0) return 0;
+    h->depth--;
+    h->fr[h->depth].n = 0;
+    h->fr[h->depth].who = NULL;
+    return 1;
+}
+/* 抽掉指定的那一层（0 起）—— 这是「作用域回溯」：不用非得从最深往下弹。
+ * 中间抽掉之后，它上面的层整体下移。 */
+static inline int hypo_drop(Hypo *h, size_t idx) {
+    if (!h || idx >= h->depth) return 0;
+    for (size_t i = idx; i + 1 < h->depth; ++i) h->fr[i] = h->fr[i + 1];
+    h->depth--;
+    h->fr[h->depth].n = 0;
+    h->fr[h->depth].who = NULL;
+    return 1;
+}
+
+/* 哪一层里有这条假设事实？（0 起；-1 = 没有）
+ * 「撤回 猫 属于 鸟」要找的就是它 —— 作用域回溯得能指名道姓。 */
+static inline int hypo_layer_of_fact(const Hypo *h, const Token *a, uint8_t rid,
+                                     const Token *b) {
+    if (!h || !a || !b) return -1;
+    for (size_t k = 0; k < h->depth; ++k) {
+        const HypoFrame *f = &h->fr[k];
+        for (size_t i = 0; i < f->n; ++i)
+            if (f->f[i].a == a && f->f[i].rid == rid && f->f[i].b == b) return (int)k;
+    }
+    return -1;
+}
+/* 哪一层提到了这个词（主语或宾语都算；从深往浅找，先撤最近说的那条） */
+static inline int hypo_layer_of_subject(const Hypo *h, const Token *t) {
+    if (!h || !t) return -1;
+    for (size_t k = h->depth; k-- > 0; ) {
+        const HypoFrame *f = &h->fr[k];
+        for (size_t i = 0; i < f->n; ++i)
+            if (f->f[i].a == t || f->f[i].b == t) return (int)k;
+    }
+    return -1;
+}
+
+/* 往最深那一层加一条事实 */
+static inline int hypo_add(Hypo *h, Token *a, Token *b, uint8_t rid, int neg) {
+    if (!h || !a || !b || rid == 0) return 0;
+    if (h->depth == 0 && !hypo_push(h, NULL)) return 0;
+    HypoFrame *f = &h->fr[h->depth - 1];
+    /* 同一层里已经有一条对同一对词、同一关系的假设 → 覆盖它（不叠加矛盾） */
+    for (size_t i = 0; i < f->n; ++i) {
+        if (f->f[i].a == a && f->f[i].b == b && f->f[i].rid == rid) {
+            f->f[i].neg = (uint8_t)(neg ? 1 : 0);
+            return 1;
+        }
+    }
+    if (f->n >= AI_MAX_HYPO) return 0;
+    HypoFact *fct = &f->f[f->n++];
+    fct->a = a; fct->b = b; fct->rid = rid; fct->neg = (uint8_t)(neg ? 1 : 0);
+    return 1;
+}
+/* 覆盖层里有没有这条？从**最深**往浅找（内层优先），*out_who 给出这层归谁。 */
+/* 视角过滤：view_who == NULL 表示「我自己」—— 所有层都算数（我知道我全部的假设，
+ * 包括我以为他怎么想）。view_who == X 表示「站在 X 的立场」—— 只有归在 X 头上的
+ * 那几层算数，**我的假设他不知道**。这就是最小可用的视角推理：
+ * 同一个问题换个立场，答案可以不同，而且原因清楚（哪些假设他看不见）。 */
+static inline int hypo_frame_visible(const HypoFrame *f, const Token *view_who) {
+    if (!view_who) return 1;                 /* 我的视角：全都算 */
+    return f->who == view_who;               /* 他的视角：只算归他的层 */
+}
+
+static inline const HypoFact *hypo_find(const Hypo *h, const Token *view_who,
+                                        const Token *a,
+                                        uint8_t rid, const Token *b,
+                                        Token **out_who) {
+    if (!h) return NULL;
+    for (size_t k = h->depth; k-- > 0; ) {
+        const HypoFrame *f = &h->fr[k];
+        if (!hypo_frame_visible(f, view_who)) continue;
+        for (size_t i = 0; i < f->n; ++i) {
+            if (f->f[i].a != a || f->f[i].b != b || f->f[i].rid != rid) continue;
+            if (out_who) *out_who = f->who;
+            return &f->f[i];
+        }
+    }
+    if (out_who) *out_who = NULL;
+    return NULL;
+}
+/* 覆盖层里所有「以 a 为主语、关系 rid、极性 neg_want」的事实（所有层都算） */
+static inline size_t hypo_edges(const Hypo *h, const Token *view_who,
+                                const Token *a, uint8_t rid,
+                                int neg_want, const HypoFact **out, size_t cap) {
+    size_t n = 0;
+    if (!h) return 0;
+    for (size_t k = 0; k < h->depth && n < cap; ++k) {
+        const HypoFrame *f = &h->fr[k];
+        if (!hypo_frame_visible(f, view_who)) continue;
+        for (size_t i = 0; i < f->n && n < cap; ++i) {
+            const HypoFact *x = &f->f[i];
+            if (x->a != a || x->rid != rid) continue;
+            if ((int)x->neg != (neg_want ? 1 : 0)) continue;
+            int dup = 0;
+            for (size_t q = 0; q < n; ++q) if (out[q] == x) { dup = 1; break; }
+            if (!dup) out[n++] = x;
+        }
+    }
+    return n;
+}
+/* 在这个视角下**看得见**的假设条数（不是总条数）。
+ * 「他 觉得 猫 属于 鸟 吗」时，我的假设他看不见 —— 所以那一刻
+ * 「在假设下」这个说法根本不该出现（实测第一版就答成
+ * 「在 他 看来 ： 在 假设 下 我 推不出来」，自相矛盾）。 */
+static inline size_t hypo_visible_n(const Hypo *h, const Token *view_who) {
+    if (!h) return 0;
+    size_t n = 0;
+    for (size_t k = 0; k < h->depth; ++k)
+        if (hypo_frame_visible(&h->fr[k], view_who)) n += h->fr[k].n;
+    return n;
+}
+
+/* 当前最深那层归谁（链上要标「他 以为」） */
+static inline Token *hypo_cur_who(const Hypo *h) {
+    if (!h || h->depth == 0) return NULL;
+    return h->fr[h->depth - 1].who;
+}
+
+#define DER_MAX_STEP 24
+
+/* 渲染风格：**语言是最后一步的事**，同一份链可以这么说也可以那么说。
+ * （完整说明在 derive.h 的 der_say。） */
+#define DER_STYLE_TERSE  0   /* 只给结论 */
+#define DER_STYLE_PLAIN  1   /* 结论 + 推导链（默认） */
+#define DER_STYLE_CHAIN  2   /* 只给链，不给结论 */
+#define DER_STYLE_SYMBOL 3   /* 符号化 */
+
+typedef enum {
+    DER_GOAL = 1,
+    DER_FACT,       /* 图里的直接**观测**事实（可被验证器独立复查） */
+    /* **以前推出来、沉淀下来的**（边上标着 ASSOC_ROLE_DERIVED）。
+     * 它和观测事实要分开：证据强度更低（可能已经过时），
+     * 而且被观测推翻时允许撤销。验证器会独立复查「这条缓存还在不在」。 */
+    DER_KNOWN,
+    DER_RULE,       /* 规则应用：传递/继承/对称/逆关系 */
+    DER_DEFAULT,    /* 默认推测（类比，非单调） */
+    DER_SOURCE,     /* **非逻辑路径的来源**：整句记忆 / 结构化帧 / 降级答复。
+                     * 它不做任何断言，所以不参与真值，也不算缺口。 */
+    DER_HYP,        /* **靠假设成立的一步**（反事实）。验证器会去覆盖层里核对：
+                     * 覆盖层里没有它，就是伪造 → 缺口。 */
+    DER_GAP,        /* 缺口：这一步没有依据 */
+    DER_CONCLUDE
+} DerKind;
+
+typedef struct {
+    DerKind kind;
+    uint8_t rule;        /* RULE 时：1 传递 2 继承 3 对称 4 逆关系 */
+    Token  *subj;        /* 这一步讲的是 subj --[rel]--> obj */
+    Token  *obj;
+    Token  *src;         /* DEFAULT 时：依据是哪个词（最近邻） */
+    uint8_t rid;
+    uint8_t neg;         /* 这一步是不是否定 */
+    int     truth;       /* +1 真 -1 假 0 未知（GAP 恒为 0） */
+    int     sim;         /* DEFAULT 时的相似度 */
+    int     verified;    /* 验证器填：这一步验过没有 */
+    /* 缺口原因 / 补充说明。**别按「字符数」估大小** —— 中文一个字 3 字节，
+     * 早先给 64 字节，一句「否定它需要完备性……」就被截在字符中间，
+     * 打出来是乱码（实测）。给足 224 字节。 */
+    char    note[224];
+} DerStep;
+
+typedef struct {
+    DerStep step[DER_MAX_STEP];
+    size_t  n;
+    int     truth;       /* 整条链的结论真值 */
+    int     gaps;        /* 缺口数；>0 就不许下断言 */
+    int     guessed;     /* 用到过 DEFAULT */
+    int     conf;        /* 0..100 */
+    /* has_claim = 0 表示这一轮**没有逻辑结论**（输出走的是记忆/骨架/降级），
+     * 这时 truth 不参与任何判断，链条只记录「话是从哪来的」。
+     * 分开这两件事很重要：把「检索到一句像的话」包装成「推导出的结论」是撒谎。 */
+    int     has_claim;
+    char    source[64];  /* has_claim=0 时的来源说明 */
+} Derivation;
+
+typedef struct {
+    TokenPool *pool;
+    uint32_t rng, gc_rng;
+
+    Token *self, *good, *bad, *unknowing, *causal;
+    Token *social_good, *social_bad;
+    Token *past_self, *future_self;
+    Token *split_tok;               /* [原语:分割]：语料里「输入/回复」的边界 */
+    AITopic topics[AI_MAX_TOPICS];  /* 话题表（显式标注累积） */
+    uint8_t cur_topic;              /* 本次生成锁定的话题 */
+
+    AISentPair *pairs;              /* 整句检索库 */
+    size_t pairs_n, pairs_cap;
+    int    use_retrieval;           /* 1 = 优先整句检索 */
+    float *idf;                     /* 每个 Token 的 IDF 权重（越小越常见） */
+    /* idf 数组的**实际长度**。必须单独记：ai->idf 是按「重建那一刻的
+     * pool->count」分配的，而重建之后还会造词（关系词 intern、frame 造词、
+     * 抽象 Token）。原来 ai_idf_of() 拿 pool->count 当边界，于是新词会**越界读**
+     * 到别的堆内容 —— 浮点垃圾值每次进程都不一样（地址相关），
+     * 结果就是「装载态」和「训练态」的联想链、回复都不一样。
+     * 症状隐蔽：整个词池 dump 逐字节相同，只有 idf 那 50 个词是垃圾。 */
+    size_t idf_n;
+    size_t n_refusals;              /* 「我不知道」次数，用来轮换说法 */
+    size_t n_synth;                 /* 说出了多少句语料里没有的句子 */
+    int    last_retrieval_cov;      /* 上一次检索的输入覆盖率 */
+    size_t last_retrieval_len;      /* 命中那条输入句的词数（长度比用） */
+    size_t last_input_len;
+    int    last_token_ratio;        /* 命中的输入句里，有多少比例的输入词真的出现过 */
+    AISlot slots[AI_MAX_SLOTS];     /* 同位槽类表 */
+    size_t slots_n;
+    size_t n_frames;                /* 结构化帧生成成功的次数 */
+    size_t n_frame_assoc;           /* 其中「靠关联链证据放行槽位」才成功的次数 */
+    size_t n_coined;                /* 其中「现场造词」造出来的新 Token 数 */
+    size_t n_split;                 /* 其中「拆解切分」才匹配上的次数 */
+    size_t n_merge;                 /* 其中「合并切分」才匹配上的次数 */
+    size_t n_relay;                 /* 其中「中转词容错」生效的次数 */
+    size_t n_hedge;                 /* 其中「降级答复」兜住的次数 */
+    size_t n_rel_learned;           /* 对话里现场学到的关系事实条数 */
+    size_t n_revised;               /* 其中「改口」的次数：后说的观测替掉了先说的对立极性 */
+    size_t n_rel_yes;               /* 靠关系推理答「是」的次数 */
+    size_t n_rel_no;                /* 靠关系推理答「不是」的次数 */
+    size_t n_rel_deep;              /* 其中需要多跳推导（不是直接边）的次数 */
+    size_t n_rel_unknown;           /* 三态里的「不知道」：不装懂，也不硬说不对 */
+    size_t n_rel_guess;             /* 靠相似度**推测**出来的次数（明确标注是推测） */
+    size_t n_cot;                   /* 思维链累计步数（看链有没有在长） */
+    /* ---- 动态关系表：让谓词表**开放** ----
+     * 清单（AI_RELS）里只有 7 个核心关系。用户说「我 想念 家」时，
+     * 「想念」不在清单里 —— 以前整句就被忽略。现在它会被登记成一个动态关系，
+     * id 从 8 起，写进模型（v7）后存盘重载仍然对得上号。
+     * 只支持肯定，不支持否定（老实记在文档的局限里）。 */
+    char  *dynrel_name[AI_MAX_DYNREL];
+    size_t dynrel_n;
+    /* ---- 推导：上一轮那条链 ----
+     * 输出只是它的投影（见 derive.h）。::der 可以按结构看它，
+     * ::style 可以换一种说法说同一件事 —— 语言不是重点，链才是。 */
+    Derivation last_der;
+    size_t n_der;                   /* 累计推导条数 */
+    /* 反事实假设（**栈式**覆盖层：可多层嵌套、每层可归属某个人；
+     * **绝不进图**，也不存盘） */
+    Hypo   hypo;
+    size_t n_hypo;                  /* 累计设过多少次假设 */
+    /* 这一轮站在谁的立场上（NULL = 我自己）。由「他 觉得 …」这种输入设置，
+     * 用完即清 —— 它是一个**问法**的修饰，不是持久状态。 */
+    Token *view_who;
+    /* 运行时的「关系是否独占」表：下标 = 关系 id。
+     * AI_RELS 里写的是**声明值**（种子），装载后由 rel_excl_build() 按数据修正 ——
+     * 这样「独占」就不是纯手写公理，而是从知识库里**量**出来的（数据够才改）。 */
+    uint8_t rel_excl[REL_TABLE_MAX + 1];
+    size_t  n_rel_excl_learned;   /* 被**数据推翻/改口**的条数 */
+    size_t  n_rel_excl_evidenced; /* 判定**有数据支持**的条数（含印证与改口） */
+    /* ---- 「独占」判定的**证据**：数据量出来的，摆在明面上 ----
+     * 判一条关系是不是函数式（一个主语最多一个宾语），靠的是「主语里有几个是
+     * 多宾语的」。样本少的时候不许瞎猜，所以这里把证据和似然比都留着，
+     * `::excl` 直接打出来 —— 判错的时候能一眼看出是数据不够还是数据本身如此。 */
+    size_t  rel_excl_single[REL_TABLE_MAX + 1];  /* 单宾语主语数 */
+    size_t  rel_excl_multi [REL_TABLE_MAX + 1];  /* 多宾语主语数 */
+    uint32_t rel_excl_base;                      /* 数据估出的基准多宾语率（千分数） */
+    float   rel_excl_llr[REL_TABLE_MAX + 1];     /* 对数似然比：>0 更像多值 */
+    /* 开放世界（默认）还是闭合世界。
+     * 「知识库里没有」≠「事实为假」—— 默认按开放世界，推不出就说不知道。
+     * 想要「没写就是假」的闭合世界语义，得**显式打开**（::world closed），
+     * 因为那是一个假设，不是真理。 */
+    int    closed_world;
+    int    der_style;               /* DerStyle，默认 PLAIN */
+    ChainOfThought cot;             /* 这一轮的思维链（每轮开头清空） */
+    size_t n_walks;                 /* 逐词关联链（加权游走）跑过的次数 */
+    char  *last_idea;               /* 上一次「自由联想」的产物（内部思考，不直接输出） */
+    int    walk_output;             /* 1 = 允许把联想结果直接当回复（默认 0） */
+    /* 0 = 结构化帧允许用关联链证据放行白名单外的槽位取值（默认）。
+     * 故意用「反向命名」：这样 calloc 出来的 AI 骨架就是开启状态 ——
+     * 这个项目已经被「calloc 骨架漏设默认值导致训练/加载两条路径分叉」坑过一次。 */
+    int    assoc_slot_off;
+    int    coin_off;                /* 0 = 允许现场造词（默认） */
+    int    seg_off;                 /* 0 = 允许换切分（拆解/合并）找帧（默认） */
+    int    relay_off;               /* 0 = 允许中转词容错（和/跟 互认）（默认） */
+    int    fall_off;                /* 0 = 允许降级答复（默认） */
+    int    rel_off;                 /* 0 = 允许关系层（推理 + 现场学知识）（默认） */
+    void  *frames;                  /* FrameSet*（frame.h），结构化回复库 */
+
+    size_t turns, n_learned;
+    /* ---- 统一写入通道（来源监控的"写入侧"）----
+     * 所有往图里写的地方都要**记一笔账**：谁写的、写了多少次。
+     * `route_writes` 打开时，**知识类**写入（关系事实）改成提意图，走审查/预算/审计；
+     * 感知共现这类保留直写（它是观测本身的丰富记录：hits/pattern/topic 都在里面，
+     * 转成意图会丢信息）—— 但账照记，所以"谁在绕过内核"随时说得清。 */
+    /* 推理沉淀的账（**放在 AI 上**：来源档的可信度要用它，而那个函数在 think.h 之前）。
+     * 以前记在 Think 里，只有报告用；现在它是"学出来的可信度"的证据来源。 */
+    size_t  n_cached, n_retracted;
+    size_t  n_write_blocked;        /* 被写入闸门挡下来的条数（账要对得上） */
+    size_t  writes[AI_WSRC_N];
+    int     route_writes;
+    /* **这三个是内核唯一"情绪相关"的东西：三个普通数字**（默认 0）。
+     * 内核不知道它们是怎么来的 —— 情绪那张耦合表在**内核之外**（`affect.h` 层），
+     * 由代理循环每轮折算一次（用户裁定：情绪不进内核）。
+     * 开着的时候每轮把驱动量折算成参数修正（思考预算 / 生成长度 / 激活阈值）。 */
+    int     affect_on;
+    /* 前提成立的**判据档**（0 = 只看注意窗口（默认）；1 = 窗口里没有时，还在图上"够得着"也算）。
+     * 用户点过的局限：前提成立只看"提到过没有"，不看"是不是真的成立/想得到"。
+     * 第二档是**图内**判据：从当前注意窗口出发扩散两步，前提被激活到阈值就算成立。 */
+    int     prem_hold_activate;   /* 0=只看注意窗口 1=图上也够得着 2=**有据**才算（第三档） */
+    /* 写入分级闸门（借参考实现的 imp 评分）：默认关，`::wgate on` 打开。 */
+    int     write_gate_off;
+    double  last_write_imp;       /* 最近一次写入的重要度（-1 = 还没写过；::wgate 看得到） */
+    /* 唯一时间核的 γ（0 = 用默认）。衰减/新近**只许**通过 ai_recency_weight 走。 */
+    float   time_gamma;
+    int     affect_d_steps, affect_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
+    float   affect_d_cutoff;
+    float energy, decay, cutoff;
+    size_t max_gen;
+    size_t consolidate_every;
+    float decay_factor;
+
+    AIGCConfig gc;
+    UncertainConfig uncertain;
+    AISetpoint setpoint;
+    AIInner inner;
+    MetaCog meta;
+
+    Token *focus_ring[AI_MAX_FOCUS];
+    float  focus_weight[AI_MAX_FOCUS];
+    size_t focus_n;
+    Token *focus;
+
+    Token **trace;
+    size_t trace_n, trace_cap;
+
+    Token **last_output;
+    size_t last_output_n, last_output_cap;
+    Token **last_skipped;
+    size_t last_skipped_n, last_skipped_cap;
+
+    AIPath last_path;
+    /* 上一轮 plan_and_act 里「分数最高」那条候选的路径。
+     * last_path 记的是循环里最后生成的那条候选（未必是选中的），
+     * 直接拿它做诊断会让「路径」和「产物」对不上，所以单独留一份。 */
+    AIPath last_walk_path;
+
+    Token *expr_root[EXPR_COUNT];
+    int    last_expr_mode;
+
+    Token    *timeline[AI_MAX_HISTORY];
+    size_t    timeline_n, timeline_head;
+
+    OtherModel others[AI_MAX_OTHERS];
+    size_t     others_n;
+
+    float  imagine_rate;
+    size_t n_imaginations, n_imagine_useful;
+    float  inner_dialogue_gain;
+    size_t n_inner_dialogues;
+    size_t narrate_every, n_narrations;
+    size_t drift_sample_every, n_drifts_detected;
+
+    DiagState diag;
+    size_t    n_diagnoses;
+    CalibState calib;
+    float      last_confidence_at_output;
+
+    size_t n_surprises, n_abstractions, n_sleeps;
+    size_t n_gc_deleted_edges, n_gc_deleted_tokens;
+    size_t n_credit_events, n_expr_learned, n_counterfactual;
+    /* 因果猜想：见过多少条（第一次见到就算）与其中多少升格成「可信的猜想」。
+     * 注意这两个数**不进存档**（瞬态），和 n_counterfactual 一样只是给 ::stats 看的。 */
+    size_t n_causal_seen, n_causal_promoted;
+    float  last_confidence;
+
+    int    n_candidates;
+    size_t sleep_every;
+    size_t sleep_cursor, sleep_target;
+    int    sleep_in_abstraction;
+
+    /* ---- 微内核状态（micro.h）----
+     * 自修改意图队列 + 安全内核 + 补丁注册表 + 元认知。
+     * 用 void* 而不是结构体成员，是为了让 micro.h **整个**放在本文件末尾包含
+     * （结构体定义在那边，而 ai_new 排在它前面）。懒分配：第一轮走到安全点时
+     * micro_of() 才建，所以它不进存档、也不影响 ai_new 的默认值。
+     * 存档格式不含它：补丁是运行时驱动、意图是暂态；
+     * 自修改**产生的 Token 和边本身**已经随图存盘了。 */
+    void  *micro;
+
+    /* ---- 思维循环（think.h）----
+     * 议程 / 未解问题 / 痕迹 / 元认知。同样用 void* 懒分配：
+     * 结构体定义在 think.h 里，而那个头文件要用 rel.h/derive.h，只能放在本文件末尾。
+     * 它也不进存档：未解问题是**会话内**的东西（想通了就没了），
+     * 想通之后落地的只有那些经安全内核审查过的 Token/边。 */
+    void  *think;
+} AI;
+
+/* ---- 思维链的写入接口（要等 AI 结构定义完才能放在这里）---- */
+/* 定长拷贝（截断是设计的一部分，所以自己写，别惹那两个编译警告） */
+static inline void cot_copy(char *dst, size_t cap, const char *src) {
+    if (!dst || cap == 0) return;
+    size_t i = 0;
+    if (src) for (; i + 1 < cap && src[i]; ++i) dst[i] = src[i];
+    dst[i] = 0;
+}
+
+/* 往链上追加一步。满了就丢掉（不覆盖前面的步骤 —— 开头那几步最要紧）。 */
+static inline void cot_push(AI *ai, CotKind kind, int ok, int score,
+                            const char *what, const char *why) {
+    if (!ai || ai->cot.n >= COT_MAX_STEP) return;
+    CotStep *s = &ai->cot.step[ai->cot.n++];
+    s->kind = kind;
+    s->ok = ok;
+    s->score = score;
+    /* 手写定长拷贝，不用 snprintf("%s") / strncpy：
+     * 前者会被 -Wformat-truncation 拦（推导链可能很长），
+     * 后者会被 -Wstringop-truncation 拦 —— 而这里**截断本来就是设计**。 */
+    cot_copy(s->what, sizeof s->what, what);
+    cot_copy(s->why, sizeof s->why, why);
+}
+
+static inline void cot_reset(AI *ai) { if (ai) ai->cot.n = 0; }
+
+/* 前向声明 */
+static inline Token *ai_predict_readonly(const AI *ai, Token *cur);
+static inline uint32_t ai_edge_weight(const AI *ai, const AssocEntry *e);
+static inline float sig_gap(const Token *t);
+static inline float sig_novelty(AI *ai, char **words, size_t n);
+static inline void ai_form_abstractions(AI *ai);
+
+/* ============================ 生命周期 ============================ */
+
+static inline void ai_init_expr_pools(AI *ai) {
+    static const char *names[EXPR_COUNT] = {
+        "[表达:确定]", "[表达:大概]", "[表达:可能]",
+        "[表达:不确定]", "[表达:不知道]", "[表达:好奇]", "[表达:沉默]",
+    };
+    static const char *variants[EXPR_COUNT][5] = {
+        { NULL, NULL, NULL, NULL, NULL },
+        { "应该", "大概", "估计", NULL, NULL },
+        { "可能", "似乎", "感觉", NULL, NULL },
+        { "我不太确定", "说不好", "让我想", NULL, NULL },
+        { "不知道", "不清楚", "想不起来", NULL, NULL },
+        { "这是什么", "什么意思", "？", NULL, NULL },
+        { NULL, NULL, NULL, NULL, NULL },
+    };
+    for (int i = 0; i < EXPR_COUNT; ++i) {
+        ai->expr_root[i] = pool_token_intern(ai->pool, names[i]);
+        for (int j = 0; j < 5 && variants[i][j]; ++j) {
+            Token *v = pool_token_intern(ai->pool, variants[i][j]);
+            token_add_assoc_unique(ai->expr_root[i], NULL, 0, v);
+        }
+    }
+}
+
+
+
+/* 每轮按表把驱动折算成参数修正（**只在 affect_on 时**动）。
+ * 这里只**算出修正量**并记下来；真正施加在用到参数的地方（思考预算在 think_of，
+ * 生成长度/阈值在 agent_step）—— 一处算、一处用，别两头各改一遍。 */
+/* ============================ 唯一时间核（时间衰减只许走这里） ============================
+ *
+ * 借参考实现（lingshu）的纪律：**全库只留一个衰减核**，任何别处自己写
+ * `exp(-t/τ)` / `×(1-factor)` / EMA 保持率，都算口径分叉（那种代码里同一条知识
+ * 会被两套衰减算出两个新旧程度）。这里钉死指数族：
+ *
+ *     w(age) = exp(-γ · age)        γ = 1 / 半衰期刻度
+ *
+ * 目前两个用户：逐条可信度的"新近项"、`::order`/租约式的年龄比较。
+ * （token 的 hits 衰减是**按巩固周期离散**的几何衰减，属于另一套口径 —— 它作用在
+ *   hits 计数上，不参与"这条知识多有底气"的判定；两套口径的分工写在这里，别再混。） */
+#define AI_TIME_GAMMA_DEFAULT 0.00002f      /* 半衰期约 34657 tick（≈ 训练语料的量级） */
+
+static inline double ai_time_kernel(uint64_t age_ticks, double gamma) {
+    if (gamma <= 0.0) return 1.0;
+    if (age_ticks == 0) return 1.0;
+    if (age_ticks > 4000000u) age_ticks = 4000000u;    /* 数值保护：别把 exp 打爆 */
+    return exp(-gamma * (double)age_ticks);
+}
+/* 这条知识按"新近程度"折算的权重（0..1），**唯一**的新近口径 */
+static inline double ai_recency_weight(const AI *ai, uint64_t age_ticks) {
+    double g = (ai && ai->time_gamma > 0.0f) ? (double)ai->time_gamma
+                                             : (double)AI_TIME_GAMMA_DEFAULT;
+    (void)ai;
+    return ai_time_kernel(age_ticks, g);
+}
+
+/* ============================ 来源档的"学出来的"可信度 ============================
+ *
+ * 用户点过的：「可信度是启发式，不是学出来的」。这里把它升级成 **Beta 后验**，
+ * 而且**不新增存储、不动存档格式** —— 证据直接来自**已有的计数器**：
+ *
+ *   基准（relations.txt 显式教的）：先验 Beta(6,2) → 0.75，没有反例可记（它就是底）；
+ *   观测（听来的/经历的）        ：先验 Beta(4,4) + 命中 (n_learned − n_revised)、反例 n_revised；
+ *   推论（想出来沉淀的缓存）      ：先验 Beta(3,7) + 命中 (n_cached − n_retracted)、反例 n_retracted；
+ *   他说的（他的信念表）          ：先验 Beta(2,2) → 0.5（没有 ground truth，按中立）。
+ *
+ * 含义：**改口越多，观测档的可信度越低**；**缓存被撤销越多，推论档越低**。
+ * 这就是"从经验里学出来的可信度"最小可用版（要更强的版本就得把 a/b 真正持久化）。 */
+static inline double ai_source_posterior(const AI *ai, uint8_t role) {
+    double a = 2.0, b = 2.0;
+    if (role == ASSOC_ROLE_INNATE) { a = 6.0; b = 2.0; }
+    else if (role == ASSOC_ROLE_DERIVED) {
+        double nc = ai ? (double)ai->n_cached : 0.0;
+        double nr = ai ? (double)ai->n_retracted : 0.0;
+        a = 3.0 + nc; b = 7.0 + nr;
+    } else {
+        /* ⚠ 用**对话里学到的关系事实**（n_rel_learned）而不是 n_learned：
+         *   后者把 24 万条训练词对也算进来 → 后验恒等于 ~1.0（观测档直接顶到上限）。
+         *   这里要问的是"我现场学的东西，有多少被后来的说法改掉"。
+         *   没在现场学过任何东西时退化成先验 Beta(4,4)=0.5（保守）。 */
+        double nl = ai ? (double)ai->n_rel_learned : 0.0;
+        double nv = ai ? (double)ai->n_revised : 0.0;
+        if (nv > nl) nv = nl;
+        a = 4.0 + (nl - nv); b = 4.0 + nv;
+    }
+    if (a < 0.5) a = 0.5;
+    if (b < 0.5) b = 0.5;
+    return a / (a + b);
+}
+
+/* 来源档后验的**百分数**（0..85，和原来的固定档同一个量纲，便于沿用旧公式） */
+static inline int ai_source_class_pct(const AI *ai, uint8_t role) {
+    double p = ai_source_posterior(ai, role);
+    int v = (int)(p * 100.0 + 0.5);
+    if (v < 5) v = 5;
+    if (v > 85) v = 85;
+    return v;
+}
+
+/* ---- 前提的第三档：前提本身**有据**吗（借 "evaluated vs asserted" 的二分）----
+ * 「够得着」只说明它现在能被想到；「有据」说明它本身是图上站得住的东西：
+ * 不是临时草稿、有足够多带命中的观测边。 */
+#define AI_PREMISE_MIN_EDGES 3
+#define AI_PREMISE_MIN_HITS  2
+static inline int ai_premise_wellfounded(const AI *ai, const Token *p) {
+    if (!ai || !p) return 0;
+    /* 草稿纸当不了"有据的前提"（判据与 micro.h 的 token_is_temp 同源：`[临:` 命名空间） */
+    if (p->name && strncmp(p->name, "[临:", 4) == 0) return 0;
+    if (p->name && p->name[0] == '[') return 0;         /* 内核自有标记也不算 */
+    size_t solid = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        const AssocEntry *e = &p->assocs[i];
+        if (!e->main || e->hits < AI_PREMISE_MIN_HITS) continue;
+        if (e->role == ASSOC_ROLE_DERIVED) continue;          /* 缓存不算"据" */
+        if (e->main->name && e->main->name[0] == '[') continue; /* 内核标记不算 */
+        solid++;
+    }
+    return solid >= AI_PREMISE_MIN_EDGES;
+}
+
+/* 一条边的**逐条可信度**（线上口径）：来源档的**后验** + 命中加成，再乘唯一时间核。 */
+static inline int ai_credibility(const AI *ai, const AssocEntry *e) {
+    if (!e) return 0;
+    uint64_t now = (ai && ai->pool) ? ai->pool->current_tick : 0;
+    uint64_t age = (now > e->last_touch_tick) ? (now - e->last_touch_tick) : 0;
+    int cls = ai_source_class_pct(ai, e->role);
+    return assoc_credibility_cls(e, ai_recency_weight(ai, age), cls);
+}
+
+/* ---- 知识租约（TTL）：`stable` 不是一个终态，而是**带期限的状态** ----
+ * 借参考实现的做法：租约到期 ≡ 可信度衰减到弱阈值以下；**降级只作用于状态，不作用于记录**
+ * （我们从不因为"过期"删东西，只改判定与呈现）。TTL 与 γ 都走**唯一时间核**。 */
+#define AI_LEASE_TTL_TICKS   200000u   /* 租约期限（tick；≈ 半衰期的 3 倍左右） */
+#define AI_LEASE_WEAK_CRED   30        /* 可信度低于它 = 减弱（对应他们的 0.3 阈值） */
+
+typedef enum { AI_LEASE_STABLE = 0, AI_LEASE_WEAK = 1, AI_LEASE_EXPIRED = 2 } AiLease;
+
+static inline AiLease ai_edge_lease(const AI *ai, const AssocEntry *e) {
+    if (!e) return AI_LEASE_EXPIRED;
+    uint64_t now = (ai && ai->pool) ? ai->pool->current_tick : 0;
+    uint64_t age = (now > e->last_touch_tick) ? (now - e->last_touch_tick) : 0;
+    if (age >= AI_LEASE_TTL_TICKS) return AI_LEASE_EXPIRED;
+    if (ai_credibility(ai, e) < AI_LEASE_WEAK_CRED) return AI_LEASE_WEAK;
+    return AI_LEASE_STABLE;
+}
+
+static inline const char *ai_lease_name(AiLease l) {
+    switch (l) {
+    case AI_LEASE_STABLE:  return "稳定";
+    case AI_LEASE_WEAK:    return "减弱";
+    default:               return "过期";
+    }
+}
+
+/* ============================ 写入分级闸门（借 lingshu 的 imp 评分） ============================
+ *
+ * 他们的式子：`imp = 0.30·novelty + 0.25·trust + 0.15·Δ²D + 0.15·Δ²T + 0.15·mention`，
+ * ≥0.70 长期层、≥0.40 知识层、**<0.40 情境层且直接丢弃**。
+ * 我们**没有** Δ²D/Δ²T 那两条历史序列（缺口与信任的二阶差分），所以如实替换成两个
+ * 等价的"当下状态"量：**惊讶度**（discomfort）与**不累**（1−fatigue）——
+ * 名字不同、量纲不同，别当成同一个东西（这一条写在这里，免得以后误引）。
+ * 另外加了一项他们式子里的"novelty"没有的、但在**图里**判别力强得多的量：
+ * **信息量 = 1 − 两端邻居的 Jaccard**（重叠高＝这条连带是意料之中）。
+ * 默认**关**：它会让某些"随口一说"不再进图，属行为改变，先实现先 A/B。 */
+/* 阈值**量出来的**（tools/wgateprobe.c 扫全图 167 条关系边）：
+ *   实测分布 最小 0.587 / p25 0.652 / 中位 0.672 / p75 0.675 / 最大 0.725。
+ *   所以借用来的 0.40 在这套评分上**永远打不着火**（一条都拦不住）；
+ *   按实测取 p25 当"知识层"门槛、取前 ~4% 当"长期层"门槛。 */
+#define AI_WGATE_LONGTERM  0.70
+#define AI_WGATE_KNOWLEDGE 0.65
+
+/* 两个词的**邻居重叠**（有界采样版 Jaccard，0..1）：重叠高 = 这条连带是"意料之中"。
+ * 放在这里而不是调 micro.h 的：ai.h 在 micro.h 之前，且这里只要一个近似值。 */
+static inline double ai_pair_jaccard(const Token *a, const Token *b) {
+    if (!a || !b || a == b) return 0.0;
+    size_t sa = a->count > 64 ? 64 : a->count;
+    size_t sb = b->count > 64 ? 64 : b->count;
+    if (sa == 0 || sb == 0) return 0.0;
+    size_t common = 0;
+    for (size_t i = 0; i < sa; ++i) {
+        const Token *m = a->assocs[i].main;
+        if (!m) continue;
+        for (size_t j = 0; j < sb; ++j)
+            if (b->assocs[j].main == m) { common++; break; }
+    }
+    size_t uni = sa + sb - common;
+    return uni ? (double)common / (double)uni : 0.0;
+}
+
+static inline double ai_write_importance(const AI *ai, const Token *a, const Token *b) {
+    if (!ai) return 0.0;
+    /* novelty：生词更值得记（两端都还很"薄"→ 1.0，见得多 → 0.4） */
+    size_t ea = a ? a->count : 0, eb = b ? b->count : 0;
+    double novelty = (ea < 6 && eb < 6) ? 1.0 : ((ea + eb < 40) ? 0.6 : 0.4);
+    /* **信息量**：两个词的邻居越不重叠，这条连带越是"新闻"（判别力比 novelty 强得多） */
+    double info = 1.0 - ai_pair_jaccard(a, b);
+    /* trust：用**自模型**的"我最近猜得准不准"（参考实现用的是 self_model.trust_state）。
+     * ⚠ 别拿 `ai_source_posterior(观测档)` 顶替：那个是被 24 万次训练学习撑到 ~1.0 的计数，
+     *   放进闸门会让它**永远开不了火**（实测：imp 恒定 ≥0.55）。 */
+    double trust = (double)ai->inner.predict_accuracy;
+    if (trust < 0.0) trust = 0.0;
+    if (trust > 1.0) trust = 1.0;
+    /* mention：两端在图里被碰过多少次（近似他们的 mention 项） */
+    double mention = (double)((a ? token_hits_total(a) : 0) + (b ? token_hits_total(b) : 0));
+    mention = mention / 200.0; if (mention > 1.0) mention = 1.0;
+    /* 惊讶 / 不累：替代 Δ²D、Δ²T 的"当下状态"量 */
+    double surprise = ai->inner.discomfort; if (surprise > 1.0) surprise = 1.0;
+    double awake = 1.0 - (double)ai->inner.fatigue; if (awake < 0.0) awake = 0.0;
+    double imp = 0.25 * novelty + 0.20 * trust + 0.20 * mention
+               + 0.20 * info + 0.075 * surprise + 0.075 * awake;
+    if (imp < 0.0) imp = 0.0;
+    if (imp > 1.0) imp = 1.0;
+    return imp;
+}
+static inline const char *ai_write_layer(double imp) {
+    if (imp >= AI_WGATE_LONGTERM)  return "长期层";
+    if (imp >= AI_WGATE_KNOWLEDGE) return "知识层";
+    return "情境层（随口一说）";
+}
+
+
+/* ============================ 开关 / 钩子的**唯一**默认值处 ============================
+ *
+ * 教训：`ai_load_file` **不调用 `ai_new()`**（它自己铺一遍常量默认值，见 model_io.h），
+ * 所以任何新的 per-AI 开关如果在 `ai_new` 里初始化，**读盘那条路会拿到 calloc 的 0**
+ * —— 实测 `write_gate_off` 就是这么变成"默认开"的（本该默认关）。
+ * 这里把（后加的）开关与测量钩子集中成一处，**两条路都调它**。
+ * （更早那批常量默认值仍有两份 —— 历史包袱，要动它得单独 A/B。） */
+static inline void ai_switches_init(AI *ai) {
+    if (!ai) return;
+    ai->time_gamma = AI_TIME_GAMMA_DEFAULT;
+    ai->prem_hold_activate = 0;      /* 0=只看注意窗口（默认）/1=够得着/2=有据 */
+    ai->write_gate_off = 1;          /* 写入分级闸门默认**关** */
+    ai->last_write_imp = -1.0;       /* -1 = 还没写过任何关系事实 */
+    ai->route_writes = 0;
+    ai->affect_on = 0;
+    { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
+    { const char *af = getenv("AIP_AFFECT"); if (af && af[0] == '1') ai->affect_on = 1; }
+    { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
+    { const char *ph = getenv("AIP_PREMHOLD");
+      if (ph && !strcmp(ph, "activate"))      ai->prem_hold_activate = 1;
+      else if (ph && !strcmp(ph, "verified")) ai->prem_hold_activate = 2; }
+}
+
+static inline AI *ai_new(void) {
+    AI *ai = (AI *)calloc(1, sizeof *ai);
+    if (!ai) return NULL;
+    ai->pool = pool_new();
+    if (!ai->pool) { free(ai); return NULL; }
+
+    ai_switches_init(ai);
+    ai->rng = 0x9E3779B9u;
+    ai->gc_rng = 0x85EBCA6Bu;
+    ai->energy = 1.0f; ai->decay = 0.7f; ai->cutoff = 0.05f;
+    ai->max_gen = 6;
+    ai->consolidate_every = 50; ai->decay_factor = 0.98f;
+
+    ai->gc.gc_min_age = 3000; ai->gc.gc_time_scale = 1000;
+    ai->gc.gc_upgrade_rate = 0.15f; ai->gc.gc_interval = 100;
+    ai->gc.gc_delete_state = MEM_FORGOTTEN;
+
+    ai->uncertain.w_gap = 0.30f; ai->uncertain.w_conflict = 0.15f;
+    ai->uncertain.w_activation = 0.25f; ai->uncertain.w_effort = 0.15f;
+    ai->uncertain.w_novelty = 0.15f;
+    ai->uncertain.certain_threshold = 0.60f;
+    ai->uncertain.unknown_threshold = 0.35f;
+
+    ai->setpoint.setpoint_comfort = 0.70f;
+    ai->setpoint.setpoint_arousal = 0.50f;
+    ai->setpoint.regulation_rate = 0.15f;
+
+    ai->inner.predict_accuracy = 0.5f;
+    ai->inner.comfort = 0.5f;
+    ai->inner.arousal = 0.5f;
+
+    ai->n_candidates = 3;
+    ai->use_retrieval = 1;          /* 默认优先整句检索 */
+    ai->frames = NULL;              /* 结构化帧库，由 frame_io.h 装载 */
+    ai->assoc_slot_off = 0;         /* 结构化帧默认允许读关联链产物（见 frame.h Gate B） */
+    ai->coin_off = 0;               /* 默认允许现场造词（见 frame.h fr_coin） */
+    ai->seg_off = 0;                /* 默认允许换切分找帧（见 frame.h fr_generate） */
+    ai->relay_off = 0;              /* 默认允许中转词容错（见 frame.h FR_RELAY） */
+    ai->fall_off = 0;               /* 默认允许降级答复（见 frame.h fr_try_fall） */
+    ai->rel_off = 0;                /* 默认允许关系层（见 rel.h） */
+    ai->der_style = DER_STYLE_PLAIN;/* 默认「结论 + 推导链」 */
+    ai->closed_world = 0;           /* 默认开放世界 */
+    ai->view_who = NULL;
+    /* 关系独占表的**声明值**（种子）。真正生效的以 ai->rel_excl 为准，
+     * 装载后会被 rel_excl_build() 按数据覆盖。 */
+    ai->rel_excl[REL_IS_A]    = 1;
+    ai->rel_excl[REL_CONTAIN] = 0;
+    ai->rel_excl[REL_HAS]     = 0;
+    ai->rel_excl[REL_CAN]     = 0;
+    ai->rel_excl[REL_FEAR]    = 0;
+    ai->rel_excl[REL_LIKE]    = 0;
+    ai->rel_excl[REL_EAT]     = 0;
+    ai->rel_excl[REL_AT]      = 1;
+    ai->rel_excl[REL_NEED]    = 0;   /* 一件事可以有很多前提（多值） */
+    ai->sleep_every = 200;
+    ai->last_expr_mode = -1;
+    ai->imagine_rate = 0.03f;
+    ai->inner_dialogue_gain = 0.15f;
+    ai->narrate_every = 500;
+    ai->drift_sample_every = 200;
+
+    ai->self        = pool_token_intern(ai->pool, "我");
+    ai->good        = pool_token_intern(ai->pool, "[符号:好]");
+    ai->bad         = pool_token_intern(ai->pool, "[符号:坏]");
+    ai->unknowing   = pool_unknowing(ai->pool);
+    ai->causal      = pool_token_intern(ai->pool, "[因果]");
+    ai->social_good = pool_token_intern(ai->pool, "[社会:对]");
+    ai->social_bad  = pool_token_intern(ai->pool, "[社会:错]");
+    ai->past_self   = pool_token_intern(ai->pool, "[我:过去]");
+    ai->future_self = pool_token_intern(ai->pool, "[我:未来]");
+    ai->split_tok   = pool_token_intern(ai->pool, AI_DIALOG_SPLIT_NAME);
+
+    token_add_assoc_unique(ai->self, NULL, 0, ai->good);
+    token_add_assoc_unique(ai->self, NULL, 0, ai->bad);
+    token_add_assoc_unique(ai->self, NULL, 0, ai->unknowing);
+    token_add_assoc_unique(ai->self, NULL, 0, ai->past_self);
+    token_add_assoc_unique(ai->self, NULL, 0, ai->future_self);
+
+    ai_init_expr_pools(ai);
+    return ai;
+}
+
+static inline void ai_free(AI *ai) {
+    if (!ai) return;
+    pool_free(ai->pool);
+    free(ai->trace);
+    free(ai->last_output);
+    free(ai->last_skipped);
+    free(ai->pairs);
+    free(ai->idf);
+    ai->idf = NULL;
+    ai->idf_n = 0;
+    free(ai->last_idea);
+    for (size_t i = 0; i < ai->dynrel_n; ++i) free(ai->dynrel_name[i]);
+    free(ai->micro);        /* 微内核状态；内建补丁用静态壳，没有别的分配 */
+    free(ai->think);        /* 思维循环状态（议程/未解问题/痕迹） */
+    free(ai);
+}
+
+/* ============================ 分词 ============================ */
+
+/* 固定词表：中文里必须整体成词的常用多字词。
+ *
+ * 为什么要有它：只靠「池里认识的词」做最长匹配会陷入鸡生蛋 —— 池里没有多字词就
+ * 永远切不出多字词，于是所有中文都被切成单字，生成出来就是「好 活 动 物 质」。
+ * 放进一张固定词表后，**语料构建和用户输入走的是同一张表**，切法必然一致，
+ * 而且不依赖任何运行顺序。表外的词自动退回单字（也是两侧一致）。 */
+static const char *const AI_LEXICON[] = {
+    /* 这张表决定 CJK 怎么切词：语料构建和用户输入共用它，切法必然一致。
+     * 表外的多字词退回单字切分。内容由语料 + 基础功能词生成。 */
+    /* 6 字词 */
+    "很高兴见到你",
+    /* 4 字词 */
+    "什么时候", "春夏秋冬", "是什么样", "说不出来",
+    /* 3 字词 */
+    "不喜欢", "不客气", "不知道", "不认识", "为什么", "什么样", "你好吗",
+    "加衣服", "听起来", "告诉我", "喜欢你", "在哪里", "好不好", "对不对", "对不起",
+    "差不多", "开心吗", "很难过", "怎么办", "怎么样", "想知道", "我在的", "早上好",
+    "是不是", "是什么", "晚上好", "有意思", "有没有", "没关系", "的时候", "累了吗",
+    "能不能", "记得吗", "陌生人", "饿了吗",
+    /* 2 字词 */
+    "一下", "一个", "一会", "一切", "一只", "一天", "一定", "一样",
+    "一点", "一直", "一种", "一类", "一起", "一遍", "三十", "上去",
+    "下午", "下去", "下来", "下次", "下雨", "不仅", "不会", "不好",
+    "不懂", "不是", "不用", "不错", "世界", "东西", "中午", "中间",
+    "之前", "之间", "乐意", "也许", "了解", "事情", "事物", "互相",
+    "交给", "什么", "今天", "从前", "从来", "他们", "以为", "以前",
+    "以后", "以来", "价值", "休息", "伙伴", "会吗", "伤害", "但是",
+    "体谅", "作业", "你们", "你好", "佩服", "保护", "保暖", "保证",
+    "值得", "假如", "做梦", "偶尔", "充实", "公园", "关心", "关系",
+    "兴趣", "其实", "再见", "再说", "写字", "农民", "几个", "几点",
+    "出去", "出来", "分享", "刚刚", "刚才", "别人", "办法", "动物",
+    "助手", "努力", "医生", "医院", "危险", "厉害", "原来", "原谅",
+    "反义", "发生", "发誓", "受伤", "句子", "只有", "只要", "可以",
+    "可能", "司机", "合理", "同意", "名字", "后悔", "听话", "告诉",
+    "哥哥", "哪个", "哪儿", "哪里", "商店", "善良", "喜欢", "回来",
+    "回答", "因为", "因果", "在吗", "地上", "地方", "地点", "坚持",
+    "城市", "声音", "外面", "多少", "多谢", "夜晚", "大人", "大家",
+    "大概", "天上", "天体", "天气", "太阳", "失望", "失败", "头发",
+    "女人", "奶奶", "她们", "好久", "好人", "好吗", "好奇", "好好",
+    "好看", "如何", "如果", "如此", "妈妈", "妹妹", "姐姐", "存在",
+    "季节", "孤单", "学习", "学校", "学生", "学过", "孩子", "安心",
+    "安静", "完全", "客气", "害怕", "家人", "家里", "对吗", "将来",
+    "小孩", "小心", "就是", "尽力", "尾巴", "属于", "山上", "嵌套",
+    "工人", "工作", "工具", "工厂", "已经", "希望", "帮助", "帮忙",
+    "帮我", "平常", "平静", "幸福", "幸运", "应该", "建议", "开始",
+    "开心", "弟弟", "当然", "形状", "彼此", "很多", "很快", "心思",
+    "心情", "心里", "忘掉", "忘记", "快乐", "怎么", "您好", "情绪",
+    "惊喜", "惊讶", "想法", "想起", "意义", "意思", "感到", "感动",
+    "感情", "感染", "感激", "感觉", "感谢", "愿意", "慢慢", "懂吗",
+    "成功", "我们", "我在", "或者", "房子", "所以", "手机", "才能",
+    "找到", "担心", "拒绝", "拥有", "支持", "收获", "改变", "放弃",
+    "放心", "放松", "故事", "故意", "敌人", "教我", "散开", "整理",
+    "方便", "方向", "无聊", "日子", "早上", "时候", "时间", "明天",
+    "明白", "星星", "昨天", "是的", "是谁", "晚上", "晚点", "最好",
+    "最近", "月亮", "有意", "有点", "朋友", "未来", "本来", "机会",
+    "机器", "村庄", "条件", "果子", "树上", "样子", "桌子", "椅子",
+    "植物", "欣赏", "每个", "每天", "水里", "永远", "没事", "没有",
+    "注意", "活动", "活着", "清楚", "温暖", "温柔", "游戏", "游泳",
+    "满意", "满足", "漂亮", "激动", "热闹", "然后", "照顾", "爷爷",
+    "爸爸", "物质", "特别", "现在", "珍惜", "理由", "理解", "生命",
+    "生气", "生活", "电脑", "男人", "痛苦", "白天", "的话", "相信",
+    "相同", "看到", "看看", "看见", "真的", "真话", "眼睛", "着急",
+    "睡觉", "知识", "知道", "确定", "礼物", "社会", "秘密", "程序",
+    "稍等", "空气", "空间", "立刻", "第一", "答应", "答案", "简单",
+    "算数", "紧张", "练习", "终于", "经常", "结尾", "结束", "继续",
+    "羞愧", "翅膀", "老师", "老虎", "老鼠", "而且", "耐心", "职业",
+    "聪明", "肚子", "肯定", "自己", "自然", "自由", "舒服", "节日",
+    "虽然", "行动", "行吗", "衣服", "见到", "见面", "觉得", "解释",
+    "认为", "认真", "认识", "讨厌", "让我", "记住", "记得", "记忆",
+    "试试", "语言", "说话", "请求", "谎言", "谎话", "谢谢", "走走",
+    "起来", "路上", "身份", "身体", "身边", "转折", "过去", "过得",
+    "过来", "过程", "还是", "这个", "这些", "这样", "这里", "进去",
+    "远处", "选择", "递进", "道歉", "那个", "那么", "那些", "那样",
+    "那里", "重要", "长大", "问题", "附近", "陌生", "随时", "难过",
+    "需要", "非常", "音乐", "顺便", "颜色", "飞机", "食物", "马上",
+    "骄傲", "骨头", "高兴",
+    NULL
+};
+
+static inline int ai_in_lexicon(const char *w) {
+    for (size_t i = 0; AI_LEXICON[i]; ++i)
+        if (strcmp(AI_LEXICON[i], w) == 0) return 1;
+    return 0;
+}
+
+/* 一个 UTF-8 字符占几个字节（只认合法起始字节） */
+static inline size_t cjk_char_len(const unsigned char *p) {
+    if ((*p & 0xE0) == 0xC0) return 2;
+    if ((*p & 0xF0) == 0xE0) return 3;
+    if ((*p & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+/* 从 text 的 pos 起，切出一个「池里认识的」最长单词。
+ *
+ * 这一步是整个对话能力的关键：语料里写的是多字词（「什么」「我们」「老师」），
+ * 而用户输入如果不按同一套词汇去切，就会出现「语料里的 `什么`」和「输入切出来的
+ * `什` + `么`」是两个不同 Token 的错位 —— 表现为答非所问/只会复读。
+ * 所以这里做「最长优先」的词汇匹配：先试 4/3/2 字，池里没有就退回单字。 */
+static inline size_t ai_match_word(const AI *ai, const unsigned char *p, size_t remain) {
+    if (!ai || !ai->pool) return 0;
+    size_t best = 0;
+    size_t off = 0, maxc = 0;
+    while (off < remain && maxc < 8) { off += cjk_char_len(p + off); maxc++; }
+    if (off > remain) off = remain;
+    /* 从长到短试 */
+    size_t candidates[8]; size_t nc = 0;
+    size_t o2 = 0, c2 = 0;
+    while (o2 < off && c2 < 8) {
+        size_t l = cjk_char_len(p + o2);
+        if (o2 + l > off) break;
+        o2 += l; c2++;
+        candidates[nc++] = o2;
+    }
+    while (nc > 0) {
+        size_t l = candidates[--nc];
+        if (l < 2) break;                       /* 单字不用查池，直接兜底 */
+        char buf[32];
+        if (l >= sizeof buf) continue;
+        memcpy(buf, p, l); buf[l] = 0;
+        if (ai_in_lexicon(buf) || pool_find(ai->pool, buf)) { best = l; break; }
+    }
+    if (best == 0) best = cjk_char_len(p);      /* 兜底：单字 */
+    if (best > remain) best = remain;
+    return best;
+}
+
+static inline char **ai_tokenize(AI *ai, const char *text, size_t *out_n) {
+    *out_n = 0;
+    if (!text) return NULL;
+    size_t cap = 16, n = 0;
+    char **words = (char **)malloc(cap * sizeof *words);
+    if (!words) return NULL;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        /* 原语标记是一个整体：[原语:对象]、[原语:分割] …
+         * 必须先于「单字节 ASCII」分支处理，否则 '[' 会被当成一个孤立标点，
+         * 整个标记被拆成 原|语|对|象 —— 与语料里的 Token 完全对不上。 */
+        if (*p == '[') {
+            const char *close = strchr((const char *)p, ']');
+            if (close && close > (const char *)p + 1) {
+                size_t len = (size_t)(close - (const char *)p) + 1;
+                if (n == cap) { cap *= 2; words = (char **)realloc(words, cap * sizeof *words); }
+                char *w = (char *)malloc(len + 1);
+                if (!w) break;
+                memcpy(w, p, len); w[len] = 0;
+                words[n++] = w;
+                p = (const unsigned char *)close + 1;
+                continue;
+            }
+        }
+        if (isspace(*p) || (*p < 128 && ispunct(*p))) { p++; continue; }
+        size_t len;
+        if (*p >= 0x80) {
+            /* 池里有的多字词优先；没有就单字 */
+            size_t remain = strlen((const char *)p);
+            len = ai ? ai_match_word(ai, p, remain) : cjk_char_len(p);
+            if (len == 0) len = cjk_char_len(p);
+        } else {
+            const unsigned char *s = p;
+            while (*p && *p < 128 && !isspace(*p) && !ispunct(*p)) p++;
+            len = (size_t)(p - s);
+            if (len == 0) { p++; continue; }
+            if (n == cap) { cap *= 2; words = (char **)realloc(words, cap * sizeof *words); }
+            char *w = (char *)malloc(len + 1);
+            if (!w) break;
+            memcpy(w, s, len); w[len] = 0;
+            words[n++] = w;
+            continue;
+        }
+        if (n == cap) { cap *= 2; words = (char **)realloc(words, cap * sizeof *words); }
+        char *w = (char *)malloc(len + 1);
+        if (!w) break;
+        memcpy(w, p, len); w[len] = 0;
+        words[n++] = w;
+        p += len;
+    }
+    *out_n = n;
+    return words;
+}
+static inline void ai_free_words(char **words, size_t n) {
+    if (!words) return;
+    for (size_t i = 0; i < n; ++i) free(words[i]);
+    free(words);
+}
+static inline void ai_learn_text(AI *ai, const char *text) {
+    if (!ai || !text) return;
+    size_t n;
+    char **words = ai_tokenize(ai, text, &n);
+    if (!words || n == 0) { ai_free_words(words, n); return; }
+    token_observe_names(ai->pool, (const char *const *)words, n, 2);
+    ai->n_learned += n;
+    ai_free_words(words, n);
+}
+
+/* ============================ 内生状态 ============================ */
+
+static inline void ai_inner_update(AI *ai, float surprise, int correct) {
+    if (!ai) return;
+    AIInner *s = &ai->inner;
+    s->predict_accuracy = s->predict_accuracy * 0.95f + (correct ? 1.0f : 0.0f) * 0.05f;
+    s->surprise_level = s->surprise_level * 0.95f + (surprise > 1 ? 1.0f : surprise) * 0.05f;
+    s->comfort = s->predict_accuracy * 0.9f + 0.1f;
+    s->discomfort = s->surprise_level * 0.9f + 0.1f;
+    s->arousal = s->arousal * 0.9f + (correct ? 0.1f : 0.9f) * 0.1f;
+    s->fatigue += 0.001f;
+    if (s->fatigue > 1.0f) s->fatigue = 1.0f;
+
+    Token *self = ai->self;
+    if (!self) return;
+    if (correct) {
+        for (size_t i = 0; i < self->count; ++i)
+            if (self->assocs[i].main == ai->good)
+                token_touch_entry(self, &self->assocs[i]);
+    } else {
+        for (size_t i = 0; i < self->count; ++i)
+            if (self->assocs[i].main == ai->bad)
+                token_touch_entry(self, &self->assocs[i]);
+    }
+}
+
+/* ============================ 设定点 ============================ */
+
+static inline float ai_comfort_error(const AI *ai) {
+    return ai->inner.comfort - ai->setpoint.setpoint_comfort;
+}
+static inline float ai_arousal_error(const AI *ai) {
+    return ai->inner.arousal - ai->setpoint.setpoint_arousal;
+}
+static inline int ai_exploration_bias(const AI *ai) {
+    float ec = -ai_comfort_error(ai), ea = -ai_arousal_error(ai);
+    float drive = (ec + ea) * 0.5f;
+    float bias = 1.0f + drive * (1.0f + ai->setpoint.regulation_rate * 5.0f);
+    if (bias < 0.5f) bias = 0.5f;
+    if (bias > 2.5f) bias = 2.5f;
+    int n = (int)((float)ai->n_candidates * bias + 0.5f);
+    if (n < 1) n = 1;
+    if (n > 8) n = 8;
+    return n;
+}
+static inline int ai_effective_candidates(const AI *ai) { return ai_exploration_bias(ai); }
+static inline float ai_effective_energy(const AI *ai) {
+    float e = ai->energy * (1.0f - ai->inner.fatigue * 0.5f)
+                          * (0.7f + ai->inner.arousal * 0.6f);
+    if (e > 1.0f) e = 1.0f;
+    if (e < 0.1f) e = 0.1f;
+    return e;
+}
+
+/* ============================ 多焦点 ============================ */
+
+static inline void ai_focus_push(AI *ai, Token *t, float w) {
+    if (!ai || !t || t->is_garbage) return;
+    for (size_t i = 0; i < ai->focus_n; ++i) {
+        if (ai->focus_ring[i] == t) {
+            ai->focus_weight[i] += w;
+            if (ai->focus_weight[i] > 3.0f) ai->focus_weight[i] = 3.0f;
+            return;
+        }
+    }
+    if (ai->focus_n == AI_MAX_FOCUS) {
+        size_t worst = 0;
+        for (size_t i = 1; i < AI_MAX_FOCUS; ++i)
+            if (ai->focus_weight[i] < ai->focus_weight[worst]) worst = i;
+        ai->focus_ring[worst] = t; ai->focus_weight[worst] = w;
+        return;
+    }
+    ai->focus_ring[ai->focus_n] = t;
+    ai->focus_weight[ai->focus_n] = w;
+    ai->focus_n++;
+}
+static inline float ai_focus_get(const AI *ai, const Token *t) {
+    if (!ai || !t) return 0.0f;
+    for (size_t i = 0; i < ai->focus_n; ++i)
+        if (ai->focus_ring[i] == t) return ai->focus_weight[i];
+    return 0.0f;
+}
+/* ============================ 前提成立吗（推理层按前提决定用不用） ============================
+ *
+ * 用户的话：「**联想本来不依赖前提**，可以正常联想……但是逻辑会知道这两个之间的前提
+ * token 是什么」+「推理/思维层按前提决定用不用」。所以判据放在**逻辑**这一侧：
+ * **前提 token 出现在当前注意窗口里（输入里的词会被推进焦点环）→ 前提成立**。
+ * 它只看注意力，不看权重：简单、确定、说出来也听得懂（"你刚才提到过它"）。
+ * 联想/走边**不看这个** —— 那是刻意的（前提不该挡住回忆）。 */
+/* 前提在图上"够得着"吗：从当前注意窗口出发做一次**受限扩散**（深度 ≤2、能量 ≥0.25），
+ * 看这条前提会不会被激活到。判据全在图里，不新造状态。 */
+typedef struct { const Token *want; int hit; } PremProbe;
+
+static inline void prem_probe_visit(Token *t, size_t depth, float energy, void *user) {
+    (void)depth;
+    PremProbe *pr = (PremProbe *)user;
+    if (pr && t == pr->want && energy >= 0.25f) pr->hit = 1;
+}
+
+static inline int ai_premise_reachable(const AI *aic, const Token *p) {
+    if (!aic || !p || aic->focus_n == 0) return 0;
+    /* 扩散只**读**图（token_touch 是时间戳维护），所以这里把 const 去掉用；AI 本身不改。 */
+    AI *ai = (AI *)aic;
+    PremProbe pr;
+    pr.want = p; pr.hit = 0;
+    ActivateCtx act;
+    activate_ctx_init(&act, 0.7f, 0.25f, 2);      /* 衰减/门槛/深度：只看两步 */
+    act.on_visit = prem_probe_visit;
+    act.user = &pr;
+    for (size_t i = 0; i < ai->focus_n && !pr.hit; ++i) {
+        Token *seed = ai->focus_ring[i];
+        if (!seed || seed == p) continue;
+        if (ai->focus_weight[i] < 0.30f) continue; /* 只从"现在确实还在意"的词出发 */
+        token_activate_from(seed, (Token *const *)ai->focus_ring, ai->focus_n, 0.9f, &act);
+    }
+    activate_ctx_free(&act);
+    return pr.hit;
+}
+
+/* 前提成立吗：① 在注意窗口里（默认档）；② 开了第二档时，**图上够得着**也算。
+ * 注意：它只回答"前提成立不成立"，不回答"世界上是不是真的" —— 那是知识层的事。 */
+static inline int ai_premise_holds(const AI *ai, const Token *p) {
+    if (!ai || !p) return 0;
+    for (size_t i = 0; i < ai->focus_n; ++i)
+        if (ai->focus_ring[i] == p) return 1;
+    if (ai->prem_hold_activate >= 1) {
+        if (!ai_premise_reachable(ai, p)) return 0;
+        /* 第三档：**够得着还不够，前提本身要有据**（借 evaluated vs asserted 的二分） */
+        if (ai->prem_hold_activate >= 2 && !ai_premise_wellfounded(ai, p)) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* 一条前提的条件成立吗：+1 = 要它在窗口里；-1 = 要它**不在**窗口里。 */
+static inline int ai_premise_cond_ok(const AI *ai, const Token *p, int pol) {
+    if (!ai || !p) return 0;
+    int holds = ai_premise_holds(ai, p);
+    return pol < 0 ? !holds : holds;
+}
+
+/* A 经前提到 B 这条连结现在能用吗：没有前提 → 能用；有前提 → 条件全成立才用。 */
+static inline int ai_premise_link_ok(const AI *ai, const Token *from, const Token *to) {
+    const Token *ps[4];
+    int pol[4];
+    size_t np = token_premises(from, to, ps, pol, 4);
+    for (size_t i = 0; i < np; ++i)
+        if (!ai_premise_cond_ok(ai, ps[i], pol[i])) return 0;
+    return 1;
+}
+
+static inline void ai_focus_decay(AI *ai, float factor) {
+    if (!ai) return;
+    for (size_t i = 0; i < ai->focus_n; ) {
+        ai->focus_weight[i] *= factor;
+        if (ai->focus_weight[i] < 0.1f) {
+            ai->focus_ring[i] = ai->focus_ring[ai->focus_n - 1];
+            ai->focus_weight[i] = ai->focus_weight[ai->focus_n - 1];
+            ai->focus_n--;
+        } else i++;
+    }
+}
+static inline void ai_set_focus(AI *ai, Token *t) { if (ai) ai->focus = t; }
+
+/* ============================ 自我模型 ============================ */
+
+static inline void ai_self_update(AI *ai) {
+    if (!ai || !ai->self) return;
+    Token *self = ai->self;
+    float c = ai->inner.comfort, a = ai->inner.arousal, f = ai->inner.fatigue;
+    for (size_t i = 0; i < self->count; ++i) {
+        AssocEntry *e = &self->assocs[i];
+        if (e->main == ai->good) {
+            if (c * (1.0f - f) > 0.5f) token_touch_entry(self, e);
+        } else if (e->main == ai->bad) {
+            if ((1.0f - c) * a > 0.4f) token_touch_entry(self, e);
+        }
+    }
+}
+
+/* 强化一次「输入尾词 → 分隔符」和「分隔符 → 回复首词」。
+ * 语料里每出现一个分隔符，就说明前面是输入、后面是回复 —— 这两条边是「接话」的
+ * 主干，必须比普通的共现边重，否则从输入尾词出发时会被高频虚词的边抢走。 */
+static inline void ai_boost_reply_bridge(AI *ai, Token *tail, Token *head) {
+    if (!ai || !ai->split_tok) return;
+    Token *sp = ai->split_tok;
+    if (tail) {
+        for (size_t i = 0; i < tail->count; ++i) {
+            AssocEntry *e = &tail->assocs[i];
+            if (e->main != sp) continue;
+            /* 顶 24 次，相当于在语料里多见了 24 遍 */
+            if (e->hits < 24) e->hits = 24;
+            break;
+        }
+    }
+    if (head) {
+        for (size_t i = 0; i < sp->count; ++i) {
+            AssocEntry *e = &sp->assocs[i];
+            if (e->main != head) continue;
+            if (e->hits < 24) e->hits = 24;
+            else e->hits += 4;
+            break;
+        }
+    }
+}
+
+/* ============================ 权重 ============================ */
+
+static inline uint32_t ai_edge_weight(const AI *ai, const AssocEntry *e) {
+    /* 线性 hits，但封顶。开方会把所有边压到同一量级、让游走退化成随机漫步
+     * （实测反而更容易漂进 反义/什么 这类环），所以保留线性、只压住极端长尾。 */
+    uint32_t h = e->hits + 1;
+    if (h > 400) h = 400;
+    uint32_t w = h;
+    if (w < 1) w = 1;
+    if (e->mem_state == MEM_FADING) w = (w + 1) / 2;
+    /* 从分隔符出发的边 = 「回复首词」。它比别的续接重要得多，单独加权，
+     * 否则游走很容易在回复开头就漂到无关的高频词上（表现为答非所问）。 */
+    if (ai->split_tok && e->hits && e->hits >= (ai->split_tok->count / 8 + 1))
+        w *= 4;
+    if (ai->focus_n > 0) {
+        float fw = ai_focus_get(ai, e->main);
+        if (fw > 0.0f) w = (uint32_t)((float)w * (1.0f + fw * 2.0f));
+        for (uint8_t k = 0; k < e->n_subs; ++k) {
+            float sw = ai_focus_get(ai, e->subs[k]);
+            if (sw > 0.0f) w = (uint32_t)((float)w * (1.0f + sw));
+        }
+    }
+    return w;
+}
+
+/* ============================ 预测 / 惊讶 ============================ */
+
+static inline Token *ai_predict_readonly(const AI *ai, Token *cur) {
+    if (!cur || cur->count == 0) return NULL;
+    AssocEntry *best = NULL;
+    uint32_t best_w = 0;
+    for (size_t i = 0; i < cur->count; ++i) {
+        AssocEntry *e = &cur->assocs[i];
+        if (e->n_subs > 0 || e->n_not > 0) continue;
+        if (e->mem_state >= MEM_DORMANT) continue;
+        if (e->main && e->main->name && e->main->name[0] == '[') continue;  /* 跳过原语 */
+        uint32_t w = ai_edge_weight(ai, e);
+        if (w > best_w) { best_w = w; best = e; }
+    }
+    return best ? best->main : NULL;
+}
+static inline void ai_weaken_edge(Token *from, Token *to) {
+    if (!from || !to) return;
+    for (size_t i = 0; i < from->count; ++i) {
+        AssocEntry *e = &from->assocs[i];
+        if (e->main != to || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->hits > 0) e->hits--;
+        if (e->hits == 0 && e->mem_state == MEM_ACTIVE) e->mem_state = MEM_FADING;
+        return;
+    }
+}
+static inline void ai_learn_pair(AI *ai, Token *prev, Token *actual) {
+    if (!ai || !prev || !actual) return;
+    Token *pred = ai_predict_readonly(ai, prev);
+    if (!pred || pred == actual) {
+        token_observe_pair(prev, actual);
+    } else {
+        token_observe_pair(prev, actual);
+        ai_weaken_edge(prev, pred);
+        ai->n_surprises++;
+    }
+}
+static inline void ai_push_trace(AI *ai, Token *t) {
+    if (!ai || !t) return;
+    if (ai->trace_n == ai->trace_cap) {
+        size_t ncap = ai->trace_cap ? ai->trace_cap * 2 : 64;
+        Token **nt = (Token **)realloc(ai->trace, ncap * sizeof *nt);
+        if (!nt) return;
+        ai->trace = nt; ai->trace_cap = ncap;
+    }
+    ai->trace[ai->trace_n++] = t;
+    if (ai->trace_n > 2048) {
+        memmove(ai->trace, ai->trace + 1024, 1024 * sizeof *ai->trace);
+        ai->trace_n = 1024;
+    }
+}
+
+/* ============================ 不确定性 ============================ */
+
+static inline float sig_gap(const Token *t) {
+    if (!t) return 1.0f;
+    uint32_t rm = t->recent_misses, ht = token_hits_total(t);
+    return (float)rm / (float)(rm + ht + 1);
+}
+static inline float sig_conflict(const Token *t, Token *const *ctx, size_t n_ctx, float energy) {
+    if (!t || t->count == 0) return 0.0f;
+    size_t reach = token_reach(t, energy);
+    uint32_t best = 0, second = 0;
+    size_t n_match = 0;
+    for (size_t i = 0; i < reach; ++i) {
+        AssocEntry *e = &t->assocs[i];
+        if (!entry_matches(e, ctx, n_ctx)) continue;
+        if (e->mem_state >= MEM_DORMANT) continue;
+        uint32_t w = e->hits + 1; n_match++;
+        if (w > best) { second = best; best = w; }
+        else if (w > second) second = w;
+    }
+    if (n_match < 2 || best == 0) return 0.0f;
+    float ratio = (float)second / (float)best;
+    float many = n_match > 5 ? 1.0f : (float)n_match / 5.0f;
+    return ratio * many;
+}
+static inline float sig_low_activation(const Token *t, Token *const *ctx, size_t n_ctx, float energy) {
+    if (!t || t->count == 0) return 1.0f;
+    size_t reach = token_reach(t, energy);
+    uint32_t best = 0;
+    int found = 0;
+    for (size_t i = 0; i < reach; ++i) {
+        AssocEntry *e = &t->assocs[i];
+        if (!entry_matches(e, ctx, n_ctx)) continue;
+        if (e->mem_state >= MEM_DORMANT) continue;
+        found = 1;
+        if (e->hits > best) best = e->hits;
+    }
+    if (!found) return 1.0f;
+    return 1.0f / (1.0f + (float)best);
+}
+static inline float sig_effort(size_t gen_steps, size_t max_steps) {
+    if (max_steps == 0) return 0.0f;
+    float r = (float)gen_steps / (float)max_steps;
+    return r > 1.0f ? 1.0f : r;
+}
+static inline float sig_novelty(AI *ai, char **words, size_t n) {
+    if (!ai || !words || n == 0) return 0.0f;
+    size_t novel = 0;
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = pool_token_intern(ai->pool, words[i]);
+        if (!t) continue;
+        if (token_hits_total(t) == 0 && t->misses == 0 &&
+            t->mem_state == MEM_ACTIVE && t->count == 0) novel++;
+    }
+    return (float)novel / (float)n;
+}
+static inline float ai_confidence(AI *ai, Token *t, Token *const *ctx, size_t n_ctx,
+                                  float energy, size_t gen_steps, size_t max_gen,
+                                  char **input_words, size_t n_words) {
+    if (!ai) return 0.0f;
+    float g = sig_gap(t);
+    float c = sig_conflict(t, ctx, n_ctx, energy);
+    float a = sig_low_activation(t, ctx, n_ctx, energy);
+    float e = sig_effort(gen_steps, max_gen);
+    float nv = sig_novelty(ai, input_words, n_words);
+    const UncertainConfig *cfg = &ai->uncertain;
+    float dis = cfg->w_gap * g + cfg->w_conflict * c +
+                cfg->w_activation * a + cfg->w_effort * e + cfg->w_novelty * nv;
+    float conf = 1.0f - dis;
+    if (conf < 0.0f) conf = 0.0f;
+    if (conf > 1.0f) conf = 1.0f;
+    return conf;
+}
+
+/* ============================ 元认知 + 表达 ============================ */
+
+static inline float ai_familiarity(const AI *ai, char **words, size_t n) {
+    if (!ai || !words || n == 0) return 0.0f;
+    uint64_t total = 0;
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = pool_token_intern(ai->pool, words[i]);
+        if (t) total += token_hits_total(t);
+    }
+    return 1.0f - 1.0f / (1.0f + (float)total / (float)n);
+}
+static inline float ai_fluency(size_t steps, size_t max_steps) {
+    if (max_steps == 0) return 0.0f;
+    float r = (float)steps / (float)max_steps;
+    return 1.0f - (r > 1.0f ? 1.0f : r);
+}
+static inline MetaCog ai_metacog(AI *ai, Token *seed, float confidence,
+                                 size_t gen_steps, size_t max_gen,
+                                 char **input_words, size_t n_words) {
+    MetaCog m = {0};
+    m.confidence = confidence;
+    m.familiarity = ai_familiarity(ai, input_words, n_words);
+    m.fluency = ai_fluency(gen_steps, max_gen);
+    m.effort = 1.0f - m.fluency;
+    m.gap_feel = seed ? sig_gap(seed) : 1.0f;
+    m.total = 0.40f * m.confidence + 0.20f * m.familiarity +
+              0.15f * m.fluency + 0.10f * (1.0f - m.effort) +
+              0.15f * (1.0f - m.gap_feel);
+    if (m.total > 1.0f) m.total = 1.0f;
+    if (m.total < 0.0f) m.total = 0.0f;
+    return m;
+}
+static inline ExprMode ai_pick_expr_mode(const AI *ai, const MetaCog *m, float novelty) {
+    (void)ai;
+    /* 只有「真的不确定」才加口头前缀（大概/可能/我不太确定…）。
+     * 原来的分档太靠上，正常一问一答也会被套上「应该，」「感觉，」，
+     * 读起来像噪声；这里把 HEDGE 归到不加前缀，TENTATIVE 以下才开口。 */
+    if (novelty > 0.6f && m->total < 0.45f) return EXPR_CURIOUS;
+    if (m->total >= 0.50f) return EXPR_CONFIDENT;
+    if (m->total >= 0.35f) return EXPR_HEDGE;
+    if (m->total >= 0.22f) return EXPR_TENTATIVE;
+    if (m->total >= 0.12f) return EXPR_UNCERTAIN;
+    return EXPR_LOST;
+}
+static inline const char *ai_render_expr(AI *ai, ExprMode mode) {
+    if (mode == EXPR_CONFIDENT || mode == EXPR_SILENT) return NULL;
+    Token *root = ai->expr_root[mode];
+    if (!root || root->count == 0) return NULL;
+    Token *pick = token_associate_weighted(root, NULL, 0, 1.0f, &ai->rng);
+    if (!pick) return NULL;
+    for (size_t i = 0; i < root->count; ++i) {
+        if (root->assocs[i].main == pick) {
+            token_touch_entry(root, &root->assocs[i]);
+            break;
+        }
+    }
+    return pick->name;
+}
+static inline int ai_feedback_hint(const char *input) {
+    if (!input) return 0;
+    if (strstr(input, "不对") || strstr(input, "不是") || strstr(input, "错了") ||
+        strstr(input, "说错") || strstr(input, "no") || strstr(input, "wrong")) return -1;
+    if (strstr(input, "对") || strstr(input, "是的") || strstr(input, "没错") ||
+        strstr(input, "正确") || strstr(input, "yes") || strstr(input, "right")) return 1;
+    return 0;
+}
+static inline void ai_learn_expression(AI *ai, ExprMode mode, int feedback) {
+    if (!ai || feedback == 0) return;
+    Token *root = ai->expr_root[mode];
+    if (!root) return;
+    for (size_t i = 0; i < ai->focus_n; ++i) {
+        Token *ctx = ai->focus_ring[i];
+        if (!ctx || ctx->is_garbage) continue;
+        if (feedback > 0) {
+            token_add_assoc_unique(ctx, NULL, 0, root);
+            for (size_t k = 0; k < ctx->count; ++k)
+                if (ctx->assocs[k].main == root) {
+                    token_touch_entry(ctx, &ctx->assocs[k]);
+                    break;
+                }
+        } else {
+            ai_weaken_edge(ctx, root);
+        }
+    }
+    ai->n_expr_learned++;
+}
+
+/* ============================ 生成 ============================ */
+
+/* 这个 Token 是不是「表达池」用的脚手架（[表达:*] 及其变体 应该/大概/…）？
+ * 它们是给 ai_render_expr 拼前后缀用的，不该被当成内容词再吐出来 ——
+ * 否则输出会变成「大概，猫人知道地上来了再见」这种带前缀残留的句子。 */
+static inline int ai_is_expr_scaffold(const AI *ai, const Token *t) {
+    if (!ai || !t) return 0;
+    for (int i = 0; i < EXPR_COUNT; ++i) {
+        Token *root = ai->expr_root[i];
+        if (!root) continue;
+        if (t == root) return 1;
+        for (size_t j = 0; j < root->count; ++j)
+            if (root->assocs[j].main == t) return 1;
+    }
+    return 0;
+}
+
+/* 分隔符：语料里「输入 <分割> 回复」的边界。
+ * 必须让它被走到 —— 从输入尾词出去权重最大的往往就是它，若当成死胡同就永远
+ * 接不上回复。它不参与文本输出，但参与游走。 */
+static inline int ai_is_dialog_split(const Token *t) {
+    return t && t->name && strcmp(t->name, AI_DIALOG_SPLIT_NAME) == 0;
+}
+
+/* 回复结束标记：语料里每条回复后面都跟着它，所以「回复的最后一词 → 它」是一条
+ * 真实学到的边。生成时走到它就收句 —— 这就是句长的来源，不用瞎猜步数。 */
+static inline int ai_is_reply_end(const Token *t) {
+    return t && t->name && strcmp(t->name, AI_REPLY_END_NAME) == 0;
+}
+
+/* 这条边能不能走（结构性的过滤，和角色无关） */
+static inline int ai_edge_walkable(const AI *ai, const AssocEntry *e, float energy) {
+    if (e->n_subs > 0 || e->n_not > 0) return 0;
+    if (e->mem_state >= MEM_DORMANT) return 0;
+    if (e->mem_state == MEM_FADING && energy < 0.5f) return 0;
+    /* hits==0 的边是「建了但没在任何语料上下文里被强化过」的残留
+     * （比如解释器建的原语边、观察建了却没打角色的边）。它们没有语义依据，
+     * 却带着权重 1 参与抽签，会把游走带偏。只放行两个边界标记。 */
+    if (e->hits == 0 && !ai_is_reply_end(e->main) && !ai_is_dialog_split(e->main))
+        return 0;
+    if (e->main && e->main->name && e->main->name[0] == '[' &&
+        !ai_is_dialog_split(e->main) && !ai_is_reply_end(e->main))
+        return 0;                       /* 跳过原语，只放行两个边界标记 */
+    if (ai_is_expr_scaffold(ai, e->main)) return 0;
+    return 1;
+}
+
+/* 到了 t 之后还能继续走吗？
+ * 不能走的有两类：① 没有任何可用出边（比如 [原语:分割]/[原语:连接] 这种
+ * 只出现在行尾的标记）；② 只有原语/脚手架出边。
+ * 走到这种词上就等于句子被硬截断 —— 实测「你好 → [原语:分割] → 死」就是它。
+ * [对话:结束] 不算死胡同：它是合法的收句点。 */
+/* 到了 t 之后还能继续走吗？from 是我们出发的那个词 ——
+ * t == from 的自环不算出路（走一步就撞环检测，等于句子被截断）。 */
+static inline int ai_can_continue_from(AI *ai, const Token *from, const Token *t, float energy) {
+    if (!t) return 0;
+    if (t == from) return 0;               /* 自环不算出路 */
+    if (ai_is_reply_end(t)) return 1;      /* 合法的收句点 */
+    for (size_t i = 0; i < t->count; ++i)
+        if (ai_edge_walkable(ai, &t->assocs[i], energy)) return 1;
+    /* 没有任何可用出边的词一律算死胡同 —— 包括 [原语:分割]。
+     * 语料里所有 [原语:分割] 都在行尾、后面什么都没有（320 行全如此），
+     * 走进去必然断句；必须靠「不能续」把它挡在外面，句长才能靠
+     * [对话:结束] 和角色边自然决定。 */
+    return 0;
+}
+
+/* 带角色的选边。
+ *
+ * want = ASSOC_ROLE_REPLY 时，**只**在标了「回复」角色的边里选 —— 这就是「按我建议的干」
+ * 的那一步：从回复首词出去时，只能走同样是回复内部学到的转移，语料别处的高频共现
+ * （反义/什么/属 于…）进不来。没有该角色的边时才退化成通用边，保证不会走投无路。 */
+/* 这个 Token 出现在某个话题里吗（投票表） */
+static inline int ai_topic_has(const AI *ai, uint8_t topic, const Token *t) {
+    if (!ai || !t || topic >= AI_MAX_TOPICS) return 0;
+    const AITopic *T = &ai->topics[topic];
+    for (size_t i = 0; i < T->n; ++i)
+        if (T->seen[i] == t) return 1;
+    return 0;
+}
+
+/* 用输入词给话题投票，返回票数最高的话题（都 0 票就返回 ASSOC_TOPIC_NONE） */
+static inline uint8_t ai_detect_topic_words(const AI *ai, Token *const *words, size_t n) {
+    if (!ai || !words || n == 0) return ASSOC_TOPIC_NONE;
+    size_t best = 0; uint32_t best_v = 0;
+    for (uint8_t t = 1; t < AI_MAX_TOPICS; ++t) {
+        if (ai->topics[t].n == 0) continue;
+        uint32_t v = 0;
+        for (size_t i = 0; i < n; ++i)
+            if (ai_topic_has(ai, t, words[i])) v++;
+        if (v > best_v) { best_v = v; best = t; }
+    }
+    return best_v ? (uint8_t)best : ASSOC_TOPIC_NONE;
+}
+
+/* 话题投票：把语料里 [话题:N] 块内的内容词记进话题表 */
+static inline void ai_topic_vote(AI *ai, uint8_t topic, Token *t) {
+    if (!ai || !t || topic == ASSOC_TOPIC_NONE || topic >= AI_MAX_TOPICS) return;
+    AITopic *T = &ai->topics[topic];
+    for (size_t i = 0; i < T->n; ++i)
+        if (T->seen[i] == t) return;
+    if (T->n < sizeof T->seen / sizeof T->seen[0]) T->seen[T->n++] = t;
+}
+
+/* ---------------- 整句检索 ---------------- */
+
+static inline void ai_sent_add(AI *ai, Token *const *in, size_t in_n,
+                               Token *const *out, size_t out_n, uint8_t topic) {
+    if (!ai || !in || !out || in_n == 0 || out_n == 0) return;
+    if (in_n > AI_MAX_SENT) in_n = AI_MAX_SENT;
+    if (out_n > AI_MAX_SENT) out_n = AI_MAX_SENT;
+    if (ai->pairs_n == ai->pairs_cap) {
+        size_t nc = ai->pairs_cap ? ai->pairs_cap * 2 : 256;
+        AISentPair *np = (AISentPair *)realloc(ai->pairs, nc * sizeof *np);
+        if (!np) return;
+        ai->pairs = np; ai->pairs_cap = nc;
+    }
+    AISentPair *p = &ai->pairs[ai->pairs_n++];
+    memcpy(p->in, in, in_n * sizeof *in);   p->in_n = in_n;
+    memcpy(p->out, out, out_n * sizeof *out); p->out_n = out_n;
+    p->topic = topic;
+}
+
+/* 一个词在句子里的「上下文签名」：左边最多 4 个邻居 + 右边最多 4 个邻居。
+ * 同一签名 = 占据相同的句法位置 = 可以互换。 */
+static inline uint32_t ai_slot_sig(Token *const *seq, size_t n, size_t i) {
+    /* 只用**紧邻**的左右邻居 + 是否在句尾。
+     * 之前用了左右各 4 个邻居，签名太细，1 万多个签名塞进 128 个类，
+     * 结果几乎每个类只有一个成员 —— 「同位」永远不成立，合成从不触发（实测 1/50）。
+     * 紧邻就够了：`我 喜欢 猫` 和 `我 喜欢 狗` 里 猫/狗 的左邻都是 喜欢、
+     * 右邻都是句尾，归为一类；而 `猫 吃 鱼` 里的 猫 左邻是句首、右邻是 吃，另一类。 */
+    uint32_t h = 2166136261u;
+    h ^= (i > 0 && seq[i-1]) ? seq[i-1]->id : 0xFFFFFFFFu;
+    h *= 16777619u;
+    h ^= 0x5BF03635u; h *= 16777619u;            /* 分隔左右 */
+    int at_end = (i + 1 == n);
+    h ^= at_end ? 0xFEEDFACEu
+                : (seq[i+1] ? seq[i+1]->id : 0xFFFFFFFFu);
+    h *= 16777619u;
+    return h;
+}
+
+/* 从整句库归纳同位槽类。只在「输入句」上做 —— 我们靠它决定
+ * 「用户换了个词，回复里对应的那个词也该换」。 */
+static inline void ai_slots_build(AI *ai) {
+    if (!ai) return;
+    ai->slots_n = 0;
+    if (!ai->pairs || ai->pairs_n == 0) return;
+    for (size_t i = 0; i < ai->pairs_n; ++i) {
+        const AISentPair *p = &ai->pairs[i];
+        if (p->in_n < 2) continue;
+        for (size_t k = 0; k < p->in_n; ++k) {
+            Token *t = p->in[k];
+            if (!t || !t->name) continue;
+            if (t->name[0] == '[') continue;              /* 跳过标记词 */
+            if (t->name[0] && strlen(t->name) > 6) continue;
+            uint32_t sg = ai_slot_sig(p->in, p->in_n, k);
+            /* 找已有同类 */
+            size_t at = ai->slots_n;
+            for (size_t q = 0; q < ai->slots_n; ++q)
+                if (ai->slots[q].sig == sg) { at = q; break; }
+            if (at == ai->slots_n) {
+                if (ai->slots_n >= AI_MAX_SLOTS) continue;
+                ai->slots[at].n = 0;
+                ai->slots[at].sig = sg;
+                ai->slots_n++;
+            }
+            AISlot *sl = &ai->slots[at];
+            int dup = 0;
+            for (size_t q = 0; q < sl->n; ++q)
+                if (sl->members[q] == t) { dup = 1; break; }
+            if (!dup && sl->n < 48) sl->members[sl->n++] = t;
+        }
+    }
+}
+
+/* a 和 b 是同一槽类吗（可以互换）？ */
+static inline int ai_same_slot(const AI *ai, const Token *a, const Token *b) {
+    if (!ai || !a || !b) return 0;
+    if (a == b) return 1;
+    for (size_t q = 0; q < ai->slots_n; ++q) {
+        const AISlot *sl = &ai->slots[q];
+        int ha = 0, hb = 0;
+        for (size_t k = 0; k < sl->n; ++k) {
+            if (sl->members[k] == a) ha = 1;
+            if (sl->members[k] == b) hb = 1;
+        }
+        if (ha && hb) return 1;
+    }
+    return 0;
+}
+
+/* 从整句库统计 IDF：某个词出现在越多的「输入句」里，权重越低。
+ * 这是换匹配器的关键 —— 纯 Dice 里 你/我/吗 和 帮/想 一个分量，
+ * 才会出现「你能帮我个忙吗」串到「你会想我吗」。 */
+/* ============================ 分布式表示（emb） ============================
+ *
+ * 这是「神经」那一半：把符号图里的共现统计投影成每个词一个 1024 维稠密向量，
+ * 让**语义相近的词向量真的靠近**。
+ *
+ *   emb(t) = Σ_c PPMI(t,c) · r_c        （r_c = 由 c 的稳定 id 生成的 ±1 随机向量）
+ *
+ * 外加一项反向贡献：c 也受「把它当上下文的词」影响。这一项对**稀疏词**很关键 ——
+ * 有些词出边只有一两条（比如 `危险`），但入边不少；只算正向的话 emb 几乎是空的。
+ *
+ * 为什么不做「多轮邻居聚合」：那种做法迭代几轮后所有向量都会趋同
+ * （oversmoothing），相似度全都变高，等于什么都没说。随机索引投影是**一遍**的，
+ * 且保留 PPMI 空间的内积，不会塌。
+ *
+ * 成本 O(E × VSA_DIM)：实测 model.bin（35858 条边）约 0.2 秒，
+ * 只在「训练收尾」和「读盘之后」各跑一次。
+ *
+ * emb **不写进模型文件**：它是 (边 + hits + 稳定 id) 的确定性函数，
+ * 现算即可 —— 格式保持 v5 不变。 */
+static inline void ai_embed_build(AI *ai) {
+    if (!ai || !ai->pool) return;
+    TokenPool *p = ai->pool;
+    size_t n = p->count;
+    if (n == 0) return;
+
+    int32_t *acc = (int32_t *)calloc(n * VSA_DIM, sizeof(int32_t));
+    int64_t *marg = (int64_t *)calloc(n, sizeof(int64_t));
+    int8_t  *rv = (int8_t *)malloc(VSA_DIM);
+    if (!acc || !marg || !rv) { free(acc); free(marg); free(rv); return; }
+
+    /* ⓪ df：一个上下文被多少个**不同的**词指向。
+     * 这一步是整个嵌入能不能用的关键。实测不做过的时候，猫/狗/雨/鱼 的
+     * PPMI 最高上下文**全是同一批模板话**：
+     *
+     *   猫: 是什么(7.75) 在哪里(7.06) 是谁(7.06) 软(5.96) ...
+     *   狗: 是什么(8.45) 在哪里(7.75) 是谁(7.35) 暗(6.25) ...
+     *   雨: 是什么(7.83) 声(7.20)   在哪里(7.14) 是谁(7.14) ...
+     *
+     * 「是什么/在哪里/是谁」只跟名词搭配，所以单看 PMI 它们比任何实词都高；
+     * 可它们跟**每一个**名词都搭配 —— 信息量为零，却把所有名词的向量拉到一起。
+     * 结果就是 猫~雨 79.9% 比 猫~狗 62.2% 还高（等于分不出来）。
+     *
+     * 修法：df 超过内容词总数 15% 的上下文一律不当上下文用。
+     * 这是**数据驱动**的，不是手写停用词表。 */
+    size_t n_content = 0;
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        if (t->name && t->name[0] != '[') n_content++;
+    }
+    uint32_t *df = (uint32_t *)calloc(n, sizeof(uint32_t));
+    if (!df) { free(acc); free(marg); free(rv); return; }
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        if (!t->name || t->name[0] == '[') continue;
+        for (size_t j = 0; j < t->count; ++j) {
+            Token *m = t->assocs[j].main;
+            if (!m || !m->name || m->name[0] == '[') continue;
+            if (t->assocs[j].hits) df[m->id]++;
+        }
+    }
+    const uint32_t DF_MAX = (uint32_t)(n_content * 15 / 100);
+    #define EMB_CTX_OK(m) ((m)->name && (m)->name[0] != '[' && df[(m)->id] <= DF_MAX)
+
+    /* ① 行和：每个内容 Token 的出边权重之和 */
+    int64_t tot = 0;
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        if (!t->name || t->name[0] == '[') continue;
+        for (size_t j = 0; j < t->count; ++j) {
+            Token *m = t->assocs[j].main;
+            if (!m || !EMB_CTX_OK(m)) continue;
+            uint32_t h = t->assocs[j].hits;
+            if (h == 0) continue;
+            marg[i] += h;
+            tot += h;
+        }
+    }
+    if (tot == 0) { free(acc); free(marg); free(rv); free(df); return; }
+
+    /* ② 两遍累积：正向（t 的上下文）+ 反向（谁把 t 当上下文）
+     *    PPMI = max(0, log( p(c|t) / p(c) )) */
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        if (!t->name || t->name[0] == '[' || marg[i] == 0) continue;
+        for (size_t j = 0; j < t->count; ++j) {
+            Token *m = t->assocs[j].main;
+            if (!m || !EMB_CTX_OK(m)) continue;
+            uint32_t h = t->assocs[j].hits;
+            if (h == 0) continue;
+            size_t mi = m->id;
+            if (mi >= n) continue;
+            if (marg[mi] == 0) continue;      /* 目标也没有可用的上下文 */
+            double p_c_given_t = (double)h / (double)marg[i];
+            double p_c = (double)marg[mi] / (double)tot;
+            if (p_c > 0) {
+                double pmi = log(p_c_given_t / p_c);
+                if (pmi > 0) {
+                    if (pmi > 10.0) pmi = 10.0;
+                    emb_randvec(m->id, rv);
+                    int32_t *a = acc + i * VSA_DIM;
+                    int32_t w = (int32_t)(pmi * 1024.0);
+                    for (size_t d = 0; d < VSA_DIM; ++d) a[d] += w * rv[d];
+                }
+            }
+            /* 反向：m 的向量里加上 t 的随机向量（稀疏词的救命稻草） */
+            if (marg[mi] > 0) {
+                double p_t_given_c = (double)h / (double)marg[mi];
+                double p_t = (double)marg[i] / (double)tot;
+                if (p_t > 0) {
+                    double pmi2 = log(p_t_given_c / p_t);
+                    if (pmi2 > 0) {
+                        if (pmi2 > 10.0) pmi2 = 10.0;
+                        emb_randvec(t->id, rv);
+                        int32_t *a = acc + mi * VSA_DIM;
+                        int32_t w = (int32_t)(pmi2 * 1024.0);
+                        for (size_t d = 0; d < VSA_DIM; ++d) a[d] += w * rv[d];
+                    }
+                }
+            }
+        }
+    }
+
+    #undef EMB_CTX_OK
+
+    /* ③ all-but-the-top：去均值 + 去掉前 3 个主成分。
+     *
+     * 这一步不是可选的。实测不做的时候：`猫` 的最近邻居是 雨 82.9% / 椅子 80.7%，
+     * 而 鱼 与 狗 的余弦（77.3%）比 猫 与 狗（67.2%）还高 —— 也就是高频名词
+     * （雨/山/太阳/鱼，它们和几乎所有词都共现过）把「共现向量」的公共方向
+     * 撑成了第一主成分，于是所有常见名词彼此都"像"，向量里剩下的全是频率信息。
+     *
+     * 去掉公共方向之后，留下的是「这个词**特别**的上下文」。这是 embedding
+     * 后处理的常规做法（all-but-the-top），这里用幂迭代取前 3 个方向，
+     * 固定初值、固定轮数 → 完全确定性。 */
+    float *E = (float *)calloc(n * VSA_DIM, sizeof(float));
+    float *mu = (float *)calloc(VSA_DIM, sizeof(float));
+    float *v = (float *)malloc(VSA_DIM * sizeof(float));
+    float *u = (float *)malloc(n * sizeof(float));
+    if (!E || !mu || !v || !u) {
+        /* 内存不够就退回「不做后处理」的老路，至少还有向量 */
+        for (size_t i = 0; i < n; ++i) {
+            Token *t = p->tokens[i];
+            if (!t->emb) continue;
+            int32_t *a = acc + i * VSA_DIM;
+            int32_t mx = 0;
+            for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+            if (mx == 0) { memset(t->emb, 0, VSA_DIM); continue; }
+            for (size_t d = 0; d < VSA_DIM; ++d) {
+                int32_t q2 = (int32_t)(((int64_t)a[d] * 120) / mx);
+                if (q2 > 127) q2 = 127;
+                if (q2 < -128) q2 = -128;
+                t->emb[d] = (int8_t)q2;
+            }
+        }
+        free(acc); free(marg); free(rv); free(E); free(mu); free(v); free(u); free(df);
+        return;
+    }
+    size_t used = 0;
+    for (size_t i = 0; i < n; ++i) {
+        int32_t *a = acc + i * VSA_DIM;
+        int32_t mx = 0;
+        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        if (mx == 0) continue;                       /* 空向量不参与统计 */
+        float *e = E + i * VSA_DIM;
+        for (size_t d = 0; d < VSA_DIM; ++d) e[d] = (float)a[d] / (float)mx;
+        used++;
+        for (size_t d = 0; d < VSA_DIM; ++d) mu[d] += e[d];
+    }
+    if (used == 0) {
+        free(acc); free(marg); free(rv); free(E); free(mu); free(v); free(u); free(df);
+        return;
+    }
+    for (size_t d = 0; d < VSA_DIM; ++d) mu[d] /= (float)used;
+    for (size_t i = 0; i < n; ++i) {
+        int32_t *a = acc + i * VSA_DIM;
+        int32_t mx = 0;
+        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        if (mx == 0) continue;
+        float *e = E + i * VSA_DIM;
+        for (size_t d = 0; d < VSA_DIM; ++d) e[d] -= mu[d];
+    }
+    /* 前 3 个主成分：幂迭代 + 逐次 deflate */
+    {
+        double inv = 1.0 / sqrt((double)VSA_DIM);
+        for (int comp = 0; comp < 3; ++comp) {
+            for (size_t d = 0; d < VSA_DIM; ++d) v[d] = (float)inv;   /* 固定初值 */
+            for (int it = 0; it < 8; ++it) {
+                for (size_t i = 0; i < n; ++i) {
+                    float *e = E + i * VSA_DIM;
+                    float acc2 = 0;
+                    for (size_t d = 0; d < VSA_DIM; ++d) acc2 += e[d] * v[d];
+                    u[i] = acc2;
+                }
+                double nu = 0;
+                for (size_t i = 0; i < n; ++i) nu += (double)u[i] * (double)u[i];
+                if (nu <= 0) break;
+                nu = sqrt(nu);
+                for (size_t i = 0; i < n; ++i) u[i] = (float)(u[i] / nu);
+                for (size_t d = 0; d < VSA_DIM; ++d) v[d] = 0;
+                for (size_t i = 0; i < n; ++i) {
+                    float *e = E + i * VSA_DIM;
+                    float ui = u[i];
+                    if (ui == 0) continue;
+                    for (size_t d = 0; d < VSA_DIM; ++d) v[d] += e[d] * ui;
+                }
+                double nv = 0;
+                for (size_t d = 0; d < VSA_DIM; ++d) nv += (double)v[d] * (double)v[d];
+                if (nv <= 0) break;
+                nv = sqrt(nv);
+                for (size_t d = 0; d < VSA_DIM; ++d) v[d] = (float)(v[d] / nv);
+            }
+            /* 从每个向量里减掉在主方向上的投影 */
+            for (size_t i = 0; i < n; ++i) {
+                float *e = E + i * VSA_DIM;
+                /* 只对有向量的词做：空向量的 E 行是 0，投影也是 0，不影响 */
+                float p2 = 0;
+                for (size_t d = 0; d < VSA_DIM; ++d) p2 += e[d] * v[d];
+                if (p2 == 0) continue;
+                for (size_t d = 0; d < VSA_DIM; ++d) e[d] -= p2 * v[d];
+            }
+        }
+    }
+    /* ④ 量化进 int8：每个词按自己的峰值归一（余弦只看方向） */
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        if (!t->emb) continue;
+        int32_t *a = acc + i * VSA_DIM;
+        int32_t mx = 0;
+        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        if (mx == 0) { memset(t->emb, 0, VSA_DIM); continue; }
+        float *e = E + i * VSA_DIM;
+        float p3 = 0;
+        for (size_t d = 0; d < VSA_DIM; ++d) { float q3 = e[d] < 0 ? -e[d] : e[d]; if (q3 > p3) p3 = q3; }
+        if (p3 <= 0) { memset(t->emb, 0, VSA_DIM); continue; }
+        for (size_t d = 0; d < VSA_DIM; ++d) {
+            int32_t q4 = (int32_t)((e[d] / p3) * 120.0f);
+            if (q4 > 127) q4 = 127;
+            if (q4 < -128) q4 = -128;
+            t->emb[d] = (int8_t)q4;
+        }
+    }
+    free(acc); free(marg); free(rv); free(E); free(mu); free(v); free(u); free(df);
+}
+
+static inline void ai_idf_rebuild(AI *ai) {
+    if (!ai || !ai->pool) return;
+    size_t ntok = ai->pool->count;
+    if (!ntok) return;
+    if (!ai->idf) {
+        ai->idf = (float *)malloc(ntok * sizeof *ai->idf);
+        if (!ai->idf) { ai->idf_n = 0; return; }
+    } else {
+        float *nidf = (float *)realloc(ai->idf, ntok * sizeof *ai->idf);
+        if (!nidf) { ai->idf_n = 0; return; }
+        ai->idf = nidf;
+    }
+    ai->idf_n = ntok;          /* 先认长度：就算下面 df 分配失败，边界也是对的 */
+    for (size_t i = 0; i < ntok; ++i) ai->idf[i] = 0.0f;
+    uint32_t *df = (uint32_t *)calloc(ntok, sizeof *df);
+    if (!df) return;
+    size_t ndoc = ai->pairs_n;
+    for (size_t i = 0; i < ndoc; ++i) {
+        const AISentPair *p = &ai->pairs[i];
+        for (size_t k = 0; k < p->in_n; ++k) {
+            Token *t = p->in[k];
+            if (t && t->id < ntok) df[t->id]++;
+        }
+    }
+    for (size_t i = 0; i < ntok; ++i) {
+        float v = (df[i] == 0)
+                ? 2.5f                                   /* 只在回复里出现 → 最有区分度 */
+                : 1.0f + logf((float)(ndoc + 1) / (float)(df[i] + 1));
+        if (v < 0.25f) v = 0.25f;
+        if (v > 4.0f) v = 4.0f;
+        ai->idf[i] = v;
+    }
+    free(df);
+}
+
+static inline float ai_idf_of(const AI *ai, const Token *t) {
+    /* 边界用 idf_n（数组真实长度），不是 pool->count（当前词数）。
+     * 重建 idf 之后还会造词，用当前词数当边界就会越界读。 */
+    if (!ai || !ai->idf || !t || t->id >= ai->idf_n) return 1.0f;
+    float v = ai->idf[t->id];
+    return v > 0.0f ? v : 1.0f;
+}
+
+/* 把 Token 名的 UTF-8 拆成「字符」，喂给 bigram 用 */
+static inline size_t ai_name_chars(const char *name, const char **out, uint8_t *lens,
+                                   size_t max) {
+    if (!name) return 0;
+    const unsigned char *p = (const unsigned char *)name;
+    size_t n = 0;
+    while (*p && n < max) {
+        size_t l = 1;
+        if ((*p & 0xE0) == 0xC0) l = 2;
+        else if ((*p & 0xF0) == 0xE0) l = 3;
+        else if ((*p & 0xF8) == 0xF0) l = 4;
+        /* 别越过字符串结尾：否则会拿越界的「长度」去 memcmp */
+        for (size_t k = 1; k < l; ++k)
+            if (!p[k]) { l = k; break; }
+        out[n] = (const char *)p;
+        lens[n] = (uint8_t)l;
+        n++;
+        p += l;
+    }
+    return n;
+}
+
+/* 字符 bigram 重合度：Dice。抓「怎么说」相似而词不完全一样的情况
+ * （「你平常做什么」对「你平时做什么」词重叠只有一半，字符几乎全同）。 */
+static inline int ai_char_bigram_score(Token *const *a, size_t an,
+                                       Token *const *b, size_t bn) {
+    enum { MAXC = 96 };
+    const char *ca[MAXC], *cb[MAXC];
+    uint8_t la_[MAXC], lb_[MAXC];
+    size_t na = 0, nb = 0;
+    for (size_t i = 0; i < an && na + 8 < MAXC; ++i)
+        na += ai_name_chars(a[i] ? a[i]->name : NULL, ca + na, la_ + na, MAXC - na);
+    for (size_t i = 0; i < bn && nb + 8 < MAXC; ++i)
+        nb += ai_name_chars(b[i] ? b[i]->name : NULL, cb + nb, lb_ + nb, MAXC - nb);
+    if (na < 2 || nb < 2) return 0;
+    size_t inter = 0, tot_a = 0, tot_b = 0;
+    for (size_t i = 0; i + 1 < na; ++i) {
+        tot_a++;
+        for (size_t j = 0; j + 1 < nb; ++j) {
+            if (la_[i] == lb_[j] && memcmp(ca[i], cb[j], la_[i]) == 0) { inter++; break; }
+        }
+    }
+    for (size_t j = 0; j + 1 < nb; ++j) tot_b++;
+    size_t tot = tot_a + tot_b;
+    return tot ? (int)((inter * 200) / tot) : 0;   /* 0..100 */
+}
+
+/* 输入句与库里的输入句有多像 —— 三路信号合成：
+ *   ① IDF 加权重合（主信号）：少见词比「你/我/吗」重要得多。
+ *      纯 Dice 的毛病就是「你能帮我个忙吗」和「你会想我吗」共享 你/我/吗，
+ *      分数接近 → 串话题。IDF 把这三个高频词的权重压下去。
+ *   ② 字符 bigram：抓「换个说法问同一件事」。
+ *   ③ 词级 Dice：短句兜底（「你好」这种没什么可加权的）。
+ * 结果 0..100。 */
+static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
+                                    Token *const *b, size_t bn, int *out_cov);
+
+static inline int ai_sent_score(AI *ai, Token *const *a, size_t an,
+                                Token *const *b, size_t bn) {
+    return ai_sent_score_cov(ai, a, an, b, bn, NULL);
+}
+
+/* 同时给出「输入被覆盖了多少」（cov，0..100）。cov 才是「这个输入真的属于
+ * 这条记忆吗」的判据 —— 总分里混了字符 bigram，短输入随便共享几个字就能凑到
+ * 60 分，于是任何问题都被硬塞一个答案（实测「地球为什么是圆的」sc=63 是假匹配）。 */
+static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
+                                    Token *const *b, size_t bn, int *out_cov) {
+    if (out_cov) *out_cov = 0;
+    if (an == 0 || bn == 0) return 0;
+    float wa = 0.0f, wb = 0.0f, wi = 0.0f;
+    for (size_t i = 0; i < an; ++i) {
+        float w = ai_idf_of(ai, a[i]);
+        wa += w;
+        for (size_t j = 0; j < bn; ++j)
+            if (a[i] == b[j]) { wi += w; break; }
+    }
+    for (size_t j = 0; j < bn; ++j) wb += ai_idf_of(ai, b[j]);
+    int cov = (wa > 0.0f) ? (int)(100.0f * wi / wa) : 0;      /* 输入被覆盖多少 */
+    size_t inter = 0;
+    for (size_t i = 0; i < an; ++i)
+        for (size_t j = 0; j < bn; ++j)
+            if (a[i] == b[j]) { inter++; break; }
+    int dice = (int)((inter * 200) / (an + bn));
+    int bg = ai_char_bigram_score(a, an, b, bn);
+    int sc = (cov * 55 + bg * 30 + dice * 15) / 100;
+    if (sc > 100) sc = 100;
+    if (out_cov) *out_cov = cov;
+    return sc;
+}
+
+/* 完整的话题判定：词表票 + 整句相似度票，同场竞争。
+ * 词表投票只要命中一个词就得分，会把真正的意图压掉；
+ * 整句相似度是更精确的信号，必须能翻盘（「早上好」就是靠它定到问候话题的）。 */
+static inline uint8_t ai_detect_topic(AI *ai, Token *const *words, size_t n) {
+    uint8_t best = ai_detect_topic_words(ai, words, n);
+    uint32_t best_v = 0;
+    if (best) {
+        for (size_t i = 0; i < n; ++i)
+            if (ai_topic_has(ai, best, words[i])) best_v++;
+    }
+    if (!ai || !ai->pairs || ai->pairs_n == 0) return best;
+    /* 每个话题取「库里最像的那一条」的分数，而不是把该话题所有对的相似度**累加**。
+     * 累加会奖励话题规模（实测小话题「支持」49 分 输给大话题「想念」的累加 5598），
+     * 取最大值才是「这个输入到底属于哪个话题」。 */
+    uint32_t tv[AI_MAX_TOPICS];
+    memset(tv, 0, sizeof tv);
+    for (size_t i = 0; i < ai->pairs_n; ++i) {
+        const AISentPair *p = &ai->pairs[i];
+        if (p->topic == ASSOC_TOPIC_NONE || p->topic >= AI_MAX_TOPICS) continue;
+        int sc = ai_sent_score(ai, words, n, (Token *const *)p->in, p->in_n);
+        if (sc > 0 && (uint32_t)sc > tv[p->topic]) tv[p->topic] = (uint32_t)sc;
+    }
+    /* 整句票和词表票尺度不同（命中词数 vs 相似度），从零重比。 */
+    best_v = 0;
+    for (uint8_t t = 1; t < AI_MAX_TOPICS; ++t) {
+        if (ai->topics[t].n == 0) continue;
+        if (tv[t] > best_v) { best_v = tv[t]; best = t; }
+    }
+    return best_v ? best : ASSOC_TOPIC_NONE;
+}
+
+static inline const AISentPair *ai_sent_lookup(AI *ai, Token *const *words, size_t n,
+                                               uint8_t topic, int *out_score,
+                                               int *out_cov) {
+    if (out_cov) *out_cov = 0;
+    ai->last_token_ratio = 0;
+    if (!ai || !ai->pairs || ai->pairs_n == 0 || !words || n == 0) return NULL;
+    int best = -1, best_cov = 0;
+    size_t best_i = 0, ties = 0, best_len = 0;
+    for (size_t i = 0; i < ai->pairs_n; ++i) {
+        const AISentPair *p = &ai->pairs[i];
+        int cv = 0;
+        int sc = ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
+        if (topic != ASSOC_TOPIC_NONE && p->topic == topic) sc += 25;
+        if (sc > best) { best = sc; best_i = i; ties = 1; best_cov = cv;
+                         best_len = p->in_n; }
+        else if (sc == best) {
+            /* 蓄水池抽样：在并列里等概率挑一个 */
+            ties++;
+            ai->rng ^= ai->rng << 13; ai->rng ^= ai->rng >> 17; ai->rng ^= ai->rng << 5;
+            if (ai->rng % ties == 0) best_i = i;
+        }
+    }
+    if (best < 0) return NULL;
+    if (out_score) *out_score = best;
+    if (out_cov) *out_cov = best_cov;
+    ai->last_retrieval_len = best_len;
+    ai->last_input_len = n;
+    /* **词命中比例**：输入里有多少个词真的出现在命中的那条输入句里。
+     * 比 IDF 覆盖率可靠 —— IDF 会被「一个少见词命中」抬高
+     * （实测「太阳 离 我们 多 远」cov=43 但只有「远」一个字真出现过）。 */
+    {
+        const AISentPair *bp = &ai->pairs[best_i];
+        size_t hit = 0;
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < bp->in_n; ++j)
+                if (words[i] == bp->in[j]) { hit++; break; }
+        ai->last_token_ratio = n ? (int)(100 * hit / n) : 0;
+    }
+    return &ai->pairs[best_i];
+}
+
+
+/* 检索：返回最佳匹配的回复句（调用方负责把 Token* 转成字符串）。
+ * 命中话题的候选有加权；同分时用 rng 随机选一个，避免每次都同一句。 */
+
+/* 把一串 Token 拼成可读文本（CJK 之间补空格，ASCII 字母数字之间不补） */
+static inline char *ai_tokens_to_text(Token *const *toks, size_t n) {
+    size_t cap = 64, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return NULL;
+    buf[0] = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!toks[i] || !toks[i]->name) continue;
+        const char *nm = toks[i]->name;
+        size_t nl = strlen(nm);
+        while (len + nl + 2 > cap) {
+            cap *= 2;
+            char *nb = (char *)realloc(buf, cap);
+            if (!nb) { free(buf); return NULL; }
+            buf = nb;
+        }
+        if (len > 0) {
+            unsigned char a = (unsigned char)buf[len-1];
+            unsigned char b = (unsigned char)nm[0];
+            int ascii_pair = (a < 128 && b < 128 && isalnum(a) && isalnum(b));
+            if (!ascii_pair) buf[len++] = ' ';
+        }
+        memcpy(buf + len, nm, nl);
+        len += nl; buf[len] = 0;
+    }
+    return buf;
+}
+
+/* ---------------- 模板合成：说出语料里没有的句子 ---------------- */
+
+/* 把「输入 → 库里输入」的差异当成槽位替换，套用到回复上。
+ *
+ * 例：库里 `你 喜欢 猫 吗 → 我 喜欢 猫`。
+ *     用户问 `你 喜欢 狗 吗`（语料里没有这一对）。
+ *     差异在 猫↔狗，而它们同槽位 → 输出 `我 喜欢 狗` —— 这句话语料里没有。
+ *
+ * 骨架是学来的（所以通顺），内容是新拼的（所以是「生成」）。
+ * 只在确实发生了替换时才返回；纯复述交给 ai_sent_lookup。 */
+static inline char *ai_synthesize(AI *ai, Token *const *words, size_t n,
+                                  uint8_t topic, int *out_score) {
+    if (out_score) *out_score = 0;
+    if (!ai || !ai->pairs || ai->pairs_n == 0 || !words || n == 0) return NULL;
+
+    /* 取最像的 24 条候选 */
+    enum { CAND = 24 };
+    size_t cand[CAND]; int csc[CAND]; size_t nc = 0;
+    for (size_t i = 0; i < ai->pairs_n; ++i) {
+        const AISentPair *p = &ai->pairs[i];
+        int sc = ai_sent_score(ai, words, n, (Token *const *)p->in, p->in_n);
+        if (topic != ASSOC_TOPIC_NONE && p->topic == topic) sc += 25;
+        if (nc < CAND) { cand[nc] = i; csc[nc] = sc; nc++; }
+        else {
+            size_t worst = 0;
+            for (size_t k = 1; k < CAND; ++k) if (csc[k] < csc[worst]) worst = k;
+            if (sc > csc[worst]) { cand[worst] = i; csc[worst] = sc; }
+        }
+    }
+    /* 从高分到低分试 */
+    for (size_t rank = 0; rank < nc; ++rank) {
+        size_t bi = 0; int bv = -1;
+        for (size_t k = 0; k < nc; ++k) if (csc[k] > bv) { bv = csc[k]; bi = k; }
+        if (bv < 0) break;
+        size_t pi = cand[bi];
+        csc[bi] = -1;
+        if (bv < 60) break;                      /* 太不像就别硬套 */
+
+        const AISentPair *p = &ai->pairs[pi];
+        /* 模板必须和输入**差不多长**：我们要的是「同一句话换了个词」，
+         * 不是「一句长话里碰巧含几个相同的词」。实测不做这个限制，
+         * 匹配器会挑长的相似句，未匹配数两边不等，合成永远不触发（0/10）。 */
+        {
+            size_t hi = n > p->in_n ? n : p->in_n;
+            size_t lo = n < p->in_n ? n : p->in_n;
+            if (hi == 0 || lo * 2 < hi) continue;
+        }
+        /* **干净的一换一**：输入和模板里，各自恰好有一个词是对方没有的。
+         * 这样模板就是「只差一个槽位」的同构句，替换一定成立；
+         * 放宽成「任意同位词都可换」会产出「不 用 我 歉」这种病句（实测过）。 */
+        Token *a_only[AI_MAX_SENT], *b_only[AI_MAX_SENT];
+        size_t na = 0, nb = 0;
+        for (size_t i2 = 0; i2 < n; ++i2) {
+            int f = 0;
+            for (size_t q = 0; q < p->in_n; ++q) if (p->in[q] == words[i2]) { f = 1; break; }
+            if (!f && na < AI_MAX_SENT) a_only[na++] = words[i2];
+        }
+        for (size_t q = 0; q < p->in_n; ++q) {
+            int f = 0;
+            for (size_t i2 = 0; i2 < n; ++i2) if (words[i2] == p->in[q]) { f = 1; break; }
+            if (!f && nb < AI_MAX_SENT) b_only[nb++] = p->in[q];
+        }
+        if (na == 0 || na != nb) continue;         /* 两边未匹配数必须相等 */
+        if (na > 4) continue;                      /* 换太多就不是同构句了 */
+        /* 未匹配的词必须能一一配对且同位 */
+        int usedb[AI_MAX_SENT] = {0};
+        int pair_ok = 1;
+        for (size_t x = 0; x < na && pair_ok; ++x) {
+            int hit = 0;
+            for (size_t y = 0; y < nb; ++y) {
+                if (usedb[y]) continue;
+                if (ai_same_slot(ai, a_only[x], b_only[y])) { usedb[y] = 1; hit = 1; break; }
+            }
+            if (!hit) pair_ok = 0;
+        }
+        if (!pair_ok) continue;
+        {
+            Token *out[AI_MAX_SENT];
+            size_t on = p->out_n > AI_MAX_SENT ? AI_MAX_SENT : p->out_n;
+            for (size_t j = 0; j < on; ++j) out[j] = p->out[j];
+            size_t swapped = 0;
+            for (size_t y = 0; y < nb; ++y) {
+                /* 找出 b_only[y] 对应的 a_only[x] */
+                Token *rep = NULL;
+                int useda[AI_MAX_SENT] = {0};
+                for (size_t x = 0; x < na; ++x) {
+                    if (useda[x]) continue;
+                    if (ai_same_slot(ai, a_only[x], b_only[y])) { rep = a_only[x]; useda[x] = 1; break; }
+                }
+                if (!rep) continue;
+                for (size_t j = 0; j < on; ++j)
+                    if (out[j] == b_only[y]) { out[j] = rep; swapped = 1; }
+            }
+            if (!swapped) continue;
+            if (out_score) *out_score = bv;
+            ai->n_synth++;
+            return ai_tokens_to_text(out, on);
+        }
+    }
+    return NULL;
+}
+
+
+static inline Token *ai_pick_next_role_pat(AI *ai, Token *cur, float energy, int do_touch,
+                                           uint8_t want, uint8_t *out_used,
+                                           uint8_t *out_pat) {
+    if (!cur || cur->count == 0) return NULL;
+
+    /* 角色优先级：想要的角色排第一，通用共现次之，回复角色垫底。
+     * 两个关键点：
+     *   ① 目标角色没有可用出边时**必须**能退到通用边，否则该词直接饿死；
+     *   ② 从输入尾词出发时 want 是 NONE，也得能挑到回复角色的边 ——
+     *      否则「输入尾词 → 回复首词」这条主干永远用不上。 */
+    uint8_t order[3];
+    size_t n_order = 0;
+    if (want != ASSOC_ROLE_NONE) order[n_order++] = want;
+    order[n_order++] = ASSOC_ROLE_NONE;
+    if (want != ASSOC_ROLE_REPLY) order[n_order++] = ASSOC_ROLE_REPLY;
+
+    /* 分两层：内容词优先，边界标记（[对话:结束]/[原语:分割]）只能兜底。
+     * 否则「吗 → [对话:结束]」会被当成一次正常续接，句子刚开头就收了。 */
+    if (g_walk_trace) fprintf(stderr, "PICK cur=%s cnt=%zu want=%u e=%.4f\n",
+                              cur->name ? cur->name : "?", cur->count,
+                              (unsigned)want, (double)energy);
+    for (int tier = 0; tier < 2; ++tier) {
+        uint8_t use = ASSOC_ROLE_NONE;
+        uint64_t total = 0;
+        for (size_t r = 0; r < n_order && total == 0; ++r) {
+            for (size_t i = 0; i < cur->count; ++i) {
+                AssocEntry *e = &cur->assocs[i];
+                if (e->role != order[r]) continue;
+                if (!ai_edge_walkable(ai, e, energy)) continue;
+                if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
+                int boundary = ai_is_reply_end(e->main) || ai_is_dialog_split(e->main);
+                if (tier == 0 && boundary) continue;      /* 第一层只要内容词 */
+                if (tier == 1 && !boundary) continue;     /* 第二层只看边界 */
+                total += ai_edge_weight(ai, e);
+                if (g_walk_trace) fprintf(stderr, "  C tier=%d r=%u i=%zu tok=%s w=%u tot=%llu\n",
+                                          tier, (unsigned)order[r], i,
+                                          e->main && e->main->name ? e->main->name : "?",
+                                          ai_edge_weight(ai, e), (unsigned long long)total);
+            }
+            if (total) use = order[r];
+        }
+        if (total == 0) continue;
+
+        ai->rng ^= ai->rng << 13; ai->rng ^= ai->rng >> 17; ai->rng ^= ai->rng << 5;
+        uint64_t pick = (uint64_t)ai->rng % total, acc = 0;
+        if (g_walk_trace) fprintf(stderr, "  TOTAL tier=%d use=%u total=%llu rng=%u pick=%llu\n",
+                                  tier, (unsigned)use, (unsigned long long)total,
+                                  ai->rng, (unsigned long long)pick);
+        for (size_t i = 0; i < cur->count; ++i) {
+            AssocEntry *e = &cur->assocs[i];
+            if (e->role != use) continue;
+            if (!ai_edge_walkable(ai, e, energy)) continue;
+            if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
+            int boundary = ai_is_reply_end(e->main) || ai_is_dialog_split(e->main);
+            if (tier == 0 && boundary) continue;
+            if (tier == 1 && !boundary) continue;
+            acc += ai_edge_weight(ai, e);
+            if (pick < acc) {
+                if (do_touch) token_touch_entry(cur, e);
+                if (out_used) *out_used = use;
+                if (out_pat) *out_pat = e->pattern;
+                return e->main;
+            }
+        }
+    }
+    return NULL;
+}
+
+static inline Token *ai_pick_next_role(AI *ai, Token *cur, float energy, int do_touch,
+                                       uint8_t want, uint8_t *out_used) {
+    return ai_pick_next_role_pat(ai, cur, energy, do_touch, want, out_used, NULL);
+}
+
+static inline Token *ai_pick_next_ex(AI *ai, Token *cur, float energy, int do_touch) {
+    return ai_pick_next_role(ai, cur, energy, do_touch, ASSOC_ROLE_NONE, NULL);
+}
+
+/* 带话题约束的选边：只走「本话题」或「无话题」的边。
+ * 话题锁定后跨话题的边一律排除 —— 这是「按意图约束解码」的核心。 */
+static inline Token *ai_pick_next_topic(AI *ai, Token *cur, float energy, int do_touch,
+                                        uint8_t want, uint8_t topic, uint8_t *out_used,
+                                        uint8_t *out_pat) {
+    if (!cur || cur->count == 0) return NULL;
+    if (topic == ASSOC_TOPIC_NONE)
+        return ai_pick_next_role_pat(ai, cur, energy, do_touch, want, out_used, out_pat);
+
+    uint8_t order[3];
+    size_t n_order = 0;
+    if (want != ASSOC_ROLE_NONE) order[n_order++] = want;
+    order[n_order++] = ASSOC_ROLE_NONE;
+    if (want != ASSOC_ROLE_REPLY) order[n_order++] = ASSOC_ROLE_REPLY;
+
+    if (g_walk_trace) fprintf(stderr, "PICKT cur=%s cnt=%zu want=%u topic=%u e=%.4f\n",
+                              cur->name ? cur->name : "?", cur->count,
+                              (unsigned)want, (unsigned)topic, (double)energy);
+    for (int pass = 0; pass < 2; ++pass) {
+        /* pass 0：只接受本话题的边；pass 1：放宽到无话题/其它话题 */
+        for (int tier = 0; tier < 2; ++tier) {
+            uint8_t use = ASSOC_ROLE_NONE;
+            uint64_t total = 0;
+            for (size_t r = 0; r < n_order && total == 0; ++r) {
+                for (size_t i = 0; i < cur->count; ++i) {
+                    AssocEntry *e = &cur->assocs[i];
+                    if (e->role != order[r]) continue;
+                    if (pass == 0 && e->topic != topic) continue;
+                    if (pass == 1 && e->topic == topic) continue;
+                    if (!ai_edge_walkable(ai, e, energy)) continue;
+                    if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
+                    int boundary = ai_is_reply_end(e->main) || ai_is_dialog_split(e->main);
+                    if (tier == 0 && boundary) continue;
+                    if (tier == 1 && !boundary) continue;
+                    total += ai_edge_weight(ai, e);
+                    if (g_walk_trace) fprintf(stderr, "  CT pass=%d tier=%d r=%u i=%zu tok=%s w=%u tot=%llu\n",
+                                              pass, tier, (unsigned)order[r], i,
+                                              e->main && e->main->name ? e->main->name : "?",
+                                              ai_edge_weight(ai, e), (unsigned long long)total);
+                }
+                if (total) use = order[r];
+            }
+            if (total == 0) continue;
+
+            ai->rng ^= ai->rng << 13; ai->rng ^= ai->rng >> 17; ai->rng ^= ai->rng << 5;
+            uint64_t pick = (uint64_t)ai->rng % total, acc = 0;
+            if (g_walk_trace) fprintf(stderr, "  TOTALT pass=%d tier=%d use=%u total=%llu rng=%u pick=%llu\n",
+                                      pass, tier, (unsigned)use, (unsigned long long)total,
+                                      ai->rng, (unsigned long long)pick);
+            for (size_t i = 0; i < cur->count; ++i) {
+                AssocEntry *e = &cur->assocs[i];
+                if (e->role != use) continue;
+                if (pass == 0 && e->topic != topic) continue;
+                if (pass == 1 && e->topic == topic) continue;
+                if (!ai_edge_walkable(ai, e, energy)) continue;
+                if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
+                int boundary = ai_is_reply_end(e->main) || ai_is_dialog_split(e->main);
+                if (tier == 0 && boundary) continue;
+                if (tier == 1 && !boundary) continue;
+                acc += ai_edge_weight(ai, e);
+                if (pick < acc) {
+                    if (do_touch) token_touch_entry(cur, e);
+                    if (out_used) *out_used = use;
+                    if (out_pat) *out_pat = e->pattern;
+                    return e->main;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+static inline char *ai_generate_scored_topic(AI *ai, Token *seed, float energy,
+                                             size_t max_len, size_t *out_steps,
+                                             float *out_score, uint8_t topic) {
+    if (out_score) *out_score = 0;
+    if (out_steps) *out_steps = 0;
+    if (!ai || !seed) return NULL;
+
+    size_t cap = 64, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return NULL;
+    buf[0] = 0;
+
+    Token *path[AI_MAX_PATH];
+    size_t path_n = 0;
+    path[path_n++] = seed;
+
+    token_touch(seed);
+    if (seed->name) {
+        size_t nl = strlen(seed->name);
+        while (len + nl + 1 > cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+        memcpy(buf + len, seed->name, nl);
+        len += nl; buf[len] = 0;
+    }
+    Token *cur = seed;
+    float e = energy;
+    size_t steps = 0;
+    /* 角色寄存器：跨过「输入/回复」边界之后就锁死在 REPLY，
+     * 之后每一步只在「回复内部」学到的那批边里走。 */
+    uint8_t want = (seed && ai_is_dialog_split(seed)) ? ASSOC_ROLE_REPLY
+                                                      : ASSOC_ROLE_NONE;
+    uint8_t pat_from_cur = ASSOC_PAT_NONE;
+    ai->cur_topic = topic;
+    for (size_t step = 0; step < max_len; ++step) {
+        if (e < ai->cutoff) break;
+        uint8_t used = ASSOC_ROLE_NONE, pat = ASSOC_PAT_NONE;
+        Token *next = ai_pick_next_topic(ai, cur, e, 1, want, topic, &used, &pat);
+        /* 退回了通用边说明「回复语境」在这里断了：之后不再假装还在回复里，
+         * 否则会用回复角色去挑词、又混着通用边，出来的句子两头不靠。 */
+        if (used != want) want = used;
+        if (!next || next == ai->unknowing || !next->name || next == cur) break;
+        if (ai_is_dialog_split(next)) {          /* 跨过「输入/回复」边界，不输出它 */
+            want = ASSOC_ROLE_REPLY;
+            cur = next; e *= ai->decay; steps++;
+            continue;
+        }
+        if (ai_is_reply_end(next)) {             /* 回复结束：收句 */
+            steps++;
+            break;
+        }
+        /* 句尾模式：这条边是在「从这个词往后还剩 N 个词」的语境里学到的。
+         * TAIL0 = 它本来就是句尾 → 到了就收；
+         * TAIL1 = 后面只剩一个词 → 再走一步就收。
+         * 只看 [对话:结束] 是不够的：那条边经常选不中，句子就一直漂。 */
+        if (pat_from_cur == ASSOC_PAT_TAIL1) { steps++; break; }
+        if (pat_from_cur == ASSOC_PAT_TAIL0) { steps++; break; }
+        pat_from_cur = pat;
+        {   /* 环检测：撞到已经走过的词就收句。语料里的共现图有不少小环
+             * （反义/什么/属 于 …），游走一旦进环就会反复念同一个词。 */
+            int seen = 0;
+            for (size_t k = 0; k < path_n; ++k)
+                if (path[k] == next) { seen = 1; break; }
+            if (seen) { steps++; break; }
+        }
+        size_t nl = strlen(next->name);
+        while (len + nl + 2 > cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+        /* 词之间要留空格：CJK 词如果直接拼会变成「好朋友属于」这种糊在一起的串
+         * （tokenize 是按空白 + 标点切、CJK 按字切的，粘一起就读不回来了）。
+         * 只有「ASCII 字母数字彼此相邻」才不加空格，避免 "abc" "def" 变成 "abc def"。 */
+        if (len > 0) {
+            unsigned char a = (unsigned char)buf[len-1];
+            unsigned char b = (unsigned char)next->name[0];
+            int ascii_pair = (a < 128 && b < 128 && isalnum(a) && isalnum(b));
+            if (!ascii_pair) buf[len++] = ' ';
+        }
+        memcpy(buf + len, next->name, nl);
+        len += nl; buf[len] = 0;
+        if (path_n < AI_MAX_PATH) path[path_n++] = next;
+        ai_push_trace(ai, next);
+        cur = next;
+        e *= ai->decay;
+        steps++;
+    }
+
+    float score = 0;
+    for (size_t i = 0; i < path_n; ++i)
+        for (size_t j = 0; j < path[i]->count; ++j) {
+            Token *m = path[i]->assocs[j].main;
+            if (m == ai->good) score += 1.0f;
+            if (m == ai->bad)  score -= 1.0f;
+        }
+    if (out_score) *out_score = score;
+    if (out_steps) *out_steps = steps;
+
+    ai->last_path.n = path_n;
+    memcpy(ai->last_path.path, path, path_n * sizeof *path);
+    return buf;
+}
+static inline char *ai_generate_scored(AI *ai, Token *seed, float energy,
+                                       size_t max_len, size_t *out_steps, float *out_score) {
+    return ai_generate_scored_topic(ai, seed, energy, max_len, out_steps, out_score,
+                                    ASSOC_TOPIC_NONE);
+}
+
+static inline void ai_push_skipped(AI *ai, Token *t) {
+    if (!ai || !t) return;
+    if (ai->last_skipped_n == ai->last_skipped_cap) {
+        size_t ncap = ai->last_skipped_cap ? ai->last_skipped_cap * 2 : 8;
+        Token **nt = (Token **)realloc(ai->last_skipped, ncap * sizeof *nt);
+        if (!nt) return;
+        ai->last_skipped = nt; ai->last_skipped_cap = ncap;
+    }
+    ai->last_skipped[ai->last_skipped_n++] = t;
+}
+static inline char *ai_plan_and_act(AI *ai, Token *seed,
+                                    size_t *out_steps, float *out_conf,
+                                    char **input_words, size_t n_words) {
+    if (!ai || !seed) return NULL;
+    int n = ai_effective_candidates(ai);
+    float e = ai_effective_energy(ai);
+    char *best = NULL;
+    float best_score = -1e30f;
+    size_t best_steps = 0;
+    ai->last_skipped_n = 0;
+    for (int i = 0; i < n; ++i) {
+        size_t steps; float score;
+        char *cand = ai_generate_scored_topic(ai, seed, e, ai->max_gen, &steps, &score,
+                                              ai->cur_topic);
+        if (g_walk_trace) {
+            fprintf(stderr, "W i=%d steps=%zu score=%.6f n=%zu:", i, steps,
+                    (double)score, ai->last_path.n);
+            for (size_t z = 0; z < ai->last_path.n; ++z) {
+                Token *pp = ai->last_path.path[z];
+                fprintf(stderr, " %s", pp && pp->name ? pp->name : "?");
+            }
+            fprintf(stderr, "\n");
+        }
+        if (!cand) continue;
+        Token *first = (ai->last_path.n >= 2) ? ai->last_path.path[1] : NULL;
+        if (score > best_score) {
+            if (best && first) ai_push_skipped(ai, first);
+            free(best);
+            best = cand; best_score = score; best_steps = steps;
+            /* 记下「被选中的那条」的路径：last_path 会被后面几条候选覆盖。 */
+            ai->last_walk_path = ai->last_path;
+        } else {
+            if (first) ai_push_skipped(ai, first);
+            free(cand);
+        }
+    }
+    if (best) {
+        float conf = ai_confidence(ai, seed, NULL, 0, e,
+                                   best_steps, ai->max_gen,
+                                   input_words, n_words);
+        if (out_conf) *out_conf = conf;
+        if (out_steps) *out_steps = best_steps;
+    }
+    return best;
+}
+
+/* ============================ 抽象 ============================ */
+
+static inline size_t ai_jaccard(const Token *a, const Token *b) {
+    if (!a || !b || a->count == 0 || b->count == 0) return 0;
+    size_t inter = 0;
+    for (size_t i = 0; i < a->count; ++i) {
+        Token *m = a->assocs[i].main;
+        if (!m || (m->name && m->name[0] == '[')) continue;
+        for (size_t j = 0; j < b->count; ++j)
+            if (b->assocs[j].main == m) { inter++; break; }
+    }
+    size_t uni = a->count + b->count - inter;
+    return uni ? (inter * 100) / uni : 0;
+}
+static inline void ai_form_abstractions(AI *ai) {
+    if (!ai || !ai->pool) return;
+    TokenPool *p = ai->pool;
+    size_t created = 0;
+    const size_t MAX_NEW = 3;
+    for (size_t i = 0; i < p->count && created < MAX_NEW; ++i) {
+        Token *a = p->tokens[i];
+        if (a->is_garbage || !a->name || a->parent) continue;
+        if (a->name[0] == '[' || a->count < 3) continue;
+        for (size_t j = i + 1; j < p->count && created < MAX_NEW; ++j) {
+            Token *b = p->tokens[j];
+            if (b->is_garbage || !b->name || b->parent) continue;
+            if (b->name[0] == '[' || b->count < 3) continue;
+            if (ai_jaccard(a, b) < 70) continue;
+            char cname[64];
+            snprintf(cname, sizeof cname, "[抽象%zu]", ai->n_abstractions);
+            Token *c = pool_token(p, cname, NULL);
+            if (!c) continue;
+            token_set_category(c, 1);
+            token_set_parent(a, c);
+            token_set_parent(b, c);
+            for (size_t k = 0; k < a->count; ++k) {
+                Token *m = a->assocs[k].main;
+                if (!m || m == ai->good || m == ai->bad) continue;
+                token_add_assoc_unique(c, NULL, 0, m);
+            }
+            created++; ai->n_abstractions++;
+            break;
+        }
+    }
+}
+
+/* ============================ 睡眠（增量） ============================ */
+
+static inline void ai_sleep_begin(AI *ai) {
+    if (!ai || ai->sleep_target > 0) return;
+    size_t n = ai->trace_n < 32 ? ai->trace_n : 32;
+    if (n == 0) return;
+    ai->sleep_cursor = 0;
+    ai->sleep_target = n;
+    ai->sleep_in_abstraction = 0;
+}
+static inline int ai_sleep_pending(const AI *ai) { return ai && ai->sleep_target > 0; }
+static inline void ai_sleep_step(AI *ai) {
+    if (!ai || ai->sleep_target == 0) return;
+    if (ai->sleep_cursor < ai->sleep_target) {
+        Token *t = ai->trace[ai->sleep_cursor++];
+        if (t && !t->is_garbage) {
+            ActivateCtx act;
+            activate_ctx_init(&act, 0.9f, 0.1f, 6);
+            token_activate_from(t, NULL, 0, 0.9f, &act);
+            activate_ctx_free(&act);
+        }
+        return;
+    }
+    if (!ai->sleep_in_abstraction) {
+        ai_form_abstractions(ai);
+        ai->sleep_in_abstraction = 1;
+        return;
+    }
+    ai->sleep_target = 0;
+    ai->sleep_cursor = 0;
+    ai->sleep_in_abstraction = 0;
+    ai->trace_n = 0;
+    ai->n_sleeps++;
+    ai->inner.fatigue = 0.0f;
+}
+static inline void ai_sleep(AI *ai) {
+    ai_sleep_begin(ai);
+    while (ai_sleep_pending(ai)) ai_sleep_step(ai);
+}
+
+/* ============================ GC ============================ */
+
+static inline int ai_gc_protected(const AI *ai, const Token *t) {
+    if (!t) return 1;
+    if (t == ai->self || t == ai->good || t == ai->bad ||
+        t == ai->unknowing || t == ai->causal ||
+        t == ai->social_good || t == ai->social_bad ||
+        t == ai->past_self || t == ai->future_self) return 1;
+    if (t->name && t->name[0] == '[') return 1;
+    if (t->name && strcmp(t->name, TOKEN_UNKNOWING_NAME) == 0) return 1;
+    return 0;
+}
+static inline int ai_gc_has_valence(const AI *ai, const Token *t) {
+    if (!t) return 0;
+    for (size_t i = 0; i < t->count; ++i) {
+        Token *m = t->assocs[i].main;
+        if (m == ai->good || m == ai->bad) return 1;
+    }
+    return 0;
+}
+static inline size_t ai_gc_indegree(const TokenPool *p, const Token *t) {
+    size_t n = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        const Token *from = p->tokens[i];
+        if (from->is_garbage) continue;
+        for (size_t j = 0; j < from->count; ++j)
+            if (from->assocs[j].main == t) n++;
+    }
+    return n;
+}
+static inline float ai_gc_keep_prob(const AI *ai, uint64_t age, uint64_t recency,
+                                    uint32_t hits, int valence, size_t indegree) {
+    if (age < ai->gc.gc_min_age) return 1.0f;
+    float r = 1.0f / (1.0f + (float)recency / (float)ai->gc.gc_time_scale);
+    float s = (float)(hits + 1) / (float)(hits + 3);
+    float p = r * s;
+    if (valence) p = p * 0.5f + 0.5f;
+    if (indegree >= 5) p = p * 0.7f + 0.3f;
+    return p > 1.0f ? 1.0f : p;
+}
+static inline float ai_gc_rand(AI *ai) {
+    ai->gc_rng ^= ai->gc_rng << 13;
+    ai->gc_rng ^= ai->gc_rng >> 17;
+    ai->gc_rng ^= ai->gc_rng << 5;
+    return (float)(ai->gc_rng & 0xFFFFFF) / (float)0x1000000;
+}
+static inline void ai_gc(AI *ai) {
+    if (!ai || !ai->pool) return;
+    TokenPool *p = ai->pool;
+    uint64_t now = p->current_tick;
+    uint8_t del_state = ai->gc.gc_delete_state;
+    float rate = ai->gc.gc_upgrade_rate;
+
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t->is_garbage || t->mem_state >= del_state) continue;
+        if (ai_gc_protected(ai, t)) continue;
+        uint64_t age = now - t->birth_tick, rec = now - t->last_touch_tick;
+        int val = ai_gc_has_valence(ai, t);
+        size_t ind = (t->mem_state != MEM_ACTIVE) ? ai_gc_indegree(p, t) : 0;
+        float keep = ai_gc_keep_prob(ai, age, rec, token_hits_total(t), val, ind);
+        if (ai_gc_rand(ai) < (1.0f - keep) * rate) t->mem_state++;
+    }
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t->is_garbage) continue;
+        for (size_t j = 0; j < t->count; ++j) {
+            AssocEntry *e = &t->assocs[j];
+            if (e->mem_state >= del_state) continue;
+            uint64_t age = now - e->birth_tick, rec = now - e->last_touch_tick;
+            int val = (e->main == ai->good || e->main == ai->bad);
+            float keep = ai_gc_keep_prob(ai, age, rec, e->hits, val, 0);
+            if (ai_gc_rand(ai) < (1.0f - keep) * rate) e->mem_state++;
+        }
+    }
+    size_t deleted = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t->is_garbage || t->mem_state < del_state) continue;
+        if (ai_gc_protected(ai, t)) continue;
+        t->is_garbage = 1; deleted++;
+    }
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t->is_garbage) {
+            ai->n_gc_deleted_edges += t->count;
+            t->count = 0;
+            continue;
+        }
+        for (size_t j = 0; j < t->count; ) {
+            AssocEntry *e = &t->assocs[j];
+            int remove = 0;
+            if (e->main && e->main->is_garbage) remove = 1;
+            if (!remove && e->mem_state >= del_state) remove = 1;
+            for (uint8_t k = 0; !remove && k < e->n_subs; ++k)
+                if (e->subs[k]->is_garbage) remove = 1;
+            for (uint8_t k = 0; !remove && k < e->n_not; ++k)
+                if (e->subs_not[k]->is_garbage) remove = 1;
+            if (remove) {
+                memmove(e, e + 1, (t->count - j - 1) * sizeof *e);
+                t->count--; ai->n_gc_deleted_edges++;
+            } else j++;
+        }
+    }
+    ai->n_gc_deleted_tokens += deleted;
+}
+
+/* ============================ 世界模型 ============================ */
+
+static inline void ai_set_last_output(AI *ai, Token **toks, size_t n) {
+    if (!ai) return;
+    if (n > ai->last_output_cap) {
+        size_t ncap = n < 8 ? 8 : n * 2;
+        Token **nt = (Token **)realloc(ai->last_output, ncap * sizeof *nt);
+        if (!nt) return;
+        ai->last_output = nt; ai->last_output_cap = ncap;
+    }
+    memcpy(ai->last_output, toks, n * sizeof *toks);
+    ai->last_output_n = n;
+}
+/* 找一条**因果猜想**边：`from -[因果]-> to`（带 [因果] 语境标记的那条）。
+ * 单独一个查询函数，是因为「学因果」和「削弱因果」必须按同一个判据找 ——
+ * 削弱原来走 ai_weaken_edge（它要求 n_subs==0），于是**永远匹配不上**，
+ * 反事实成了空转（见 ai_learn_counterfactual 的注释）。 */
+static inline AssocEntry *ai_causal_edge(Token *from, Token *to, const Token *causal) {
+    if (!from || !to || !causal) return NULL;
+    for (size_t i = 0; i < from->count; ++i) {
+        AssocEntry *e = &from->assocs[i];
+        if (e->main != to || e->n_subs != 1 || e->subs[0] != causal) continue;
+        return e;
+    }
+    return NULL;
+}
+
+/* 因果猜想：**一次巧合不算规律**（反迷信），反复协变才升格。
+ *
+ * 人脑原理（采用）：因果/预测关系来自**协变** —— X 之后 Y 反复出现才算数；
+ * 而且**反例**（我没做 X，Y 照样发生）会削弱它。这是人真的在做的事，
+ * 也是这个内核本来就想要的（`[因果]` 语境 + 反事实那一节）。
+ * 糟粕（不学）：一次时序相邻就当成规律（post hoc ergo propter hoc），
+ * 以及「出现一百次和出现一次没有区别」（从不更新这条猜想有多可信）。
+ *
+ * 三条护栏，保证「见得多」**不会**把它变成知识：
+ *   ① 永远带 [因果] 语境标记 → 关系层/知识查询（rel_direct_* 要求 n_subs==0）认不出它；
+ *   ② 永远不参与走边（ai_edge_walkable 直接挡掉带语境的边）；
+ *   ③ 升格只写 hits/mem_state（参数层），**不建新边、不改结构**。 */
+static inline void ai_learn_causal(AI *ai, char **words, size_t n) {
+    if (!ai || ai->last_output_n == 0 || n == 0) return;
+    for (size_t i = 0; i < ai->last_output_n; ++i) {
+        Token *did = ai->last_output[i];
+        if (!did || !did->name || did->name[0] == '[') continue;
+        for (size_t j = 0; j < n; ++j) {
+            Token *observed = pool_token_intern(ai->pool, words[j]);
+            if (observed == did) continue;
+            if (!observed->name || observed->name[0] == '[') continue;
+            AssocEntry *e = ai_causal_edge(did, observed, ai->causal);
+            if (e) {
+                /* 又见了一次：这是**协变证据**（不是新知识，也不新建边） */
+                if (e->hits < AI_CAUSAL_HITS_CAP) e->hits++;
+                if (e->hits >= AI_CAUSAL_MIN_HITS && e->mem_state == MEM_FADING) {
+                    e->mem_state = MEM_ACTIVE;
+                    ai->n_causal_promoted++;
+                }
+                continue;
+            }
+            Token *subs[1] = { ai->causal };
+            if (token_add_assoc_unique(did, subs, 1, observed) != 0) continue;
+            /* 刚建的那条一定在**最后一个**位置：一次巧合 = 暂时（会淡、可被反例雪藏） */
+            AssocEntry *ne = &did->assocs[did->count - 1];
+            ne->hits = 1;
+            ne->mem_state = MEM_FADING;
+            ai->n_causal_seen++;
+        }
+    }
+}
+
+/* 削弱一条因果猜想（**只动带 [因果] 标记的边**）：
+ *   hits>0        → hits--（掉到 0 退回「暂时」）
+ *   hits==0 暂时  → 雪藏（DORMANT：在「暂时」之上再来一个反例就不信了）
+ * 返回 1 = 真的削弱了。计数器据此 +1 —— 以前不管削没削到都 +1，那是在**谎报**。 */
+static inline int ai_weaken_causal(Token *from, Token *to, const Token *causal) {
+    AssocEntry *e = ai_causal_edge(from, to, causal);
+    if (!e) return 0;
+    if (e->hits > 0) {
+        e->hits--;
+        if (e->hits == 0) e->mem_state = MEM_FADING;
+        return 1;
+    }
+    if (e->mem_state == MEM_FADING) { e->mem_state = MEM_DORMANT; return 1; }
+    return 0;
+}
+
+static inline void ai_learn_counterfactual(AI *ai, char **words, size_t n) {
+    if (!ai || ai->last_skipped_n == 0 || n == 0) return;
+    for (size_t i = 0; i < ai->last_skipped_n; ++i) {
+        Token *didnt_do = ai->last_skipped[i];
+        if (!didnt_do || didnt_do->is_garbage) continue;
+        for (size_t j = 0; j < n; ++j) {
+            Token *observed = pool_token_intern(ai->pool, words[j]);
+            if (!observed || observed == didnt_do) continue;
+            /* 「我没做 X，可 Y 还是发生了」⟹ X 不是 Y 的原因 —— 削弱那条猜想。
+             * 踩过的坑：这里原来调 ai_weaken_edge，而它要求 n_subs==0，
+             * 因果边带 [因果] 语境（n_subs==1）→ **永远匹配不上**：
+             * 反事实从来没生效过，计数器却每次 +1（机制在，行为不在）。 */
+            if (ai_weaken_causal(didnt_do, observed, ai->causal))
+                ai->n_counterfactual++;
+        }
+    }
+    ai->last_skipped_n = 0;
+}
+static inline void ai_credit_from_feedback(AI *ai, float valence) {
+    if (!ai) return;
+    AIPath *p = &ai->last_path;
+    if (p->n < 2) return;
+    if (valence > 0.0f) {
+        for (size_t i = 0; i + 1 < p->n; ++i)
+            token_observe_pair(p->path[i], p->path[i + 1]);
+    } else {
+        float credit = -valence;
+        for (size_t i = p->n; i > 1; --i) {
+            ai_weaken_edge(p->path[i - 2], p->path[i - 1]);
+            credit *= 0.7f;
+            if (credit < 0.15f) break;
+        }
+    }
+    ai->n_credit_events++;
+}
+static inline void ai_credit_from_surprise(AI *ai, float surprise) {
+    if (!ai || surprise < 0.3f) return;
+    ai_credit_from_feedback(ai, -surprise);
+}
+
+/* ============================ 他者 ============================ */
+
+static inline OtherModel *ai_meet(AI *ai, const char *name) {
+    if (!ai || !name) return NULL;
+    for (size_t i = 0; i < ai->others_n; ++i)
+        if (ai->others[i].who && ai->others[i].who->name &&
+            strcmp(ai->others[i].who->name, name) == 0)
+            return &ai->others[i];
+    if (ai->others_n >= AI_MAX_OTHERS) return NULL;
+    Token *who = pool_token_intern(ai->pool, name);
+    OtherModel *om = &ai->others[ai->others_n++];
+    om->who = who; om->belief_of_self = NULL;
+    om->trust = 0.5f; om->n_interactions = 0;
+    token_add_assoc_unique(ai->self, NULL, 0, who);
+    token_add_assoc_unique(who, NULL, 0, ai->self);
+    char bname[64];
+    snprintf(bname, sizeof bname, "[%s:认为的我]", name);
+    om->belief_of_self = pool_token_intern(ai->pool, bname);
+    token_add_assoc_unique(who, NULL, 0, om->belief_of_self);
+    return om;
+}
+/* ---- 他者信念表：他说的「X R Y」存在**他**名下 ----
+ * 这是「归属」从标注变成真东西的那一步。三条规矩：
+ *   ① 他的信念**不进我的图**（跟假设同一条铁律）—— 他信什么不影响我知道什么；
+ *   ② 问「他 觉得 … 吗」只查他的表（+ 归他的假设层），查不到就说不知道他怎么看，
+ *      **不许**拿我的知识冒充他的想法（原来的实现就是拿我的图答他的问题）；
+ *   ③ 他的信念写进模型文件（v8），存盘重载还在 —— 关系是持久的，归属也该持久。 */
+static inline OtherModel *other_find(const AI *ai, const Token *who) {
+    if (!ai || !who) return NULL;
+    for (size_t i = 0; i < ai->others_n; ++i)
+        if (ai->others[i].who == who) return (OtherModel *)&ai->others[i];
+    return NULL;
+}
+static inline OtherModel *other_intern(AI *ai, Token *who) {
+    OtherModel *om = other_find(ai, who);
+    if (om || !who) return om;
+    if (ai->others_n >= AI_MAX_OTHERS) return NULL;
+    om = &ai->others[ai->others_n++];
+    memset(om, 0, sizeof *om);
+    om->who = who;
+    om->trust = 0.5f;
+    return om;
+}
+/* 记一条他的信念。同一对词、同一关系 → 覆盖极性（人会说反话）。 */
+static inline int other_belief_learn(AI *ai, OtherModel *om,
+                                     Token *a, Token *b, uint8_t rid, int neg) {
+    if (!ai || !om || !a || !b || rid == 0 || a == b) return 0;
+    for (size_t i = 0; i < om->n_bel; ++i) {
+        if (om->bel[i].a == a && om->bel[i].b == b && om->bel[i].rid == rid) {
+            om->bel[i].neg = (uint8_t)(neg ? 1 : 0);
+            return 1;
+        }
+    }
+    if (om->n_bel >= AI_MAX_BELIEF) return 0;
+    HypoFact *f = &om->bel[om->n_bel++];
+    f->a = a; f->b = b; f->rid = rid; f->neg = (uint8_t)(neg ? 1 : 0);
+    om->n_bel_learned++;
+    return 1;
+}
+static inline const HypoFact *other_belief_find(const OtherModel *om,
+                                                const Token *a, uint8_t rid,
+                                                const Token *b) {
+    if (!om || !a || !b || rid == 0) return NULL;
+    for (size_t i = 0; i < om->n_bel; ++i)
+        if (om->bel[i].a == a && om->bel[i].b == b && om->bel[i].rid == rid)
+            return &om->bel[i];
+    return NULL;
+}
+/* 以 a 为主语、关系 rid、极性 neg_want 的信念（他可能信好几条） */
+static inline size_t other_belief_edges(const OtherModel *om, const Token *a,
+                                        uint8_t rid, int neg_want,
+                                        const HypoFact **out, size_t cap) {
+    size_t n = 0;
+    if (!om || !a) return 0;
+    for (size_t i = 0; i < om->n_bel && n < cap; ++i) {
+        const HypoFact *x = &om->bel[i];
+        if (x->a != a || x->rid != rid) continue;
+        if ((int)x->neg != (neg_want ? 1 : 0)) continue;
+        out[n++] = x;
+    }
+    return n;
+}
+/* 他名下**有没有以 a 为主语**的说法 —— 用来区分「他这么想」和「他没说过这个」。
+ * 只看主语：问「他 觉得 猫 属于 鸟 吗」时，他要是只说过「猫 会 飞」，
+ * 那关于「猫 属于 鸟」他其实什么都没说，只能答「我没听他说过这个」。 */
+static inline int other_has_subject(const OtherModel *om, const Token *a) {
+    if (!om || !a) return 0;
+    for (size_t i = 0; i < om->n_bel; ++i)
+        if (om->bel[i].a == a) return 1;
+    return 0;
+}
+static inline void ai_social_feedback(AI *ai, OtherModel *om, int feedback) {
+    if (!ai || !om || feedback == 0) return;
+    float target = (feedback > 0) ? 1.0f : 0.0f;
+    om->trust = om->trust * 0.9f + target * 0.1f;
+    om->n_interactions++;
+    if (om->who && om->who->hv) {
+        Token *marker = (feedback > 0) ? ai->social_good : ai->social_bad;
+        if (marker && marker->hv) {
+            Token *r = pool_token(ai->pool, NULL, NULL);
+            if (r && r->hv) {
+                vsa_bind(om->who->hv, marker->hv, r->hv);
+                r->perspective_of = om->who;
+                token_add_assoc_unique(om->who, NULL, 0, r);
+            }
+        }
+    }
+}
+static inline OtherModel *ai_identify_speaker(AI *ai, char **words, size_t n) {
+    if (!ai || !words || n == 0) return NULL;
+    /* 「他/你/她 + 名字」才是在指出说话人。第一版只看前一个词，于是
+     * `他 以为 猫 会 飞` 会给「以为」建一个「他者模型」、`他 说 …` 再给「说」
+     * 建一个 —— 一次对话下来冒出好几个假人（实测）。所以后面那个词
+     * **必须不像谓语**，否则不算人名。 */
+    static const char *not_name[] = {
+        "以为", "认为", "觉得", "说", "想", "知道", "是", "的", "了", "在", "有",
+        "会", "能", "要", "属于", "包含", "喜欢", "爱", "吃", "怕", "不", "吗",
+        "呢", "吧", "过", "着", "和", "跟", "与", NULL };
+    for (size_t i = 0; i + 1 < n; ++i) {
+        if (strcmp(words[i], "你") != 0 && strcmp(words[i], "他") != 0 &&
+            strcmp(words[i], "她") != 0) continue;
+        int bad = 0;
+        for (size_t k = 0; not_name[k]; ++k)
+            if (strcmp(words[i + 1], not_name[k]) == 0) { bad = 1; break; }
+        if (bad) continue;
+        return ai_meet(ai, words[i + 1]);
+    }
+    return NULL;
+}
+
+/* ============================ 时间 ============================ */
+
+static inline void ai_timeline_advance(AI *ai) {
+    if (!ai) return;
+    char tname[64];
+    snprintf(tname, sizeof tname, "[时刻:%llu]",
+             (unsigned long long)ai->pool->current_tick);
+    Token *now = pool_token_intern(ai->pool, tname);
+    if (ai->timeline_n > 0) {
+        size_t last = (ai->timeline_head + ai->timeline_n - 1) % AI_MAX_HISTORY;
+        Token *prev = ai->timeline[last];
+        if (prev && prev != now) {
+            if (!prev->next_in_time) prev->next_in_time = now;
+            Token *rel = pool_token_intern(ai->pool, "[关系:之后]");
+            token_add_assoc_unique(prev, NULL, 0, rel);
+            token_add_assoc_unique(prev, NULL, 0, now);
+            token_touch(ai->past_self);
+        }
+    }
+    ai->timeline[ai->timeline_head] = now;
+    ai->timeline_head = (ai->timeline_head + 1) % AI_MAX_HISTORY;
+    if (ai->timeline_n < AI_MAX_HISTORY) ai->timeline_n++;
+    if (ai->focus) token_add_assoc_unique(now, NULL, 0, ai->focus);
+    token_add_assoc_unique(ai->past_self, NULL, 0, now);
+    token_add_assoc_unique(now, NULL, 0, ai->self);
+    token_add_assoc_unique(ai->future_self, NULL, 0, ai->self);
+}
+static inline size_t ai_timeline_recent(const AI *ai, Token **out, size_t max) {
+    if (!ai || ai->timeline_n == 0) return 0;
+    size_t k = ai->timeline_n < max ? ai->timeline_n : max;
+    for (size_t i = 0; i < k; ++i) {
+        size_t idx = (ai->timeline_head + AI_MAX_HISTORY - 1 - i) % AI_MAX_HISTORY;
+        out[i] = ai->timeline[idx];
+    }
+    return k;
+}
+static inline Token *ai_when_did_i(AI *ai, Token *what) {
+    if (!ai || !what) return NULL;
+    size_t k = ai->timeline_n;
+    for (size_t i = 0; i < k; ++i) {
+        size_t idx = (ai->timeline_head + AI_MAX_HISTORY - 1 - i) % AI_MAX_HISTORY;
+        Token *t = ai->timeline[idx];
+        if (!t) continue;
+        for (size_t j = 0; j < t->count; ++j)
+            if (t->assocs[j].main == what) return t;
+    }
+    return NULL;
+}
+
+/* ============================ 想象 ============================ */
+
+static inline void ai_imagine(AI *ai) {
+    if (!ai || ai->focus_n < 2) return;
+    float ec = ai_comfort_error(ai), ea = ai_arousal_error(ai);
+    float dev = ec * ec + ea * ea;
+    float rate = ai->imagine_rate * (1.0f + dev * 5.0f);
+    if (rate > 0.5f) rate = 0.5f;
+    ai->rng ^= ai->rng << 13; ai->rng ^= ai->rng >> 17; ai->rng ^= ai->rng << 5;
+    float roll = (float)(ai->rng & 0xFFFFFF) / (float)0x1000000;
+    if (roll > rate) return;
+
+    size_t n = ai->focus_n;
+    size_t i = (ai->rng >> 8) % n;
+    size_t j = (ai->rng >> 16) % n;
+    if (i == j) return;
+    Token *a = ai->focus_ring[i];
+    Token *b = ai->focus_ring[j];
+    if (!a || !b || !a->hv || !b->hv || a->is_garbage || b->is_garbage) return;
+
+    Token *r = pool_token(ai->pool, NULL, NULL);
+    if (!r || !r->hv) return;
+    vsa_bind(a->hv, b->hv, r->hv);
+    token_add_assoc_unique(r, NULL, 0, a);
+    token_add_assoc_unique(r, NULL, 0, b);
+    Token *marker = pool_token_intern(ai->pool, "[想象]");
+    token_add_assoc_unique(r, NULL, 0, marker);
+    token_add_assoc_unique(ai->self, NULL, 0, r);
+    ai->n_imaginations++;
+    if (ai->inner.comfort > 0.8f && ai->inner.arousal < 0.3f)
+        r->mem_state = MEM_FADING;
+}
+
+/* ============================ 类比 ============================ */
+
+/* 关系类比：A : B :: C : ?
+ *
+ * **为什么不用 bind/unbind 了**：那个版本走的是 hv（名字的随机投影），
+ * 于是 unbind 出来的「关系向量」和答案都是随机的，最近邻查出来的东西没有意义 ——
+ * 这就是它一直是死代码的原因（没人敢调）。
+ *
+ * 改成在**学出来的 emb 空间**里做向量算术（word2vec 那套）：
+ *
+ *     answer ≈ emb(C) + (emb(B) − emb(A))
+ *
+ * emb 是从 PPMI 邻居投影出来的，所以这个偏移方向真的对应「A 到 B 的那种关系」。
+ * 实测 `猫 动物 狗` 能落在「同类词」上（见 ::analogy）。
+ *
+ * 返回值是最近的那个真实词（不新建 Token），相似度写进 out_sim。 */
+static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
+                               Token *item_c, float *out_sim) {
+    if (!ai || !item_a || !pair_ab || !item_c) return NULL;
+    if (!item_a->emb || !pair_ab->emb || !item_c->emb) return NULL;
+    /* 查询向量用 float 累加（emb 是 int8，直接相加会溢出） */
+    int16_t q[VSA_DIM];
+    for (size_t d = 0; d < VSA_DIM; ++d) {
+        int v = (int)item_c->emb[d] + (int)pair_ab->emb[d] - (int)item_a->emb[d];
+        if (v > 127) v = 127;
+        if (v < -128) v = -128;
+        q[d] = (int16_t)v;
+    }
+    Token *best = NULL;
+    double best_sim = -2.0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t->emb || t->is_garbage) continue;
+        if (!t->name || t->name[0] == '[') continue;
+        if (t == item_a || t == pair_ab || t == item_c) continue;
+        double dot = 0, nq = 0, nt = 0;
+        for (size_t d = 0; d < VSA_DIM; ++d) {
+            dot += (double)q[d] * (double)t->emb[d];
+            nq  += (double)q[d] * (double)q[d];
+            nt  += (double)t->emb[d] * (double)t->emb[d];
+        }
+        if (nq == 0 || nt == 0) continue;
+        double c = dot / (sqrt(nq) * sqrt(nt));
+        if (c > best_sim) { best_sim = c; best = t; }
+    }
+    if (out_sim) *out_sim = best ? (float)best_sim : 0.0f;
+    return best;
+}
+
+/* 按 emb 找最近的词（语义邻居，不要求有边） */
+static inline Token *ai_nearest_emb(AI *ai, const Token *t, float *out_sim) {
+    if (!ai || !t || !t->emb) return NULL;
+    Token *best = NULL;
+    double best_sim = -2.0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *u = ai->pool->tokens[i];
+        if (!u->emb || u->is_garbage || u == t) continue;
+        if (!u->name || u->name[0] == '[') continue;
+        double c = (double)emb_cosine(t->emb, u->emb);
+        if (c > best_sim) { best_sim = c; best = u; }
+    }
+    if (out_sim) *out_sim = best ? (float)best_sim : 0.0f;
+    return best;
+}
+
+/* ============================ 内部对话 ============================ */
+
+static inline void ai_inner_dialogue(AI *ai) {
+    if (!ai || ai->focus_n < 2) return;
+    for (size_t i = 0; i < ai->focus_n; ++i) {
+        Token *ti = ai->focus_ring[i];
+        if (!ti) continue;
+        for (size_t j = 0; j < ai->focus_n; ++j) {
+            if (i == j) continue;
+            Token *tj = ai->focus_ring[j];
+            if (!tj) continue;
+            for (size_t k = 0; k < ti->count; ++k) {
+                if (ti->assocs[k].main == tj) {
+                    ai->focus_weight[j] += ai->inner_dialogue_gain *
+                                           (float)(ti->assocs[k].hits + 1);
+                    if (ai->focus_weight[j] > 3.0f) ai->focus_weight[j] = 3.0f;
+                    break;
+                }
+            }
+        }
+    }
+    ai->n_inner_dialogues++;
+}
+
+/* ============================ 漂移 ============================ */
+
+static inline void ai_drift_sample(AI *ai) {
+    if (!ai) return;
+    TokenPool *p = ai->pool;
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t->is_garbage || !t->hv || !t->hv_prev) continue;
+        if (t->name && t->name[0] == '[') continue;
+        float sim = vsa_cosine(t->hv, t->hv_prev);
+        float drift = 1.0f - sim;
+        if (drift > 0.30f) {
+            char name[64];
+            snprintf(name, sizeof name, "[漂移:%s]", t->name ? t->name : "?");
+            Token *d = pool_token_intern(ai->pool, name);
+            if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+            ai->n_drifts_detected++;
+        }
+        memcpy(t->hv_prev, t->hv, VSA_DIM);
+    }
+}
+
+/* ============================ 叙事 ============================ */
+
+static inline char *ai_narrate(AI *ai, size_t n_recent) {
+    if (!ai || ai->timeline_n == 0) return NULL;
+    size_t cap = 512, len = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return NULL;
+    buf[0] = 0;
+    size_t k = ai->timeline_n < n_recent ? ai->timeline_n : n_recent;
+    int first = 1;
+    for (size_t i = 0; i < k; ++i) {
+        size_t idx = (ai->timeline_head + AI_MAX_HISTORY - 1 - i) % AI_MAX_HISTORY;
+        Token *t = ai->timeline[idx];
+        if (!t) continue;
+        Token *focus = NULL;
+        uint32_t best_h = 0;
+        for (size_t j = 0; j < t->count; ++j) {
+            Token *m = t->assocs[j].main;
+            if (!m || !m->name || m->name[0] == '[') continue;
+            uint32_t h = t->assocs[j].hits;
+            if (h >= best_h) { best_h = h; focus = m; }
+        }
+        if (!focus) continue;
+        const char *sep = first ? "我最近在想 " : "，然后 ";
+        size_t sl = strlen(sep), nl = strlen(focus->name);
+        while (len + sl + nl + 2 > cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+        memcpy(buf + len, sep, sl); len += sl;
+        memcpy(buf + len, focus->name, nl); len += nl;
+        buf[len] = 0;
+        first = 0;
+    }
+    if (!first) {
+        while (len + 4 > cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+        strcat(buf, "。");
+    }
+    return buf;
+}
+
+/* ============================ 诊断 ============================ */
+
+static inline float ai_lexical_diversity(AI *ai) {
+    if (!ai || ai->trace_n == 0) return 1.0f;
+    size_t k = ai->trace_n < 64 ? ai->trace_n : 64;
+    size_t distinct = 0;
+    for (size_t i = 0; i < k; ++i) {
+        Token *t = ai->trace[ai->trace_n - 1 - i];
+        if (!t) continue;
+        int seen = 0;
+        for (size_t j = 0; j < i; ++j)
+            if (ai->trace[ai->trace_n - 1 - j] == t) { seen = 1; break; }
+        if (!seen) distinct++;
+    }
+    return (float)distinct / (float)k;
+}
+static inline void ai_diagnose(AI *ai) {
+    if (!ai) return;
+    float div = ai_lexical_diversity(ai);
+    size_t p_n = ai->pool->perspective_n;
+    size_t abs_n = ai->n_abstractions;
+    size_t imag_n = ai->n_imaginations, useful_n = ai->n_imagine_useful;
+
+    if (ai->diag.prev_lexical_diversity > 0 &&
+        div < ai->diag.prev_lexical_diversity - 0.15f) {
+        Token *d = pool_token_intern(ai->pool, "[诊断:自举退化]");
+        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        ai->n_diagnoses++;
+    }
+    if (p_n > ai->diag.prev_perspective_n + 50) {
+        Token *d = pool_token_intern(ai->pool, "[诊断:视角爆炸]");
+        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        ai->n_diagnoses++;
+    }
+    if (abs_n > ai->diag.prev_abstractions + 10) {
+        Token *d = pool_token_intern(ai->pool, "[诊断:抽象过度]");
+        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        ai->n_diagnoses++;
+    }
+    if (imag_n > ai->diag.prev_imaginations + 20 &&
+        useful_n <= ai->diag.prev_imagine_useful) {
+        Token *d = pool_token_intern(ai->pool, "[诊断:想象噪声]");
+        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        ai->n_diagnoses++;
+    }
+    ai->diag.prev_lexical_diversity = div;
+    ai->diag.prev_perspective_n = p_n;
+    ai->diag.prev_abstractions = abs_n;
+    ai->diag.prev_imaginations = imag_n;
+    ai->diag.prev_imagine_useful = useful_n;
+    ai->diag.last_diag_tick = ai->pool->current_tick;
+}
+
+/* ============================ 校准 ============================ */
+
+static inline void ai_calibrate(AI *ai, int feedback) {
+    if (!ai || feedback == 0) return;
+    if (ai->last_confidence_at_output > 0.8f) {
+        ai->calib.n_confident++;
+        if (feedback < 0) ai->calib.n_confident_wrong++;
+    }
+    if (ai->calib.n_confident > 0) {
+        float wrong_rate = (float)ai->calib.n_confident_wrong
+                         / (float)ai->calib.n_confident;
+        ai->calib.calibration_bias = wrong_rate - 0.2f;
+    }
+    if (ai->calib.n_confident > 20) {
+        if (ai->calib.calibration_bias > 0.15f) {
+            ai->uncertain.certain_threshold += 0.01f;
+            if (ai->uncertain.certain_threshold > 0.90f)
+                ai->uncertain.certain_threshold = 0.90f;
+        } else if (ai->calib.calibration_bias < -0.10f) {
+            ai->uncertain.certain_threshold -= 0.01f;
+            if (ai->uncertain.certain_threshold < 0.50f)
+                ai->uncertain.certain_threshold = 0.50f;
+        }
+    }
+}
+
+/* ============================ 统计 ============================ */
+
+static inline void ai_stats(const AI *ai) {
+    /* 来源档可信度（Beta 后验，见 ai_source_posterior）：**学出来的**，不是写死的档 */
+    if (ai) {
+        printf("       来源档可信度（后验）：基准 %.2f 观测 %.2f 推论 %.2f（改口 %zu 次 / 缓存撤 %zu 次）\n",
+               ai_source_posterior(ai, ASSOC_ROLE_INNATE),
+               ai_source_posterior(ai, ASSOC_ROLE_NONE),
+               ai_source_posterior(ai, ASSOC_ROLE_DERIVED),
+               ai->n_revised, ai->n_retracted);
+    }
+    if (!ai) return;
+    size_t edges = 0, garbage = 0;
+    size_t active = 0, fading = 0, dormant = 0, forgotten = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (t->is_garbage) { garbage++; continue; }
+        edges += t->count;
+        switch (t->mem_state) {
+        case MEM_ACTIVE: active++; break;
+        case MEM_FADING: fading++; break;
+        case MEM_DORMANT: dormant++; break;
+        case MEM_FORGOTTEN: forgotten++; break;
+        }
+    }
+    printf("[统计] Token=%zu (活跃%zu 淡化%zu 休眠%zu 遗忘%zu 垃圾%zu)  边=%zu\n",
+           ai->pool->count, active, fading, dormant, forgotten, garbage, edges);
+    printf("       已学=%zu  轮次=%zu  已删Token=%zu  已删边=%zu\n",
+           ai->n_learned, ai->turns,
+           ai->n_gc_deleted_tokens, ai->n_gc_deleted_edges);
+    printf("       惊讶=%zu  抽象=%zu  睡眠=%zu  轨迹=%zu  睡眠中=%d\n",
+           ai->n_surprises, ai->n_abstractions, ai->n_sleeps,
+           ai->trace_n, ai_sleep_pending(ai));
+    printf("       信用=%zu  表达自举=%zu  反事实=%zu  因果=%zu(升格%zu)\n",
+           ai->n_credit_events, ai->n_expr_learned, ai->n_counterfactual,
+           ai->n_causal_seen, ai->n_causal_promoted);
+    printf("       舒适=%.2f 唤醒=%.2f 疲劳=%.2f 候选=%d 置信=%.2f 知道感=%.2f\n",
+           ai->inner.comfort, ai->inner.arousal, ai->inner.fatigue,
+           ai_effective_candidates(ai), ai->last_confidence, ai->meta.total);
+    printf("       帧生成=%zu (关联链放行%zu 现场造词%zu 拆解%zu 合并%zu 中转%zu 降级%zu)\n",
+           ai->n_frames, ai->n_frame_assoc, ai->n_coined,
+           ai->n_split, ai->n_merge, ai->n_relay, ai->n_hedge);
+    printf("       思维链步数=%zu\n", ai->n_cot);
+    printf("       关系知识：现场学到 %zu 条（其中改口 %zu 次：后说的观测替掉了先说的）  "
+           "推理答是 %zu / 答不是 %zu / 答不确定 %zu（多跳 %zu 类比 %zu）\n",
+           ai->n_rel_learned, ai->n_revised, ai->n_rel_yes, ai->n_rel_no, ai->n_rel_unknown,
+           ai->n_rel_deep, ai->n_rel_guess);
+    printf("       动态关系 %zu 个\n", ai->dynrel_n);
+    {
+        size_t nh = 0;
+        for (size_t i = 0; i < ai->hypo.depth; ++i) nh += ai->hypo.fr[i].n;
+        printf("       假设层：累计设过 %zu 次  当前 %zu 层 / %zu 条%s\n",
+               ai->n_hypo, ai->hypo.depth, nh,
+               ai->hypo.depth ? "（只在推理时用，未写进知识库）" : "");
+    }
+    printf("       世界假设：%s\n", ai->closed_world ? "闭合（没写就是假）" : "开放（没写就是不知道）");
+    {
+        printf("       关系独占表：");
+        for (uint8_t r = 1; r <= REL_CORE_MAX; ++r) {
+            const char *nm = NULL;
+            switch (r) {
+                case REL_IS_A: nm = "属于"; break;
+                case REL_HAS:  nm = "有";   break;
+                case REL_CAN:  nm = "会";   break;
+                case REL_FEAR: nm = "怕";   break;
+                case REL_LIKE: nm = "喜欢"; break;
+                case REL_EAT:  nm = "吃";   break;
+                case REL_AT:   nm = "在";   break;
+                case REL_NEED: nm = "需要"; break;
+                default: break;
+            }
+            if (!nm) continue;
+            /* 带上证据：单宾语/多宾语的主语数。判独占的完整数字在 ::excl 里。 */
+            printf("%s=%s(单%zu/多%zu) ", nm, ai->rel_excl[r] ? "独占" : "多值",
+                   ai->rel_excl_single[r], ai->rel_excl_multi[r]);
+        }
+        printf("（有数据支持的 %zu 项，其中改口 %zu 项；参照多宾语率 %.1f%%）\n",
+               ai->n_rel_excl_evidenced, ai->n_rel_excl_learned,
+               ai->rel_excl_base / 10.0);
+    }
+    printf("       逐词游走=%zu\n", ai->n_walks);
+    printf("       他者=%zu  时间点=%zu  视角深度=%zu\n",
+           ai->others_n, ai->timeline_n, perspective_depth(ai->pool));
+    printf("       想象=%zu (有用%zu)  内部对话=%zu  叙事=%zu\n",
+           ai->n_imaginations, ai->n_imagine_useful,
+           ai->n_inner_dialogues, ai->n_narrations);
+    printf("       诊断=%zu  漂移=%zu  校准偏差=%.2f  置信门槛=%.2f\n",
+           ai->n_diagnoses, ai->n_drifts_detected,
+           ai->calib.calibration_bias, ai->uncertain.certain_threshold);
+}
+
+/* 微内核（安全内核 + 自修改意图队列 + 补丁注册表 + 元认知）。
+ * 放在最后包含：它要用完整的 AI 结构，也要用上面这些函数
+ * （ai_tokenize / ai_focus_push / ai_free_words）。 */
+#include "micro.h"
+
+/* ============================ 统一写入通道 ============================
+ *
+ * `microkernel.md` 一直记着一条局限：**老写入者绕过安全内核**
+ * （感知学习、内部对话、想象、关系层现场学都直接改图）。这一轮把它变成
+ * "**有账 + 可路由**"：
+ *
+ *   ① **有账**：谁写的都从这两个口子过，`ai->writes[来源]++`；
+ *   ② **可路由**：`ai->route_writes` 打开时，**知识类**写入（关系事实）
+ *      改成提意图 → 同一条「审查 → 预算 → 应用 → 审计」的路；
+ *   ③ **刻意不路由的**：感知共现（`ai_learn_pair`）。它带 hits/pattern/topic
+ *      这些观测细节，转成意图会**丢信息**；而且观测是知识的来源，
+ *      直写本来就是它的正常路径。这条区别写在 `::safe` 里，不藏着。
+ *
+ * 两个口子都必须**在 micro.h 之后**（要用 micro_of / micro_try）。 */
+static inline void ai_write_count(AI *ai, AiWriteSrc s) {
+    if (ai && (unsigned)s < AI_WSRC_N) ai->writes[s]++;
+}
+
+/* 共现边：记一笔，直写（观测的丰富记录留在原路径里）。 */
+static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
+    if (!ai || !a || !b) return 0;
+    ai_write_count(ai, s);
+    return token_add_assoc_unique(a, NULL, 0, b) == 0;
+}
+
+/* 关系事实（知识）：记一笔；`route_writes` 打开时**走受审通道**。
+ * 两条路的语义相同（MOD_TAG_REL 内部就是 token_tag_rel），差别只在
+ * 谁来审查、什么时候落地 —— 所以这是一次**可测量**的开关，不是改行为。 */
+static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
+    if (!ai || !a || !b || rid == 0) return -1;
+    ai_write_count(ai, s);
+    Micro *mk = micro_of(ai);
+    if (ai->route_writes && mk && !mk->safe.mod_off) {
+        ModIntent m;
+        memset(&m, 0, sizeof m);
+        m.type = MOD_TAG_REL;
+        m.target = a; m.main = b; m.rel_id = rid;
+        m.neg = (uint8_t)(neg ? 1 : 0);      /* 否定也要带过去（否则改口/否定语义会丢） */
+        {   /* source 只有 24 字节：有界拼接（"统一通道:关系学习" 正好 26 字节，
+             * snprintf 会被 -Werror=format-truncation 拦下；截断是故意的） */
+            size_t off = 0;
+            const char *head = "统一通道:";
+            for (const char *q = head; *q && off + 1 < sizeof m.source; ++q) m.source[off++] = *q;
+            for (const char *q = ai_write_src_name(s); *q && off + 1 < sizeof m.source; ++q)
+                m.source[off++] = *q;
+            m.source[off] = 0;
+        }
+        char note[96];
+        return micro_try(ai, &m, note, sizeof note) == SAFE_OK ? 0 : -1;
+    }
+    return neg ? token_tag_nrel(a, b, rid, REL_BOOST) : token_tag_rel(a, b, rid, REL_BOOST);
+}
+
+#endif /* AI_H */
+
+/* 结构化回复层（依赖 ai.h 里的 AI / ai_tokenize / ai_tokens_to_text） */
+#include "frame.h"
+
+/* 语义关系层（L2）：类型化关系 + 传递推理 + 对话中动态学知识 */
+#include "rel.h"
+
+/* 推导层：把「链」做成第一等公民 —— 可验证、可渲染（文字是最后一步的事）。
+ * 必须排在 rel.h 之后：它用 Proof / rel_solve 做验证。 */
+#include "derive.h"
+
+/* 思维循环（议程 + 分步 + 跨轮未解问题 + 元认知）。
+ * 排在最后：它要用 rel.h 的求解器、derive.h 的验证器、micro.h 的意图队列。 */
+#include "think.h"

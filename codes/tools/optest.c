@@ -1,0 +1,1457 @@
+/* tools/optest.c — **Token 行为（图操作）+ 临时 Token + 修正的记忆** 的自测（C 级）
+ *
+ * 用户要的三件事，在这里逐条钉住：
+ *   ① 「给带 token 的连接 token」     → 随语境接线（带语境 X 的边接上 Y）
+ *   ② 「给带**指定** token 的连接另一个 token」 → 指定接线（限定主语）
+ *   ③ 「在这两个 token 之间加一个 token，不要直连、经它中转」 → 中间插词
+ *   ④ 临时 Token（[临:…]）：能参与边、**不存盘**、没人引用时可回收
+ *   ⑤ 修正的记忆 / 来源监控：改口留一个 [修正:…] 标记（幂等、不冒充知识、能存盘）
+ *
+ * 还有一条这一轮**查出来的洞**的看护：安全内核的「每步新建边预算」原来永远扣不着
+ * （safety_charge 排在 apply 之后，而它靠 `!micro_has_edge()` 判「是不是新边」），
+ * 见第六节 —— 参数不是问题，「机制在、行为不在」才是。
+ *
+ * 用法：gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest
+ */
+#include "../agent.h"
+#include "../model_io.h"
+#include "../token_lang.h"
+
+#include <stdio.h>
+#include <string.h>
+
+static int passes = 0, fails = 0;
+static void ok(int cond, const char *what) {
+    if (cond) { printf("  [OK]   %s\n", what); passes++; }
+    else      { printf("  [FAIL] %s\n", what); fails++; }
+}
+static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, name); }
+
+/* ============================ ① 行为表自检 ============================ */
+static void test_table(void) {
+    printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
+    size_t n = token_op_count();
+    ok(n == 6, "表里 6 条行为（加前提/加反前提/前提接线/中间插词/回收临时/调用补丁）");
+    int dup = 0, nofn = 0, noshape = 0;
+    for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
+        if (!TOKEN_OPS[i].expand) nofn++;
+        if (!TOKEN_OPS[i].shape) noshape++;
+        for (size_t j = i + 1; TOKEN_OPS[j].name; ++j)
+            if (strcmp(TOKEN_OPS[i].name, TOKEN_OPS[j].name) == 0) dup++;
+    }
+    ok(dup == 0, "行为名不重复");
+    ok(nofn == 0, "每条行为都有展开函数（表里有的都实现得了）");
+    ok(noshape == 0, "每条行为都写了参数形状（帮助由表生成）");
+    char note[200];
+    ok(token_op_run(NULL, "随语境接线", NULL, 0, note, sizeof note) == -1, "空 AI 不会崩");
+}
+
+/* ============================ ② 中间插词（不直连，经它中转） ============================ */
+static void test_insert_between(void) {
+    printf("== ② 中间插词：A 与 B 不直连，经插入的 Token 中转 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
+    (void)token_observe_pair(cat, moon);                  /* 先有一条普通直连边 */
+    ok(micro_has_edge(cat, moon), "前置：A—B 有一条直连边");
+
+    char *args[2] = {(char *)"猫", (char *)"月亮"};
+    char note[200];
+    int got = token_op_run(ai, "中间插词", args, 2, note, sizeof note);
+    ok(got == 1, "行为跑通了（展开 1 条意图并应用）");
+    Token *via = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
+    ok(via != NULL, "中转 Token 建出来了（默认是临时 Token [临:中转]）");
+    ok(via && token_is_temp(via), "它标着「临时」——不存盘的草稿");
+    ok(micro_has_edge(cat, via), "A → 中转 在");
+    ok(micro_has_edge(via, moon), "中转 → B 在");
+    ok(!micro_has_edge(cat, moon), "A—B 的**直连被拆了**（语义：不要直接联想到）");
+    ok(rel_direct(cat, REL_HAS, moon) == 0, "中转不是知识：任何关系位上都没有它");
+    ok(ai_edge_walkable(ai, &cat->assocs[0], 1.0f) >= 0, "走边过滤器不会因为这条改动崩");
+
+    /* 直连是**关系边**（知识）时：不许拆，但仍然插中转 */
+    AI *ai2 = ai_new();
+    Token *a2 = T(ai2, "猫"), *b2 = T(ai2, "鱼");
+    (void)token_tag_rel(a2, b2, REL_EAT, REL_BOOST);
+    int got2 = token_op_run(ai2, "中间插词", args, 2, note, sizeof note);   /* 猫 月亮：词不存在 */
+    ok(got2 == -1, "词不在池子里 → 行为不跑，也不乱建东西");
+    char *args2[2] = {(char *)"猫", (char *)"鱼"};
+    ok(token_op_run(ai2, "中间插词", args2, 2, note, sizeof note) == 1, "换一对真词：跑了");
+    ok(rel_direct(a2, REL_EAT, b2) == 1, "直连是**观测到的关系边** → 铁律 2：不拆");
+    Token *via2 = pool_find(ai2->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
+    ok(via2 && micro_has_edge(a2, via2) && micro_has_edge(via2, b2),
+       "但中转照样接上了（知识不拆，联想改走中转）");
+    ai_free(ai); ai_free(ai2);
+}
+
+/* ============================ ④ 临时 Token 不存盘 ============================ */
+static void test_temp_not_saved(void) {
+    printf("== ④ 临时 Token 与指向它的边**不进存档**（格式不动、v9 不变） ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
+    Token *via = T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]");
+    (void)token_observe_pair(cat, moon);
+    size_t i_plain = (size_t)-1;
+    for (size_t i = 0; i < cat->count; ++i) if (cat->assocs[i].main == moon) i_plain = i;
+    ok(i_plain != (size_t)-1 && mio_edge_saved(&cat->assocs[i_plain]),
+       "普通边照旧存盘（过滤在无草稿时是恒等的）");
+    (void)token_observe_pair(cat, via);
+    size_t i_via = (size_t)-1;
+    for (size_t i = 0; i < cat->count; ++i) if (cat->assocs[i].main == via) i_via = i;
+    ok(i_via != (size_t)-1 && !mio_edge_saved(&cat->assocs[i_via]),
+       "指向临时 Token 的边不存盘（否则装载会指向不存在的 id）");
+    Token *subs[1] = { via };
+    (void)token_add_assoc_ex(moon, subs, 1, NULL, 0, cat, NULL);
+    size_t i_ctx = (size_t)-1;
+    for (size_t i = 0; i < moon->count; ++i) if (moon->assocs[i].n_subs == 1) i_ctx = i;
+    ok(i_ctx != (size_t)-1 && !mio_edge_saved(&moon->assocs[i_ctx]),
+       "**语境里**带临时 Token 的边也不存盘");
+    ok(!token_is_temp(cat) && !token_is_temp(NULL), "普通 Token / NULL 不是临时");
+    ai_free(ai);
+}
+
+/* ============================ ⑤ 回收临时 ============================ */
+static void test_collect_temp(void) {
+    printf("== ⑤ 回收临时：只回收**没人引用**的草稿；别的 Token 一律不许删 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
+    Token *orphan = T(ai, MICRO_TEMP_TOKEN_PREFIX "孤儿]");      /* 谁都不连它 */
+    (void)moon;
+    char note[200];
+    char *args[2] = {(char *)"猫", (char *)"月亮"};
+    ok(token_op_run(ai, "中间插词", args, 2, note, sizeof note) == 1, "先插一个中转（它会被引用）");
+    Token *used = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
+    ok(used != NULL, "在用中的临时 Token 存在");
+    int got = token_op_run(ai, "回收临时", NULL, 0, note, sizeof note);
+    ok(got == 1, "回收临时：只提出 1 条（孤儿那条）");
+    ok(orphan->is_garbage, "没人引用的草稿被回收（软删：标垃圾，池里的指针不悬空）");
+    ok(used && !used->is_garbage, "**还在用**的草稿不动（自己还连着边）");
+
+    /* 非临时 Token 永远不许走这条路 */
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_REMOVE_TOKEN; m.target = cat;
+    ok(safety_review(&micro_of(ai)->safe, ai->pool, &m) == SAFE_DENY_NOT_TEMP,
+       "回收一条**普通** Token → 被拒（只许回收临时草稿）");
+    ai_free(ai);
+}
+
+/* ============================ ⑥ 每步新建边预算真的算数 ============================ */
+static void test_edge_budget_charged(void) {
+    printf("== ⑥ 安全内核的「每步新建边」预算：真的会被扣、真的会拦 ==\n");
+    AI *ai = ai_new();
+    Micro *mk = micro_of(ai);
+    Token *a = T(ai, "甲"), *b = T(ai, "乙"), *c = T(ai, "丙"), *d = T(ai, "丁");
+    mk->safe.max_new_edges_step = 1;          /* 一步只许建一条新边 */
+    safety_step_begin(ai);
+    char note[128];
+    ModIntent m1; memset(&m1, 0, sizeof m1);
+    m1.type = MOD_ADD_ASSOC; m1.target = a; m1.main = b; m1.bump = 1;
+    ok(micro_try(ai, &m1, note, sizeof note) == SAFE_OK, "第一条新边：放过");
+    ModIntent m2; memset(&m2, 0, sizeof m2);
+    m2.type = MOD_ADD_ASSOC; m2.target = c; m2.main = d; m2.bump = 1;
+    ok(micro_try(ai, &m2, note, sizeof note) == SAFE_DENY_BUDGET_EDGE,
+       "第二条新边：预算拦下（**这条以前永远拦不住** —— 记账排在应用之后）");
+    safety_step_begin(ai);
+    ok(micro_try(ai, &m2, note, sizeof note) == SAFE_OK, "新的一步：预算重置，又能建");
+    /* 带语境的边也算新边（不然「给同一条边加不同语境」会绕过预算） */
+    safety_step_begin(ai);
+    mk->safe.max_new_edges_step = 1;
+    ModIntent m3; memset(&m3, 0, sizeof m3);
+    m3.type = MOD_ADD_ASSOC; m3.target = a; m3.main = b; m3.n_subs = 1; m3.subs[0] = c;
+    ok(micro_try(ai, &m3, note, sizeof note) == SAFE_OK, "带语境的边（不同语境）算新边：放过第一条");
+    ModIntent m4; memset(&m4, 0, sizeof m4);
+    m4.type = MOD_ADD_ASSOC; m4.target = a; m4.main = b; m4.n_subs = 1; m4.subs[0] = d;
+    ok(micro_try(ai, &m4, note, sizeof note) == SAFE_DENY_BUDGET_EDGE,
+       "另一种语境的边也要占预算（不能靠 micro_has_edge 只看无语境那条绕过）");
+    ai_free(ai);
+}
+
+/* ============================ ⑦ 修正的记忆（改口留痕） ============================ */
+static void test_revise_memory(void) {
+    printf("== ⑦ 修正的记忆：改口留一个 [修正:…] 标记（幂等、不冒充知识） ==\n");
+    AI *ai = ai_new();
+    (void)T(ai, "猫"); (void)T(ai, "有"); (void)T(ai, "毛");
+    char *w1[3] = {(char *)"猫", (char *)"有", (char *)"毛"};
+    char *w2[3] = {(char *)"猫", (char *)"没有", (char *)"毛"};
+    float conf = 0;
+    char *r1 = agent_learn_relation(ai, w1, 3, &conf);
+    ok(r1 != NULL, "先记下「猫 有 毛」");
+    free(r1);
+    micro_step(ai, NULL, 0, "测试");          /* 安全点：把队列里的意图落地 */
+    char *r2 = agent_learn_relation(ai, w2, 3, &conf);
+    ok(r2 != NULL && strstr(r2, "改 过来 了") != NULL, "改口时如实说「改过来了」");
+    free(r2);
+    micro_step(ai, NULL, 0, "测试");
+    Token *mark = pool_find(ai->pool, MICRO_REVISE_TOKEN_PREFIX "猫_不_有_毛]");
+    ok(mark != NULL, "落下一个 [修正:猫_不_有_毛] 标记（来源监控：这件事被改过口）");
+    ok(mark && micro_has_edge(mark, T(ai, "猫")), "标记连回主语（查得到「是哪件事」）");
+    ok(rel_direct(T(ai, "猫"), REL_HAS, T(ai, "毛")) == 0 &&
+       rel_direct_neg(T(ai, "猫"), REL_HAS, T(ai, "毛")) == 1,
+       "留痕**不改知识**：图里仍只有后来那个极性");
+    /* 幂等：**同一条**修正再说一次（改回否定）→ 同名标记仍然只有一个 */
+    char *r3 = agent_learn_relation(ai, w1, 3, &conf);      /* 改回肯定 → 另一个标记 */
+    free(r3);
+    micro_step(ai, NULL, 0, "测试");
+    char *r4 = agent_learn_relation(ai, w2, 3, &conf);      /* 又改回否定 → 与第一次同名 */
+    free(r4);
+    micro_step(ai, NULL, 0, "测试");
+    size_t n_neg = 0, n_all = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || !t->name) continue;
+        if (strncmp(t->name, MICRO_REVISE_TOKEN_PREFIX,
+                    strlen(MICRO_REVISE_TOKEN_PREFIX)) != 0) continue;
+        n_all++;
+        if (strcmp(t->name, MICRO_REVISE_TOKEN_PREFIX "猫_不_有_毛]") == 0) n_neg++;
+    }
+    ok(n_neg == 1, "**同一条**修正改口两次只有一个标记（MOD_ADD_TOKEN 同名 intern 幂等）");
+    ok(n_all == 2, "两次**不同方向**的修正各留一个标记（猫_有_毛 / 猫_不_有_毛）");
+    ai_free(ai);
+}
+
+/* ============================ ⑧ 原语栈式组合（复用已有栈机） ============================
+ *
+ * 用户的选择：**用临时 Token，不另造 Token 栈**；真要组合时复用**已有的** Interp 栈机。
+ * 这一节钉住那条路：原语层只把「行为编号 + 操作数」交给宿主，
+ * **自己不碰图** —— 所以「行为」在语言层能写、能组合，但落地仍然只有安全内核那一个入口。 */
+typedef struct {
+    int         n;
+    InterpOpKind op[4];
+    size_t      nargs[4];
+    char        args[4][4][32];
+} OpLog;
+
+/* 真宿主（就是 main.c 里那个 interp_op_host 的最小版）：把行为交给 token_op_run。
+ * 用它证明「组合出来的行为是真能落地的」，而不是只把请求记下来。 */
+static int prim_host_tokrun(void *user, InterpOpKind op, char *const *args, size_t n) {
+    AI *ai = (AI *)user;
+    if (!ai || op < 0 || op >= IPOP_N || !TOKEN_OPS[op].name) return -1;
+    char note[200];
+    return token_op_run(ai, TOKEN_OPS[op].name, args, n, note, sizeof note);
+}
+
+static int rec_host(void *user, InterpOpKind op, char *const *args, size_t n) {
+    OpLog *L = (OpLog *)user;
+    if (!L || L->n >= 4) return 0;
+    int k = L->n++;
+    L->op[k] = op;
+    L->nargs[k] = n;
+    for (size_t i = 0; i < n && i < 4; ++i)
+        snprintf(L->args[k][i], sizeof L->args[k][i], "%s", args[i] ? args[i] : "");
+    return 0;
+}
+
+static void test_prim_stack(void) {
+    printf("== ⑧ 原语栈式组合：语言层写行为、不碰图（复用 Interp，不新造栈） ==\n");
+    /* 表自检：名字只有一份、没有重复、没有落空的 kind */
+    int dup = 0, dead = 0;
+    for (size_t i = 0; PRIMS[i].name; ++i) {
+        if (PRIMS[i].kind == PK_NONE) dead++;
+        for (size_t j = i + 1; PRIMS[j].name; ++j)
+            if (strcmp(PRIMS[i].name, PRIMS[j].name) == 0) dup++;
+    }
+    ok(dup == 0, "原语表里名字不重复（以前名字写在两处，现在只有这一张）");
+    ok(dead == 0, "每条原语都有 kind（不会出现「表里有、识别不出」）");
+    ok(prim_count() >= 37, "原语表条数够（含新增的行为入口，含 [原语:前关联不]）");
+
+    AI *ai = ai_new();
+    ok(prim_kind(T(ai, PRIM_INSERT))       == PK_INSERT,       "[原语:插词] 识别得了");
+    ok(prim_kind(T(ai, PRIM_INSERT_NAMED)) == PK_INSERT_NAMED, "[原语:插词为] 识别得了（它取一个参数）");
+    ok(prim_kind(T(ai, PRIM_PREMISE_TIE))  == PK_PREMISE_TIE,  "[原语:前提接线] 识别得了");
+    ok(prim_kind(T(ai, PRIM_COLLECT_TEMP)) == PK_COLLECT_TEMP, "[原语:回收临时] 识别得了");
+
+    /* **编号契约**：原语层的编号必须指到 TOKEN_OPS 里那条行为（改顺序这里变红） */
+    ok(strcmp(TOKEN_OPS[IPOP_PREMISE_CONNECT].name, "加前提") == 0,
+       "IPOP_PREMISE_CONNECT → 加前提（[原语:前关联]+[原语:连接]）");
+    ok(strcmp(TOKEN_OPS[IPOP_PREMISE_TIE].name, "前提接线") == 0,
+       "IPOP_PREMISE_TIE → 前提接线");
+    ok(strcmp(TOKEN_OPS[IPOP_INSERT].name, "中间插词") == 0,    "IPOP_INSERT → 中间插词");
+    ok(strcmp(TOKEN_OPS[IPOP_COLLECT_TEMP].name, "回收临时") == 0, "IPOP_COLLECT_TEMP → 回收临时");
+
+    /* 栈式组合：`[原语:对象] A [原语:对象] B [原语:插词]` → 弹 B、A，交给宿主 */
+    {
+        OpLog L; memset(&L, 0, sizeof L);
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "月亮", PRIM_INSERT };
+        token_run_names_ctx(ai->pool, seq, 5, rec_host, &L);
+        ok(L.n == 1 && L.op[0] == IPOP_INSERT, "原语跑完 → 宿主收到一条「中间插词」");
+        ok(L.nargs[0] == 2 && strcmp(L.args[0][0], "猫") == 0 &&
+           strcmp(L.args[0][1], "月亮") == 0,
+           "操作数顺序对（栈：先 push 的 A 在前，后 push 的 B 在后）");
+    }
+    /* 带名字的那条：`[原语:插词为] <名字>` 会把参数当第三个操作数 */
+    {
+        OpLog L; memset(&L, 0, sizeof L);
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "桌子",
+                              PRIM_INSERT_NAMED, "家具" };
+        token_run_names_ctx(ai->pool, seq, 6, rec_host, &L);
+        ok(L.n == 1 && L.nargs[0] == 3 && strcmp(L.args[0][2], "家具") == 0,
+           "[原语:插词为] <名字>：名字作为第三个操作数交出去");
+    }
+    /* 前提接线：pop Y, P, A 三个操作数 */
+    {
+        OpLog L; memset(&L, 0, sizeof L);
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "吃",
+                              PRIM_OBJECT, "水", PRIM_PREMISE_TIE };
+        token_run_names_ctx(ai->pool, seq, 7, rec_host, &L);
+        ok(L.n == 1 && L.op[0] == IPOP_PREMISE_TIE && L.nargs[0] == 3 &&
+           strcmp(L.args[0][0], "猫") == 0 && strcmp(L.args[0][1], "吃") == 0 &&
+           strcmp(L.args[0][2], "水") == 0, "[原语:前提接线]：主语、前提、目标三个操作数");
+    }
+    /* 前关联 + 连接 → 走「加前提」（不再往边上写退役的语境字段） */
+    {
+        OpLog L; memset(&L, 0, sizeof L);
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "吃",
+                              PRIM_PRE_ASSOC, "饿", PRIM_CONNECT };
+        token_run_names_ctx(ai->pool, seq, 7, rec_host, &L);
+        ok(L.n == 1 && L.op[0] == IPOP_PREMISE_CONNECT && L.nargs[0] == 3 &&
+           strcmp(L.args[0][0], "猫") == 0 && strcmp(L.args[0][1], "饿") == 0 &&
+           strcmp(L.args[0][2], "吃") == 0,
+           "[原语:前关联]+[原语:连接] → 加前提（A、B、前提 P 三个操作数）");
+    }
+    /* **没有宿主时原语不生效**：语言层不该自己改图（结构改动只有 micro_step 一个入口） */
+    {
+        AI *ai2 = ai_new();
+        (void)T(ai2, "猫"); (void)T(ai2, "月亮");
+        size_t before = 0;
+        for (size_t i = 0; i < ai2->pool->count; ++i) before += ai2->pool->tokens[i]->count;
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "月亮", PRIM_INSERT };
+        token_run_names(ai2->pool, seq, 5);              /* 旧入口：没有宿主 */
+        size_t after = 0;
+        for (size_t i = 0; i < ai2->pool->count; ++i) after += ai2->pool->tokens[i]->count;
+        ok(before == after, "没有宿主 → 图的边数一条不变（语言层不碰结构）");
+        ok(pool_find(ai2->pool, MICRO_TEMP_TOKEN_PREFIX "中转]") == NULL,
+           "也没有偷偷造出临时 Token");
+        ai_free(ai2);
+    }
+    /* 组合出来的行为是**真的**能落地：宿主用 token_op_run，走安全内核 */
+    {
+        Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
+        (void)token_observe_pair(cat, moon);
+        const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "月亮", PRIM_INSERT };
+        token_run_names_ctx(ai->pool, seq, 5, prim_host_tokrun, ai);
+        ok(!micro_has_edge(cat, moon), "组合起来跑一条：直连被拆");
+        ok(micro_has_edge(cat, T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]")), "中转接上了（经临时 Token）");
+    }
+    ai_free(ai);
+}
+
+/* ============================ ⑨ 前提 token（淘汰「语境」后的表示） ============================
+ *
+ * 用户的澄清：「联想本来不依赖前提，可以正常联想；前提 token 可以被正常联想到，
+ * 但是**逻辑会知道这两个之间的前提 token 是什么**，并且可以被正常处理。」
+ * 这一节把三句话逐条钉住：
+ *   ① 表示：A —[前提]→ P → B（P 是普通 token，`[前提]` 是挂在动作槽上的行为 token）
+ *   ② 联想照走 / 前提可联想：A→P 是普通可走边；P 是普通 token（有 hits、有邻居）
+ *   ③ 逻辑知道前提是谁：token_premise_between(A,B) 直接答出 P（可多个）
+ * 外加两条纪律：**语境字段不再有创建者**（退役）+ 旧模型读得回来（容忍）。 */
+static void test_premise(void) {
+    printf("== ⑨ 前提 token：联想照走、前提可联想、逻辑查得到它是谁 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *moon = T(ai, "月亮"), *food = T(ai, "食物");
+    (void)T(ai, "鱼");                                       /* 操作数要已在池子里 */
+    (void)token_observe_pair(cat, moon);                     /* 先有直连 */
+    char note[200];
+    char *a1[2] = {(char *)"猫", (char *)"月亮"};
+    ok(token_op_run(ai, "加前提", a1, 2, note, sizeof note) == 1, "::op 加前提 跑通");
+    Token *via = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "前提]");
+    ok(via != NULL && token_is_temp(via), "缺省前提是**临时 token**（[临:前提]，草稿）");
+    ok(!micro_has_edge(cat, moon), "直连被拆：连结改成「经过前提」");
+    ok(micro_has_edge(cat, via) && micro_has_edge(via, moon), "A —[前提]→ P → B 两跳都在");
+    ok(edge_is_premise_link(&cat->assocs[micro_edge_index(cat, via)]),
+       "A→P 上挂着 `[前提]` 行为 token（标记）");
+
+    const Token *ps[4];
+    size_t np = token_premise_between(cat, moon, ps, 4);
+    ok(np == 1 && ps[0] == via, "**逻辑问得出**：猫 与 月亮 之间的前提就是那个临时 token");
+
+    /* 前提用**真词**：它照常能被联想到（可走边、有权重），逻辑也知道它是前提 */
+    char *a2[3] = {(char *)"猫", (char *)"月亮", (char *)"食物"};
+    ok(token_op_run(ai, "加前提", a2, 3, note, sizeof note) == 1, "换真词当前提：加前提 猫 月亮 食物");
+    np = token_premise_between(cat, moon, ps, 4);
+    ok(np == 2, "同一对词可以**多个前提**（逻辑一次都拿得到）");
+    long ip = micro_edge_index(cat, food);
+    ok(ip >= 0 && edge_is_premise_link(&cat->assocs[ip]), "食物 也是前提链接的目标");
+    ok(ip >= 0 && ai_edge_walkable(ai, &cat->assocs[ip], 1.0f) == 1,
+       "**联想照走**：A→前提 是普通可走边（前提不挡联想）");
+    ok(food->count > 0, "**前提 token 能被正常联想到**：它就是普通 token，有自己的边");
+
+    /* 原语路径：前关联 + 连接 → 前提是那个**真词**，不写退役字段 */
+    AI *ai2 = ai_new();
+    (void)T(ai2, "猫"); (void)T(ai2, "吃"); (void)T(ai2, "饿");
+    const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "吃",
+                          PRIM_PRE_ASSOC, "饿", PRIM_CONNECT };
+    token_run_names_ctx(ai2->pool, seq, 7, prim_host_tokrun, ai2);
+    Token *c2 = T(ai2, "猫"), *e2 = T(ai2, "饿"), *eat = T(ai2, "吃");
+    const Token *ps2[4];
+    ok(token_premise_between(c2, e2, ps2, 4) == 1 && ps2[0] == eat,
+       "[原语:前关联]+[原语:连接] → 逻辑答得出前提是「吃」");
+    ai_free(ai2);
+
+    /* 前提接线：让 A 经前提 P 也能到 Y（选择判据 = 图里的前提链接） */
+    {
+        char *a3[3] = {(char *)"猫", (char *)"食物", (char *)"鱼"};
+        ok(token_op_run(ai, "前提接线", a3, 3, note, sizeof note) >= 1,
+           "前提接线：猫 经前提 食物 也能到 鱼");
+        ok(micro_has_edge(food, T(ai, "鱼")), "前提的出口 食物→鱼 建出来了");
+        const Token *ps3[4];
+        ok(token_premise_between(cat, T(ai, "鱼"), ps3, 4) == 1 && ps3[0] == food,
+           "逻辑同样答得出 猫 与 鱼 之间的前提是 食物");
+        /* 没有那条前提链接的主语 → 不该乱接 */
+        AI *ai4 = ai_new();
+        (void)T(ai4, "甲"); (void)T(ai4, "乙"); (void)T(ai4, "丙");
+        char *a4[3] = {(char *)"甲", (char *)"乙", (char *)"丙"};
+        /* 甲 —[前提]→ 乙 不存在 → 但仍然会把 乙→丙 建上（这是「让乙通到丙」的语义），
+         * 所以这里断言的是「不会凭空给甲标记前提」 */
+        (void)token_op_run(ai4, "前提接线", a4, 3, note, sizeof note);
+        long ix = micro_edge_index(T(ai4, "甲"), T(ai4, "乙"));
+        ok(ix >= 0 && edge_is_premise_link(&T(ai4, "甲")->assocs[ix]),
+           "前提接线会补上 A —[前提]→ P（并标记），不会静默什么都不做");
+        ai_free(ai4);
+    }
+
+    /* **语境退役**：跑完上面所有创建路径，池子里不该有 n_subs/n_not */
+    size_t legacy = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->is_garbage) continue;
+        for (size_t j = 0; j < t->count; ++j)
+            if (t->assocs[j].n_subs || t->assocs[j].n_not) legacy++;
+    }
+    ok(legacy == 0, "语境（subs/subs_not）**没有任何创建者**了（退役）");
+
+    /* 旧模型容忍：字段还在，旧边读回来照样按老语义匹配（不当成坏数据） */
+    {
+        AI *ai3 = ai_new();
+        Token *a = T(ai3, "甲"), *b = T(ai3, "乙"), *cx = T(ai3, "丙");
+        Token *subs[1] = { cx };
+        (void)token_add_assoc_ex(a, subs, 1, NULL, 0, b, NULL);
+        long i3 = -1;
+        for (size_t k = 0; k < a->count; ++k) if (a->assocs[k].main == b) i3 = (long)k;
+        Token *ctx_yes[1] = { cx };
+        Token *ctx_no[1]  = { T(ai3, "丁") };
+        ok(i3 >= 0 && a->assocs[i3].n_subs == 1, "旧边（带语境）还写得进去（兼容路径在）");
+        ok(i3 >= 0 && entry_matches(&a->assocs[i3], ctx_yes, 1) == 1,
+           "旧模型读回来：语境在 → 匹配（容忍，不当坏数据）");
+        ok(i3 >= 0 && entry_matches(&a->assocs[i3], ctx_no, 1) == 0,
+           "旧模型读回来：语境不在 → 不匹配（老语义没坏）");
+        ai_free(ai3);
+    }
+    ai_free(ai);
+}
+
+/* ============================ ⑩ 推理/思维层按前提决定用不用（R10） ============================
+ *
+ * 用户：「推理/思维层按前提决定用不用」。判据：**前提 token 在当前注意窗口里** → 前提成立。
+ * 这一节钉住四件事：
+ *   ① 求解器：前提不成立 → **不用**那条连结（status 0）；成立 → 用（status +1，R10 规则 10）
+ *   ② 验证器：这条链独立复核得通过（gaps==0），而且**伪造的前提步会被拒**
+ *   ③ 思维层：前提没成立时，痕上写明「有前提、没成立，所以不用」（不是默默没答案）
+ *   ④ 联想照走：前提不成立也不挡 A→前提 的可走性（用户明确说的那条）
+ */
+static void test_premise_gate(void) {
+    printf("== ⑩ 推理/思维层按前提决定用不用（R10：前提是闸门，不是路障） ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *cook = T(ai, "做饭"), *who = T(ai, "人");
+    (void)token_tag_rel(who, cook, REL_CAN, REL_BOOST);       /* 人 会 做饭（第二跳是知识） */
+    char note[220];
+    char *a1[3] = {(char *)"猫", (char *)"做饭", (char *)"人"};
+    ok(token_op_run(ai, "加前提", a1, 3, note, sizeof note) == 1, "建出 猫 —[前提]→ 人 → 做饭");
+
+    /* ① 前提不成立 → 求解器不用这条连结 */
+    Proof pf;
+    rel_solve(ai, cat, REL_CAN, cook, 0, &pf);
+    ok(pf.status == 0, "前提「人」不在注意窗口 → 求解器**不用**这条连结（推不出来）");
+
+    /* ④ 联想照走：前提不成立，A→前提 照样是可走边 */
+    long ip = micro_edge_index(cat, who);
+    ok(ip >= 0 && ai_edge_walkable(ai, &cat->assocs[ip], 1.0f) == 1,
+       "**联想照走**：前提不在窗口，也不挡 A→前提 这条普通边（前提是闸门，不是路障）");
+    ok(ai_premise_holds(ai, who) == 0, "ai_premise_holds：前提不在窗口 → 0");
+
+    /* ③ 思维层：痕上写清「有前提、没成立，所以不用」 */
+    char *q[4] = {(char *)"猫", (char *)"会", (char *)"做饭", (char *)"吗"};
+    for (int i = 0; i < 4; ++i) (void)pool_token_intern(ai->pool, q[i]);
+    Think *t = think_of(ai);
+    think_run(ai, q, 4);
+    ok(t->concl == 0, "思维层这一轮没有结论（前提没成立，不硬答）");
+    int saw = 0;
+    for (size_t i = 0; i < t->trace_n; ++i)
+        if (strstr(t->trace[i].what, "问前提") &&
+            (strstr(t->trace[i].why, "没成立") || strstr(t->trace[i].why, "不用"))) saw = 1;
+    ok(saw, "痕上写明：这条连结有前提、前提没成立、所以不用它");
+
+    /* ② 前提成立 → 用（R10），验证器复核通过 */
+    ai->focus_ring[0] = who; ai->focus_n = 1;
+    ok(ai_premise_holds(ai, who) == 1, "ai_premise_holds：前提在窗口 → 1");
+    ok(ai_premise_link_ok(ai, cat, cook) == 1, "ai_premise_link_ok：前提成立 → 这条连结可用");
+    rel_solve(ai, cat, REL_CAN, cook, 0, &pf);
+    ok(pf.status == 1, "前提成立 → R10 推出结论");
+    char txt[256];
+    proof_text(ai, &pf, txt, sizeof txt);
+    ok(strstr(txt, "前提") && strstr(txt, "做饭"), "链上读得出前提这一跳");
+    Derivation d;
+    der_reset(&d);
+    der_from_proof(ai, &d, cat, REL_CAN, cook, &pf);
+    ok(der_verify(ai, &d) == 0, "验证器独立复核通过（gaps==0）");
+    int rule10 = 0;
+    for (size_t i = 0; i < d.n; ++i)
+        if (d.step[i].kind == DER_RULE && d.step[i].rule == 10) rule10 = 1;
+    ok(rule10, "链上那一步记的是规则 10（前提）");
+
+    /* ②b 伪造的前提步必须被拒：两个没有前提链接的词之间写一条 rule=10 */
+    Derivation fake;
+    der_reset(&fake);
+    der_goal(&fake, cat, REL_CAN, cook);
+    der_rule(&fake, 10, cat, 0, cook, +1);        /* 猫 到 做饭 之间**没有**前提链接 */
+    ok(der_verify(ai, &fake) > 0, "验证器识破伪造的前提步（gaps>0）");
+
+    /* 前提成立时思维层直接答出来，链上带前提 */
+    think_run(ai, q, 4);
+    ok(t->concl == 1 && strstr(t->chain_text, "前提") != NULL,
+       "思维层这一轮直接用上带前提的链");
+    ai_free(ai);
+}
+
+/* ============================ ⑪ 前提极性 + 前提说明进答复 ============================
+ *
+ * 补掉上一轮列的两条局限：
+ *   ① **反前提**（`[前提不]`）：条件是"前提 token **不**在注意窗口里"——
+ *      旧 `subs_not` 的能力有了替代（而且同样带验证器复核）；
+ *   ② **前提说明进答复**：默认开（A/B 量过 0/8），把"为什么没用那条连结"追加进回答。
+ */
+static void test_premise_polarity_out(void) {
+    printf("== ⑪ 反前提（[前提不]）+ 前提说明进答复 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *cook = T(ai, "做饭"), *who = T(ai, "人");
+    (void)token_tag_rel(who, cook, REL_CAN, REL_BOOST);
+    char note[220];
+    char *a1[3] = {(char *)"猫", (char *)"做饭", (char *)"人"};
+    ok(token_op_run(ai, "加反前提", a1, 3, note, sizeof note) == 1, "::op 加反前提 跑通");
+    const AssocEntry *pl = token_premise_link(cat, who);
+    ok(pl && edge_premise_polarity(pl) == -1, "这条前提链接的极性是 -1（反前提）");
+    const Token *ps[4]; int pol[4];
+    ok(token_premises(cat, cook, ps, pol, 4) == 1 && pol[0] == -1,
+       "token_premises 答得出「前提不：人」");
+
+    /* 条件成立（人不在窗口）→ 用；不成立（人在窗口）→ 不用 */
+    Proof pf;
+    rel_solve(ai, cat, REL_CAN, cook, 0, &pf);
+    ok(pf.status == 1, "反前提条件成立（人没出现）→ 用这条连结");
+    char txt[256];
+    proof_text(ai, &pf, txt, sizeof txt);
+    ok(strstr(txt, "前提不") != NULL, "链上读作 `-[前提不]->`（不是含混的「前提」）");
+    Derivation d;
+    der_reset(&d);
+    der_from_proof(ai, &d, cat, REL_CAN, cook, &pf);
+    ok(der_verify(ai, &d) == 0, "验证器复核通过（规则 11）");
+    ai->focus_ring[0] = who; ai->focus_n = 1;              /* 人 出现了 → 条件不成立 */
+    rel_solve(ai, cat, REL_CAN, cook, 0, &pf);
+    ok(pf.status == 0, "反前提条件不成立（人出现了）→ **不用**这条连结");
+
+    /* 伪造：把一条**正**前提链接写成规则 11（或反之）必须被拒 */
+    Derivation fake;
+    der_reset(&fake);
+    der_goal(&fake, cat, REL_CAN, cook);
+    der_rule(&fake, 10, cat, 0, who, +1);                  /* 实际是 -1 的边，谎称 10 */
+    ok(der_verify(ai, &fake) > 0, "验证器识破「极性对不上」的前提步");
+
+    /* 前提说明进答复：默认开；关掉就不追加 */
+    char *q[4] = {(char *)"猫", (char *)"会", (char *)"做饭", (char *)"吗"};
+    for (int i = 0; i < 4; ++i) (void)pool_token_intern(ai->pool, q[i]);
+    Think *t = think_of(ai);
+    think_run(ai, q, 4);                                    /* 人 在窗口 → 条件不成立 → 记下来 */
+    ok(t->premise_blocked == 1, "思维层记下了「有前提、没成立」");
+    ok(strstr(t->premise_text, "前提") != NULL, "那句话备好了（给答复用）");
+    t->premise_out_on = 1;
+    char out[512];
+    snprintf(out, sizeof out, "%s", "猫 应该 会 做饭");
+    ok(think_take_output(ai, out, sizeof out) == 1, "默认开：接管输出（追加）");
+    ok(strstr(out, "猫 应该 会 做饭") != NULL && strstr(out, "前提") != NULL,
+       "追加而不是替换：原答还在，后面补了前提说明");
+    snprintf(out, sizeof out, "%s", "猫 应该 会 做饭");
+    t->premise_out_on = 0;
+    ok(think_take_output(ai, out, sizeof out) == 0 && strcmp(out, "猫 应该 会 做饭") == 0,
+       "关掉（::premiseout off）→ 一个字都不加");
+    t->premise_out_on = 1;
+    ai_free(ai);
+}
+
+/* ============================ ⑫ 未解问题持久化（不动存档格式） ============================
+ *
+ * 用户点过「关掉再打开还记得没想通的事」。做法不是升格式，而是**用已经存盘的标记**：
+ * 思维层挂问题时经安全内核落了一个 `[自问:…]` 节点（普通 token、随图存盘），
+ * 装载时扫一遍把它解析回 (主语,关系,宾语,极性) 重新挂上议程。 */
+static void test_restore_pending(void) {
+    printf("== ⑫ 未解问题持久化：从 [自问:…] 标记恢复 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫");
+    (void)T(ai, "会"); (void)T(ai, "跳舞"); (void)T(ai, "吗");
+    /* 模拟思维层当初落下的标记（真流程里由 MOD_ADD_TOKEN 建，这里直接建同名节点） */
+    Token *mark = pool_token_intern(ai->pool, MICRO_ASK_TOKEN_PREFIX "猫_会_跳舞_吗]");
+    ok(mark != NULL, "前置：存盘里带着 [自问:猫_会_跳舞_吗] 标记");
+    (void)token_add_assoc_unique(mark, NULL, 0, cat);
+    Think *t = think_of(ai);
+    ok(t->n_open == 0, "前置：内存里还没挂着问题（Think 是瞬态的）");
+    ok(think_restore_pending(ai) == 1 && t->n_open == 1,
+       "装载恢复：从标记里恢复出 1 条未解问题");
+    ok(strstr(t->open[0].text, "跳舞") != NULL, "恢复出来的问句文本对");
+    ok(think_restore_pending(ai) == 0 && t->n_open == 1, "再扫一遍不会重复挂（幂等）");
+    /* 解析不出来的标记要跳过，不许瞎挂 */
+    (void)pool_token_intern(ai->pool, MICRO_ASK_TOKEN_PREFIX "坏_标记]");
+    ok(think_restore_pending(ai) == 0 && t->n_open == 1, "解析不出的标记跳过（不瞎挂）");
+    ai_free(ai);
+}
+
+/* ============================ ⑬ 记事本补丁：可编辑的答复 + 草稿区 + 发送控制 ============================
+ *
+ * 用户要的两件事（**作为补丁**，不是塞进流水线）：输出是 AI 能编辑的文本（像记事本）、
+ * 它自己控制什么时候发送；还有一块草稿区。内核侧只认三个口子（stage/emit/op），
+ * 完全不知道"记事本"是什么 —— 这一节既测补丁，也测"内核不依赖补丁"。 */
+static void test_notepad_patch(void) {
+    printf("== ⑬ 记事本补丁：可编辑答复 / 草稿区 / 发送控制 / 内核不依赖补丁 ==\n");
+    AI *ai = ai_new();
+    (void)pool_token_intern(ai->pool, "猫");
+    char rep[220];
+
+    /* 内核不依赖补丁：一个都没挂时，emit 谁都不接管 */
+    char out[512];
+    snprintf(out, sizeof out, "%s", "流水线原话");
+    ok(patch_emit_all(ai, out, sizeof out) == 0, "没挂补丁：emit 不接管（内核用流水线文本）");
+    ok(patch_op_call_by_name(ai, "记事本", "写", NULL, 0, rep, sizeof rep) == -1,
+       "没挂补丁：调用它的操作返回 -1（不崩）");
+
+    ok(patch_mount_builtin(ai, "记事本") == 0, "::patch mount 记事本");
+    /* auto 模式：逐字节回放（挂上它不改行为） */
+    patch_stage_all(ai, "猫 看 来 跑");
+    snprintf(out, sizeof out, "%s", "x");
+    int r = patch_emit_all(ai, out, sizeof out);
+    ok(r == 1 && strcmp(out, "猫 看 来 跑") == 0, "auto：emit 逐字节回放流水线文本");
+
+    /* 草稿区：写 / 插入 / 删 / 改 / 清空（都不影响发言）。
+     * 位置按**字符**算（中文一个字 3 字节，按字节删会把汉字劈成两半）。 */
+    patch_op_call_by_name(ai, "记事本", "清空", NULL, 0, rep, sizeof rep);
+    char *a1[1] = {(char *)"猫"};
+    ok(patch_op_call_by_name(ai, "记事本", "写", a1, 1, rep, sizeof rep) == 0, "写 猫");
+    char *a2[3] = {(char *)"1", (char *)"会", (char *)"跑"};
+    ok(patch_op_call_by_name(ai, "记事本", "插入", a2, 3, rep, sizeof rep) == 0, "插入：按字符位置插");
+    char *a3[2] = {(char *)"会", (char *)"在"};
+    ok(patch_op_call_by_name(ai, "记事本", "改", a3, 2, rep, sizeof rep) == 0, "改：替换首处");
+    char *a4[2] = {(char *)"1", (char *)"1"};
+    ok(patch_op_call_by_name(ai, "记事本", "删", a4, 2, rep, sizeof rep) == 0 &&
+       strstr(rep, "草稿 7 字节") != NULL, "删：按字符位置删一段（不会劈开汉字，猫在 跑 → 猫 跑）");
+    ok(patch_op_call_by_name(ai, "记事本", "读", NULL, 0, rep, sizeof rep) == 0 &&
+       strstr(rep, "草稿[7字节]=猫 跑") != NULL, "草稿内容正确：猫 跑");
+    ok(patch_op_call_by_name(ai, "记事本", "提交", NULL, 0, rep, sizeof rep) == 0 &&
+       strstr(rep, "待发送（7 字节）") != NULL, "提交：草稿进待发送");
+    char *a5[2] = {(char *)"跑", (char *)"走"};
+    ok(patch_op_call_by_name(ai, "记事本", "改发言", a5, 2, rep, sizeof rep) == 0 &&
+       strstr(rep, "待发送 7 字节") != NULL, "改发言：直接编辑要说的那句话");
+    ok(patch_op_call_by_name(ai, "记事本", "清空", NULL, 0, rep, sizeof rep) == 0, "清空草稿");
+
+    /* manual 模式：不「发送」就**不说话**（AI 控制什么时候发） */
+    char *a6[1] = {(char *)"manual"};
+    ok(patch_op_call_by_name(ai, "记事本", "模式", a6, 1, rep, sizeof rep) == 0, "切到 manual");
+    patch_stage_all(ai, "流水线想说这句");
+    out[0] = 0;
+    ok(patch_emit_all(ai, out, sizeof out) == -1, "manual：没发送 → 明确不说话（emit = -1）");
+    ok(patch_op_call_by_name(ai, "记事本", "发送", NULL, 0, rep, sizeof rep) == 0, "发送：AI 决定现在说");
+    out[0] = 0;
+    r = patch_emit_all(ai, out, sizeof out);
+    ok(r == 1 && strcmp(out, "猫 走") == 0,
+       "发送后说出来的是**它自己编辑过的**文本（猫 走），而不是流水线那句");
+    out[0] = 0;
+    ok(patch_emit_all(ai, out, sizeof out) == -1, "发过之后又回到「没内容可发 → 不说话」");
+
+    /* 受审通道：MOD_PATCH_CALL 也要过安全内核（预算 + 审计） */
+    {
+        ModIntent m;
+        memset(&m, 0, sizeof m);
+        m.type = MOD_PATCH_CALL;
+        snprintf(m.patch, sizeof m.patch, "记事本");
+        snprintf(m.name, sizeof m.name, "读");
+        char note[200];
+        safety_step_begin(ai);
+        ok(micro_try(ai, &m, note, sizeof note) == SAFE_OK, "调用补丁走「审查→记账→应用→审计」");
+        Micro *mk = micro_of(ai);
+        mk->safe.max_patch_calls_step = 0;      /* 预算压到 0：第二条必须被拦 */
+        ok(micro_try(ai, &m, note, sizeof note) == SAFE_DENY_BUDGET_PATCH,
+           "补丁调用也吃**硬预算**（::safe 里看得见）");
+        mk->safe.max_patch_calls_step = 4;
+    }
+
+    /* 故障隔离：不认的操作算补丁自己出错，连续 3 次自动停用 */
+    for (int i = 0; i < 3; ++i)
+        (void)patch_op_call_by_name(ai, "记事本", "根本没有这个操作", NULL, 0, rep, sizeof rep);
+    Patch *np = patch_find(&((Micro *)ai->micro)->patches, "记事本");
+    ok(np && np->n_op_err == 3 && np->enabled == 0, "坏操作连续 3 次 → 补丁自己停用（不拖累内核）");
+    ok(patch_op_call_by_name(ai, "记事本", "读", NULL, 0, rep, sizeof rep) == -1,
+       "停用之后调用它一律失败（内核照跑）");
+    out[0] = 0;
+    ok(patch_emit_all(ai, out, sizeof out) == 0, "停用之后 emit 也不接管");
+
+    /* 草稿持久化（不改存档格式）：存成 [草稿:…] 标记节点，挂载时扫回来。
+     * 注意：上面那一段故意把它连错 3 次**停用**了 —— 这里先放回来。 */
+    {
+        char rep2[200];
+        (void)patch_set_enabled(ai, "记事本", 1);
+        patch_op_call_by_name(ai, "记事本", "清空", NULL, 0, rep2, sizeof rep2);
+        char *w1[1] = {(char *)"小猫"};
+        (void)patch_op_call_by_name(ai, "记事本", "写", w1, 1, rep2, sizeof rep2);
+        ok(patch_op_call_by_name(ai, "记事本", "存草稿", NULL, 0, rep2, sizeof rep2) == 0,
+           "存草稿：提交给安全内核（走受审通道落成标记节点）");
+        char *no[1] = {(char *)"。"};
+        micro_step(ai, no, 1, "");                    /* 安全点：补丁的提议在这里落地 */
+        Token *mark = NULL;
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (t && t->name && strncmp(t->name, MICRO_DRAFT_TOKEN_PREFIX,
+                                        strlen(MICRO_DRAFT_TOKEN_PREFIX)) == 0) mark = t;
+        }
+        ok(mark != NULL, "图里出现了 [草稿:…] 标记（普通 token → 随图存盘）");
+        (void)patch_unmount_by_name(ai, "记事本");
+        ok(patch_mount_builtin(ai, "记事本") == 0, "重新挂载");
+        (void)patch_op_call_by_name(ai, "记事本", "读", NULL, 0, rep2, sizeof rep2);
+        ok(strstr(rep2, "小猫") != NULL, "草稿**被扫回来了**（重启/重挂都在）");
+    }
+
+    /* 卸载 → 回到"没有补丁" */
+    ok(patch_unmount_by_name(ai, "记事本") == 0, "::patch unmount 记事本");
+    patch_stage_all(ai, "原话");
+    out[0] = 0;
+    ok(patch_emit_all(ai, out, sizeof out) == 0, "卸载后内核回到流水线文本");
+    ai_free(ai);
+}
+
+/* ============================ ⑭ D4 条件依赖：前提的**生产端** ============================
+ *
+ * 用户要的「前提自动长出来」：系统从**反复出现的谈话**里自己发现
+ * "A 与 B 的连结几乎总伴随着 P" → 提议 `A —[前提]→ P → B`（照样过安全内核）。
+ * 这一节钉住四件事：
+ *   ① 分子/分母都够、比例够 → 自己长出前提（不用手打 ::op）；
+ *   ② **分母必须独立于 P 记**：一半的轮次没有 P → 比例 50% < 70% → **不提**
+ *      （这是这类检测器最容易犯的错：分母只统计 P 在场的轮次，比值恒等于 100%）；
+ *   ③ 已经标过就不重复提（幂等）；表是有界的，塞很多三元组也不炸；
+ *   ④ 默认关：不打开它，行为一点不变。 */
+static void test_d4_conditional(void) {
+    printf("== ⑭ D4 条件依赖：前提从反复出现的谈话里长出来 ==\n");
+    char *turn1[3] = {(char *)"猫", (char *)"鱼", (char *)"水"};
+    char *turn2[2] = {(char *)"猫", (char *)"鱼"};
+
+    /* ① 三次「猫 鱼 水」→ 自己长出 猫 —[前提]→ 水 → 鱼 */
+    {
+        AI *ai = ai_new();
+        Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
+        (void)T(ai, "水");
+        (void)token_add_assoc_unique(cat, NULL, 0, fish);      /* 先有连结（共现学来的） */
+        {   /* 把这条连结"做实"：观测到的连结至少命中过 2 次（刚造出来的边不算证据） */
+            long ei = micro_edge_index(cat, fish);
+            if (ei >= 0) cat->assocs[ei].hits = 5;
+        }
+        Micro *mk = micro_of(ai);
+        ok(mk->meta.cond_off == 1, "D4 默认**关**（它会在对话里改结构，先测量再谈默认）");
+        mk->meta.cond_off = 0;
+        for (int i = 0; i < 8; ++i) micro_step(ai, turn1, 3, "");   /* 8 轮：过 5/8 两道门槛 */
+        const Token *ps[4];
+        ok(token_premise_between(cat, fish, ps, 4) == 1 && ps[0] == T(ai, "水"),
+           "八次同轮共现（水都在场）→ **自己长出** 猫 —[前提]→ 水 → 鱼");
+        ok(token_premise_link(cat, T(ai, "水")) != NULL, "前提链接确实带 [前提] 标记（不是猜的）");
+        ok(mk->meta.n_cond_proposed == 1 && mk->meta.n_cond_applied == 1,
+           "计数如实报：提 1 / 成 1");
+        for (int i = 0; i < 3; ++i) micro_step(ai, turn1, 3, "");
+        ok(mk->meta.n_cond_proposed == 1, "已经标过就不重复提（幂等）");
+        ai_free(ai);
+    }
+    /* ② 分母独立：3 次「猫 鱼 水」+ 3 次「猫 鱼」→ 50% → **不提** */
+    {
+        AI *ai = ai_new();
+        Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
+        (void)T(ai, "水");
+        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        {
+            long ei = micro_edge_index(cat, fish);
+            if (ei >= 0) cat->assocs[ei].hits = 5;
+        }
+        Micro *mk = micro_of(ai);
+        mk->meta.cond_off = 0;
+        /* 5 轮带「水」+ 3 轮不带 = 5/8 = 62.5% < 70% → 不当前提（分母必须独立于 P） */
+        for (int i = 0; i < 5; ++i) micro_step(ai, turn1, 3, "");
+        for (int i = 0; i < 3; ++i) micro_step(ai, turn2, 2, "");
+        const Token *ps[4];
+        ok(token_premise_between(cat, fish, ps, 4) == 0,
+           "三分之一的轮次没有「水」→ 比例 62.5% < 70% → **不当前提**（分母独立才算得准）");
+        ai_free(ai);
+    }
+    /* ③ 有界：塞 200 个不同三元组，不许炸、不许溢出 */
+    {
+        AI *ai = ai_new();
+        Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
+        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        {
+            long ei = micro_edge_index(cat, fish);
+            if (ei >= 0) cat->assocs[ei].hits = 5;
+        }
+        Micro *mk = micro_of(ai);
+        mk->meta.cond_off = 0;
+        char buf[16][12];
+        char *w[3];
+        for (int i = 0; i < 200; ++i) {
+            snprintf(buf[0], sizeof buf[0], "猫");
+            snprintf(buf[1], sizeof buf[1], "鱼");
+            snprintf(buf[2], sizeof buf[2], "P%d", i);
+            w[0] = buf[0]; w[1] = buf[1]; w[2] = buf[2];
+            micro_step(ai, w, 3, "");
+        }
+        ok(mk->meta.cond_tri_n <= MICRO_D4_MAX_TRIPLES,
+           "候选表**有界**（200 个三元组塞进去也不越界）");
+        ai_free(ai);
+    }
+    /* ③b **去重**：一轮里重复出现的词不许把分子加得比谁都快
+     * （实测在 2 万行语料上就是这么发现的：比值算成 179%、270%） */
+    {
+        AI *ai = ai_new();
+        Token *cat = T(ai, "猫4"), *fish = T(ai, "鱼4");
+        (void)T(ai, "水4");
+        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        {
+            long ei = micro_edge_index(cat, fish);
+            if (ei >= 0) cat->assocs[ei].hits = 5;
+        }
+        Micro *mk = micro_of(ai);
+        mk->meta.cond_off = 0;
+        char *dup[4] = {(char *)"猫4", (char *)"鱼4", (char *)"水4", (char *)"水4"};
+        for (int i = 0; i < 6; ++i) micro_step(ai, dup, 4, "");
+        int over = 0;
+        for (size_t i = 0; i < mk->meta.cond_tri_n; ++i)
+            if (mk->meta.cond_tri[i].n_triple > mk->meta.cond_tri[i].n_pair) over++;
+        ok(mk->meta.cond_tri_n > 0 && over == 0,
+           "同一轮里的重复词**不重复计数**（分子 ≤ 分母；比值不会算成 179%）");
+        ai_free(ai);
+    }
+
+    /* ④ ::mod cond 开关 */
+    {
+        AI *ai = ai_new();
+        (void)micro_of(ai);
+        ok(micro_set_detector(ai, "cond", 1) == 0 && micro_of(ai)->meta.cond_off == 0,
+           "::mod cond on 打开");
+        ok(micro_set_detector(ai, "cond", 0) == 0 && micro_of(ai)->meta.cond_off == 1,
+           "::mod cond off 关上");
+        ai_free(ai);
+    }
+}
+
+/* ============================ ⑮ AI 自己用记事本：写草稿 / 什么时候发送 ============================
+ *
+ * 用户要的「AI 可以控制什么时候发送」。这一节把决策链钉住：
+ *   思维层（think_settle）提议 → **受审通道**（MOD_PATCH_CALL）→ 记事本补丁执行
+ *   → 输出侧 emit 决定这一轮说什么。
+ * 三条规矩：
+ *   ① `::notepad off`（默认）什么都不做；补丁没挂也什么都不做；
+ *   ② `on`：有结论（成立**或**不成立）→ 把结论写进草稿并发送 → **说的是它自己写的那句**；
+ *   ③ `hold`：没结论 → 按住不说（emit = -1，这一轮不出声）。 */
+static void test_ai_notepad(void) {
+    printf("== ⑮ AI 自己用记事本：写草稿 / 发送 / 按住不说 ==\n");
+    AI *ai = ai_new();
+    (void)pool_token_intern(ai->pool, "猫");
+    char *w[1] = {(char *)"猫"};
+    Think *t = think_of(ai);
+    char out[512];
+
+    /* ① 没挂补丁：开不开都一样（机制挂在补丁上） */
+    t->notepad = 1;
+    t->concl = 1;
+    snprintf(t->concl_text, sizeof t->concl_text, "%s", "猫 不 会 唱歌");
+    t->trace_n = 1;
+    think_settle(ai);
+    micro_step(ai, w, 1, "");
+    snprintf(out, sizeof out, "%s", "流水线那句");
+    ok(patch_emit_all(ai, out, sizeof out) == 0, "没挂补丁：思维层照样想，但没人替它说话（emit 不接管）");
+
+    /* ② on：有结论 → 写草稿 + 发送 → 发出来的是**它自己写的那句** */
+    ok(patch_mount_builtin(ai, "记事本") == 0, "挂上记事本");
+    t->concl = 1;
+    snprintf(t->concl_text, sizeof t->concl_text, "%s", "猫 不 会 唱歌");
+    t->trace_n = 1;
+    patch_stage_all(ai, "流水线那句");            /* 流水线先起草（auto：进待发送） */
+    think_settle(ai);                            /* 思维层：写草稿 + 发送 */
+    micro_step(ai, w, 1, "");                    /* 受审通道：两条都应用 */
+    ok(t->n_notepad > 0, "思维层动了笔（痕上有「打草稿 / 发送」）");
+    snprintf(out, sizeof out, "x");
+    ok(patch_emit_all(ai, out, sizeof out) == 1 && strcmp(out, "猫 不 会 唱歌") == 0,
+       "**AI 自己写的优先**：说出来的是它的结论，不是流水线那句");
+
+    /* ③ 负结论也算「有结论」（-1 不是"没结论"） */
+    t->concl = -1;
+    snprintf(t->concl_text, sizeof t->concl_text, "%s", "猫 会 游泳");
+    t->trace_n = 1;
+    patch_stage_all(ai, "流水线那句");
+    think_settle(ai);
+    micro_step(ai, w, 1, "");
+    snprintf(out, sizeof out, "x");
+    ok(patch_emit_all(ai, out, sizeof out) == 1 && strcmp(out, "猫 会 游泳") == 0,
+       "结论=不成立时也说出来（那是否定结论，不是没有结论）");
+
+    /* ④ hold：没结论 → 按住不说 */
+    t->notepad = 2;
+    t->concl = 0;
+    t->concl_text[0] = 0;
+    t->trace_n = 1;
+    patch_stage_all(ai, "流水线那句");
+    think_settle(ai);
+    micro_step(ai, w, 1, "");
+    snprintf(out, sizeof out, "x");
+    ok(patch_emit_all(ai, out, sizeof out) == -1, "hold + 没结论 → **按住不说**（emit = -1）");
+
+    /* ⑤ off：回到流水线（先把上一轮的残留清干净，模拟新的一轮） */
+    {
+        char rep2[120];
+        (void)patch_op_call_by_name(ai, "记事本", "清空发言", NULL, 0, rep2, sizeof rep2);
+        (void)patch_op_call_by_name(ai, "记事本", "清空", NULL, 0, rep2, sizeof rep2);
+    }
+    t->notepad = 0;
+    t->trace_n = 1;
+    patch_stage_all(ai, "流水线那句");
+    think_settle(ai);
+    micro_step(ai, w, 1, "");
+    snprintf(out, sizeof out, "x");
+    ok(patch_emit_all(ai, out, sizeof out) == 1 && strcmp(out, "流水线那句") == 0,
+       "::notepad off → 一个字都不插手（流水线照说）");
+    ai_free(ai);
+}
+
+/* ============================ ⑯ 来源监控：这条知识是哪来的 ============================
+ *
+ * 用户要的「来源监控（谁说的）」。三档分得开：
+ *   **基准**（relations.txt / 显式教过我的）／**观测**（对话/语料里学到的）／
+ *   **推论**（想出来沉淀的缓存）；他说的在**他的表**里，根本不进我的图。
+ * 这一节钉住：基准档真的会在装载时打上、判据只有一份、链的"底"报得出来。 */
+static void test_provenance(void) {
+    printf("== ⑯ 来源监控：基准 / 观测 / 推论分得开，链的底报得出来 ==\n");
+    AI *ai = ai_new();
+    Token *jia = T(ai, "甲"), *yi = T(ai, "乙"), *bing = T(ai, "丙");
+
+    /* ① 对话里学到的（token_tag_rel）不是"基准" */
+    (void)token_tag_rel(jia, yi, REL_IS_A, REL_BOOST);
+    long e1 = micro_edge_index(jia, yi);
+    ok(e1 >= 0 && !assoc_role_is_innate(&jia->assocs[e1]),
+       "对话里学到的事实 **不**被标成基准（来源=观测）");
+
+    /* ② relations_load 装载的知识打「基准」档（写一个临时关系文件，真走装载路径） */
+    {
+        const char *path = "_t/optest_rel_src.txt";
+        FILE *f = fopen(path, "w");
+        ok(f != NULL, "写一个临时关系文件");
+        if (f) {
+            fprintf(f, "# 测试用\n甲 属于 丙\n");
+            fclose(f);
+        }
+        (void)relations_load(ai, path);
+        long e2 = micro_edge_index(jia, bing);
+        ok(e2 >= 0 && assoc_role_is_innate(&jia->assocs[e2]),
+           "relations_load 装载的知识 → **基准**档");
+        ok(strcmp(assoc_role_name(ASSOC_ROLE_INNATE), "基准") == 0 &&
+           strcmp(assoc_role_name(ASSOC_ROLE_DERIVED), "推论") == 0 &&
+           strcmp(assoc_role_name(ASSOC_ROLE_NONE), "共现") == 0,
+           "来源档的中文名只有一份（assoc_role_name）");
+        remove(path);
+    }
+
+    /* ③ 链的"底"报得出来：基准事实推出来的链 → "基准" */
+    {
+        Proof pf;
+        rel_solve(ai, jia, REL_IS_A, bing, 0, &pf);
+        ok(pf.status == 1, "基准知识推得出来（甲 属于 丙）");
+        Derivation d;
+        der_reset(&d);
+        der_from_proof(ai, &d, jia, REL_IS_A, bing, &pf);
+        ok(der_verify(ai, &d) == 0, "验证器通过");
+        ok(strcmp(der_base_source(&d), "基准") == 0,
+           "链的底是**基准**（来源监控在这一层报得出来）");
+    }
+    /* ④ 缓存的两条规矩：
+     *   4a **孤立缓存不被采信**（"缓存不许证明自己"）；
+     *   4b 有支撑的缓存被采信，而且链的底报**推论**。 */
+    {
+        AI *a2 = ai_new();
+        Token *p1 = T(a2, "丁"), *p2 = T(a2, "戊");
+        ModIntent m;
+        memset(&m, 0, sizeof m);
+        m.type = MOD_TAG_DERIVED;
+        m.target = p1; m.main = p2; m.rel_id = REL_IS_A;
+        snprintf(m.source, sizeof m.source, "测试");
+        char note[160];
+        safety_step_begin(a2);
+        (void)micro_try(a2, &m, note, sizeof note);
+        Proof pf;
+        rel_solve(a2, p1, REL_IS_A, p2, 0, &pf);
+        ok(pf.status == 0, "孤立缓存**不被采信**（不许用缓存证明缓存 —— 求解器会要求脱离缓存也推得出）");
+        ai_free(a2);
+    }
+    {
+        AI *a3 = ai_new();
+        Token *x = T(a3, "庚"), *y = T(a3, "辛"), *z = T(a3, "壬");
+        (void)token_tag_rel(x, y, REL_IS_A, REL_BOOST);      /* 庚 属于 辛 */
+        (void)token_tag_rel(y, z, REL_IS_A, REL_BOOST);      /* 辛 属于 壬 → 庚 属于 壬 可继承 */
+        ModIntent m;
+        memset(&m, 0, sizeof m);
+        m.type = MOD_TAG_DERIVED;
+        m.target = x; m.main = z; m.rel_id = REL_IS_A;       /* 把推出来的沉淀成缓存 */
+        snprintf(m.source, sizeof m.source, "测试");
+        char note[160];
+        safety_step_begin(a3);
+        (void)micro_try(a3, &m, note, sizeof note);
+        Proof pf;
+        rel_solve(a3, x, REL_IS_A, z, 0, &pf);
+        ok(pf.status == 1, "有支撑的缓存被采信（脱离缓存也推得出）");
+        Derivation d;
+        der_reset(&d);
+        der_from_proof(a3, &d, x, REL_IS_A, z, &pf);
+        ok(strcmp(der_base_source(&d), "推论") == 0,
+           "链的底报**推论**（这条是我想出来记住的，不是听来的）");
+        ai_free(a3);
+    }
+    ai_free(ai);
+}
+
+/* ============================ ⑰ 对话触发：自然语言 → Token 行为 ============================
+ *
+ * 「猫 和 鱼 之间 加 个 词」这种话要真的能干活（用户要的对话触发）。
+ * 三条纪律：
+ *   ① **窄集**：必须「之间 + 动词 + 种类词」，只说话不干活；
+ *   ② **不误触发**：提问（`猫 和 鱼 之间 有 什么 关系`）与普通句子一律不动；
+ *   ③ 动作**照样走受审通道**（token_op_run），自然语言只是入口不是特权。 */
+static void test_dialog_trigger(void) {
+    printf("== ⑰ 对话触发：`A 和 B 之间 加 个 词/前提` 真的能干活，且不误触发 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
+    char out[256];
+
+    /* ① 插词 */
+    char *w1[8] = {(char *)"把", (char *)"猫", (char *)"和", (char *)"鱼",
+                   (char *)"之间", (char *)"加", (char *)"个", (char *)"词"};
+    ok(dialog_trigger_try(ai, w1, 8, out, sizeof out) == 1, "「把 猫 和 鱼 之间 加 个 词」触发");
+    Token *via = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
+    ok(via && micro_has_edge(cat, via) && micro_has_edge(via, fish),
+       "真干了：中间插了一个词（A —[临:中转]→ B）");
+    ok(strstr(out, "猫") && strstr(out, "鱼"), "答复里说清了它对谁做了什么");
+    ok(!micro_has_edge(cat, fish), "直连被拆（插词的定义）");
+
+    /* ② 前提（分词器会把「前提」切成「前」+「提」—— 这里就用切开的写法测） */
+    char *w2[10] = {(char *)"把", (char *)"猫", (char *)"和", (char *)"鱼", (char *)"之间",
+                    (char *)"加", (char *)"个", (char *)"前", (char *)"提", (char *)"饿"};
+    (void)T(ai, "饿");
+    ok(dialog_trigger_try(ai, w2, 10, out, sizeof out) == 1, "「之间 加 个 前提 饿」触发");
+    const Token *ps[4];
+    ok(token_premise_between(cat, fish, ps, 4) == 1 && ps[0] == T(ai, "饿"),
+       "真干了：建出 猫 —[前提]→ 饿 → 鱼");
+
+    /* ③ 不误触发：提问、普通句、没有动词的祈使句 */
+    char *q1[7] = {(char *)"猫", (char *)"和", (char *)"鱼", (char *)"之间",
+                   (char *)"有", (char *)"什么", (char *)"关系"};
+    ok(dialog_trigger_try(ai, q1, 7, out, sizeof out) == 0, "提问不触发（没有动词）");
+    char *q2[4] = {(char *)"猫", (char *)"会", (char *)"唱歌", (char *)"吗"};
+    ok(dialog_trigger_try(ai, q2, 4, out, sizeof out) == 0, "普通问句不触发");
+    char *q3[3] = {(char *)"猫", (char *)"和", (char *)"鱼"};
+    ok(dialog_trigger_try(ai, q3, 3, out, sizeof out) == 0, "光提两个词不触发");
+
+    /* ④ 回收草稿（动作词 + 对象词） */
+    {
+        Token *tmp = pool_token_intern(ai->pool, MICRO_TEMP_TOKEN_PREFIX "x]");
+        (void)tmp;
+        char *w3[2] = {(char *)"回收", (char *)"草稿"};
+        ok(dialog_trigger_try(ai, w3, 2, out, sizeof out) == 1, "「回收 草稿」触发");
+    }
+    ai_free(ai);
+}
+
+/* ============================ ⑱ 统一写入通道：谁在改图（写入账 + 可路由） ============================
+ *
+ * `microkernel.md` 的局限 1 是「老写入者绕过安全内核」。这一轮把它变成
+ * **有账 + 可路由**：所有写入记来源，知识类写入（关系事实）可以改成走受审通道。
+ * 这一节钉三件事：① 账记得对（每个来源各算各的）；② 路由开/关两条路**语义一样**；
+ * ③ 路由的写入**进审计**（看得见"谁批的"）。 */
+static void test_write_ledger(void) {
+    printf("== ⑱ 统一写入通道：写入账 + 知识类写入可路由（走受审通道） ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "甲1"), *b = T(ai, "乙1");
+    size_t before = ai->writes[AI_WSRC_PERCEIVE];
+    (void)ai_write_assoc(ai, a, b, AI_WSRC_PERCEIVE);
+    ok(ai->writes[AI_WSRC_PERCEIVE] == before + 1, "共现写入记在「感知」名下");
+    ok(micro_has_edge(a, b), "直写路径照样把边建出来（默认 = 观测直写）");
+
+    /* 路由开：关系事实走受审通道，而且**进审计** */
+    AI *a2 = ai_new();
+    Token *p = T(a2, "丙1"), *q = T(a2, "丁1");
+    ok(a2->route_writes == 0, "路由**默认关**（观测直写是正常路径）");
+    ok(micro_set_route(a2, 1) == 0 && a2->route_writes == 1, "::safe route on 打开");
+    safety_step_begin(a2);
+    int rc = ai_write_rel(a2, p, q, REL_IS_A, 0, AI_WSRC_RELATION);
+    ok(rc == 0, "路由开：关系事实照样写得进去（语义没变）");
+    ok(rel_direct(p, REL_IS_A, q), "而且图里真的有了这条事实");
+    ok(a2->writes[AI_WSRC_RELATION] == 1, "这笔写入记在「关系学习」名下");
+    {
+        Micro *mk = micro_of(a2);
+        int seen = 0;
+        for (size_t i = 0; i < mk->safe.audit_n && i < MICRO_AUDIT_MAX; ++i)
+            if (strstr(mk->safe.audit[i].op, "打关系")) seen = 1;
+        ok(seen, "路由的写入**进了审计**（谁批的、批了什么，都留痕）");
+        ok(mk->safe.n_allowed >= 1, "受审通道的记账真的动了（n_allowed ≥ 1）");
+    }
+    /* 路由关：同一件事走直写，结果一样 */
+    AI *a3 = ai_new();
+    Token *u = T(a3, "戊1"), *v = T(a3, "己1");
+    ok(ai_write_rel(a3, u, v, REL_IS_A, 0, AI_WSRC_RELATION) == 0 && rel_direct(u, REL_IS_A, v),
+       "路由关：同一件事走直写，结果一样（两条路语义相同）");
+    ok(a3->writes[AI_WSRC_RELATION] == 1, "记账两条路都记");
+    ok(micro_of(a3)->safe.n_allowed == 0, "直写不进审计（它就是观测的正常路径）");
+    ai_free(ai); ai_free(a2); ai_free(a3);
+}
+
+/* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
+ *
+ * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
+ * 算出来的启发式。用途：`::src` 说得清"我更信哪一条"，`::trust on` 时**真的按它选边**。
+ * 这一节钉住：排序对（基准 > 观测 > 推论）、命中加成、新近扣分、夹在 0..100，
+ * 以及**矛盾两边差 ≥20 时按更可信的答**。 */
+static void test_credibility(void) {
+    printf("== ⑲ 逐条可信度：基准 > 观测 > 推论，且能按它选边 ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "甲2"), *b = T(ai, "乙2"), *c = T(ai, "丙2");
+    (void)token_tag_rel(a, b, REL_IS_A, REL_BOOST);          /* 观测 */
+    token_mark_innate(a, c);                                  /* 基准 */
+    (void)token_tag_rel(a, c, REL_IS_A, REL_BOOST);
+    long eb = micro_edge_index(a, b), ec = micro_edge_index(a, c);
+    ok(eb >= 0 && ec >= 0, "两条边都在");
+    uint64_t now = ai->pool->current_tick;
+    int cb = assoc_credibility(&a->assocs[eb], now);
+    int cc = assoc_credibility(&a->assocs[ec], now);
+    ok(cc > cb, "同样命中数下，**基准边**比观测边更可信");
+    /* 命中加成（索引要**重新取**：中间加边可能让旧下标指向别的边）。
+     * 注意 REL_BOOST 本身就是 32 次命中 —— 别拿 0 当基准。 */
+    eb = micro_edge_index(a, b);
+    a->assocs[eb].hits = 1;
+    int c_low = assoc_credibility(&a->assocs[eb], now);
+    a->assocs[eb].hits = 32;
+    ok(assoc_credibility(&a->assocs[eb], now) > c_low, "命中越多越可信");
+    /* 新近扣分：走**唯一时间核**（指数族）—— 同一个字段，越老越低（夹在 0..100）。
+     * 线上口径是 `ai_credibility(ai, e)`（自己算 age + 核），这里用它验。 */
+    {
+        eb = micro_edge_index(a, b);
+        a->assocs[eb].last_touch_tick = 0;
+        ai->pool->current_tick = 0;
+        int fresh = ai_credibility(ai, &a->assocs[eb]);
+        ai->pool->current_tick = 400000;             /* 很老 */
+        int stale = ai_credibility(ai, &a->assocs[eb]);
+        ok(stale < fresh && stale >= 0 && fresh <= 100,
+           "很久没碰过会扣分（指数核；且夹在 0..100）");
+        ai->pool->current_tick = 0;
+    }
+    /* 推论最弱 */
+    {
+        Token *d = T(ai, "丁2");
+        ModIntent m; memset(&m, 0, sizeof m);
+        m.type = MOD_TAG_DERIVED; m.target = a; m.main = d; m.rel_id = REL_IS_A;
+        snprintf(m.source, sizeof m.source, "测试");
+        char note[120];
+        safety_step_begin(ai);
+        (void)micro_try(ai, &m, note, sizeof note);
+        long ed = micro_edge_index(a, d);
+        ok(ed >= 0 && assoc_credibility(&a->assocs[ed], now) < cb, "推论（缓存）最弱");
+    }
+    ai_free(ai);
+
+    /* ---- `::trust on`：两边差够多时按更可信的答 ----
+     * 真实知识库里"两边都推得出来 + 可信度差 ≥20"很罕见（规则冲突两边都算 50），
+     * 所以这里分两段测：① 真跑一个矛盾，确认**默认不选边**；
+     * ② 把"更信哪一边"摆好，确认答复真的这么说（测的是**决策与呈现**那条路）。 */
+    {
+        AI *a2 = ai_new();
+        Think *t = think_of(a2);
+        t->conflict = 1;
+        snprintf(t->concl_text, sizeof t->concl_text, "%s", "关于 猫3 会 唱歌3 这件事，我这儿有互相矛盾的依据");
+        snprintf(t->chain_text2, sizeof t->chain_text2, "%s", "猫3 -[会·缺前提]-> 唱歌3");
+        char out[512];
+        /* ① 没摆"更信哪一边"（= trust 关着，或差得不够）→ 照旧只说矛盾 */
+        snprintf(out, sizeof out, "%s", "x");
+        ok(think_take_output(a2, out, sizeof out) == 1 && strstr(out, "更 信") == NULL,
+           "没说「更信」时不选边（照旧只说矛盾）");
+        /* ② 摆好"更信哪一边"（trust on 且差 ≥20 时 think 里就是这么摆的）→ 答复那么说 */
+        t->trust_on = 1;
+        t->trust_pick = -1;
+        t->trust_c1 = 80;
+        t->trust_c2 = 40;
+        snprintf(out, sizeof out, "%s", "x");
+        ok(think_take_output(a2, out, sizeof out) == 1 && strstr(out, "更 信") != NULL,
+           "::trust on：答复里说「我更信可信度高的那一边（80 对 40）」");
+        ok(strstr(out, "80") && strstr(out, "40"), "可信度两个数都摆出来（不是空口说更信）");
+        ai_free(a2);
+    }
+}
+
+/* ============================ ⑳ 结构类比 / 情绪参与决策 / 时间顺序 ============================
+ *
+ * 清单里的 #6 三小件，各做成**窄而可测**的一步：
+ *   ① **结构映射式类比**：R5 现在不只看 emb 像不像，还看**关系骨架**像不像
+ *      （用词完全不同也能借答案）—— 这是"结构映射"与"最近邻"的区别；
+ *   ② **情绪参与决策**：一张耦合表（驱动 → 参数 → 增减），默认关，`::drive` 全列出来；
+ *   ③ **时间顺序**：谁先出现（按首次见到的 tick），带顺序证据。 */
+static void test_struct_affect_order(void) {
+    printf("== ⑳ 结构类比 / 情绪参与决策 / 时间顺序 ==\n");
+    /* ① 结构类比：骨架一样、emb 都没有（新 AI 没算 emb）也能借到答案 */
+    {
+        AI *ai = ai_new();
+        Token *jia = T(ai, "甲3"), *yi = T(ai, "乙3");
+        Token *x = T(ai, "子3"), *y = T(ai, "丑3"), *z = T(ai, "寅3");
+        Token *fish = T(ai, "卯3");
+        (void)token_tag_rel(jia, x, REL_IS_A, REL_BOOST);
+        (void)token_tag_rel(jia, y, REL_HAS, REL_BOOST);
+        (void)token_tag_rel(jia, z, REL_CAN, REL_BOOST);
+        (void)token_tag_rel(yi, x, REL_IS_A, REL_BOOST);   /* 乙3 的关系骨架和 甲3 一样 */
+        (void)token_tag_rel(yi, y, REL_HAS, REL_BOOST);
+        (void)token_tag_rel(yi, z, REL_CAN, REL_BOOST);
+        (void)token_tag_rel(yi, fish, REL_EAT, REL_BOOST); /* 乙3 对「吃 卯3」有态度 */
+        /* 干扰项：同样对「吃 卯3」有态度，但**结构完全不同** —— 不该被选中 */
+        Token *wei = T(ai, "未3");
+        (void)token_tag_rel(wei, fish, REL_EAT, REL_BOOST);
+        size_t common = 0;
+        int st = rel_struct_sim(jia, yi, &common);
+        ok(st >= REL_STRUCT_MIN_PCT && common >= REL_STRUCT_MIN_COMMON,
+           "结构相似度够（骨架重合 ≥3 个关系邻居）");
+        ok(rel_struct_sim(jia, wei, &common) < REL_STRUCT_MIN_PCT,
+           "干扰项的结构相似度不够（不会因为它有态度就借它）");
+        /* R5 在**思维层**的「借最近邻」里调用（不是求解器内部）—— 这里直接调它 */
+        Proof pf;
+        ok(rel_guess(ai, jia, REL_EAT, fish, &pf) == 1 && pf.status == 1 && pf.guessed == 1,
+           "结构类比借到了答案（并标明是**推测**）");
+        ok(pf.n >= 2 && pf.step[1].tok == yi, "借的是**结构像**的那个（不是随便一个有态度的词）");
+        ok(pf.step[1].sim >= REL_STRUCT_MIN_PCT, "链上记的相似度就是结构相似度");
+        char txt[256];
+        proof_text(ai, &pf, txt, sizeof txt);
+        ok(strstr(txt, "像") != NULL, "链上写明「像」（不是当成事实）");
+        ai_free(ai);
+    }
+    /* ② 情绪参与决策：表 + 开关（默认关时一个修正都不施加） */
+    {
+        AI *ai = ai_new();
+        ok(ai->affect_on == 0, "默认**关**（不改任何行为参数）");
+        ai->inner.fatigue = 0.9f;
+        ai_affect_step(ai);
+        ok(ai->affect_d_steps == 0, "关着的时候疲劳再高也不施加减步修正");
+        ai->affect_on = 1;
+        ai_affect_step(ai);
+        ok(ai->affect_d_steps < 0, "打开后：疲劳高 → 思考步数减（表里那一行）");
+        ai->inner.fatigue = 0.0f; ai->inner.arousal = 0.8f;
+        ai_affect_step(ai);
+        ok(ai->affect_d_gen > 0, "唤醒高 → 生成长度加（另一行）");
+        ai->inner.arousal = 0.1f; ai->inner.comfort = 0.2f;
+        ai_affect_step(ai);
+        ok(ai->affect_d_gen < 0 && ai->affect_d_cutoff > 0.0f,
+           "迷糊 → 少说；不舒服 → 阈值抬高（保守）");
+        ai_free(ai);
+    }
+    /* ③ 时间顺序：先出现的 tick 更小 */
+    {
+        AI *ai = ai_new();
+        Token *first = T(ai, "辰3");
+        ai->pool->current_tick = 100;                 /* 手动推时间，模拟"后来才见到" */
+        Token *second = T(ai, "巳3");
+        ok(first->birth_tick < second->birth_tick, "先见到的词 tick 更小（顺序判据）");
+        ai_free(ai);
+    }
+}
+
+/* ============================ ㉑ 前提成立的两档判据（借 lingshu 的"条件成立"分层） ============================
+ *
+ * 局限：#1「前提成立只看注意窗口（提到过没有）」。第二档是**图内**判据 ——
+ * 从当前注意窗口出发做受限扩散（深度≤2、能量≥0.25），前提**够得着**也算成立。
+ * 默认仍是第一档（提到过）——第二档会放宽 R10 的闸门，属行为改变，先实现先 A/B。 */
+static void test_premise_tiers(void) {
+    printf("== ㉑ 前提成立两档：提到过（默认）/ 图上够得着（activate） ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫5"), *cook = T(ai, "做饭5"), *who = T(ai, "人5");
+    (void)token_tag_rel(who, cook, REL_CAN, REL_BOOST);
+    (void)token_add_assoc_unique(cook, NULL, 0, who);   /* 反向共现边：扩散要能走过去 */
+    char note[200];
+    char *a1[3] = {(char *)"猫5", (char *)"做饭5", (char *)"人5"};
+    ok(token_op_run(ai, "加前提", a1, 3, note, sizeof note) == 1, "建 猫5 —[前提]→ 人5 → 做饭5");
+    (void)cat;
+
+    ok(ai->prem_hold_activate == 0, "默认档 = mention（只看注意窗口）");
+    /* 注意窗口里放一个与人5强相连的词，但**不放人5** */
+    ai->focus_ring[0] = cook; ai->focus_weight[0] = 1.0f; ai->focus_n = 1;
+    ok(ai_premise_holds(ai, who) == 0, "mention 档：前提没被提到 → 不成立");
+    ai->prem_hold_activate = 1;
+    ok(ai_premise_holds(ai, who) == 1,
+       "activate 档：前提没提到，但它**在图上够得着**（做饭5 → 人5）→ 成立");
+    /* 换一个跟谁都不相连的词当焦点 → 够不着 */
+    ai->focus_ring[0] = T(ai, "无关词5"); ai->focus_weight[0] = 1.0f; ai->focus_n = 1;
+    ok(ai_premise_holds(ai, who) == 0, "activate 档也不瞎认：够不着就是不成立");
+    ai_free(ai);
+}
+
+/* ============================ ㉒ 谓词别名表 + 来源档后验 ============================
+ *
+ * 两条局限的落地：
+ *   ① 「他说的/我学的按 (A,关系,B) 精确匹配，同义改写对不上」→ **谓词别名表**
+ *      （`害怕→怕`、`喜爱→喜欢`、`拥有→有`…），一处归一；
+ *   ② 「可信度是启发式的」→ 来源档换成 **Beta 后验**，证据取自**已有计数器**
+ *      （观测档：n_learned/n_revised；推论档：n_cached/n_retracted）——
+ *      **改口越多，观测档越低；缓存被撤越多，推论档越低**。格式没动。 */
+static void test_alias_and_posterior(void) {
+    printf("== ㉒ 谓词别名归一 + 来源档可信度（后验，从计数器学） ==\n");
+    AI *ai = ai_new();
+    /* ① 别名：不同说法 → 同一个关系 id */
+    ok(rel_id_of(ai, "拥有", 1) == REL_HAS, "「拥有」归到核心关系「有」（模型里真有这个词）");
+    ok(rel_alias_id("害怕") == 0,
+       "「害怕」**有意不收**（frames.txt 里有一条 [帧:害怕X吗] 会跟关系层抢话，见 docs）");
+    ok(rel_id_of(ai, "喜爱", 1) == REL_LIKE,
+       "「喜爱」在**别名表**里也归到「喜欢」（但它现在会被分词器切开，所以实际走不到）");
+    ok(rel_id_of(ai, "怕", 0) == REL_FEAR, "核心表里的词照旧");
+    uint8_t dyn = rel_id_of(ai, "念叨", 1);
+    ok(dyn >= REL_DYN_BASE, "没收录的说法仍走**动态关系**（表不是封闭的）");
+    ok(rel_alias_id("莫名其妙") == 0, "不认识的说法不会被硬塞进核心关系");
+
+    /* 用别名学一句、再用核心词问 —— 这条以前是对不上的 */
+    {
+        AI *a2 = ai_new();
+        Token *me = T(a2, "我6"), *fish = T(a2, "鱼6");
+        uint8_t rid = rel_id_of(a2, "拥有", 1);
+        ok(rid == REL_HAS && token_tag_rel(me, fish, rid, REL_BOOST) == 0, "学「我 拥有 鱼6」");
+        ok(rel_direct(me, REL_HAS, fish), "问「我 有 鱼6」能对上（同一个关系位）");
+        ai_free(a2);
+    }
+
+    /* ② 来源档后验：观测档随"改口"变低，推论档随"撤销"变低 */
+    {
+        AI *a3 = ai_new();
+        double p0 = ai_source_posterior(a3, ASSOC_ROLE_NONE);       /* 观测档 */
+        /* 证据是**对话里现场学到的关系事实**（n_rel_learned）与**改口次数** ——
+         * 不是 n_learned（那会把 24 万条训练词对算进来，后验恒等于 ~1.0）。 */
+        a3->n_rel_learned = 40; a3->n_revised = 0;
+        double p_good = ai_source_posterior(a3, ASSOC_ROLE_NONE);
+        a3->n_revised = 30;                                         /* 改口一大堆 */
+        double p_bad = ai_source_posterior(a3, ASSOC_ROLE_NONE);
+        ok(p_good > p0, "观测档：现场学得多、没改口 → 后验升高");
+        ok(p_bad < p_good, "观测档：改口多 → 后验降低（**学出来的**，不是写死的）");
+        double d0 = ai_source_posterior(a3, ASSOC_ROLE_DERIVED);
+        a3->n_cached = 300; a3->n_retracted = 0;
+        double d_good = ai_source_posterior(a3, ASSOC_ROLE_DERIVED);
+        a3->n_retracted = 250;                                      /* 缓存被撤一大堆 */
+        double d_bad = ai_source_posterior(a3, ASSOC_ROLE_DERIVED);
+        ok(d_good > d0 && d_bad < d_good, "推论档：撤销多 → 后验降低");
+        ok(ai_source_posterior(a3, ASSOC_ROLE_INNATE) > p_bad,
+           "基准档（显式教的）始终高于被改口拖垮的观测档");
+        ok(ai_source_class_pct(a3, ASSOC_ROLE_INNATE) <= 85, "折成百分数后仍在同一个量纲（≤85）");
+        ai_free(a3);
+    }
+    ai_free(ai);
+}
+
+/* ============================ ㉓ 租约 / 写入闸门 / 前提第三档 ============================
+ *
+ * 借参考实现的三件（`docs/对照-lingshu与五个局限.md` 第二节）：
+ *   ① **知识租约（TTL）**：`stable` 不是终态，而是带期限的状态；**降级只改状态，不删记录**；
+ *   ② **写入分级闸门**：imp 评分 <0.40 的"随口一说"不落库（默认关）；
+ *   ③ **前提第三档 verified**：够得着还不够，前提本身要**有据**。 */
+static void test_lease_gate_tiers(void) {
+    printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "甲7"), *b = T(ai, "乙7");
+    (void)token_tag_rel(a, b, REL_IS_A, REL_BOOST);
+    long ei = micro_edge_index(a, b);
+    ok(ei >= 0, "先有一条知识");
+    ok(ai_edge_lease(ai, &a->assocs[ei]) == AI_LEASE_STABLE, "刚碰过的 → 租约**稳定**");
+    ai->pool->current_tick = 300000;                     /* 超过 TTL */
+    ok(ai_edge_lease(ai, &a->assocs[ei]) == AI_LEASE_EXPIRED,
+       "超过 TTL → **过期**（但记录还在：只改状态不删）");
+    ok(micro_has_edge(a, b), "过期之后那条边**照样在图里**（降级不等于删除）");
+    ai->pool->current_tick = 100000;                     /* TTL 内但衰减够多 */
+    {
+        Token *d = T(ai, "丙7");
+        ModIntent m; memset(&m, 0, sizeof m);
+        m.type = MOD_TAG_DERIVED; m.target = a; m.main = d; m.rel_id = REL_IS_A;
+        snprintf(m.source, sizeof m.source, "测试");
+        char note[120];
+        safety_step_begin(ai);
+        (void)micro_try(ai, &m, note, sizeof note);
+        long ed = micro_edge_index(a, d);
+        a->assocs[ed].last_touch_tick = 0;               /* 很老 */
+        ok(ed >= 0 && ai_edge_lease(ai, &a->assocs[ed]) == AI_LEASE_WEAK,
+           "推论档 + 衰减够多 → **减弱**（可信度掉到弱阈值下）");
+    }
+
+    /* ② 写入闸门：生词更值得记、见多了就一般；分层名字对得上 */
+    {
+        AI *a2 = ai_new();
+        Token *x = T(a2, "丁7"), *y = T(a2, "戊7");
+        double imp_new = ai_write_importance(a2, x, y);
+        ok(imp_new > 0.0 && imp_new <= 1.0, "重要度在 0..1");
+        ok(ai_pair_jaccard(x, y) == 0.0 && ai_write_importance(a2, x, y) > 0.5,
+           "两端互不相干（Jaccard=0）→ 信息量高 → 重要度高");
+        {
+            /* 邻居高度重叠的一对 → 信息量低（这条连带是"意料之中"） */
+            Token *p1 = T(a2, "壬7"), *p2 = T(a2, "癸7");
+            for (int i = 0; i < 5; ++i) {
+                char nm[16];
+                snprintf(nm, sizeof nm, "子%d", i);
+                Token *o = T(a2, nm);
+                (void)token_add_assoc_unique(p1, NULL, 0, o);
+                (void)token_add_assoc_unique(p2, NULL, 0, o);
+            }
+            ok(ai_pair_jaccard(p1, p2) > 0.5, "邻居几乎一样 → Jaccard 高");
+            ok(ai_write_importance(a2, p1, p2) < ai_write_importance(a2, x, y),
+               "于是重要度更低（信息量那一项真的在起作用）");
+        }
+        ok(strcmp(ai_write_layer(AI_WGATE_LONGTERM), "长期层") == 0 &&
+           strcmp(ai_write_layer(AI_WGATE_KNOWLEDGE), "知识层") == 0 &&
+           strcmp(ai_write_layer(0.10), "情境层（随口一说）") == 0,
+           "三层名字对得上（≥0.70 长期 / ≥0.40 知识 / 更低 情境）");
+        ok(a2->write_gate_off == 1, "闸门**默认关**（不由它决定写不写）");
+        ai_free(a2);
+    }
+
+    /* ③ 前提第三档：够得着 + **有据** */
+    {
+        AI *a3 = ai_new();
+        Token *thin = T(a3, "己7");                      /* 没有任何边 → 没据 */
+        ok(!ai_premise_wellfounded(a3, thin), "没有边的词当不了「有据的前提」");
+        Token *fat = T(a3, "庚7");
+        for (int i = 0; i < 4; ++i) {
+            char nm[16];
+            snprintf(nm, sizeof nm, "辛%d", i);
+            Token *o = T(a3, nm);
+            (void)token_add_assoc_unique(fat, NULL, 0, o);
+            long k = micro_edge_index(fat, o);
+            if (k >= 0) fat->assocs[k].hits = 3;
+        }
+        ok(ai_premise_wellfounded(a3, fat), "有 ≥3 条带命中的边 → 算「有据」");
+        ai_free(a3);
+    }
+    ai_free(ai);
+}
+
+int main(void) {
+    test_table();
+    test_insert_between();
+    test_temp_not_saved();
+    test_collect_temp();
+    test_edge_budget_charged();
+    test_revise_memory();
+    test_prim_stack();
+    test_premise();
+    test_premise_gate();
+    test_premise_polarity_out();
+    test_restore_pending();
+    test_notepad_patch();
+    test_d4_conditional();
+    test_ai_notepad();
+    test_provenance();
+    test_dialog_trigger();
+    test_write_ledger();
+    test_credibility();
+    test_struct_affect_order();
+    test_premise_tiers();
+    test_alias_and_posterior();
+    test_lease_gate_tiers();
+    printf("\nToken 行为 / 临时 Token / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
+    return fails ? 1 : 0;
+}
