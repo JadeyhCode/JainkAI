@@ -40,6 +40,8 @@ d4:AIP_D4=1
 # 闸门里的候选证据项现在是**默认开**，所以反向测它要成对给：
 #   闸门开 + 证据项关 = 老公式（阈值也回到老那套）
 wgate-ev0:AIP_WGATE=1 AIP_WGATE_EV=0
+# 对话触发的匹配器现在是**默认新**（说法归一表 + 槽位），反向测要切回老那套
+trigger-kw:AIP_TRIGGER=kw
 EOF
 if [ -n "${ONLY:-}" ]; then
     grep "^$ONLY:" /tmp/.sw_list.$$ > /tmp/.sw_use.$$ || { echo "没有这个开关：$ONLY"; exit 2; }

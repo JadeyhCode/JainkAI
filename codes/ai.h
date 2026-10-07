@@ -626,6 +626,10 @@ typedef struct {
     double  last_write_imp;       /* 最近一次写入的重要度（-1 = 还没写过；::wgate 看得到） */
     /* 最近一次候选的**证据**（量测与 ::wgate 用；不存盘）：链长 / 链底可信度 / 证据档 */
     int     last_write_hops, last_write_cred, last_write_ev;
+    /* 对话触发用哪个匹配器：1 = 说法归一表 + 槽位（新，**默认**）；0 = 关键词表 + 位置算术（老）。
+     * 覆盖量到 33/33（老的 25/33）+ 整包两跑法全绿之后才翻的默认（§6.44）；
+     * `AIP_TRIGGER=kw` / `::triggers norm off` 可切回老的。 */
+    int     trigger_norm;
     /* 唯一时间核的 γ（0 = 用默认）。衰减/新近**只许**通过 ai_recency_weight 走。 */
     float   time_gamma;
     int     affect_d_steps, affect_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
@@ -1082,6 +1086,11 @@ static inline void ai_switches_init(AI *ai) {
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
     { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }
+    /* 对话触发的匹配器：**默认新那套**（说法归一表 + 槽位）；`AIP_TRIGGER=kw` 切回老的 */
+    ai->trigger_norm = 1;
+    { const char *tg = getenv("AIP_TRIGGER");
+      if (tg && !strcmp(tg, "norm")) ai->trigger_norm = 1;
+      else if (tg && !strcmp(tg, "kw")) ai->trigger_norm = 0; }
     { const char *ph = getenv("AIP_PREMHOLD");
       if (ph && !strcmp(ph, "activate"))      ai->prem_hold_activate = 1;
       else if (ph && !strcmp(ph, "verified")) ai->prem_hold_activate = 2; }

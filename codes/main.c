@@ -640,8 +640,10 @@ static const CmdDef CMDS[] = {
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
     { "trust", NULL, 1, "基本",
       "逐条可信度是否参与判定：off（默认，只说清我更信哪一条）| on（差得多时按它选边）", CMD_TRUST },
-    { "triggers", NULL, 0, "基本",
-      "对话触发（自然语言 → Token 行为）有哪几种说法；关键词表各只有一处", CMD_TRIGGERS },
+    { "triggers", NULL, 1, "基本",
+      "对话触发（自然语言 → Token 行为）有哪几种说法；加说法只改 DIALOG_WORDS 一张表。\n"
+      "::triggers norm on|off  切匹配器：说法归一表 + 槽位（新）/ 关键词表 + 位置算术（老）；"
+      "AIP_TRIGGER=norm|kw", CMD_TRIGGERS },
     { "src", "<A> <关系> <B>", 3, "基本",
       "**来源账**：这条知识是哪来的 —— 我的图（基准/观测/推论）、推得出来吗、他说的、假设层", CMD_SRC },
     { "notepad", NULL, 1, "基本",
@@ -2380,6 +2382,20 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_TRIGGERS: {
+                /* `::triggers` = 看所有说法；`::triggers norm on|off` = 切匹配器（新/老） */
+                const char *arg = cmd[8] == ' ' ? cmd + 9 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strncmp(arg, "norm", 4)) {
+                    const char *v = arg + 4;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->trigger_norm = 1;
+                    else if (!strcmp(v, "off")) a->brain->trigger_norm = 0;
+                    else { printf("[用法] ::triggers [norm on|off]\n"); continue; }
+                    printf("[对话触发匹配器 = %s]\n",
+                           a->brain->trigger_norm ? "说法归一表 + 槽位（新）"
+                                                  : "关键词表 + 位置算术（老）");
+                }
+                dialog_trigger_norm_note(a->brain->trigger_norm);
                 dialog_trigger_list();
                 continue;
             }

@@ -268,8 +268,57 @@ run '::premhold mention\n猫 和 鱼 之间 搭 个 词儿\n::edges 猫\n' o28c
 grep -qE '→ \[临:中转\]' o28c && ok "「搭 个 词儿」→ 中间插词（被切开的「词儿」也认）" \
     || bad "同义说法（词儿）" "$(grep -E '照做|临:' o28c | head -3)"
 run '::triggers\n' o28
-grep -q '之间 加|插 个 词' o28 && ok "::triggers 列出所有说法（关键词表各只有一处）" \
+grep -q '之间 加|插 个 词' o28 && ok "::triggers 列出所有说法（说法归一表只有一处）" \
     || bad "::triggers" "$(grep '触发' o28 | head -3)"
+
+# ---- 说法归一表 + 槽位（新匹配器）：覆盖量出来的 8 处缺口（§6.44；量法 tests/meas_trigger.sh）----
+# 断言里**显式写开关**（`::triggers norm on`），所以反向测量 AIP_TRIGGER=kw 也能整包跑绿。
+run '::triggers norm on\n猫 和 鱼 当中 加 个 词\n::edges 猫\n' o29
+grep -qE '→ \[临:中转\]' o29 && ok "新匹配器认「当中」（老匹配器漏）" \
+    || bad "当中" "$(grep -E '照做|临:' o29 | head -3)"
+run '::triggers norm on\n猫 和 鱼 之间 堆 个 词\n::edges 猫\n' o30
+grep -qE '→ \[临:中转\]' o30 && ok "新匹配器认动词「堆/搁」（说法归一表）" \
+    || bad "堆" "$(grep -E '照做|临:' o30 | head -3)"
+run '::triggers norm on\n给 猫 和 鱼 之间 加 个 词\n::edges 猫\n' o31
+grep -qE '→ \[临:中转\]' o31 && ok "填充词在任意位置也算（「给 … 之间 加 个 词」）" \
+    || bad "填充词" "$(grep -E '照做|临:' o31 | head -3)"
+run '::triggers norm on\n加 个 词 在 猫 和 鱼 之间\n::edges 猫\n' o32
+grep -qE '→ \[临:中转\]' o32 && ok "**动词在前**的语序也认（「加 个 词 在 A 和 B 之间」）" \
+    || bad "动词在前" "$(grep -E '照做|临:' o32 | head -3)"
+run '::triggers norm on\n猫 和 鱼 之间 加 上 个 词\n::edges 猫\n' o33
+if grep -qE '→ \[临:中转\]' o33; then
+    ok "动词词尾不当名字（「加 **上** 个 词」插的是临时 token，不是「上」）"
+elif grep -q '→ 上' o33; then
+    bad "词尾被当名字" "$(grep '→ 上' o33 | head -2)"
+else
+    bad "加上个词" "$(grep -E '照做|临:' o33 | head -3)"
+fi
+run '::triggers norm on\n猫 和 鱼 之间 别 加 词\n' o34
+if grep -q '照做 了' o34; then
+    bad "**否定命令**被当成命令" "$(grep 'AI >' o34 | tail -1)"
+else
+    ok "否定命令**不动手**（「别 加 词」）—— 老匹配器在这里是误触发"
+fi
+run '::triggers norm on\n猫 和 鱼 之间 不 要 塞 个 条件\n' o35
+if grep -q '照做 了' o35; then
+    bad "否定命令（不要）被当成命令" "$(grep 'AI >' o35 | tail -1)"
+else
+    ok "否定命令（「不 要 塞 个 条件」）不动手"
+fi
+run '::triggers norm on\n猫 和 鱼 之间 加 个 词 是 什么 意思\n' o36
+if grep -q '照做 了' o36; then
+    bad "问句被当成命令" "$(grep 'AI >' o36 | tail -1)"
+else
+    ok "问句不动手（带「什么」的一律不当命令）"
+fi
+if [ "${AIP_TRIGGER:-}" = "kw" ]; then
+    ok "反向测量（AIP_TRIGGER=kw）：跳过默认值断言"
+else
+    run '::triggers\n' o37
+    grep -q '说法归一表 + 槽位（新）' o37 \
+        && ok "默认用**新**匹配器（覆盖 25/33 → 33/33 之后才翻的默认）" \
+        || bad "默认匹配器" "$(grep '匹配器 =' o37 | head -2)"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then

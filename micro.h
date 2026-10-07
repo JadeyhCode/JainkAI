@@ -2513,8 +2513,8 @@ static inline int dialog_str_in(const char *const *tab, const char *w) {
     return 0;
 }
 
-static inline int dialog_trigger_try(AI *ai, char *const *words, size_t n,
-                                     char *out, size_t out_cap) {
+static inline int dialog_trigger_try_kw(AI *ai, char *const *words, size_t n,
+                                        char *out, size_t out_cap) {
     if (!ai || !words || n == 0 || out_cap == 0) return 0;
     out[0] = 0;
     /* ① 「回收草稿」这类：动作词 + 对象词都在就行（顺序无关） */
@@ -2620,14 +2620,227 @@ static inline int dialog_trigger_try(AI *ai, char *const *words, size_t n,
     return 1;
 }
 
+/* ============================ 对话触发：**说法归一表 + 槽位**（新匹配器） ============================
+ *
+ * 为什么换（老匹配器靠**位置算术**，实测 25/33，量法见 tests/meas_trigger.sh）：
+ *   · 漏说法：「当中」「堆」「搁」这些同义说法直接漏；「给 我 加 个 词」漏（两位填充）；
+ *     「加 个 词 在 猫 和 鱼 之间」这种**动词在前**的语序漏；
+ *   · 填错槽：「加 上 个 词」把"上"当成词名插进去；
+ *   · **误触发**：「别 加 词」「别 塞 个 条件」这种**否定命令**反而照做（最不能接受的一类）。
+ *
+ * 新匹配器分两步，还是"表驱动"，但表换成**一张说法归一表**（词 → 槽位类别）：
+ *   ① 归一：每个词查 `DIALOG_WORDS[]` → 类别（连接词/锚点/动词/种类词/否定/问句/填充…）；
+ *   ② 填槽：锚点（之间/中间/当中）把话切成"操作数"和"指令"两段，各自扫槽：
+ *        操作数 = 类别为空的实词（恰好两个）；动词/种类词/否定**不看位置**，只看有没有；
+ *        名字   = 种类词之后的第一个实词（`吧/了/上/个` 这类填充与量词不算）。
+ * 动手的硬条件（**宁可漏，不可误触发**）：有锚点 + 恰好两个操作数 + 一个动词 +
+ *        没有否定命令（别/不要/不…）+ 没有问句标志（什么/吗/呢…）。
+ * 加说法只加 `DIALOG_WORDS[]` 一行；匹配逻辑只有这一份。 */
+typedef enum {
+    DWC_NONE = 0,     /* 实词（可能是操作数，也可能是名字） */
+    DWC_CONN,         /* 和/跟/与/以及… */
+    DWC_ANCHOR,       /* 之间/中间/当中 */
+    DWC_V_INSERT,     /* 加/插/添/塞/放/搁/堆 */
+    DWC_V_CONNECT,    /* 连/接/搭（动作同插词：往中间接一个） */
+    DWC_KIND_WORD,    /* 词/词儿/词元/token */
+    DWC_KIND_PREM,    /* 前提/条件/前题/前提词/条件词 */
+    DWC_NEG_KIND,     /* 反/非（修饰种类词 → 反前提） */
+    DWC_NEG_CMD,      /* 别/甭/莫/不要/不用/不（**否定命令 → 不动手**） */
+    DWC_QUESTION,     /* 什么/吗/呢/怎么/为什么/哪（**问句 → 不动手**） */
+    DWC_SKIP,         /* 把/在/给/我/请/一下/个/上/吧/了…（填充、量词、动词词尾） */
+    DWC_DRAFT,        /* 草稿/草稿纸/临时…（回收的对象） */
+    DWC_RECYCLE,      /* 回收/清理/收/清（回收的动作） */
+} DialogWordClass;
+
+typedef struct { const char *w; uint8_t cls; } DialogWordRow;
+
+static const DialogWordRow DIALOG_WORDS[] = {
+    { "和", DWC_CONN }, { "跟", DWC_CONN }, { "与", DWC_CONN }, { "同", DWC_CONN },
+    { "、", DWC_CONN }, { "以及", DWC_CONN }, { "还有", DWC_CONN },
+    { "之间", DWC_ANCHOR }, { "中间", DWC_ANCHOR }, { "当中", DWC_ANCHOR },
+    { "加", DWC_V_INSERT }, { "插", DWC_V_INSERT }, { "添", DWC_V_INSERT },
+    { "塞", DWC_V_INSERT }, { "放", DWC_V_INSERT }, { "搁", DWC_V_INSERT },
+    { "堆", DWC_V_INSERT },
+    { "连", DWC_V_CONNECT }, { "接", DWC_V_CONNECT }, { "搭", DWC_V_CONNECT },
+    { "词", DWC_KIND_WORD }, { "词儿", DWC_KIND_WORD }, { "词元", DWC_KIND_WORD },
+    { "token", DWC_KIND_WORD },
+    { "前提", DWC_KIND_PREM }, { "条件", DWC_KIND_PREM }, { "前题", DWC_KIND_PREM },
+    { "前提词", DWC_KIND_PREM }, { "条件词", DWC_KIND_PREM },
+    { "反", DWC_NEG_KIND }, { "非", DWC_NEG_KIND },
+    { "别", DWC_NEG_CMD }, { "甭", DWC_NEG_CMD }, { "莫", DWC_NEG_CMD },
+    { "不要", DWC_NEG_CMD }, { "不用", DWC_NEG_CMD }, { "不", DWC_NEG_CMD },
+    { "什么", DWC_QUESTION }, { "吗", DWC_QUESTION }, { "呢", DWC_QUESTION },
+    { "怎么", DWC_QUESTION }, { "为什么", DWC_QUESTION }, { "哪", DWC_QUESTION },
+    { "把", DWC_SKIP }, { "在", DWC_SKIP }, { "给", DWC_SKIP }, { "我", DWC_SKIP },
+    { "你", DWC_SKIP }, { "请", DWC_SKIP }, { "帮", DWC_SKIP }, { "一下", DWC_SKIP },
+    { "个", DWC_SKIP }, { "一个", DWC_SKIP }, { "一", DWC_SKIP },
+    { "再", DWC_SKIP }, { "又", DWC_SKIP }, { "就", DWC_SKIP }, { "先", DWC_SKIP },
+    { "然后", DWC_SKIP },
+    /* 动词词尾/补语：`加 上 个 词` 里的"上"是词尾，**不是名字**（老匹配器在这里插了个叫"上"的词） */
+    { "上", DWC_SKIP }, { "下", DWC_SKIP }, { "进", DWC_SKIP }, { "出", DWC_SKIP },
+    { "好", DWC_SKIP }, { "吧", DWC_SKIP }, { "了", DWC_SKIP },
+    { "这", DWC_SKIP }, { "那", DWC_SKIP },
+    { "回收", DWC_RECYCLE }, { "清理", DWC_RECYCLE }, { "收", DWC_RECYCLE },
+    { "清", DWC_RECYCLE },
+    { "草稿", DWC_DRAFT }, { "草稿纸", DWC_DRAFT }, { "临时", DWC_DRAFT },
+    { "临时词", DWC_DRAFT }, { "临时token", DWC_DRAFT },
+    { NULL, DWC_NONE }
+};
+
+static inline uint8_t dialog_class_of(const char *w) {
+    if (!w) return DWC_NONE;
+    for (size_t i = 0; DIALOG_WORDS[i].w; ++i)
+        if (!strcmp(DIALOG_WORDS[i].w, w)) return DIALOG_WORDS[i].cls;
+    return DWC_NONE;
+}
+
+/* 在位置 i 上归一（连写匹配：分词器会把「前提/词儿」切开）→ 类别；*used = 吃掉几个 token */
+static inline uint8_t dialog_class_at(char *const *words, size_t n, size_t i, size_t *used) {
+    if (used) *used = 0;
+    if (!words || i >= n) return DWC_NONE;
+    uint8_t c = dialog_class_of(words[i]);
+    if (c != DWC_NONE) { if (used) *used = 1; return c; }
+    if (i + 1 < n) {
+        char j[64];
+        snprintf(j, sizeof j, "%s%s", words[i], words[i + 1]);
+        c = dialog_class_of(j);
+        if (c != DWC_NONE) { if (used) *used = 2; return c; }
+    }
+    return DWC_NONE;
+}
+
+#define DIALOG_MAX_WORDS 64      /* 触发只看短句；超了按前 64 个词算（有界） */
+
+static inline int dialog_trigger_try_norm(AI *ai, char *const *words, size_t n,
+                                          char *out, size_t out_cap) {
+    if (!ai || !words || n == 0 || out_cap == 0) return 0;
+    out[0] = 0;
+    size_t m = (n < DIALOG_MAX_WORDS) ? n : DIALOG_MAX_WORDS;
+    uint8_t cls[DIALOG_MAX_WORDS];
+    for (size_t i = 0; i < m; ++i) cls[i] = DWC_NONE;
+    /* ① 归一：一次扫过去，连写的第二个 token 标成"已被吃掉"（用 255 表示） */
+    for (size_t i = 0; i < m;) {
+        size_t u = 0;
+        uint8_t c = dialog_class_at(words, m, i, &u);
+        cls[i] = c;
+        if (u == 2) cls[i + 1] = 255;
+        i += (u == 0) ? 1 : u;
+    }
+    /* ② 回收草稿：动作 + 对象都出现就动手（与锚点无关） */
+    {
+        int act = 0, obj = 0;
+        for (size_t i = 0; i < m; ++i) {
+            if (cls[i] == DWC_RECYCLE) act = 1;
+            if (cls[i] == DWC_DRAFT)   obj = 1;
+        }
+        if (act && obj) {
+            char note[200];
+            int got = token_op_run(ai, "回收临时", NULL, 0, note, sizeof note);
+            snprintf(out, out_cap, "好 ， 照做 了 ： %s", note);
+            return got >= 0 ? 1 : 1;
+        }
+    }
+    /* ③ 硬条件：有锚点 / 没有否定命令 / 没有问句标志 / 有动词 */
+    int has_negcmd = 0, has_question = 0, has_verb = 0, has_prem = 0, has_word = 0;
+    size_t anchor_idx = m, kind_end = m;
+    for (size_t i = 0; i < m; ++i) {
+        if (cls[i] == DWC_ANCHOR && anchor_idx == m) anchor_idx = i;
+        if (cls[i] == DWC_NEG_CMD)   has_negcmd = 1;
+        if (cls[i] == DWC_QUESTION)  has_question = 1;
+        if (cls[i] == DWC_V_INSERT || cls[i] == DWC_V_CONNECT) has_verb = 1;
+        if (cls[i] == DWC_KIND_PREM) has_prem = 1;
+        if (cls[i] == DWC_KIND_WORD) has_word = 1;
+    }
+    if (anchor_idx == m || has_negcmd || has_question || !has_verb) return 0;
+    if (has_prem || has_word) {
+        for (size_t i = 0; i < m; ++i)
+            if (cls[i] == DWC_KIND_PREM || cls[i] == DWC_KIND_WORD) {
+                kind_end = i + 1;
+                /* 被切开的「词儿」：尾巴「儿」是**种类词的一部分**，不是名字。
+                 * （老匹配器有这条；重写时漏了，被 tokenop 的既有断言当场抓住 ——
+                 *   症状：`搭 个 词儿` 插进去一个叫「儿」的词。） */
+                if (kind_end < m && words[kind_end] && !strcmp(words[kind_end], "儿")) kind_end++;
+                break;
+            }
+    }
+    /* ④ 填槽：**以锚点为界**（这是唯一稳的判据）——
+     *   操作数 = 锚点**之前**的实词，恰好两个（`A 和 B 之间`／`A B 之间`／`把 A 和 B 之间`）；
+     *   名字   = 锚点**之后**、且在种类词之后的第一个实词
+     *            （`…之间 加 个 词 月亮` → 月亮；`加 个 词 在 A 和 B 之间` → 没有名字）。
+     *   第一版把"种类词之后"当名字，结果动词在前的语序里把操作数 A 当成名字吃掉了（实测 32/33）。 */
+    const char *A = NULL, *B = NULL;
+    int n_operand = 0;
+    for (size_t i = 0; i < anchor_idx; ++i) {
+        if (cls[i] != DWC_NONE) continue;    /* 实词才考虑 */
+        if (!words[i] || !words[i][0] || words[i][0] == '[') continue;
+        if (n_operand == 0) A = words[i];
+        else if (n_operand == 1) B = words[i];
+        n_operand++;
+    }
+    if (n_operand != 2 || !A || !B) return 0;                  /* 操作数不是两个 → 不动手 */
+    const char *P = NULL;
+    {
+        size_t from = kind_end > anchor_idx + 1 ? kind_end : anchor_idx + 1;
+        for (size_t i = from; i < m; ++i) {
+            if (cls[i] != DWC_NONE) continue;
+            if (!words[i] || !words[i][0] || words[i][0] == '[') continue;
+            P = words[i];
+            break;
+        }
+    }
+    /* 种类词：前提 / 反前提（否定词紧挨在种类词前）/ 插词 */
+    int kind = 1;
+    if (has_prem) {
+        kind = 2;
+        for (size_t i = 1; i < m; ++i)
+            if (cls[i] == DWC_KIND_PREM && (cls[i - 1] == DWC_NEG_KIND || cls[i - 1] == DWC_NEG_CMD))
+                kind = 3;
+    }
+    char note[220];
+    int got;
+    char *args[3] = { (char *)A, (char *)B, (char *)P };
+    int argc_ = P ? 3 : 2;
+    if (kind == 1)      got = token_op_run(ai, "中间插词", args, argc_, note, sizeof note);
+    else if (kind == 2) got = token_op_run(ai, "加前提",   args, argc_, note, sizeof note);
+    else                got = token_op_run(ai, "加反前提", args, argc_, note, sizeof note);
+    {
+        const char *head = (got < 0) ? "这句 我 听 懂 了 ， 可 没 做 成 ： " : "好 ， 照做 了 ： ";
+        size_t off = 0;
+        for (const char *q = head; *q && off + 1 < out_cap; ++q) out[off++] = *q;
+        for (const char *q = note; *q && off + 1 < out_cap; ++q) out[off++] = *q;
+        out[off] = 0;
+    }
+    return 1;
+}
+
+/* 分派：默认老匹配器；开关打开走"说法归一表 + 槽位"（先 A/B，绿了再翻默认） */
+static inline int dialog_trigger_try(AI *ai, char *const *words, size_t n,
+                                     char *out, size_t out_cap) {
+    if (ai && ai->trigger_norm) return dialog_trigger_try_norm(ai, words, n, out, out_cap);
+    return dialog_trigger_try_kw(ai, words, n, out, out_cap);
+}
+
+/* `::triggers` 是**无参**的（命令表里如此），但报告要说清当前用哪个匹配器 ——
+ * 用一个进程内的"最近一次看到的开关状态"（只影响显示，不影响行为）。 */
+static int g_dialog_norm_shown = 0;
+static inline int ai_trigger_norm_on(void) { return g_dialog_norm_shown; }
+static inline void dialog_trigger_norm_note(int on) { g_dialog_norm_shown = on; }
+
 static inline void dialog_trigger_list(void) {
-    printf("对话触发（自然语言 → Token 行为，窄集；各关键词表只有一处）：\n");
+    printf("对话触发（自然语言 → Token 行为）：\n");
     printf("  <A> 和 <B> 之间 加|插 个 词 [<名字>]     → ::op 中间插词\n");
     printf("  <A> 和 <B> 之间 加|插 个 前提 [<前提>]   → ::op 加前提\n");
     printf("  <A> 和 <B> 之间 加|插 个 反 前提 [<前提>] → ::op 加反前提\n");
     printf("  回收|清理 草稿|临时                      → ::op 回收临时\n");
-    printf("  连接词：和/跟/与/同/、；动词：加/插/添/连/接（改说法只改表）\n");
+    printf("  连接词：和/跟/与/同/、/以及；动词：加/插/添/塞/放/搁/堆/连/接/搭\n");
     printf("  **没动词不触发**：`猫 和 鱼 之间 有 什么 关系` 是提问，不是命令\n");
+    printf("  匹配器 = %s（`::triggers norm on|off` 切；AIP_TRIGGER=norm|kw）\n",
+           ai_trigger_norm_on() ? "说法归一表 + 槽位（新）" : "关键词表 + 位置算术（老）");
+    if (ai_trigger_norm_on()) {
+        printf("  新匹配器额外认：当中/堆/搁；动词在前的语序（`加 个 词 在 X 和 Y 之间`）；\n");
+        printf("  任意位置的填充词（`给 我 加 个 词`）；动词词尾不当名字（`加 上 个 词`）；\n");
+        printf("  **否定命令不动手**（`别 加 词`）；问句不动手（什么/吗/呢…）\n");
+    }
 }
 
 /* ============================ 报告（::mod / ::safe / ::patch） ============================ */
