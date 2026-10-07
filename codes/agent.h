@@ -607,6 +607,142 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
     return r;
 }
 
+/* ============================ 他者视角：多层合并 + 四态判定 ============================
+ *
+ * 借 lingshu 的两件事（`docs/对照-lingshu与五个局限.md` 局限 4）：
+ *   ① **同类别并进滑动窗**：所有人名下的说法，只要与所问**同类**就并进一个窗里看。
+ *      「同类」= 宾语相同，**或他的宾语是所问宾语的下位**（他说「学生 属于 人」，
+ *      我问「学生 属于 动物」——`人 ⊂ 动物` 蕴含所问，算一条支持）；
+ *   ② **冲突交四态判定**：都说认 / 都说不认 / **有分歧（待验，不是否定）** / 没人说过。
+ *
+ * 两条铁律没松：
+ *   · 他的信念**不进我的图**：窗口是**查询时并出来的**，不落任何持久字段
+ *     （存档格式一个字节没动）；
+ *   · **不许拿别人的想法冒充答案**：窗口只报「谁说过什么 + 合并结论」，
+ *     而且只有**蕴含所问**（下位宾语）的说法才算支持；上位宾语只标成
+ *     「相关但不蕴含」，不参与判定。
+ *
+ * 为什么现算：`OtherModel.bel[]` 里每人只留**最新**的一版极性（人会说反话，
+ * `other_belief_learn` 是覆盖语义）—— 那是设计，不是缺陷；窗口不存"历史"，
+ * 所以重载之后同一个问题给出的是同一个答案（确定性）。 */
+typedef enum {
+    OBV_NONE   = 0,   /* 没人说过 */
+    OBV_YES    = 1,   /* 都说认 */
+    OBV_NO     = 2,   /* 都说不认 */
+    OBV_DEFER  = 3,   /* 有人认、有人不认 —— **待验，不是否定** */
+} OtherBeliefVerdict;
+
+typedef struct {
+    const Token    *who;
+    const HypoFact *fact;
+    int             entail;   /* 1 = 这条**蕴含**所问（下位宾语/同一个）；0 = 只是相关 */
+} OtherBeliefObs;
+
+typedef struct {
+    OtherBeliefObs     obs[AI_MAX_OTHERS * 4];
+    size_t             n;
+    size_t             n_yes, n_no, n_related;   /* n_related = 相关但不蕴含 */
+    size_t             n_who;                    /* 涉及到几个人 */
+    OtherBeliefVerdict verdict;
+} OtherBeliefView;
+
+static inline const char *other_belief_verdict_name(OtherBeliefVerdict v) {
+    switch (v) {
+    case OBV_YES:   return "都说认";
+    case OBV_NO:    return "都说不认";
+    case OBV_DEFER: return "有分歧（待验，不是否定）";
+    default:        return "没人说过";
+    }
+}
+
+/* 他的宾语是不是**蕴含**所问（同一个，或是所问的下位）：`x ⊂ b`。
+ * 两条判据都用现成的：类别链（`parent`）与关系层的 `属于`（含传递）——
+ * 不新造"相似"口径。 */
+static inline int other_obj_narrows(AI *ai, const Token *x, const Token *b) {
+    if (!x || !b) return 0;
+    if (x == b) return 1;
+    if (token_is_descendant(x, b)) return 1;
+    {
+        Proof pf;
+        memset(&pf, 0, sizeof pf);
+        rel_solve(ai, x, REL_IS_A, b, 0, &pf);
+        if (pf.status > 0) return 1;
+    }
+    return 0;
+}
+
+/* 把所有人名下与 (a, rid, b) 同类的说法并进一个窗，再交四态判定。 */
+static inline void other_belief_view(AI *ai, const Token *a, uint8_t rid, const Token *b,
+                                     OtherBeliefView *v) {
+    if (!v) return;
+    memset(v, 0, sizeof *v);
+    v->verdict = OBV_NONE;
+    if (!ai || !a || !b || rid == 0) return;
+    size_t cap = sizeof v->obs / sizeof v->obs[0];
+    for (size_t i = 0; i < ai->others_n && v->n < cap; ++i) {
+        const OtherModel *om = &ai->others[i];
+        for (size_t k = 0; k < om->n_bel && v->n < cap; ++k) {
+            const HypoFact *f = &om->bel[k];
+            if (f->a != a || f->rid != rid) continue;
+            /* 同类判据：宾语相同 → 蕴含；他的宾语是所问的**下位** → 蕴含；
+             * 他的宾语是所问的**上位** → 只是相关（不参与判定）。 */
+            int entail = 0, related = 0;
+            if (f->b == b) { entail = 1; related = 1; }
+            else if (other_obj_narrows(ai, f->b, b)) { entail = 1; related = 1; }
+            else if (other_obj_narrows(ai, b, f->b)) { related = 1; }
+            if (!related) continue;
+            OtherBeliefObs *o = &v->obs[v->n++];
+            o->who = om->who; o->fact = f; o->entail = entail;
+            if (!entail) { v->n_related++; continue; }
+            if (f->neg) v->n_no++; else v->n_yes++;
+        }
+    }
+    /* 涉及几个人（只数**蕴含**的那些，才代表"他们对此表过态"） */
+    for (size_t i = 0; i < v->n; ++i) {
+        if (!v->obs[i].entail) continue;
+        int seen = 0;
+        for (size_t j = 0; j < i; ++j)
+            if (v->obs[j].entail && v->obs[j].who == v->obs[i].who) { seen = 1; break; }
+        if (!seen) v->n_who++;
+    }
+    if (v->n_yes && v->n_no)     v->verdict = OBV_DEFER;
+    else if (v->n_yes)           v->verdict = OBV_YES;
+    else if (v->n_no)            v->verdict = OBV_NO;
+    else                         v->verdict = OBV_NONE;
+}
+
+/* 打印一个窗口（`::others <A> <关系> <B>` 用）。返回四态判定，便于调用方再加工。 */
+static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
+                                                         uint8_t rid, const Token *b) {
+    const char *rn = rel_name_of(ai, rid);
+    OtherBeliefView v;
+    other_belief_view(ai, a, rid, b, &v);
+    printf("[他者视角：%s %s %s —— %zu 个人表过态]\n",
+           a && a->name ? a->name : "?", rn ? rn : "?",
+           b && b->name ? b->name : "?", v.n_who);
+    for (size_t i = 0; i < v.n; ++i) {
+        const OtherBeliefObs *o = &v.obs[i];
+        const HypoFact *f = o->fact;
+        printf("    %s：%s %s%s %s", o->who && o->who->name ? o->who->name : "?",
+               f->a && f->a->name ? f->a->name : "?",
+               f->neg ? "不 " : "", rn ? rn : "?",
+               f->b && f->b->name ? f->b->name : "?");
+        if (!o->entail) printf("   ← 相关，但**不蕴含**所问（上位说法），不算依据");
+        else if (f->b != b) printf("   ← **同类**（%s ⊂ %s），算依据",
+                                   f->b && f->b->name ? f->b->name : "?",
+                                   b && b->name ? b->name : "?");
+        printf("\n");
+    }
+    printf("  合并判定：**%s**", other_belief_verdict_name(v.verdict));
+    if (v.verdict == OBV_DEFER)
+        printf("（%zu 认 / %zu 不认 —— 两条都留着，谁也不盖谁）", v.n_yes, v.n_no);
+    if (v.verdict == OBV_NONE && v.n_related)
+        printf("（只有 %zu 条相关但不蕴含的说法，不算答案）", v.n_related);
+    printf("\n");
+    printf("  我的知识没被改：他的信念只在**他的**名下（这条判定是现算的，不落库）\n");
+    return v.verdict;
+}
+
 /* 站在别人的立场上回答：先把**他名下的信念**临时铺成一层假设（who = 他），
  * 让原来的求解器 / 验证器 / 链式渲染原样用上 —— 他的信念和归他的假设因此
  * 走**同一条**代码路径，不需要为它开特例。答完立刻原样撤回：

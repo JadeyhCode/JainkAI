@@ -133,6 +133,47 @@ printf '%s\n' "$out" | grep -aqE '观测 0\.[5-9]' \
     && chk "观测档后验 > 0.5（学到了东西，不是先验 0.5）" 1 \
     || chk "观测档后验（实得：$(printf '%s\n' "$out" | grep '来源档可信度' | head -1)）" 0
 
+echo "⑩ 他者视角**多层合并 + 四态判定**（同类别并进滑动窗；冲突交四态，待验≠否定）"
+# 两个人说法相反 → 有分歧（**待验**），不是否定；两条都留着
+out=$(run "甲 以为 猫 属于 动物" "乙 说 猫 不属于 动物" "::others 猫 属于 动物")
+printf '%s\n' "$out" | grep -aq '有分歧（待验，不是否定）' \
+    && chk "两人相反 → 有分歧（待验，不是否定）" 1 \
+    || chk "有分歧（实得：$(printf '%s\n' "$out" | grep '合并判定' | head -1)）" 0
+printf '%s\n' "$out" | grep -aq '1 认 / 1 不认' \
+    && chk "两条都留着，谁也不盖谁（1 认 / 1 不认）" 1 || chk "认/不认计数" 0
+# **铁律**：他的信念不进我的图 —— 乙 说不属于，我的知识照旧
+printf '%s\n' "$out" | grep -aq '我的知识没被改' \
+    && chk "判定之后我的知识没被改（他的信念只在他名下）" 1 || chk "不该改我的知识" 0
+out=$(run "甲 以为 猫 属于 动物" "乙 说 猫 不属于 动物" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | grep -aq '对' \
+    && chk "我照旧知道「猫 属于 动物」（没被乙的说法改掉）" 1 \
+    || chk "我的知识被别人的说法改了（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+# 两个人都认 → 都说认
+out=$(run "甲 以为 猫 会 飞" "乙 觉得 猫 会 飞" "::others 猫 会 飞")
+printf '%s\n' "$out" | grep -aq '都说认' && chk "两人都认 → 都说认" 1 \
+    || chk "都说认（实得：$(printf '%s\n' "$out" | grep '合并判定' | head -1)）" 0
+# 同类别：他说「学生 属于 人」，问「学生 属于 动物」→ 人 ⊂ 动物 **蕴含**所问，算依据
+out=$(run "甲 以为 学生 属于 人" "::others 学生 属于 动物")
+printf '%s\n' "$out" | grep -aq '同类' && chk "上位链蕴含所问 → 标成「同类」，算依据" 1 \
+    || chk "同类蕴含（实得：$(printf '%s\n' "$out" | grep '甲：' | head -1)）" 0
+printf '%s\n' "$out" | grep -aq '都说认' && chk "并进滑动窗之后判成「都说认」" 1 || chk "同类后的判定" 0
+# 反过来（他说的更泛）不能当依据：他说「猫 属于 生物」，问「猫 属于 动物」
+out=$(run "甲 以为 猫 属于 生物" "::others 猫 属于 动物")
+printf '%s\n' "$out" | grep -aq '不蕴含' \
+    && chk "上位说法标成「相关但不蕴含」，**不算依据**" 1 \
+    || chk "上位说法（实得：$(printf '%s\n' "$out" | grep '甲：' | head -1)）" 0
+printf '%s\n' "$out" | grep -aq '没人说过' \
+    && chk "只剩相关说法时判成「没人说过」（不拿它冒充答案）" 1 || chk "不蕴含时的判定" 0
+# 没人提过 → 没人说过
+out=$(run "甲 以为 猫 会 飞" "::others 猫 有 毛")
+printf '%s\n' "$out" | grep -aq '没人说过' && chk "没人提过 → 没人说过" 1 || chk "没人说过" 0
+# 判定是**现算**的：存盘重载后同一个问题给同一个答案（信念表是持久的）
+run "甲 以为 猫 属于 动物" "乙 说 猫 不属于 动物" "::save $TMP/ov.bin" > "$TMP/ov1.txt" 2>&1 || true
+out=$( { printf '::load %s/ov.bin\n::notepad off\n::others 猫 属于 动物\n::quit\n' "$TMP"; } | "$BIN" 2>&1 )
+printf '%s\n' "$out" | grep -aq '有分歧（待验，不是否定）' \
+    && chk "重载后同一个问题给同一个判定（现算，不落库也不丢）" 1 \
+    || chk "重载后的判定（实得：$(printf '%s\n' "$out" | grep '合并判定' | head -1)）" 0
+
 echo
-[ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 学出来的可信度跨重启）" \
+[ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 学出来的可信度跨重启 + 他者视角多层合并/四态）" \
                   || { echo "FAIL belief"; exit 1; }

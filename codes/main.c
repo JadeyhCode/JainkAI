@@ -660,8 +660,10 @@ static const CmdDef CMDS[] = {
       "「独占」判定表：样本数 / 似然比 / 是印证还是改口", CMD_EXCL },
     { "frames", NULL, 0, "基本",
       "结构化帧库（问法骨架 + 槽位）", CMD_FRAMES },
-    { "others", NULL, 0, "基本",
-      "他者模型：每个人名下**他相信的**事实（存盘里）", CMD_OTHERS },
+    { "others", NULL, 1, "基本",
+      "他者模型：每个人名下**他相信的**事实（存盘里）。\n"
+      "::others <A> <关系> <B>  多层合并 + 四态判定：同类别说法并进一个窗，\n"
+      "  都说认/都说不认/**有分歧（待验，不是否定）**/没人说过", CMD_OTHERS },
     { "prims", NULL, 0, "基本",
       "列出所有原语", CMD_PRIMS },
     { "gc", NULL, 0, "基本",
@@ -1648,6 +1650,30 @@ int main(int argc, char **argv) {
                 /* 他者模型：每个人名下**他相信的事实**（不是我的知识）。
                  * 这是「归属」从标注变成持久状态的地方 —— 存盘重载还在。 */
                 AI *B = a->brain;
+                const char *arg = (cmd[6] == ' ') ? cmd + 7 : NULL;
+                while (arg && *arg == ' ') arg++;
+                /* `::others <A> <关系> <B>`：**多层合并 + 四态判定**（§6.45）——
+                 * 把所有人名下"同类"的说法并进一个窗，冲突交四态（待验 ≠ 否定）。 */
+                if (arg && *arg) {
+                    char w1[64] = {0}, wr[64] = {0}, w2[64] = {0};
+                    if (sscanf(arg, "%63s %63s %63s", w1, wr, w2) != 3) {
+                        printf("[用法] ::others [<A> <关系> <B>]\n");
+                        continue;
+                    }
+                    Token *A = pool_find(B->pool, w1);
+                    Token *O = pool_find(B->pool, w2);
+                    uint8_t rid = rel_id_of(B, wr, 0);
+                    if (!A || !O || rid == 0) {
+                        printf("[找不到：%s %s %s]\n", w1, wr, w2);
+                        continue;
+                    }
+                    if (B->others_n == 0) {
+                        printf("[还没有「别人」的模型 —— 说一句「他 以为 …」试试]\n");
+                        continue;
+                    }
+                    other_belief_view_print(B, A, rid, O);
+                    continue;
+                }
                 if (B->others_n == 0) { printf("[还没有「别人」的模型 —— 说一句「他 以为 …」试试]\n"); continue; }
                 for (size_t i = 0; i < B->others_n; ++i) {
                     const OtherModel *om = &B->others[i];
