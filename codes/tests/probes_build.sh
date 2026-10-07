@@ -21,7 +21,11 @@ cd "$ROOT"
 MODEL=${MODEL:-model.bin}
 CORPUS=${CORPUS:-_corpus.txt}
 OUT=./_t/probes
-rm -rf "$OUT"; mkdir -p "$OUT"
+# 产物**留着**（二进制 + .hash）：要不要重编由下面那张内容哈希决定，而不是每轮无条件重编。
+# 只清上一轮的调度结果与日志（它们是每轮重建的）。
+mkdir -p "$OUT"
+rm -rf "$OUT/q"
+rm -f "$OUT"/*.log
 
 . "$ROOT/tests/pool.sh"
 POOL_DIR=$OUT/q
@@ -38,8 +42,30 @@ for f in tools/*.c; do
     n=$((n + 1))
 done
 if [ "$POOL_JOBS" -gt "$n" ]; then POOL_JOBS=$n; fi
-pool_run "$OUT/list.txt"
 
+# ---- 内容哈希缓存：探针的**输入**（所有 tools/*.c + 所有头文件）一字未变就复用上次产物 ----
+# 安全边界（照实说）：哈希只覆盖"源码与头文件"。**换编译器/换 gcc 版本**它看不出来
+# （那时新警告会漏一次）—— 想强制重编：删掉 $OUT/.hash 或整个 _t/probes。
+# 为什么敢缓存：探针门第 ② 件（跑出结论行）**每次照跑**；缓存只跳过第 ① 件（编译），
+# 而它跳过的前提是"输入逐字节没变"。
+STAMP=$OUT/.hash
+NEW=$(cat "$ROOT"/*.h "$ROOT"/*.c tools/*.c 2>/dev/null | md5sum | cut -d' ' -f1)
+OLD=$(cat "$STAMP" 2>/dev/null || echo none)
+have=1
+for f in tools/*.c; do
+    [ -x "$OUT/$(basename "$f" .c)" ] || have=0
+done
+compiled=0
+if [ -n "$NEW" ] && [ "$NEW" = "$OLD" ] && [ "$have" = 1 ]; then
+    echo "  编译通过：$n 个探针（复用上次编译：源码与头文件哈希未变 $NEW）"
+else
+    pool_run "$OUT/list.txt"
+    printf '%s\n' "$NEW" > "$STAMP"
+    compiled=1
+    echo "  编译通过：$n 个探针（-Wall -Wextra -Werror，JOBS=$POOL_JOBS）"
+fi
+
+# 只在**这一轮真编译过**时核对退出码：缓存命中时没有 .rc（也没编译，没什么可核对的）。
 bad=0
 for rc in "$OUT"/q/*.rc; do
     [ -f "$rc" ] || continue
@@ -53,12 +79,11 @@ for rc in "$OUT"/q/*.rc; do
 done
 # 硬门：结果文件数必须等于探针数（少了＝有编译没留下退出码，那种"编译门"是假的）
 nres=$(ls "$OUT"/q/*.rc 2>/dev/null | wc -l)
-if [ "$nres" -ne "$n" ]; then
+if [ "$compiled" = 1 ] && [ "$nres" -ne "$n" ]; then
     echo "  [FAIL] 结果文件数（$nres）≠ 探针数（$n）：有编译没留下退出码"
     bad=1
 fi
 [ "$bad" -eq 0 ] || exit 1
-echo "  编译通过：$n 个探针（-Wall -Wextra -Werror，JOBS=$POOL_JOBS）"
 
 if [ ! -f "$MODEL" ]; then
     echo "  跳过运行冒烟：缺 $MODEL"

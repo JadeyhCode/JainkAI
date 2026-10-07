@@ -64,11 +64,22 @@ if [ "$JOBS" -gt "$total" ]; then JOBS=$total; fi
 if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
 
 echo "=== 0 编译（严格零警告 + 所有探针）==="
+# 这两件事**互不依赖**（探针不碰 build_aip，build_aip 也不碰探针）→ 并行跑。
+# 量过：`build_aip` 单编 ~16 s、26 个探针并行编译 ~11 s，串着跑就是白等 11 s。
+# 探针那边限 4 路（`JOBS=4`）：主程序那条 -O2 编译本身要吃内存，两边都满速容易换页。
+mkdir -p "$PAR"
+JOBS=4 sh tests/probes_build.sh > "$PAR/probes.log" 2>&1 &
+probes_pid=$!
 gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_aip main.c -lm
 echo "BUILD OK"
 # 探针也要编译得过、跑得出结论 —— 它们是"把拍的变成量的"那件工具，自己不能没看护。
 # （血泪：affectprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
-sh tests/probes_build.sh
+if ! wait "$probes_pid"; then
+    echo "  ^^^ 探针门失败："
+    cat "$PAR/probes.log"
+    exit 1
+fi
+cat "$PAR/probes.log"
 
 # 调度只用一份实现（tests/pool.sh）；这里的两个钩子负责"每条任务一个干净沙箱"。
 . "$ROOT/tests/pool.sh"
