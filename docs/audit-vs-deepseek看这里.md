@@ -1559,8 +1559,9 @@ relations.txt"不是缺陷而是**定义**——文档改掉，不假装做了�
    现在 **85 个文件逐字节一致**（`cmp` 全过）。同步命令要带上 `tests/suites.txt`
    （本轮新增的非 `*.sh` 文件）：
    ```
-   cp -a *.h *.c CMakeLists.txt codes/ && cp -a tests/*.sh tests/suites.txt codes/tests/ && cp -a tools/*.c tools/*.txt codes/tools/
-   for f in *.h *.c CMakeLists.txt tests/*.sh tests/suites.txt tools/*.c tools/*.txt; do cmp -s "$f" "codes/$f" || echo "DIFF: $f"; done
+   cp -a *.h *.c CMakeLists.txt codes/ && cp -a tests/*.sh tests/*.txt codes/tests/ && cp -a tools/*.c tools/*.txt codes/tools/
+   for f in *.h *.c CMakeLists.txt tests/*.sh tests/*.txt tools/*.c tools/*.txt; do cmp -s "$f" "codes/$f" || echo "DIFF: $f"; done
+   # ↑ tests/ 用 *.txt 通配（suites.txt、ab_suites.txt…）：以后再加数据文件不会再漏出镜像
    ```
 2. `git add -A && git commit`：`6c1222b`（codes/ 镜像补全 + 收尾改动 + docs）。
 
@@ -2007,3 +2008,55 @@ relations.txt"不是缺陷而是**定义**——文档改掉，不假装做了�
 - 想做的话，几条"下一层"的候选（都在各轮的"局限照实说"里登记着）：
   ① 机制路径候选的 `hops/cred` 接全（#2 的尾巴）；② 预测簇拆成两个真轴（#5 的尾巴）；
   ③ 他者视角接进回答路径（"大家怎么看"，#4 的尾巴）；④ 整包套件相位再提速。
+
+---
+
+### 6.48 外部评审（DeepSeek 分享）核账 + tests/ 收口（**已完成**）
+
+分享：`https://chat.deepseek.com/share/a293yb1t9mocf0yaa6`（用户把源码/工具/测试分批贴过去，让那边评审；
+取法同前几轮：`GET https://chat.deepseek.com/api/v0/share/content?share_id=…`，要带 UA 头，否则返回
+"Request Blocked" 页）。它对 `tests/` 提了 **7 条**，逐条核实：**6 条成立、1 条不成立**。
+
+| # | 评审说的 | 核实结果 | 处理 |
+|---|---|---|---|
+| 1 | `features.sh` 语境退役断言"逻辑反了，等于没测" | **成立，而且比说的更糟**：`&& ok … \|\| ok …` **两个分支都 ok**（永不红）；我改掉逻辑后再测，发现**路径也没带 `$ROOT`** —— 这套早就 `cd` 进工作目录，那里没有 `token_lang.h`，grep 永远找不到文件、永远走 else | 改成可证伪，并**证伪测过**：插一个 `n_subs` → 当场 `[FAIL]`；还原 → `32 项通过` |
+| 2 | `hypo_frames.sh` 里 `printf '%s\n'` 被真换行劈开 | 成立（2 处） | 接回 `printf '%s\n' "$out"` |
+| 3 | `suites.txt` 里 `exclusivity` 标"0.0s"是假的（要训模型） | **不成立**：实测 **70 ms**（它用预编好的 `build_aip` + 小语料） | 标签写清楚："0.07s —— 是真的快" |
+| 4 | A/B 脚本各自硬写一份 SUITES，没走唯一清单 | 成立 **2/3**（`thinkout_ab`、`premiseout_ab` 硬写；`switches_ab` 本来就从环境读） | 新增 **`tests/ab_suites.txt`**（唯一一份），两个脚本都读它（`SUITES=` 仍可盖） |
+| 5 | `has '有 [0-9]* 条边'` 的 BRE 模式允许零个数字 | 成立 | 改成 `[0-9][0-9]*` |
+| 6 | `printf "$1"` 把输入当格式串（有 `%` 就炸） | 成立（8 个脚本） | 全改 `printf '%b' "$1"`（调用点靠 `\n` 转义，`%b` 才解释它们，顺带消掉格式串风险） |
+| 7 | `probes_build.sh` 注释写死"26 个探针"、还把四个说成"三个" | 成立（注释漂移） | 注释不再写死数量/口径改对 |
+
+**证据**：整包 `tests/all.sh` **30 套 + 冒烟全绿**（65 s，8 个被 `printf '%b'` 扫过的套件都在里面）；
+`features.sh` 证伪测试红→绿；A/B 清单解析实测输出
+`[relations derivation hypothesis logic4 exclusivity hypo_frames cot thinking ]`。
+
+**踩的坑**
+1. 我第一版只改了断言的**逻辑**（`bad`/`ok`），没查**路径** —— 它仍然是假的。假断言有两层，
+   评审点出第一层，第二层是自己证伪测试时抓到的（"改完要能变红"，这条纪律再次生效）。
+2. 我自己的 python 修补脚本连错两次：raw string 里的 `\n` 是字面量（正则没匹配），
+   接回被劈开的 `printf` 时**吃掉了行首的 `r=$(`**（靠 `sh -n` 抓到）。改完要读文件、要跑语法检查。
+3. 备份写 `/tmp` —— 那是一次性命名空间，下一个命令就没了，还原失败。**同一轮第二次踩**（§6.42 记过），
+   改用 `git checkout -- <file>` 还原。
+
+**评审的结构性提醒（照实说）**：它指出 `tests/` 里也长出"同一份清单多处写"的苗头。本轮收口了一处
+（`ab_suites.txt`）；其余（`suites.txt` 与各 A/B 脚本的关系、探针名单与注释）已经在注释里点明，
+但**没有**系统性地扫一遍 —— 登记为下一步。
+
+---
+
+### 6.49 停放点（**明天接着干**）
+
+原计划的第二半——**受审的外部执行 + 写文件通道**（"距离写代码还差什么"里排第 1、2 的那两件）
+**还没开始**，设计要点先记在这里：
+
+1. 新层 `action.h`（和 `affect.h` 一样在核外）：`AIP_ACT=1` / `::act on|off`，**默认关**。
+2. 动作表（一行一个）：名字 / 为什么允许 / 超时 / 白名单首词。`action_run()` 用 `popen` + 超时，
+   收 stdout+rc，记账（`n_actions / n_failed / last_rc / last_text`）；`action_write_file()`
+   限定在 `_t/work/` 之内（路径规范化后必须还在里面）。
+3. 安全边界：命令**首词**必须命中白名单；出现 shell 元字符（`;|&><\`` ``$()``）一律拒并记账。
+4. 输出算**观测**：经意图队列落一个 `[运行:rc]` 标记节点（与 `[草稿:]/[自问:]` 同一套约定），
+   **不建关系边、不进我的知识**；进图这件事仍然只走 `micro_step()`。
+5. 看护 `tests/action.sh`：默认关不执行 / 白名单拒 `rm` / 超时被杀 / 写文件越界被拒 /
+   输出变观测 / 审计账对得上。
+6. 纪律：默认关；A/B = "关着时整包一位不变" + "开着时新套件绿"；**存档格式 v9 不动**（新字段只进内存）。

@@ -28,7 +28,7 @@ ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # `::notepad off`：**钉住"流水线模式"** —— 这样环境变量强制打开"AI 自己写草稿"时
 # （`AIP_PATCH=记事本 AIP_NOTEPAD=on`），这套看护的断言依然测的是它要测的东西。
-run() { cp model.bin m.bin; { printf '::notepad off\n'; printf "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
+run() { cp model.bin m.bin; { printf '::notepad off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1

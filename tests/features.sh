@@ -20,11 +20,12 @@ ok()   { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad()  { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 has()  { printf '%s' "$2" | grep -q "$1"; }
 
-run() { printf "$1" | ./aip > "$2" 2>&1; }
+run() { printf '%b' "$1" | ./aip > "$2" 2>&1; }
 
 echo "== 1. 关联记忆：Hebbian 建边 / hits 强化 / 衰减 / 遗忘 / 复活 / 重排 =="
 run '猫\n猫\n::edges 猫\n::stats\n' o1
-if has '有 [0-9]* 条边' "$(cat o1)" && has 'hits=' "$(cat o1)"; then ok "建边 + hits 字段可见"; else bad "建边/hits" "$(grep -m2 '猫\|边' o1)"; fi
+# BRE 里 `[0-9]*` 允许**零个**数字（"有  条边"也能中）→ 写成 `[0-9][0-9]*`
+if has '有 [0-9][0-9]* 条边' "$(cat o1)" && has 'hits=' "$(cat o1)"; then ok "建边 + hits 字段可见"; else bad "建边/hits" "$(grep -m2 '猫\|边' o1)"; fi
 grep -q '已学=' o1 && ok "每轮学习计数在走" || bad "已学计数" "$(grep '已学' o1)"
 
 echo "== 2. 联想生成：扩散激活 / 加权游走 / 多候选选优 =="
@@ -42,9 +43,18 @@ has '\*\*前提\*\*' "$(cat o3)" && ok "前提链接：前关联+连接 建出 A
     || bad "前提链接" "$(grep -E '饿|前提' o3 | head -3)"
 has '之间的前提 token' "$(cat o3)" && ok "逻辑查得到前提 token 是什么（::premise 猫 饿 → $(grep -A1 '之间的前提 token' o3 | tail -1 | tr -d ' ' | cut -d'（' -f1)）" \
     || bad "::premise" "$(grep -A2 '前提' o3 | head -4)"
-# 语境字段退役：语言层不再有任何原语能写它（旧模型仍读得回来）
-grep -q 'n_subs' token_lang.h 2>/dev/null && ok "语境字段在语言层还有引用（应当是 0 处创建者）" \
-    || ok "语境（subs）已退役：语言层不再创建它 —— 见 docs/语境退役-前提token.md"
+# 语境字段退役：语言层不再有任何原语能写它（旧模型仍读得回来）。
+# ⚠ 这条原来**两个分支都写 ok**，等于永不红（外部评审点出来的）；现在"有引用"就是 bad。
+# 判据是**可证伪的文本检查**：语言层里不许再出现 `n_subs`（创建者 `token_add_assoc_ex`
+# 的那个参数名；字段本身还在 token.h 里，旧模型要读得回来）。
+# ⚠ 路径必须带 $ROOT：这套**早就 cd 进工作目录**了，那里没有 token_lang.h ——
+# 原来写相对路径时 grep 永远找不到文件、永远走 else，所以这条断言**真红了才怪**
+# （外部评审说它"等于没测"，两次都对：先是两个分支都 ok，改掉之后才发现路径也是坏的）。
+if grep -q 'n_subs' "$ROOT/token_lang.h" 2>/dev/null; then
+    bad "语境字段在语言层又被引用了（应当是 0 处）" "$(grep -n 'n_subs' "$ROOT/token_lang.h" | head -2)"
+else
+    ok "语境（subs）已退役：语言层不再创建它 —— 见 docs/语境退役-前提token.md"
+fi
 run '::tokens 12\n' o3b
 has '分类=1' "$(cat o3b)" && ok "类别继承：模型里已有自动抽象类别（分类=1）" || ok "类别继承机制在位"
 

@@ -25,7 +25,9 @@ cd "$ROOT"
 CC=${CC:-gcc}
 $CC -std=c11 -O2 -o build_aip main.c -lm
 
-SUITES="relations derivation hypothesis logic4 exclusivity hypo_frames cot thinking"
+# 受影响的几套：**从 tests/ab_suites.txt 读**（唯一一份；SUITES= 可临时盖掉）
+SUITES=${SUITES:-$(grep -v '^#' "$ROOT/tests/ab_suites.txt" 2>/dev/null | tr '\n' ' ')}
+[ -n "$SUITES" ] || { echo "读不到 tests/ab_suites.txt 的套件清单"; exit 2; }
 OUT="$ROOT/_t/ab"
 rm -rf "$OUT"; mkdir -p "$OUT/off" "$OUT/on"
 

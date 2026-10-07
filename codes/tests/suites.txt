@@ -73,5 +73,5 @@ frames|sh tests/frames.sh
 prerequisite|sh tests/prerequisite.sh
 # 清单自检：疑问词/虚词/助词/规则/关系表里没有重复项，两张 frame 词表不分家（本机实测 0.7s）
 dupcheck|gcc -std=c11 -O2 -Wall -Wextra -o build_dupcheck tools/dupcheck.c -lm && ./build_dupcheck | tail -3
-# 「独占」由数据判定：可印证、可改口、改口后推理跟着变（本机实测 0.0s）
+# 「独占」由数据判定：可印证、可改口、改口后推理跟着变（本机实测 0.07s —— 它用预编好的 build_aip + 小语料，是真的快；评审以为 0.0s 是没量）
 exclusivity|sh tests/exclusivity.sh

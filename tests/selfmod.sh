@@ -30,8 +30,8 @@ for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done
 pass=0; fail=0
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
-run() { printf "$1" | ./aip > "$2" 2>&1 || true; }
-runm() { printf "$1" | ./aip --model "$2" > "$3" 2>&1 || true; }
+run() { printf '%b' "$1" | ./aip > "$2" 2>&1 || true; }
+runm() { printf '%b' "$1" | ./aip --model "$2" > "$3" 2>&1 || true; }
 
 echo "== 1. 默认状态：自修改开、不剪枝、一个补丁都没挂 =="
 run '::mod\n::patch\n::stats\n' o1

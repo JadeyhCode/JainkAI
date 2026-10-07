@@ -138,6 +138,14 @@
      真正的开销是 build_aip 16.3s 与 26 个探针编译 11s，改成**两条路并行** + 探针编译**内容哈希缓存**：
      第 0 步 29s → 25.5s（全新编译）/ **17.3s（缓存命中）**）
 
+七点五、外部评审（DeepSeek 分享）核账 —— 已完成（详见 audit §6.48）
+  · 7 条里 **6 条成立、1 条不成立**：features.sh 的"语境退役"断言**双重假**（两分支都 ok +
+    路径没带 $ROOT）已改成可证伪并证伪测过；hypo_frames 被换行劈开的 printf 接回；
+    A/B 脚本的 SUITES 收口成 tests/ab_suites.txt（唯一一份）；BRE 数字模式、8 个脚本的
+    printf "$1"、probes_build 注释漂移一并修掉。不成立的那条：exclusivity 实测 70ms，0.0s 是真的。
+  · **停放点（§6.49）**：受审的**外部执行 + 写文件**通道还没开始 —— 设计要点（action.h、白名单、
+    超时、元字符拒绝、输出当观测走意图队列、tests/action.sh 看护）已经写在 audit §6.49，明天接着做。
+
 八、省时间纪律（用户明确要求，务必照做）
   · 迭代**只跑受影响的那几套**（sh tests/features.sh 10–40 秒）；整包（并行 ≈70 秒）只在批次收尾跑一次
   · 开关对照：`SUITES="features tokenop relations selfmod" SKIP_BASE=1 ONLY=affect sh tests/switches_ab.sh`（≈1 分钟）

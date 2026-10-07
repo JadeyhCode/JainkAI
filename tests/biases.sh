@@ -26,7 +26,7 @@ for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done
 pass=0; fail=0
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
-run() { cp model.bin m.bin; printf "$1" | ./aip --model m.bin > "$2" 2>&1 || true; }
+run() { cp model.bin m.bin; printf '%b' "$1" | ./aip --model m.bin > "$2" 2>&1 || true; }
 
 echo "== ① 因果猜想：一次=暂时，协变才升格，且永远是猜想 =="
 # 「我 知道 ： 猫 吃 鱼」是同一输入下的稳定答复，所以 (我的答复词 → 你的输入词)

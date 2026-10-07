@@ -1,0 +1,8 @@
+# tests/ab_suites.txt — A/B 脚本默认只跑这几套：**唯一一份**
+#
+# `tests/thinkout_ab.sh` 与 `tests/premiseout_ab.sh` 都读这一份（以前各自抄了一行，
+# 外部评审点出来的"同一份清单两处写"）。改了这套清单只改这里；要临时换：
+#     SUITES="features tokenop" sh tests/thinkout_ab.sh
+# 挑这几套的理由：它们是**会被"输出侧/前提侧开关"影响到**的那几套
+# （关系/推导/反事实/四局限/独占/假设帧/思维链/思维循环）。
+relations derivation hypothesis logic4 exclusivity hypo_frames cot thinking
