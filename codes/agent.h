@@ -5,6 +5,7 @@
 #define AGENT_H
 
 #include "ai.h"
+#include "affect.h"
 #include "frame_io.h"
 
 typedef const char *(*AgentPerceiveFn)(void *user);
@@ -715,12 +716,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     ai->pool->current_tick++;
     a->cycle++;
     /* 情绪参与决策（默认关）：先把驱动量折算成这一轮的参数修正，再走后面的流程。 */
-    ai_affect_step(ai);
-    if (ai->affect_on && ai->affect_d_gen) {
+    affect_policy_step(ai);            /* 情绪层（内核之外）折算预算修正 */
+    if (ai->affect_d_gen) {
         int g = 6 + ai->affect_d_gen;                  /* 6 = 默认 max_gen */
         ai->max_gen = (g < 1) ? 1 : g;
     }
-    if (ai->affect_on && ai->affect_d_cutoff != 0.0f) {
+    if (ai->affect_d_cutoff != 0.0f) {
         float c = 0.05f + ai->affect_d_cutoff;         /* 0.05 = 默认 cutoff */
         ai->cutoff = (c < 0.01f) ? 0.01f : (c > 0.30f ? 0.30f : c);
     }

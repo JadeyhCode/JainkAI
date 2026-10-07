@@ -39,9 +39,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 CORPUS=${1:-_corpus.txt}
 
-echo "=== 0/31 编译（严格零警告）==="
+echo "=== 0/31 编译（严格零警告 + 所有探针）==="
 gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_aip main.c -lm
 echo "BUILD OK"
+# 探针也要编译得过、跑得出结论 —— 它们是"把拍的变成量的"那件工具，自己不能没看护。
+# （血泪：affectprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
+sh tests/probes_build.sh
 
 fail=0
 step() {   # $1=N/M  $2=名字  $3=命令

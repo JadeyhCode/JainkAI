@@ -2233,7 +2233,7 @@ int main(int argc, char **argv) {
                     else if (!strcmp(arg, "off")) a->brain->affect_on = 0;
                     else { printf("[用法] ::drive [on|off]\n"); continue; }
                 }
-                ai_affect_step(a->brain);
+                affect_policy_step(a->brain);
                 printf("[情绪参与决策 = %s]\n", a->brain->affect_on ? "开" : "关（默认）");
                 printf("  当前驱动：舒适=%.2f 唤醒=%.2f 疲劳=%.2f\n",
                        a->brain->inner.comfort, a->brain->inner.arousal, a->brain->inner.fatigue);

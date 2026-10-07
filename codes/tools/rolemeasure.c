@@ -3,6 +3,7 @@
 #include "../model_io.h"
 #include <stdio.h>
 int main(int argc, char **argv) {
+    (void)argc; (void)argv;
     AI *ai = ai_load_file(argv[1]);
     if (!ai) { printf("load fail\n"); return 1; }
     size_t n_rep = 0, out_rep = 0, out_all = 0, dead = 0;

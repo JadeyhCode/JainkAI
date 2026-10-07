@@ -3,6 +3,7 @@
 #include "../model_io.h"
 #include <stdio.h>
 int main(int argc, char **argv) {
+    (void)argc; (void)argv;
     AI *ai = ai_load_file(argv[1]);
     FILE *f = fopen(argv[2], "r"); char line[512];
     size_t n_novel = 0, n_syn = 0;

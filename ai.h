@@ -841,6 +841,12 @@ static inline int ai_source_class_pct(const AI *ai, uint8_t role) {
 /* ---- 前提的第三档：前提本身**有据**吗（借 "evaluated vs asserted" 的二分）----
  * 「够得着」只说明它现在能被想到；「有据」说明它本身是图上站得住的东西：
  * 不是临时草稿、有足够多带命中的观测边。 */
+/* 阈值**量过了**（`tools/premholdprobe.c`）：出厂模型 1070 个内容词里，
+ *   有据度（命中≥2 的非推论实边条数）分位 p10=0 / **p50=3** / p90=44，
+ *   17.9% 的词一条都没有。所以 `≥3 条` 正好是**中位数** → 它把词一分为二（53.1% 算"有据"）；
+ *   `命中≥2` 与 ≥1/≥3/≥4 几乎没差别（53.1/53.1/53.0/52.8%）→ 这个数不敏感，留着没坏处。
+ * 照实说：出厂模型里**一条前提链接都没有**（0 条），所以三档差异只在"现场建了前提"的会话里
+ *   体现 —— 整包在 `AIP_PREMHOLD=verified` 下全绿是**预期**，不是"它没作用"的证据。 */
 #define AI_PREMISE_MIN_EDGES 3
 #define AI_PREMISE_MIN_HITS  2
 static inline int ai_premise_wellfounded(const AI *ai, const Token *p) {

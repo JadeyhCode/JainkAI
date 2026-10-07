@@ -608,7 +608,9 @@ typedef struct {
     size_t  n_write_blocked;        /* 被写入闸门挡下来的条数（账要对得上） */
     size_t  writes[AI_WSRC_N];
     int     route_writes;
-    /* 情绪/驱动参与决策（默认关）：一张**耦合表**说了算，见 ai_affect_step。
+    /* **这三个是内核唯一"情绪相关"的东西：三个普通数字**（默认 0）。
+     * 内核不知道它们是怎么来的 —— 情绪那张耦合表在**内核之外**（`affect.h` 层），
+     * 由代理循环每轮折算一次（用户裁定：情绪不进内核）。
      * 开着的时候每轮把驱动量折算成参数修正（思考预算 / 生成长度 / 激活阈值）。 */
     int     affect_on;
     /* 前提成立的**判据档**（0 = 只看注意窗口（默认）；1 = 窗口里没有时，还在图上"够得着"也算）。
@@ -761,52 +763,7 @@ static inline void ai_init_expr_pools(AI *ai) {
     }
 }
 
-/* ============================ 情绪 / 驱动参与决策（#6b） ============================
- *
- * 用户点过的「情绪参与决策」。做成**一张表**（一行一个耦合），不是散落的 if：
- *   `驱动量 → 参数 → 区间与增减`。默认**关**（`::affect on` 打开）—— 它改的是
- *   思考预算/生成长度/激活阈值这类行为参数，按规矩先实现、先 A/B。
- *
- * 为什么值得有：疲劳高还硬想很久、唤醒低还硬凑长句，都不像人。
- * 表的好处是**可解释**：`::drive` 把"哪个驱动把哪个参数改了多少"直接列出来。 */
-typedef struct {
-    const char *drive;   /* 驱动量名 */
-    const char *param;   /* 改哪个参数 */
-    float  lo, hi;       /* 驱动量落在这个区间才起作用 */
-    int    delta;        /* 作用量（步数/词数/百分之一阈值） */
-    const char *note;
-} AffectCoupling;
 
-/* ⚠ 区间是**量出来的**，不是拍的（`tools/affectprobe.c` 回放两种输入）：
- *     硬输入（陌生语料 150 行）：舒适 p05/p50/p95 = 0.10/0.11/0.40，唤醒 0.73/0.90/0.90，
- *                                 疲劳 0.01/0.07/0.14，不适 0.40/0.93/0.99
- *     熟输入（关系库/帧库 100 行）：舒适 0.12/0.32/0.58，唤醒 0.46/0.80/0.90，
- *                                 疲劳 0.01/0.05/0.10，不适 0.12/0.63/0.95
- * 量出来的三件事（照实说）：
- *   ① 疲劳**到不了 0.60**（每轮 +0.001，睡眠清零 → 一个周期最多 ~0.2）→ 原来那行**永远不触发**；
- *   ② 唤醒**到不了 0.25**（它 = 预测对不对的低通，最低也 0.46）→「迷糊时少说两句」也**永不触发**；
- *   ③ 舒适与唤醒的相关系数 **r=0.91**（都是"猜得准不准"的函数）→ 两行其实在说同一件事。
- * 所以：把疲劳区间按实测下移到 p90 附近；把永不触发的"唤醒低"换成**真正会低**的量（不适高）；
- * 给舒适补一条对称的"舒服时敢想远一点"。 */
-static const AffectCoupling AI_AFFECT[] = {
-    { "疲劳", "思考步数", 0.08f, 1.00f, -4, "这一轮工作周期快到头了 → 少想几步（睡一觉就回来）" },
-    { "唤醒", "生成长度", 0.70f, 1.00f, +2, "警醒时多说两句" },
-    { "不适", "生成长度", 0.90f, 1.00f, -1, "完全没底时少说两句" },
-    { "舒适", "激活阈值", 0.00f, 0.35f, +3, "不舒服时保守一点（阈值抬高 0.03）" },
-    { "舒适", "激活阈值", 0.55f, 1.00f, -2, "舒服时敢想远一点（阈值降 0.02）" },
-    { NULL, NULL, 0, 0, 0, NULL }
-};
-#define AI_AFFECT_N ((sizeof AI_AFFECT / sizeof AI_AFFECT[0]) - 1)
-
-/* 取某个驱动量的当前值（0..1） */
-static inline float ai_drive_value(const AI *ai, const char *drive) {
-    if (!ai || !drive) return 0.0f;
-    if (!strcmp(drive, "舒适")) return ai->inner.comfort;
-    if (!strcmp(drive, "唤醒")) return ai->inner.arousal;
-    if (!strcmp(drive, "疲劳")) return ai->inner.fatigue;
-    if (!strcmp(drive, "不适")) return ai->inner.discomfort;   /* 惊讶水平的低通 */
-    return 0.0f;
-}
 
 /* 每轮按表把驱动折算成参数修正（**只在 affect_on 时**动）。
  * 这里只**算出修正量**并记下来；真正施加在用到参数的地方（思考预算在 think_of，
@@ -884,6 +841,12 @@ static inline int ai_source_class_pct(const AI *ai, uint8_t role) {
 /* ---- 前提的第三档：前提本身**有据**吗（借 "evaluated vs asserted" 的二分）----
  * 「够得着」只说明它现在能被想到；「有据」说明它本身是图上站得住的东西：
  * 不是临时草稿、有足够多带命中的观测边。 */
+/* 阈值**量过了**（`tools/premholdprobe.c`）：出厂模型 1070 个内容词里，
+ *   有据度（命中≥2 的非推论实边条数）分位 p10=0 / **p50=3** / p90=44，
+ *   17.9% 的词一条都没有。所以 `≥3 条` 正好是**中位数** → 它把词一分为二（53.1% 算"有据"）；
+ *   `命中≥2` 与 ≥1/≥3/≥4 几乎没差别（53.1/53.1/53.0/52.8%）→ 这个数不敏感，留着没坏处。
+ * 照实说：出厂模型里**一条前提链接都没有**（0 条），所以三档差异只在"现场建了前提"的会话里
+ *   体现 —— 整包在 `AIP_PREMHOLD=verified` 下全绿是**预期**，不是"它没作用"的证据。 */
 #define AI_PREMISE_MIN_EDGES 3
 #define AI_PREMISE_MIN_HITS  2
 static inline int ai_premise_wellfounded(const AI *ai, const Token *p) {
@@ -1002,18 +965,6 @@ static inline const char *ai_write_layer(double imp) {
     return "情境层（随口一说）";
 }
 
-static inline void ai_affect_step(AI *ai) {
-    ai->affect_d_steps = 0; ai->affect_d_gen = 0; ai->affect_d_cutoff = 0.0f;
-    if (!ai || !ai->affect_on) return;
-    for (size_t i = 0; i < AI_AFFECT_N; ++i) {
-        const AffectCoupling *c = &AI_AFFECT[i];
-        float v = ai_drive_value(ai, c->drive);
-        if (v < c->lo || v > c->hi) continue;
-        if (!strcmp(c->param, "思考步数")) ai->affect_d_steps += c->delta;
-        else if (!strcmp(c->param, "生成长度")) ai->affect_d_gen += c->delta;
-        else if (!strcmp(c->param, "激活阈值")) ai->affect_d_cutoff += (float)c->delta / 100.0f;
-    }
-}
 
 /* ============================ 开关 / 钩子的**唯一**默认值处 ============================
  *

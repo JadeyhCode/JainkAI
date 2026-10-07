@@ -9,6 +9,7 @@
  *       每行都按 `AI_AFFECT` 表算一次命中，统计**每一行命中次数**与驱动量的分布。
  */
 #include "../agent.h"
+#include "../affect.h"
 #include "../model_io.h"
 #include <stdio.h>
 #include <math.h>
@@ -48,7 +49,7 @@ int main(int argc, char **argv) {
         ag.brain = ai;
         char out[512];
         (void)agent_step(&ag, line, out, sizeof out);
-        ai_affect_step(ai);          /* 一轮结束后再折算（就是实际生效的那一步） */
+        affect_policy_step(ai);          /* 一轮结束后再折算（就是实际生效的那一步） */
         for (size_t i = 0; i < AI_AFFECT_N; ++i) {
             const AffectCoupling *c = &AI_AFFECT[i];
             float v = ai_drive_value(ai, c->drive);

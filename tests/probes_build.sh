@@ -51,4 +51,5 @@ run_probe() {   # run_probe <二进制> <日志名> <出错时该看到的模式
 run_probe d4probe     d4.log     "当前阈值" "$MODEL" "$CORPUS" 200
 run_probe wgateprobe  wgate.log  "关系边"   "$MODEL"
 run_probe affectprobe affect.log "耦合表命中" "$MODEL" "$CORPUS" 30
+run_probe premholdprobe premhold.log "阈值扫描" "$MODEL"
 echo "PROBES OK"

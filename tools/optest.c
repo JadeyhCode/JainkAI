@@ -1243,10 +1243,15 @@ static void test_struct_affect_order(void) {
         ai->inner.fatigue = 0.0f; ai->inner.arousal = 0.8f;
         affect_policy_step(ai);
         ok(ai->affect_d_gen > 0, "唤醒高 → 生成长度加（另一行）");
-        ai->inner.arousal = 0.1f; ai->inner.comfort = 0.2f;
+        /* 表按实测重调过：「唤醒低」那行**永不触发**（唤醒最低也 0.46），
+         * 换成了**真的会低**的量 —— 不适高（没底）→ 少说。见 affect.h 的实测注释。 */
+        ai->inner.arousal = 0.1f; ai->inner.discomfort = 0.95f; ai->inner.comfort = 0.2f;
         affect_policy_step(ai);
         ok(ai->affect_d_gen < 0 && ai->affect_d_cutoff > 0.0f,
-           "迷糊 → 少说；不舒服 → 阈值抬高（保守）");
+           "没底（不适高）→ 少说；不舒服 → 阈值抬高（保守）");
+        ai->inner.discomfort = 0.1f; ai->inner.comfort = 0.8f;
+        affect_policy_step(ai);
+        ok(ai->affect_d_cutoff < 0.0f, "舒服 → 阈值降（敢想远一点）—— 对称的那一行");
         ai_free(ai);
     }
     /* ③ 时间顺序：先出现的 tick 更小 */

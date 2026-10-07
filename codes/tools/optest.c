@@ -14,6 +14,7 @@
  * 用法：gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest
  */
 #include "../agent.h"
+#include "../affect.h"
 #include "../model_io.h"
 #include "../token_lang.h"
 
@@ -1234,18 +1235,23 @@ static void test_struct_affect_order(void) {
         AI *ai = ai_new();
         ok(ai->affect_on == 0, "默认**关**（不改任何行为参数）");
         ai->inner.fatigue = 0.9f;
-        ai_affect_step(ai);
+        affect_policy_step(ai);
         ok(ai->affect_d_steps == 0, "关着的时候疲劳再高也不施加减步修正");
         ai->affect_on = 1;
-        ai_affect_step(ai);
+        affect_policy_step(ai);
         ok(ai->affect_d_steps < 0, "打开后：疲劳高 → 思考步数减（表里那一行）");
         ai->inner.fatigue = 0.0f; ai->inner.arousal = 0.8f;
-        ai_affect_step(ai);
+        affect_policy_step(ai);
         ok(ai->affect_d_gen > 0, "唤醒高 → 生成长度加（另一行）");
-        ai->inner.arousal = 0.1f; ai->inner.comfort = 0.2f;
-        ai_affect_step(ai);
+        /* 表按实测重调过：「唤醒低」那行**永不触发**（唤醒最低也 0.46），
+         * 换成了**真的会低**的量 —— 不适高（没底）→ 少说。见 affect.h 的实测注释。 */
+        ai->inner.arousal = 0.1f; ai->inner.discomfort = 0.95f; ai->inner.comfort = 0.2f;
+        affect_policy_step(ai);
         ok(ai->affect_d_gen < 0 && ai->affect_d_cutoff > 0.0f,
-           "迷糊 → 少说；不舒服 → 阈值抬高（保守）");
+           "没底（不适高）→ 少说；不舒服 → 阈值抬高（保守）");
+        ai->inner.discomfort = 0.1f; ai->inner.comfort = 0.8f;
+        affect_policy_step(ai);
+        ok(ai->affect_d_cutoff < 0.0f, "舒服 → 阈值降（敢想远一点）—— 对称的那一行");
         ai_free(ai);
     }
     /* ③ 时间顺序：先出现的 tick 更小 */

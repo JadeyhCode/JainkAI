@@ -258,8 +258,9 @@ static inline Think *think_of(AI *ai) {
         Think *t = (Think *)calloc(1, sizeof *t);
         if (!t) return NULL;
         t->max_steps = THINK_DEF_STEPS;
-        /* 情绪参与决策（默认关）：疲劳高就少想几步 —— 修正量由 ai_affect_step 算好。 */
-        if (ai->affect_on && ai->affect_d_steps) {
+        /* 预算修正：内核**只知道有个数字**（谁算的不问 —— 情绪层在内核之外，见 affect.h）。
+         * 层关着时这个数字是 0，于是"没有情绪"和"有情绪但没命中"在这里完全一样。 */
+        if (ai->affect_d_steps) {
             int v = t->max_steps + ai->affect_d_steps;
             t->max_steps = (v < 3) ? 3 : v;
         }
