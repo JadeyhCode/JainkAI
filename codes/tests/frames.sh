@@ -9,14 +9,18 @@
 #   ③ 抽查几句，必须是新句子而不是原句复述。
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cd "$ROOT"
+# 在自己的工作目录里干活：`./trainframes frames.txt` 是**写** frames.txt 的，
+# 以前 `cd $ROOT` 跑就是**改写仓库根那份**（内容确定所以 md5 不变，但 mtime 被改、
+# 且和别的套件并行时会串台）。现在仓库根那份只读。
+WORK="$ROOT/_t/frames"
+rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 CC=${CC:-gcc}
 
-$CC -std=c11 -O2 -o trainframes trainframes.c
+$CC -std=c11 -O2 -o trainframes "$ROOT/trainframes.c"
 ./trainframes frames.txt
-$CC -std=c11 -O2 -o build_frq tools/frq.c -lm
+$CC -std=c11 -O2 -o build_frq "$ROOT/tools/frq.c" -lm
 
-PROBE=tools/probes_frames.txt
+PROBE=$ROOT/tools/probes_frames.txt
 [ -f "$PROBE" ] || { echo "FAIL: 缺 $PROBE"; exit 1; }
 
 out=$(./build_frq frames.txt "$PROBE")

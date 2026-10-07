@@ -48,8 +48,8 @@ OUT="$ROOT/_t/sw"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
 # 省时间的两档（默认仍是"整包 × 每个开关"，最慢但最全）：
-#   SKIP_BASE=1  复用上次的基线（`_t/sw/off.res`），少跑一轮整包（≈7 分钟）
-#   SUITES="a b c"  只跑受影响的几套（`tests/<名字>.sh`），每档从 ~7 分钟降到 ~1 分钟
+#   SKIP_BASE=1  复用上次的基线（`_t/sw/off.res`），少跑一轮整包（并行后 ≈70 秒；串行 6 分钟）
+#   SUITES="a b c"  只跑受影响的几套（`tests/<名字>.sh`），每档从 ~70 秒降到 ~30 秒
 # 什么时候能用 SUITES：改的东西只可能影响那几套时。改动一多就别省 —— 整包该跑还得跑。
 if [ -n "${SKIP_BASE:-}" ] && [ -f "$OUT/off.res" ]; then
     echo "复用上次基线（SKIP_BASE=1）：$(cat "$OUT/off.res")"

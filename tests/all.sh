@@ -1,91 +1,126 @@
 #!/bin/sh
-# tests/all.sh — 一把跑完全部回归
+# tests/all.sh — 一把跑完全部回归（**并行：每套一个沙箱**）
 #
-# 三十一套看护，各自盯一件事：
-#   model_roundtrip  存/读无损，且加载后行为与原地训练等价（最重的一套）
-#   features         对应 deepseek看这里.txt 的十项能力逐条核验
-#   frames           结构化帧生成（语料里没写过的句子）
-#   framegate_ab     帧读关联链产物（Gate B）的 A/B 与反面看护
-#   coining          现场造词：没见过的复合词造成 Token 并现场接线
-#   segmentation     切分可选：拆解 / 合并 / 中转词容错 / 碎片护栏
-#   cot              思维链：骨架→校验→降级 咬合，降级答复可关
-#   embed            L3 神经表示：emb 真学出来了 + 钉住它的边界
-#   relations        L2 关系层：静态知识 / 传递推理 / 对话中现学知识 / 持久化
-#   derivation       推导层：链结构化 / 验证器在验 / 缺口不断言 / 语言是投影
-#   dertest          **验证器自身的测试**：伪造/非法/断链/假依据必须被拒
-#   hypothesis       反事实：假设世界可推、不越界、能外推、**绝不进图**
-#   logic4           四个局限：多层假设 / 独占健全否定 / 假设不被接管 / 嵌套+归属
-#   exclusivity      「独占」由数据判定：可印证、可改口、改口后推理跟着变
-#   belief           归属：每个人一份信念表（持久、不进我的知识、问他就查他的）
-#   hypo_frames      假设进检索/帧层：与假设相反的话被否决，并记在链上
-#   hypo_scope       假设的作用域回溯：按序号/主语/内容撤**指定**那层
-#   prerequisite     缺前提 → 否定能力：训练数据里没有的结论也能推出来
-#   microtest        微内核自测（C 级）：队列去重/预算/每条拒绝理由/检测器/补丁故障隔离/冻结
-#   selfmod          微内核端到端（CLI）：::mod/::safe/::patch 三个入口 + 自修改结构随图存盘
-#   delibtest        思维循环自测（C 级）：议程/反方向/矛盾/跨轮/铁律/元认知/UTF-8
-#   thinking         思维循环端到端（CLI）：::delib/::pending/::thinkrun/::thinkout/::thinkbudget
-#   consolidate      推理沉淀：想通的记下来（标成推出来的）/ 复用 / 观测压过 / 撤销 / 存读
-#   cmdtable         元命令表：命令名只有一份（帮助由表生成），帮助里每条都真的认得
-#   dupcheck         清单自检：疑问词/虚词/助词/规则/关系表里没有重复项，两张 frame 词表不分家
-#   revision         观测改口语义：后说的替掉先说的（on/off A/B 对照 + 装载边界）
-#   biastest         反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化
-#   biases           反糟粕端到端（CLI）：因果要协变、不知道不说成知道、别人的看法不是我的知识
-#   optest           Token 行为/临时 Token/修正的记忆自测（C 级）：接线/插词/中转/不存盘/预算真扣
-#   tokenop          Token 行为端到端（CLI）：::op 接线插词、临时 Token 不存盘、修正的记忆持久
+# 为什么并行（用户要求省时间：整包串行一轮 5–7 分钟，一轮改动的收尾跑一次就够呛）：
+#   清单里的套件分给 JOBS 个 worker，**每条任务有自己的沙箱目录**，用完即弃：
+#     · 只读件：*.h *.c CMakeLists.txt _corpus.txt seed_full.txt → 软链回仓库（不占地方）
+#     · 会被写的：model.bin / frames.txt / relations.txt          → 真副本
+#     · tests/ tools/                                             → 真副本
+#       （套件用 ROOT=$(dirname $0)/.. 定位仓库根：这两目录若用软链，
+#         套件的 ROOT 会指回真仓库，`$ROOT/model.bin` 之类就不再是沙箱里的副本了。）
+#   于是"某套把仓库根的 frames.txt 重训一遍"这类**仓库内串台**在并行下不会发生
+#   （串行时 tests/frames.sh 真的会改写仓库根的 frames.txt —— 并行顺带把它关进沙箱）。
 #
-# 用法：sh tests/all.sh [语料文件]      默认 _corpus.txt
+# 清单在 tests/suites.txt（**唯一一份**：加套件只改那里，别在这儿再列一遍）。
+#
+# 用法：sh tests/all.sh [语料文件]                  默认 _corpus.txt
+#       JOBS=1 sh tests/all.sh                     串行（排查用；同一套沙箱机制）
+#       JOBS=8 sh tests/all.sh                     指定并行度（默认 min(nproc,8)）
+#       SUITES="features tokenop" sh tests/all.sh  只跑这几套（名字＝清单第一列）
+#
+# 产物：_t/par/<名字>.log（该套全部输出）、_t/par/<名字>.rc（退出码 + 毫秒）
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 CORPUS=${1:-_corpus.txt}
+export CORPUS
+LIST=$ROOT/tests/suites.txt
+PAR=$ROOT/_t/par
 
-echo "=== 0/31 编译（严格零警告 + 所有探针）==="
+# 锁：同一份 _t/par 不能给两个 all.sh 同时用 —— 调度靠 todo/ + mv 领取，
+# 两个实例会互相抢任务、互相 rm -rf 对方的沙箱（本轮真踩过：一个 SUITES=frames 的跑法
+# 被紧接着启动的整包挤掉，两边都用 _t/par/w1）。撞上就**立刻**退出，别浪费一次整包。
+mkdir -p "$PAR"
+if ! mkdir "$PAR/.lock" 2>/dev/null; then
+    echo "另有一个 tests/all.sh 在跑（$PAR/.lock 还在）：等它跑完再启动。"
+    echo "确认没在跑：rm -rf \"$PAR/.lock\" 之后重试（或整个 rm -rf _t/par）。"
+    exit 3
+fi
+trap 'rm -rf "$PAR/.lock"' EXIT INT TERM
+
+# —— 先把任务清单组好（SUITES 写错了要立刻报错，别让人白等第 0 步的编译+探针）——
+mkdir -p "$PAR"
+TASKS=$PAR/tasks.txt
+grep -v '^[[:space:]]*#' "$LIST" | grep -v '^[[:space:]]*$' > "$PAR/all.txt"
+if [ -n "${SUITES:-}" ]; then
+    : > "$TASKS"
+    for s in $SUITES; do
+        if grep -q "^$s|" "$PAR/all.txt"; then
+            grep "^$s|" "$PAR/all.txt" >> "$TASKS"
+        else
+            echo "清单里没有这套：$s（见 tests/suites.txt）"
+            exit 2
+        fi
+    done
+else
+    cp "$PAR/all.txt" "$TASKS"
+fi
+total=$(grep -c . "$TASKS")
+
+cpun=$(nproc 2>/dev/null || echo 4)
+JOBS=${JOBS:-$cpun}
+if [ "$JOBS" -gt 8 ]; then JOBS=8; fi
+if [ "$JOBS" -gt "$total" ]; then JOBS=$total; fi
+if [ "$JOBS" -lt 1 ]; then JOBS=1; fi
+
+echo "=== 0 编译（严格零警告 + 所有探针）==="
 gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_aip main.c -lm
 echo "BUILD OK"
 # 探针也要编译得过、跑得出结论 —— 它们是"把拍的变成量的"那件工具，自己不能没看护。
 # （血泪：affectprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
 sh tests/probes_build.sh
 
-fail=0
-step() {   # $1=N/M  $2=名字  $3=命令
-    echo "=== $1 $2 ==="
-    out=$(sh -c "$3" 2>&1) && rc=0 || rc=$?
-    printf '%s\n' "$out" | tail -2
-    [ "$rc" -eq 0 ] || { echo "  ^^^ $2 失败（exit $rc）"; fail=1; }
+# 调度只用一份实现（tests/pool.sh）；这里的两个钩子负责"每条任务一个干净沙箱"。
+. "$ROOT/tests/pool.sh"
+POOL_DIR=$PAR
+POOL_JOBS=$JOBS
+
+pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
+    SB=$PAR/w$2
+    rm -rf "$SB"; mkdir -p "$SB"
+    for f in "$ROOT"/*.h "$ROOT"/*.c "$ROOT"/CMakeLists.txt \
+             "$ROOT"/_corpus.txt "$ROOT"/seed_full.txt; do
+        if [ -e "$f" ]; then ln -s "$f" "$SB/"; fi
+    done
+    cp -a "$ROOT/tests" "$SB/tests"
+    cp -a "$ROOT/tools" "$SB/tools"
+    cp "$ROOT/model.bin" "$SB/model.bin"
+    cp "$ROOT/build_aip" "$SB/build_aip"
+    for f in frames.txt relations.txt; do
+        if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$SB/$f"; fi
+    done
+    cd "$SB"
 }
+pool_task_cleanup() { rm -rf "$PAR/w$2"; }
 
-step "1/31" "model_roundtrip" "sh tests/model_roundtrip.sh $CORPUS"
-step "2/31" "features"        "sh tests/features.sh"
-step "3/31" "frames"          "sh tests/frames.sh"
-step "4/31" "framegate_ab"    "sh tests/framegate_ab.sh"
-step "5/31" "coining"         "sh tests/coining.sh"
-step "6/31" "segmentation"    "sh tests/segmentation.sh"
-step "7/31" "cot"             "sh tests/cot.sh"
-step "8/31" "embed"           "gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -o build_slotprobe tools/slotprobe.c -lm && sh tests/embed.sh"
-step "9/31" "relations"       "sh tests/relations.sh"
-step "10/31" "derivation"     "sh tests/derivation.sh"
-step "11/31" "dertest"        "gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin | tail -12"
-step "12/31" "hypothesis"    "sh tests/hypothesis.sh"
-step "13/31" "logic4"        "sh tests/logic4.sh"
-step "14/31" "exclusivity"   "sh tests/exclusivity.sh"
-step "15/31" "belief"        "sh tests/belief.sh"
-step "16/31" "hypo_frames"   "sh tests/hypo_frames.sh"
-step "17/31" "hypo_scope"    "sh tests/hypo_scope.sh"
-step "18/31" "prerequisite"  "sh tests/prerequisite.sh"
-step "19/31" "microtest"     "gcc -std=c11 -O2 -Wall -Wextra -o build_microtest tools/microtest.c -lm && ./build_microtest | tail -3"
-step "20/31" "selfmod"       "sh tests/selfmod.sh"
-step "21/31" "delibtest"     "gcc -std=c11 -O2 -Wall -Wextra -o build_delibtest tools/delibtest.c -lm && ./build_delibtest | tail -3"
-step "22/31" "thinking"      "sh tests/thinking.sh"
-step "23/31" "consolidate"   "sh tests/consolidate.sh"
-step "24/31" "cmdtable"      "sh tests/cmdtable.sh"
-step "25/31" "dupcheck"      "gcc -std=c11 -O2 -Wall -Wextra -o build_dupcheck tools/dupcheck.c -lm && ./build_dupcheck | tail -3"
-step "26/31" "revision"     "sh tests/revision.sh"
-step "27/31" "biastest"      "gcc -std=c11 -O2 -Wall -Wextra -o build_biastest tools/biastest.c -lm && ./build_biastest | tail -3"
-step "28/31" "biases"        "sh tests/biases.sh"
-step "29/31" "optest"        "gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest | tail -3"
-step "30/31" "tokenop"       "sh tests/tokenop.sh"
+echo "=== 跑 $total 套（JOBS=$JOBS，每条一个沙箱）==="
+start=$(date +%s%N)
+pool_run "$TASKS"
+end=$(date +%s%N)
 
-echo "=== 31/31 交互冒烟（读盘后各派生层是否都在 + 混合模式 + 开关）==="
+pass=0; fail=0; failed=""
+for f in "$PAR"/*.rc; do
+    [ -f "$f" ] || continue
+    name=${f##*/}; name=${name%.rc}
+    read -r rc ms < "$f" || continue
+    if [ "$rc" -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); failed="$failed $name"; fi
+done
+# 硬门：结果文件数必须等于任务数。少了就是"有任务没留下退出码"（worker 被杀、
+# 沙箱建不起来之类）—— 那种情况汇总看着是绿的，其实有套件根本没跑。宁可变红。
+nres=$(ls "$PAR"/*.rc 2>/dev/null | wc -l)
+if [ "$nres" -ne "$total" ]; then
+    echo "  ^^^ 结果文件数（$nres）≠ 任务数（$total）：有套件没留下退出码，汇总不可信"
+    fail=1
+fi
+for name in $failed; do
+    echo
+    echo "--- $name 失败（最后 20 行；全文 _t/par/$name.log）---"
+    tail -20 "$PAR/$name.log"
+done
+echo
+echo "=== 套件结果：$total 套，通过 $pass，失败 $fail，用时 $(( (end-start)/1000000000 ))s（JOBS=$JOBS）==="
+
+echo "=== 收官：交互冒烟（读盘后各派生层是否都在 + 混合模式 + 开关）==="
 # 硬断言：读盘之后**派生层**必须都在。这几层不进模型文件、靠加载器现读/现算，
 # 曾经因为一次字符串替换把 ai_embed_build + frames_load 删掉，
 # 症状只是「帧库空了」→ 帧层与思维链步骤静默消失，而 roundtrip 照样 PASS
