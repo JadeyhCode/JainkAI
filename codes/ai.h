@@ -608,11 +608,11 @@ typedef struct {
     size_t  n_write_blocked;        /* 被写入闸门挡下来的条数（账要对得上） */
     size_t  writes[AI_WSRC_N];
     int     route_writes;
-    /* **这三个是内核唯一"情绪相关"的东西：三个普通数字**（默认 0）。
-     * 内核不知道它们是怎么来的 —— 情绪那张耦合表在**内核之外**（`affect.h` 层），
-     * 由代理循环每轮折算一次（用户裁定：情绪不进内核）。
+    /* **这三个是内核唯一知道的东西：三个普通数字**（默认 0）。
+     * 内核不知道它们是怎么来的 —— 那张耦合表在**内核之外**（`drive.h` 层），
+     * 由代理循环每轮折算一次（用户裁定：情绪不进内核，层的名字也就改成了"驱动"）。
      * 开着的时候每轮把驱动量折算成参数修正（思考预算 / 生成长度 / 激活阈值）。 */
-    int     affect_on;
+    int     drive_on;
     /* 前提成立的**判据档**（0 = 只看注意窗口（默认）；1 = 窗口里没有时，还在图上"够得着"也算）。
      * 用户点过的局限：前提成立只看"提到过没有"，不看"是不是真的成立/想得到"。
      * 第二档是**图内**判据：从当前注意窗口出发扩散两步，前提被激活到阈值就算成立。 */
@@ -632,8 +632,8 @@ typedef struct {
     int     trigger_norm;
     /* 唯一时间核的 γ（0 = 用默认）。衰减/新近**只许**通过 ai_recency_weight 走。 */
     float   time_gamma;
-    int     affect_d_steps, affect_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
-    float   affect_d_cutoff;
+    int     drive_d_steps, drive_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
+    float   drive_d_cutoff;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -768,14 +768,14 @@ static inline void ai_init_expr_pools(AI *ai) {
         ai->expr_root[i] = pool_token_intern(ai->pool, names[i]);
         for (int j = 0; j < 5 && variants[i][j]; ++j) {
             Token *v = pool_token_intern(ai->pool, variants[i][j]);
-            token_add_assoc_unique(ai->expr_root[i], NULL, 0, v);
+            token_add_assoc_unique(ai->expr_root[i], v);
         }
     }
 }
 
 
 
-/* 每轮按表把驱动折算成参数修正（**只在 affect_on 时**动）。
+/* 每轮按表把驱动折算成参数修正（**只在 drive_on 时**动）。
  * 这里只**算出修正量**并记下来；真正施加在用到参数的地方（思考预算在 think_of，
  * 生成长度/阈值在 agent_step）—— 一处算、一处用，别两头各改一遍。 */
 /* ============================ 唯一时间核（时间衰减只许走这里） ============================
@@ -1080,9 +1080,9 @@ static inline void ai_switches_init(AI *ai) {
     ai->last_write_imp = -1.0;       /* -1 = 还没写过任何关系事实 */
     ai->last_write_hops = ai->last_write_cred = ai->last_write_ev = -1;
     ai->route_writes = 0;
-    ai->affect_on = 0;
+    ai->drive_on = 0;
     { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
-    { const char *af = getenv("AIP_AFFECT"); if (af && af[0] == '1') ai->affect_on = 1; }
+    { const char *af = getenv("AIP_DRIVE"); if (af && af[0] == '1') ai->drive_on = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
     { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }
@@ -1161,18 +1161,18 @@ static inline AI *ai_new(void) {
     ai->good        = pool_token_intern(ai->pool, "[符号:好]");
     ai->bad         = pool_token_intern(ai->pool, "[符号:坏]");
     ai->unknowing   = pool_unknowing(ai->pool);
-    ai->causal      = pool_token_intern(ai->pool, "[因果]");
+    ai->causal      = pool_token_intern(ai->pool, AI_CAUSAL_MARK);   /* 名字只有一处：token.h */
     ai->social_good = pool_token_intern(ai->pool, "[社会:对]");
     ai->social_bad  = pool_token_intern(ai->pool, "[社会:错]");
     ai->past_self   = pool_token_intern(ai->pool, "[我:过去]");
     ai->future_self = pool_token_intern(ai->pool, "[我:未来]");
     ai->split_tok   = pool_token_intern(ai->pool, AI_DIALOG_SPLIT_NAME);
 
-    token_add_assoc_unique(ai->self, NULL, 0, ai->good);
-    token_add_assoc_unique(ai->self, NULL, 0, ai->bad);
-    token_add_assoc_unique(ai->self, NULL, 0, ai->unknowing);
-    token_add_assoc_unique(ai->self, NULL, 0, ai->past_self);
-    token_add_assoc_unique(ai->self, NULL, 0, ai->future_self);
+    token_add_assoc_unique(ai->self, ai->good);
+    token_add_assoc_unique(ai->self, ai->bad);
+    token_add_assoc_unique(ai->self, ai->unknowing);
+    token_add_assoc_unique(ai->self, ai->past_self);
+    token_add_assoc_unique(ai->self, ai->future_self);
 
     ai_init_expr_pools(ai);
     return ai;
@@ -1615,10 +1615,8 @@ static inline uint32_t ai_edge_weight(const AI *ai, const AssocEntry *e) {
     if (ai->focus_n > 0) {
         float fw = ai_focus_get(ai, e->main);
         if (fw > 0.0f) w = (uint32_t)((float)w * (1.0f + fw * 2.0f));
-        for (uint8_t k = 0; k < e->n_subs; ++k) {
-            float sw = ai_focus_get(ai, e->subs[k]);
-            if (sw > 0.0f) w = (uint32_t)((float)w * (1.0f + sw));
-        }
+        /* v10：边上没有语境字段了，所以不再有"语境词也在注意环里 → 再加权"那一档
+         * （那一档只在带语境的边上生效，而出厂模型一条都没有）。 */
     }
     return w;
 }
@@ -1631,7 +1629,7 @@ static inline Token *ai_predict_readonly(const AI *ai, Token *cur) {
     uint32_t best_w = 0;
     for (size_t i = 0; i < cur->count; ++i) {
         AssocEntry *e = &cur->assocs[i];
-        if (e->n_subs > 0 || e->n_not > 0) continue;
+        if (edge_is_causal_guess(e)) continue;   /* 因果猜想不是知识，预测不认它 */
         if (e->mem_state >= MEM_DORMANT) continue;
         if (e->main && e->main->name && e->main->name[0] == '[') continue;  /* 跳过原语 */
         uint32_t w = ai_edge_weight(ai, e);
@@ -1643,7 +1641,7 @@ static inline void ai_weaken_edge(Token *from, Token *to) {
     if (!from || !to) return;
     for (size_t i = 0; i < from->count; ++i) {
         AssocEntry *e = &from->assocs[i];
-        if (e->main != to || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != to || edge_is_causal_guess(e)) continue;
         if (e->hits > 0) e->hits--;
         if (e->hits == 0 && e->mem_state == MEM_ACTIVE) e->mem_state = MEM_FADING;
         return;
@@ -1823,7 +1821,7 @@ static inline void ai_learn_expression(AI *ai, ExprMode mode, int feedback) {
         Token *ctx = ai->focus_ring[i];
         if (!ctx || ctx->is_garbage) continue;
         if (feedback > 0) {
-            token_add_assoc_unique(ctx, NULL, 0, root);
+            token_add_assoc_unique(ctx, root);
             for (size_t k = 0; k < ctx->count; ++k)
                 if (ctx->assocs[k].main == root) {
                     token_touch_entry(ctx, &ctx->assocs[k]);
@@ -1868,7 +1866,7 @@ static inline int ai_is_reply_end(const Token *t) {
 
 /* 这条边能不能走（结构性的过滤，和角色无关） */
 static inline int ai_edge_walkable(const AI *ai, const AssocEntry *e, float energy) {
-    if (e->n_subs > 0 || e->n_not > 0) return 0;
+    if (edge_is_causal_guess(e)) return 0;   /* 因果猜想不参与走边（v10：判据在动作槽上） */
     if (e->mem_state >= MEM_DORMANT) return 0;
     if (e->mem_state == MEM_FADING && energy < 0.5f) return 0;
     /* hits==0 的边是「建了但没在任何语料上下文里被强化过」的残留
@@ -2960,7 +2958,7 @@ static inline void ai_form_abstractions(AI *ai) {
             for (size_t k = 0; k < a->count; ++k) {
                 Token *m = a->assocs[k].main;
                 if (!m || m == ai->good || m == ai->bad) continue;
-                token_add_assoc_unique(c, NULL, 0, m);
+                token_add_assoc_unique(c, m);
             }
             created++; ai->n_abstractions++;
             break;
@@ -3101,11 +3099,8 @@ static inline void ai_gc(AI *ai) {
             AssocEntry *e = &t->assocs[j];
             int remove = 0;
             if (e->main && e->main->is_garbage) remove = 1;
+            if (!remove && e->action && e->action->is_garbage) remove = 1;
             if (!remove && e->mem_state >= del_state) remove = 1;
-            for (uint8_t k = 0; !remove && k < e->n_subs; ++k)
-                if (e->subs[k]->is_garbage) remove = 1;
-            for (uint8_t k = 0; !remove && k < e->n_not; ++k)
-                if (e->subs_not[k]->is_garbage) remove = 1;
             if (remove) {
                 memmove(e, e + 1, (t->count - j - 1) * sizeof *e);
                 t->count--; ai->n_gc_deleted_edges++;
@@ -3128,15 +3123,17 @@ static inline void ai_set_last_output(AI *ai, Token **toks, size_t n) {
     memcpy(ai->last_output, toks, n * sizeof *toks);
     ai->last_output_n = n;
 }
-/* 找一条**因果猜想**边：`from -[因果]-> to`（带 [因果] 语境标记的那条）。
+/* 找一条**因果猜想**边：`from -[因果]→ to`（动作槽上挂 `[因果]` 标记的那条）。
  * 单独一个查询函数，是因为「学因果」和「削弱因果」必须按同一个判据找 ——
- * 削弱原来走 ai_weaken_edge（它要求 n_subs==0），于是**永远匹配不上**，
- * 反事实成了空转（见 ai_learn_counterfactual 的注释）。 */
+ * 削弱原来走 ai_weaken_edge（它只认"普通知识边"），于是**永远匹配不上**，
+ * 反事实成了空转（见 ai_learn_counterfactual 的注释）。
+ * v10 起判据在**动作槽**上（语境字段已删）：edge_is_causal_guess()。 */
 static inline AssocEntry *ai_causal_edge(Token *from, Token *to, const Token *causal) {
-    if (!from || !to || !causal) return NULL;
+    (void)causal;   /* 判据只有一处（按标记名），不再需要调用方传标记对象 */
+    if (!from || !to) return NULL;
     for (size_t i = 0; i < from->count; ++i) {
         AssocEntry *e = &from->assocs[i];
-        if (e->main != to || e->n_subs != 1 || e->subs[0] != causal) continue;
+        if (e->main != to || !edge_is_causal_guess(e)) continue;
         return e;
     }
     return NULL;
@@ -3151,8 +3148,8 @@ static inline AssocEntry *ai_causal_edge(Token *from, Token *to, const Token *ca
  * 以及「出现一百次和出现一次没有区别」（从不更新这条猜想有多可信）。
  *
  * 三条护栏，保证「见得多」**不会**把它变成知识：
- *   ① 永远带 [因果] 语境标记 → 关系层/知识查询（rel_direct_* 要求 n_subs==0）认不出它；
- *   ② 永远不参与走边（ai_edge_walkable 直接挡掉带语境的边）；
+ *   ① 动作槽上永远挂着 `[因果]` 标记 → 关系层/知识查询（rel_direct_*）认不出它；
+ *   ② 永远不参与走边（ai_edge_walkable 直接挡掉因果猜想边）；
  *   ③ 升格只写 hits/mem_state（参数层），**不建新边、不改结构**。 */
 static inline void ai_learn_causal(AI *ai, char **words, size_t n) {
     if (!ai || ai->last_output_n == 0 || n == 0) return;
@@ -3173,10 +3170,11 @@ static inline void ai_learn_causal(AI *ai, char **words, size_t n) {
                 }
                 continue;
             }
-            Token *subs[1] = { ai->causal };
-            if (token_add_assoc_unique(did, subs, 1, observed) != 0) continue;
-            /* 刚建的那条一定在**最后一个**位置：一次巧合 = 暂时（会淡、可被反例雪藏） */
-            AssocEntry *ne = &did->assocs[did->count - 1];
+            /* v10：因果猜想边 = **动作槽上挂 `[因果]` 的边**（语境字段已删）。
+             * 落边用 (main, action) 去重：普通观测边可以同时存在，两条互不覆盖。 */
+            AssocEntry *ne = token_add_assoc_action_unique(did, observed, ai->causal);
+            if (!ne) continue;
+            /* 一次巧合 = 暂时（会淡、可被反例雪藏） */
             ne->hits = 1;
             ne->mem_state = MEM_FADING;
             ai->n_causal_seen++;
@@ -3209,8 +3207,8 @@ static inline void ai_learn_counterfactual(AI *ai, char **words, size_t n) {
             Token *observed = pool_token_intern(ai->pool, words[j]);
             if (!observed || observed == didnt_do) continue;
             /* 「我没做 X，可 Y 还是发生了」⟹ X 不是 Y 的原因 —— 削弱那条猜想。
-             * 踩过的坑：这里原来调 ai_weaken_edge，而它要求 n_subs==0，
-             * 因果边带 [因果] 语境（n_subs==1）→ **永远匹配不上**：
+             * 踩过的坑：这里原来调 ai_weaken_edge，而它只认"普通知识边"，
+             * 因果猜想边（当时靠语境字段标出来）→ **永远匹配不上**：
              * 反事实从来没生效过，计数器却每次 +1（机制在，行为不在）。 */
             if (ai_weaken_causal(didnt_do, observed, ai->causal))
                 ai->n_counterfactual++;
@@ -3253,12 +3251,12 @@ static inline OtherModel *ai_meet(AI *ai, const char *name) {
     OtherModel *om = &ai->others[ai->others_n++];
     om->who = who; om->belief_of_self = NULL;
     om->trust = 0.5f; om->n_interactions = 0;
-    token_add_assoc_unique(ai->self, NULL, 0, who);
-    token_add_assoc_unique(who, NULL, 0, ai->self);
+    token_add_assoc_unique(ai->self, who);
+    token_add_assoc_unique(who, ai->self);
     char bname[64];
     snprintf(bname, sizeof bname, "[%s:认为的我]", name);
     om->belief_of_self = pool_token_intern(ai->pool, bname);
-    token_add_assoc_unique(who, NULL, 0, om->belief_of_self);
+    token_add_assoc_unique(who, om->belief_of_self);
     return om;
 }
 /* ---- 他者信念表：他说的「X R Y」存在**他**名下 ----
@@ -3343,7 +3341,7 @@ static inline void ai_social_feedback(AI *ai, OtherModel *om, int feedback) {
             if (r && r->hv) {
                 vsa_bind(om->who->hv, marker->hv, r->hv);
                 r->perspective_of = om->who;
-                token_add_assoc_unique(om->who, NULL, 0, r);
+                token_add_assoc_unique(om->who, r);
             }
         }
     }
@@ -3384,18 +3382,18 @@ static inline void ai_timeline_advance(AI *ai) {
         if (prev && prev != now) {
             if (!prev->next_in_time) prev->next_in_time = now;
             Token *rel = pool_token_intern(ai->pool, "[关系:之后]");
-            token_add_assoc_unique(prev, NULL, 0, rel);
-            token_add_assoc_unique(prev, NULL, 0, now);
+            token_add_assoc_unique(prev, rel);
+            token_add_assoc_unique(prev, now);
             token_touch(ai->past_self);
         }
     }
     ai->timeline[ai->timeline_head] = now;
     ai->timeline_head = (ai->timeline_head + 1) % AI_MAX_HISTORY;
     if (ai->timeline_n < AI_MAX_HISTORY) ai->timeline_n++;
-    if (ai->focus) token_add_assoc_unique(now, NULL, 0, ai->focus);
-    token_add_assoc_unique(ai->past_self, NULL, 0, now);
-    token_add_assoc_unique(now, NULL, 0, ai->self);
-    token_add_assoc_unique(ai->future_self, NULL, 0, ai->self);
+    if (ai->focus) token_add_assoc_unique(now, ai->focus);
+    token_add_assoc_unique(ai->past_self, now);
+    token_add_assoc_unique(now, ai->self);
+    token_add_assoc_unique(ai->future_self, ai->self);
 }
 static inline size_t ai_timeline_recent(const AI *ai, Token **out, size_t max) {
     if (!ai || ai->timeline_n == 0) return 0;
@@ -3442,11 +3440,11 @@ static inline void ai_imagine(AI *ai) {
     Token *r = pool_token(ai->pool, NULL, NULL);
     if (!r || !r->hv) return;
     vsa_bind(a->hv, b->hv, r->hv);
-    token_add_assoc_unique(r, NULL, 0, a);
-    token_add_assoc_unique(r, NULL, 0, b);
+    token_add_assoc_unique(r, a);
+    token_add_assoc_unique(r, b);
     Token *marker = pool_token_intern(ai->pool, "[想象]");
-    token_add_assoc_unique(r, NULL, 0, marker);
-    token_add_assoc_unique(ai->self, NULL, 0, r);
+    token_add_assoc_unique(r, marker);
+    token_add_assoc_unique(ai->self, r);
     ai->n_imaginations++;
     if (ai->inner.comfort > 0.8f && ai->inner.arousal < 0.3f)
         r->mem_state = MEM_FADING;
@@ -3556,7 +3554,7 @@ static inline void ai_drift_sample(AI *ai) {
             char name[64];
             snprintf(name, sizeof name, "[漂移:%s]", t->name ? t->name : "?");
             Token *d = pool_token_intern(ai->pool, name);
-            if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+            if (d) token_add_assoc_unique(ai->self, d);
             ai->n_drifts_detected++;
         }
         memcpy(t->hv_prev, t->hv, VSA_DIM);
@@ -3627,23 +3625,23 @@ static inline void ai_diagnose(AI *ai) {
     if (ai->diag.prev_lexical_diversity > 0 &&
         div < ai->diag.prev_lexical_diversity - 0.15f) {
         Token *d = pool_token_intern(ai->pool, "[诊断:自举退化]");
-        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
     }
     if (p_n > ai->diag.prev_perspective_n + 50) {
         Token *d = pool_token_intern(ai->pool, "[诊断:视角爆炸]");
-        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
     }
     if (abs_n > ai->diag.prev_abstractions + 10) {
         Token *d = pool_token_intern(ai->pool, "[诊断:抽象过度]");
-        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
     }
     if (imag_n > ai->diag.prev_imaginations + 20 &&
         useful_n <= ai->diag.prev_imagine_useful) {
         Token *d = pool_token_intern(ai->pool, "[诊断:想象噪声]");
-        if (d) token_add_assoc_unique(ai->self, NULL, 0, d);
+        if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
     }
     ai->diag.prev_lexical_diversity = div;
@@ -3798,7 +3796,7 @@ static inline void ai_write_count(AI *ai, AiWriteSrc s) {
 static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
     if (!ai || !a || !b) return 0;
     ai_write_count(ai, s);
-    return token_add_assoc_unique(a, NULL, 0, b) == 0;
+    return token_add_assoc_unique(a, b) == 0;
 }
 
 /* 关系事实（知识）：记一笔；`route_writes` 打开时**走受审通道**。

@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     printf("cat count=%zu cap=%zu assocs=%p probe=%p\n",
            cat->count, cat->cap, (void *)cat->assocs, (void *)probe);
     fflush(stdout);
-    int rc = token_add_assoc_unique(cat, NULL, 0, probe);
+    int rc = token_add_assoc_unique(cat, probe);
     printf("append rc=%d 之后 count=%zu cap=%zu assocs=%p\n",
            rc, cat->count, cat->cap, (void *)cat->assocs);
     ai_free(ai);

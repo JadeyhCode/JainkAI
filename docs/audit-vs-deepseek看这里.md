@@ -1556,12 +1556,21 @@ relations.txt"不是缺陷而是**定义**——文档改掉，不假装做了�
 #### 四、上一会话遗留的两件收尾 —— **本轮已做**
 1. `codes/` 同步：**实际漂移比记录的多** —— 13 个已改文件 + 3 个新增
    （`affect.h`、`tests/probes_build.sh`、`tools/premholdprobe.c`）都没进镜像；
-   现在 **85 个文件逐字节一致**（`cmp` 全过）。同步命令要带上 `tests/suites.txt`
-   （本轮新增的非 `*.sh` 文件）：
+   现在 **94 个文件逐字节一致**（`cmp` 全过）。**同步口令的规范形式**（§6.50 更新过一次）：
    ```
-   cp -a *.h *.c CMakeLists.txt codes/ && cp -a tests/*.sh tests/*.txt codes/tests/ && cp -a tools/*.c tools/*.txt codes/tools/
-   for f in *.h *.c CMakeLists.txt tests/*.sh tests/*.txt tools/*.c tools/*.txt; do cmp -s "$f" "codes/$f" || echo "DIFF: $f"; done
-   # ↑ tests/ 用 *.txt 通配（suites.txt、ab_suites.txt…）：以后再加数据文件不会再漏出镜像
+   # ① 改名/删除先处理（只 cp 会留下陈旧件：镜像里会同时有 affect.h 和 drive.h）
+   rm -f codes/affect.h codes/tools/affectprobe.c
+   # ② 三个目录各同步一遍（tests/ 带 *.txt 与 *.bin，tools/ 带 *.txt 与 *.sh）
+   cp -a *.h *.c CMakeLists.txt codes/
+   cp -a tests/*.sh tests/*.txt tests/*.bin codes/tests/
+   cp -a tools/*.c tools/*.txt tools/*.sh codes/tools/
+   # ③ 逐字节核对 + **双向**查陈旧件（只查一个方向会漏掉"仓里删了、镜像里还在"）
+   for f in *.h *.c CMakeLists.txt tests/*.sh tests/*.txt tests/*.bin tools/*.c tools/*.txt tools/*.sh; do
+       cmp -s "$f" "codes/$f" || echo "DIFF: $f"; done
+   comm -3 <(ls *.h *.c CMakeLists.txt tests/*.sh tests/*.txt tests/*.bin tools/*.c tools/*.txt tools/*.sh | sed 's|^|./|' | sort) \
+           <(cd codes && find . -type f | sort)      # 两列都应为空
+   # ↑ tests/ 用 *.txt/*.bin 通配（suites.txt、ab_suites.txt、v9_sample.bin…）：
+   #   以后再加数据文件不会再漏出镜像；**改名/删除要显式 rm**，cp 不会帮你删。
    ```
 2. `git add -A && git commit`：`6c1222b`（codes/ 镜像补全 + 收尾改动 + docs）。
 
@@ -2060,3 +2069,147 @@ relations.txt"不是缺陷而是**定义**——文档改掉，不假装做了�
 5. 看护 `tests/action.sh`：默认关不执行 / 白名单拒 `rm` / 超时被杀 / 写文件越界被拒 /
    输出变观测 / 审计账对得上。
 6. 纪律：默认关；A/B = "关着时整包一位不变" + "开着时新套件绿"；**存档格式 v9 不动**（新字段只进内存）。
+
+---
+
+### 6.50 本轮：#1 套件相位提速 + `affect→drive` 改名 + **删掉语境字段（模型 v10）**
+
+（用户 2026-10-07 拍板四条：①白名单"再加 grep/head/tail/sed/ls" ②**允许破 v9 写 v10**
+③确认 `affect.h→drive.h`、`::affect` 并进 `::drive`（后者本来就已经是 `::drive`）
+④release 无账 = 编译期开关 + **一套** release 冒烟。本节按这四条做的是 ②，①③ 里能做的先做。）
+
+#### 一、做了什么
+
+1. **套件相位提速（用户明确要求"能不能节省一点时间"）**
+   - 新增 `tests/prebuilt.sh`：**唯一一份**"套件要的二进制从哪来"。
+   - 9 个套件（biases/cmdtable/consolidate/features/revision/selfmod/thinking/tokenop/model_roundtrip）
+     各自 `gcc -O2 "$ROOT/main.c"`（各 ~16 s）→ 改成调它。
+   - `tests/all.sh` 第 0 步编完 `build_aip` 后，把**二进制 + 源码内容哈希**（`*.h`+`*.c`，
+     口径同 `tests/probes_build.sh`）通过 `AIP_PREBUILT` / `AIP_PREBUILT_HASH` 传给套件；
+     套件直接 `cp`，不再各编一遍。
+   - 三条路都留了活口：**单跑单套**（没设 `AIP_PREBUILT`）照旧自己编（不会偷偷用可能过期的
+     `./build_aip`）；**哈希不符**自己编并打一行说明；**`FORCE_CC=1`** 强制自己编。
+2. **`affect → drive` 改名（语义一个字没动）**
+   - `affect.h → drive.h`、`tools/affectprobe.c → tools/driveprobe.c`；
+     `AffectCoupling→DriveCoupling`、`AI_AFFECT→AI_DRIVE`、`drive_policy_step`、
+     `drive_on` / `drive_d_*` / `AIP_DRIVE`。
+   - 文件头写明"**名字的来历**"：语义一直是「内部状态 → 预算修正」，叫"情绪"名不副实。
+   - `::affect` 并进 `::drive`：命令表里**本来只有 `drive`**（`::drive on|off` 就是那个开关），
+     这一条是把显示口径（`[驱动参与决策]`）与注释一起改过来。
+3. **删掉语境字段，存档 v9 → v10**
+   - `AssocEntry` 里的 `subs[4]/subs_not[4]/n_subs/n_not` **删掉**（v9 每条边 64 字节 + 对齐）。
+   - 创建者收成 `token_add_assoc_ex(t, main, action)`；`token_add_assoc_unique(t, main)`；
+     新增 `token_find_assoc_action` / `token_add_assoc_action_unique`（因果猜想边与普通边**并存**）；
+     删掉没人用的 `token_add_assoc_multi/action/not`。
+   - **条件搬到动作槽**：前提 = `[前提]`/`[前提不]`（已有），因果猜想 = `[因果]`
+     （`AI_CAUSAL_MARK` 只有一处，`ai->causal` 也用它 intern）。判据收成两个函数：
+     `edge_premise_polarity()` / `edge_is_causal_guess()`，外加**所有"按 main 找边"循环共用的**
+     `edge_is_plain()`。
+   - 旧词池序列化 `token_pool_dump/load`（`TOKEN_MAGIC`/`TOKEN_VERSION`）**删掉**：
+     自 `model_io.h` 那份存档出现起就被取代，仓里 0 个调用者，而且它也在写语境字段。
+   - `model_io.h`：`MODEL_VERSION 10u`；写盘不再写语境两段；读盘按 `has_ctx = (mver < 10)`
+     **跳过**旧文件里那两段（读进来的旧边当**普通边**）。
+4. **看护同步**
+   - `tests/features.sh`：原来那条"语境退役"断言（文本 grep `token_lang.h` 的 `n_subs`）改成
+     两件可证伪的事 —— ① `AssocEntry` 正文不许再有那几个字段声明；② **全仓**不许再有
+     `->n_subs` / `->subs[` 之类的访问点；③ `MODEL_VERSION == 10u`。
+   - `tests/model_roundtrip.sh`：新增 **[6/6] v9 → v10** 一步（见下面"证据"里的 A/B）。
+   - `tests/biases.sh`：因果猜想的断言从显示串 `语境[[因果]]` 改到新显示 `**因果猜想**`。
+   - `tools/{optest,mdump,causalprobe,biastest}.c` 跟着改（optest 里那条"带语境的边也算新边"
+     换成了 v10 的真话：**同一对词最多一条无标记边** + 幂等不再占预算）。
+
+#### 二、证据（都能复核）
+
+| 事 | 数 |
+|---|---|
+| 整包 | **30 套全绿**（+ 收官冒烟），套件相位 **23 s**、端到端 **39.5 s**（改前 65~72 s）|
+| 快路 | 复用二进制 **9 ms** vs 自己编 **15.6 s**；哈希不符 / `FORCE_CC=1` / 单跑三条路都实测走对分支 |
+| 内存 | `sizeof(AssocEntry)` **128 → 56**（`tools/loadcheck.c` 打印；`sizeof(Token)` 152 没动）⇒ 出厂 41138 条边省 **≈2.9 MB** |
+| 文件 | 每条边少 2 字节 ⇒ `model.bin` 若另存会小 **80 KB**；**现存的 model.bin 没动**（仍是 v9，md5 `bb5142627e94a4c5e435618a35450be7`）|
+| v9 读 | 冻结样本 `tests/v9_sample.bin`（头里声明 38 Token / 25 边；**带非空语境**：`n_subs=1` / `n_subs=2+n_not=1` / 动作槽+语境同时非空）——**旧代码与新代码读出来一致**（49 Token / 25 边）；旧代码 `::edges` 打 `语境[水里]`、新代码不打 |
+| v9→v10 | v9 读进来的指纹 == 存成 v10 再读回来的指纹（`model_roundtrip` 第 ⑥ 步，逐位一致）|
+| 回归 | 改名那轮：`-Werror` 编译 + features 32 项 + optest 242 项 + 探针门全绿；v10 后：consolidate 21 / thinking 37 / biases 10 / tokenop 63 / selfmod 58 全绿 |
+
+#### 三、踩的坑（**两处返工，值得记**）
+
+1. **"删字段"不等于"把 `n_subs == 0` 那半句删掉"**。v9 里 `n_subs == 0` 同时兼职两件事：
+   ①"没有语境" ②"这不是因果猜想边"。字段删掉之后，一大批**按 main 找那条边**的循环
+   （`token_edge_is_derived` / `token_add_assoc_unique` / `token_tag_full|rel|nrel|dyn` /
+   `token_observe_pair` / `token_remove_assoc` / `token_set_action_by_target` / `micro_edge_index`）
+   开始**先撞上猜想边**。症状不是崩，是**静默失效**：`consolidate` 第 ④ 节红，
+   回答从「猫 不 有 毛（我原先记的是反的…）」变成「对，猫 -[有·记]-> 毛」，
+   而且 `::stats` 少两条边、思维链少一步。
+   修法：把兼职拆开，新增 **`edge_is_plain()`** 一个判据，上面每个循环都显式用它跳过猜想边。
+2. **`entry_matches` 一开始写成"恒真"**。它在 v9 里还兼职挡掉带语境的边（=猜想边），
+   写成恒真之后猜想边漏进联想/扩散激活/置信度信号 ⇒ `biases`/`thinking` 也红。
+   现在它是 `!edge_is_causal_guess(e)`（"唯独猜想不是知识"），并在注释里写明**别处不许再加条件**。
+
+小坑（过程性）：`sed` 用 `|` 当分隔符而模式里含 `||` ⇒ 整条命令报错退出、**一个字节没改**
+（后来一律用 `#` 当分隔符，并用编译驱动）；`var=$(grep …)` 在 `set -e` 下没匹配就退出脚本
+（断言里要 `|| true`）；测试断言盯着**显示格式**时，改显示必须同步改断言。
+
+#### 四、局限照实说
+
+- **ctx 参数链没拆**（`token.h`/`token_lang.h`/`ai.h`/`think.h` 四层约 60 处 `ctx/n_ctx`）：
+  现在它们唯一的作用是喂 `entry_matches()`。留着是因为筛选点散在 8 处、横跨四层，拆它风险大、
+  收益只是"好看"。**登记为遗留**。
+- **v9 旧文件里非空的语境字段** ⇒ 读进来当普通边：少一层条件，而且不再被"知识查询要求无语境"
+  挡住（出厂模型实测全 0 ⇒ 实际无损；手工造过的文件有这层语义漂移）。这正是
+  `tests/v9_sample.bin` 存在的意义：把这条漂移**钉住并写明**，而不是假装没有。
+- **工厂 `model.bin` 仍是 v9 文件**（md5 未变）：第一次 `::save` 之后才写 v10。
+  所以"v9 不动"那句话现在要读成"**v9 读得回来；新存是 v10**"。
+- 内存账是 `128→56` 的实测值 × 边数的算术，**没量 RSS**；文件账同理（没另存大模型对比）。
+- `tools/v9gen.c` 生成器**已删**（v10 之后它编译不了），样本本体冻在 `tests/v9_sample.bin`
+  （82 KB；源码与复现命令见本节末尾）。
+
+#### 五、下一步
+
+见 `deepseek看这里.txt` 开头那份**唯一**清单（本轮做完第 1、2 条，下一件是第 3 条 `action.h`）。
+
+#### 附：v9 样本生成器源码（**留档**，已从 tools/ 删除）
+
+```c
+/* tools/v9gen.c — 一次性的：造一个 v9 存档（带非空语境字段），给 v9→v10 迁移看护当输入。
+ * 复现：git checkout fcad3f0 -- . && 把本文件写进 tools/v9gen.c
+ *       gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_v9gen tools/v9gen.c -lm
+ *       ./build_v9gen tests/v9_sample.bin       # ⇒ 82240 字节，版本 9，38 Token / 25 边
+ * 关键：① 普通边（n_subs=0）② n_subs=1 ③ n_subs=2 + n_not=1 ④ 动作槽+语境同时非空 ⑤ 只带否定语境 */
+#include "../agent.h"
+#include "../model_io.h"
+#include <stdio.h>
+int main(int argc, char **argv) {
+    const char *out = (argc > 1) ? argv[1] : "tests/v9_sample.bin";
+    AI *ai = ai_new();
+    if (!ai) { printf("ai_new 失败\n"); return 1; }
+    Token *cat = pool_token_intern(ai->pool, "猫");
+    Token *animal = pool_token_intern(ai->pool, "动物");
+    Token *fish = pool_token_intern(ai->pool, "鱼");
+    Token *fur = pool_token_intern(ai->pool, "毛");
+    Token *water = pool_token_intern(ai->pool, "水里");
+    Token *shore = pool_token_intern(ai->pool, "岸上");
+    ai->pool->current_tick = 12345;
+    token_add_assoc_unique(cat, NULL, 0, animal);                    /* ① */
+    { AssocEntry *e = &cat->assocs[cat->count - 1];
+      e->hits = 7; e->role = ASSOC_ROLE_INNATE; e->rel = REL_BIT(REL_IS_A); }
+    { Token *s[1] = { water };                                       /* ② */
+      token_add_assoc_ex(cat, s, 1, NULL, 0, fish, NULL);
+      AssocEntry *e = &cat->assocs[cat->count - 1];
+      e->hits = 5; e->rel = REL_BIT(REL_AT); e->topic = 2; e->pattern = 1; }
+    { Token *s[2] = { water, shore }; Token *nn[1] = { shore };       /* ③ */
+      token_add_assoc_ex(cat, s, 2, nn, 1, fur, NULL);
+      AssocEntry *e = &cat->assocs[cat->count - 1];
+      e->hits = 2; e->role = ASSOC_ROLE_DERIVED; e->dyn = 3; e->nrel = REL_BIT(REL_HAS); }
+    { Token *s[1] = { ai->causal };                                   /* ④ */
+      token_add_assoc_ex(ai->self, s, 1, NULL, 0, water, ai->causal);
+      AssocEntry *e = &ai->self->assocs[ai->self->count - 1];
+      e->hits = 1; e->mem_state = MEM_FADING; }
+    { Token *nn[1] = { shore };                                       /* ⑤ */
+      token_add_assoc_ex(animal, NULL, 0, nn, 1, cat, NULL);
+      AssocEntry *e = &animal->assocs[animal->count - 1];
+      e->hits = 4; }
+    size_t n = ai_save_file(ai, out);
+    if (!n) { printf("写盘失败 %s\n", out); return 1; }
+    printf("写出 %s：%zu 字节，模型版本 %u\n", out, n, (unsigned)MODEL_VERSION);
+    return 0;
+}
+```

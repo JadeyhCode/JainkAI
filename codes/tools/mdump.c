@@ -74,15 +74,10 @@ static void dump_ai(const AI *ai, FILE *o) {
                 t->perspective_of ? t->perspective_of->name : "-", t->count);
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
-            fprintf(o, "  E%zu main=%s act=%s hits=%u seq=%u mem=%u bt=%llu lt=%llu sub=",
+            fprintf(o, "  E%zu main=%s act=%s hits=%u seq=%u mem=%u bt=%llu lt=%llu",
                     j, e->main ? (e->main->name ? e->main->name : "?") : "-",
                     e->action ? e->action->name : "-", e->hits, e->seq, e->mem_state,
                     (unsigned long long)e->birth_tick, (unsigned long long)e->last_touch_tick);
-            for (uint8_t k = 0; k < e->n_subs; ++k)
-                fprintf(o, "%s,", e->subs[k] && e->subs[k]->name ? e->subs[k]->name : "?");
-            fprintf(o, " not=");
-            for (uint8_t k = 0; k < e->n_not; ++k)
-                fprintf(o, "%s,", e->subs_not[k] && e->subs_not[k]->name ? e->subs_not[k]->name : "?");
             fprintf(o, "\n");
         }
     }

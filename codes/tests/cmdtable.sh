@@ -18,8 +18,8 @@ MODEL=${1:-$ROOT/model.bin}
 WORK="$ROOT/_t/cmd"
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 
-CC=${CC:-gcc}
-$CC -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o aip "$ROOT/main.c" -lm
+# aip 从哪来只有一处实现：tests/prebuilt.sh（第 0 步编好的二进制优先，否则自己编）
+sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror
 [ -s "$MODEL" ] || { echo "FAIL: 找不到模型 $MODEL"; exit 1; }
 cp "$MODEL" model.bin
 for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done

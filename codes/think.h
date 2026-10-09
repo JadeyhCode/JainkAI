@@ -277,10 +277,10 @@ static inline Think *think_of(AI *ai) {
         Think *t = (Think *)calloc(1, sizeof *t);
         if (!t) return NULL;
         t->max_steps = THINK_DEF_STEPS;
-        /* 预算修正：内核**只知道有个数字**（谁算的不问 —— 情绪层在内核之外，见 affect.h）。
-         * 层关着时这个数字是 0，于是"没有情绪"和"有情绪但没命中"在这里完全一样。 */
-        if (ai->affect_d_steps) {
-            int v = t->max_steps + ai->affect_d_steps;
+        /* 预算修正：内核**只知道有个数字**（谁算的不问 —— 驱动层在内核之外，见 drive.h）。
+         * 层关着时这个数字是 0，于是"层关着"和"开着但一行都没命中"在这里完全一样。 */
+        if (ai->drive_d_steps) {
+            int v = t->max_steps + ai->drive_d_steps;
             t->max_steps = (v < 3) ? 3 : v;
         }
         t->stall_limit = THINK_STALL_LIM;

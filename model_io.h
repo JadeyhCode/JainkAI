@@ -34,8 +34,13 @@
  *     旧文件（v1..v7）照样能读：读进来的 other 没有信念，n_bel = 0。
  * v9: 边的 rel/nrel 从 1 字节扩成 2 字节 —— 核心关系多了第 9 个「需要」
  *     （缺前提推理 R9 用的），bit8 装不进一个字节。
- *     v8 及以前按 1 字节读进来即可（那些文件不可能有 bit8）。 */
-#define MODEL_VERSION 9u   /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+ *     v8 及以前按 1 字节读进来即可（那些文件不可能有 bit8）。
+ * v10: **边的语境字段（subs/subs_not）删掉**（用户 2026-10-07 拍板「历史遗留可以删」）。
+ *     每条边少写 4+4 个字节的"计数 + 裸 id"：出厂模型 41138 条边实测全是 0 ⇒ 迁移无损，
+ *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
+ *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
+ *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
+#define MODEL_VERSION 10u  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -109,13 +114,12 @@ static inline int mr_ids(MReader *r, TokenPool *p, Token ***arr, size_t *ncap, s
     return 0;
 }
 
-/* 这条边会不会被存盘：两端（主语与宾语）、语境、动作里**没有临时 Token**。
- * 临时 Token 是草稿纸，不存盘；指向它的边也不存 —— 否则装载时会指向不存在的 id。 */
+/* 这条边会不会被存盘：两端（主语与宾语）、动作里**没有临时 Token**。
+ * 临时 Token 是草稿纸，不存盘；指向它的边也不存 —— 否则装载时会指向不存在的 id。
+ * （v10：边的语境字段已删，所以这里只看 main/action 两端。） */
 static inline int mio_edge_saved(const AssocEntry *e) {
     if (!e) return 0;
     if (token_is_temp(e->main) || token_is_temp(e->action)) return 0;
-    for (uint8_t k = 0; k < e->n_subs; ++k)     if (token_is_temp(e->subs[k])) return 0;
-    for (uint8_t k = 0; k < e->n_not;  ++k)     if (token_is_temp(e->subs_not[k])) return 0;
     return 1;
 }
 
@@ -130,7 +134,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     /* ---- 头 ---- */
     /* **临时 Token（[临:…]）不存盘**：它是草稿纸（会话内的中间节点），
      * 存它等于把草稿写成知识。跳过它**以及指向它的边**（不然装载时会指向不存在的 id）。
-     * 名字前缀是唯一判据 —— 所以这条路**不需要动存档格式**（仍 v9）。
+     * 名字前缀是唯一判据 —— 这条路**不需要为它动存档格式**（v10 里连语境字段都没了，判断更简单）。
      * 没有临时 Token 时，下面每个过滤都恒真 ⇒ 输出逐字节不变（roundtrip 钉着这一点）。 */
     size_t saved_tokens = 0;
     uint32_t total_assocs = 0;
@@ -179,12 +183,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
             if (!mio_edge_saved(e)) continue;
-            mw_u8 (&w, e->n_subs);
-            for (uint8_t k = 0; k < e->n_subs; ++k)
-                mw_u32(&w, e->subs[k] ? e->subs[k]->id : TOKEN_ID_NONE);
-            mw_u8 (&w, e->n_not);
-            for (uint8_t k = 0; k < e->n_not; ++k)
-                mw_u32(&w, e->subs_not[k] ? e->subs_not[k]->id : TOKEN_ID_NONE);
+            /* v10：语境那两段（n_subs + 裸 id / n_not + 裸 id）不再写。 */
             mw_u32(&w, e->main ? e->main->id : TOKEN_ID_NONE);
             mw_u32(&w, e->action ? e->action->id : TOKEN_ID_NONE);            mw_u32(&w, e->hits);
             mw_u32(&w, e->seq);
@@ -484,6 +483,7 @@ static inline AI *ai_load_file(const char *path) {
     int has_nrel    = (mver >= 7u);
     int has_belief  = (mver >= 8u);
     int has_wide_rel = (mver >= 9u);   /* v9：rel/nrel 是 2 字节 */
+    int has_ctx      = (mver < 10u);   /* v10 起：边上**没有**语境字段（旧文件要跳过去） */
     if (mr_u32(&r) != (uint32_t)VSA_DIM) goto fail;
     uint32_t n_tok   = mr_u32(&r);
     uint32_t n_assoc = mr_u32(&r);
@@ -557,15 +557,18 @@ static inline AI *ai_load_file(const char *path) {
         }
         t->count = na;      /* 边表已就位（na 可能为 0）；字段在第二遍填 */
         /* 第一遍只把每条边整体跳过：不解析 id，只在第二遍做。
-         * 每条边的裸 id 数是 n_subs + n_not + main + action；纯标量部分是
-         * hits/seq/mem_state/birth/last_touch = 4+4+1+8+8 = 25 字节。 */
+         * 每条边的裸 id 数是 main + action；纯标量部分是
+         * hits/seq/mem_state/birth/last_touch = 4+4+1+8+8 = 25 字节。
+         * v9 及以前：**最前面还有语境两段**（n_subs + 裸 id / n_not + 裸 id），按 has_ctx 跳。 */
         for (uint32_t j = 0; j < na; ++j) {
-            uint8_t ns = mr_u8(&r);
-            if (r.err || ns > TOKEN_CTX_MAX) goto fail;
-            if (mr_raw(&r, NULL, 4u * ns) != 0) goto fail;
-            uint8_t nn = mr_u8(&r);
-            if (r.err || nn > TOKEN_CTX_MAX) goto fail;
-            if (mr_raw(&r, NULL, 4u * nn) != 0) goto fail;
+            if (has_ctx) {
+                uint8_t ns = mr_u8(&r);
+                if (r.err || ns > TOKEN_CTX_MAX) goto fail;
+                if (mr_raw(&r, NULL, 4u * ns) != 0) goto fail;
+                uint8_t nn = mr_u8(&r);
+                if (r.err || nn > TOKEN_CTX_MAX) goto fail;
+                if (mr_raw(&r, NULL, 4u * nn) != 0) goto fail;
+            }
             if (mr_raw(&r, NULL, 4u + 4u + 4u + 4u + 1u + 8u + 8u
                               + (has_role ? 1u : 0u) + (has_topic ? 1u : 0u)
                               + (has_pattern ? 1u : 0u)
@@ -603,21 +606,15 @@ static inline AI *ai_load_file(const char *path) {
             if (!t || t->count != na) goto fail;
             for (uint32_t j = 0; j < na; ++j) {
                 AssocEntry *e = &t->assocs[j];
-                uint8_t ns = mr_u8(&rr);
-                if (rr.err || ns > TOKEN_CTX_MAX) goto fail;
-                e->n_subs = ns;
-                for (uint8_t k = 0; k < ns; ++k) {
-                    uint32_t sid = mr_u32(&rr);
-                    if (sid >= np->count) goto fail;
-                    e->subs[k] = np->tokens[sid];
-                }
-                uint8_t nn = mr_u8(&rr);
-                if (rr.err || nn > TOKEN_CTX_MAX) goto fail;
-                e->n_not = nn;
-                for (uint8_t k = 0; k < nn; ++k) {
-                    uint32_t sid = mr_u32(&rr);
-                    if (sid >= np->count) goto fail;
-                    e->subs_not[k] = np->tokens[sid];
+                if (has_ctx) {
+                    /* 旧格式的语境字段：**跳过去**（字段在 v10 里已删）。
+                     * 出厂模型实测全 0 ⇒ 无损；非空的旧文件会少一层条件（登记在案，§6.50）。 */
+                    uint8_t ns = mr_u8(&rr);
+                    if (rr.err || ns > TOKEN_CTX_MAX) goto fail;
+                    if (mr_raw(&rr, NULL, 4u * ns) != 0) goto fail;
+                    uint8_t nn = mr_u8(&rr);
+                    if (rr.err || nn > TOKEN_CTX_MAX) goto fail;
+                    if (mr_raw(&rr, NULL, 4u * nn) != 0) goto fail;
                 }
                 uint32_t main_id = mr_u32(&rr);
                 uint32_t act_id  = mr_u32(&rr);

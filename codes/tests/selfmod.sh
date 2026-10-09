@@ -20,9 +20,9 @@ MODEL=${1:-$ROOT/model.bin}
 WORK="$ROOT/_t/selfmod"
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 
-CC=${CC:-gcc}
+# aip 从哪来只有一处实现：tests/prebuilt.sh（第 0 步编好的二进制优先，否则自己编）
 # 顺带用 -Werror 看住新头文件（micro.h）的零警告
-$CC -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o aip "$ROOT/main.c" -lm
+sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror
 [ -s "$MODEL" ] || { echo "FAIL: 找不到模型 $MODEL"; exit 1; }
 cp "$MODEL" model.bin
 for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done

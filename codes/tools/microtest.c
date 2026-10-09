@@ -26,7 +26,7 @@ static void ok(int cond, const char *what) {
 
 /* intern（去重）而不是 pool_token（创建）：测试里要的是「同一个节点」 */
 static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, name); }
-static void link2(Token *a, Token *b) { (void)token_add_assoc_unique(a, NULL, 0, b); }
+static void link2(Token *a, Token *b) { (void)token_add_assoc_unique(a, b); }
 
 /* 共享邻居池：让两个 Token 的邻居高度重叠，制造「图里已有证据」的局面 */
 static const char *const SHARED[] = {"s1","s2","s3","s4","s5","s6","s7","s8","s9","s10"};

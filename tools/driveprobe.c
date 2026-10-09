@@ -1,6 +1,6 @@
-/* tools/affectprobe.c — 「情绪耦合表」到底会不会被触发 + 驱动量**彼此独不独立**？（量出来，别猜）
+/* tools/driveprobe.c — 「驱动耦合表」到底会不会被触发 + 驱动量**彼此独不独立**？（量出来，别猜）
  *
- * 局限登记里写着两条：「情绪耦合只有 5 行、参数手调」「舒适×唤醒共线 r=0.91」。
+ * 局限登记里写着两条：「驱动耦合只有 5 行、参数手调」「舒适×唤醒共线 r=0.91」。
  * 这张表值不值得扩、要不要加维度，先得知道：
  *   ① 每一行在真语料上**命中不命中**（全在区间外 = 这张表等于没有）；
  *   ② 几个驱动量**彼此独不独立** —— 两个量强相关就意味着两行在说同一件事。
@@ -9,12 +9,12 @@
  *   那不是配对数据的相关（排序把"同一轮的搭配"打散了）。现在改成
  *   **按轮配对**存下来、算真 Pearson r，并打一张**相关矩阵**（所有驱动量两两）。
  *
- * 用法：./build_affectprobe <模型> <语料> [最多回放多少行]
- * 做法：回放语料，每行走一次真流水线（`agent_step`）再走一次 `affect_policy_step`，
+ * 用法：./build_driveprobe <模型> <语料> [最多回放多少行]
+ * 做法：回放语料，每行走一次真流水线（`agent_step`）再走一次 `drive_policy_step`，
  *       统计每行命中次数、驱动量分布、以及两两相关。
  */
 #include "../agent.h"
-#include "../affect.h"
+#include "../drive.h"
 #include "../model_io.h"
 #include <stdio.h>
 #include <math.h>
@@ -46,8 +46,8 @@ int main(int argc, char **argv) {
         sorted[d] = (float *)malloc(limit * sizeof *sorted[d]);
         if (!v[d] || !sorted[d]) { fclose(f); ai_free(ai); return 1; }
     }
-    size_t hits[AI_AFFECT_N + 1];
-    for (size_t i = 0; i <= AI_AFFECT_N; ++i) hits[i] = 0;
+    size_t hits[AI_DRIVE_N + 1];
+    for (size_t i = 0; i <= AI_DRIVE_N; ++i) hits[i] = 0;
     double sum[NDRIVE];
     for (int d = 0; d < NDRIVE; ++d) sum[d] = 0.0;
     size_t lines = 0;
@@ -61,9 +61,9 @@ int main(int argc, char **argv) {
         ag.brain = ai;
         char out[512];
         (void)agent_step(&ag, line, out, sizeof out);
-        affect_policy_step(ai);          /* 一轮结束后再折算（就是实际生效的那一步） */
-        for (size_t i = 0; i < AI_AFFECT_N; ++i) {
-            const AffectCoupling *c = &AI_AFFECT[i];
+        drive_policy_step(ai);          /* 一轮结束后再折算（就是实际生效的那一步） */
+        for (size_t i = 0; i < AI_DRIVE_N; ++i) {
+            const DriveCoupling *c = &AI_DRIVE[i];
             float x = ai_drive_value(ai, c->drive);
             if (x >= c->lo && x <= c->hi) hits[i]++;
         }
@@ -88,8 +88,8 @@ int main(int argc, char **argv) {
     for (int d = 0; d < NDRIVE; ++d)
         printf("%s %.3f%s", DRIVES[d], sum[d] / (double)lines, (d + 1 < NDRIVE) ? "  " : "\n");
     printf("  耦合表命中（区间 [lo,hi] 落点）：\n");
-    for (size_t i = 0; i < AI_AFFECT_N; ++i) {
-        const AffectCoupling *c = &AI_AFFECT[i];
+    for (size_t i = 0; i < AI_DRIVE_N; ++i) {
+        const DriveCoupling *c = &AI_DRIVE[i];
         printf("    %-8s → %-8s  区间[%.2f,%.2f]  修正 %+d  命中 %zu 次（%.1f%%）  %s\n",
                c->drive, c->param, (double)c->lo, (double)c->hi, c->delta, hits[i],
                100.0 * (double)hits[i] / (double)lines, c->note ? c->note : "");
@@ -153,8 +153,8 @@ int main(int argc, char **argv) {
     }
     printf("    差分为 0（量根本不动）时算 0.00 —— 那种量当驱动量**没有意义**，要么换信号要么别用\n");
     size_t used = 0;
-    for (size_t i = 0; i < AI_AFFECT_N; ++i) if (hits[i]) used++;
-    printf("  实际参与过决策的行：%zu / %zu\n", used, (size_t)AI_AFFECT_N);
+    for (size_t i = 0; i < AI_DRIVE_N; ++i) if (hits[i]) used++;
+    printf("  实际参与过决策的行：%zu / %zu\n", used, (size_t)AI_DRIVE_N);
     if (used == 0) printf("  → 结论：这张表在真语料上**一行都没命中**（扩表之前先修区间/驱动量）\n");
     free(v); free(sorted);
     ai_free(ai);

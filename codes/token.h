@@ -11,6 +11,8 @@
 #include <string.h>
 #include <math.h>
 
+/* 语境字段（subs/subs_not）在 v10 里已删；这个上限**只剩"读 v9 旧文件"时的合法性检查**用
+ * （见 model_io.h 的 has_ctx）。别再拿它开新数组 —— 边上没有语境了，见 AssocEntry 的注释。 */
 #ifndef TOKEN_CTX_MAX
 #define TOKEN_CTX_MAX 4
 #endif
@@ -27,8 +29,6 @@
 #define VSA_DIM 1024
 #endif
 
-#define TOKEN_MAGIC   0x4D435341u
-#define TOKEN_VERSION 4u
 #define TOKEN_SEQ_NONE ((uint32_t)-1)
 #define TOKEN_ID_NONE  ((uint32_t)-1)
 
@@ -138,9 +138,14 @@ typedef enum {
 #define REL_DYN_BASE 10u /* 动态关系 id 从这里开始 */
 
 struct AssocEntry {
-    Token    *subs[TOKEN_CTX_MAX];
-    Token    *subs_not[TOKEN_CTX_MAX];
-    uint8_t   n_subs, n_not;
+    /* ⚠ **v10：边上的语境字段（subs/subs_not/n_subs/n_not）已删**。
+     * 它原来占每条边 64 字节（8 个指针 + 2 个计数 = sizeof 的一半），
+     * 而实测出厂模型 41138 条边里**一条带语境的都没有**（用户 2026-10-07 拍板「历史遗留可以删」）。
+     * 条件本身没丢，只是从"边上的字段"搬成了"图里的节点 + 动作槽上的标记"：
+     *   · 前提：`A —[前提]→ P → B`（P 是**普通 token**，`[前提]` 挂在动作槽上）→ edge_premise_polarity()
+     *   · 因果猜想：动作槽上的 `[因果]` → edge_is_causal_guess()
+     * 于是"联想"这条路上**没有任何条件**（用户原话：联想本来不依赖前提），
+     * 只有逻辑/思维层按上面两个判据决定用不用。 */
     Token    *main;
     Token    *action;
     uint32_t  hits, seq;
@@ -212,12 +217,15 @@ struct Token {
  *   ③ **逻辑知道前提是什么**：`token_premise_between(A,B)` 直接答出 P（可多个）——
  *      条件不再藏在边的字段里，而是**图里的节点 + 边上的标记**。
  *
- * 旧的「语境」（AssocEntry.subs/subs_not）由此**退役**：不再有任何创建者，
- * 旧模型读得回来（见 docs/语境退役-前提token.md）。
+ * 旧的「语境」（AssocEntry.subs/subs_not）由此**退役**：先是没有创建者（2026-10-07 上午），
+ * 然后连字段一起删掉（模型 v10；旧文件仍读得回来，见 docs/语境退役-前提token.md）。
  * 注意 `[前提]` 是**标记**（行为 token），不是「前提 token」本身 ——
  * 前提 token 是它指向的那个普通词。 */
 #define AI_PREMISE_MARK     "[前提]"      /* 条件：P **在**注意窗口里 */
 #define AI_PREMISE_NOT_MARK "[前提不]"    /* 条件：P **不在**注意窗口里（旧 subs_not 的替代） */
+/* 因果猜想的行为 token（也挂在**动作槽**上）—— 名字只有这一处：
+ * ai.h 的 `ai->causal` 也用它 intern，判据也只有这一个（edge_is_causal_guess）。 */
+#define AI_CAUSAL_MARK      "[因果]"
 
 /* 这条边是「前提链接」吗？极性：+1 = 正前提（P 要在），-1 = 反前提（P 要不出现），0 = 不是。
  * 判据只有一份：所有消费者（求解器/验证器/思维层/查询）都走它。 */
@@ -230,6 +238,22 @@ static inline int edge_premise_polarity(const AssocEntry *e) {
 static inline int edge_is_premise_link(const AssocEntry *e) {
     return edge_premise_polarity(e) != 0;
 }
+/* 这条边是「因果猜想」吗？—— 三条护栏共用这一个判据（见 ai.h 的 ai_learn_causal）：
+ *   ① 知识查询（rel.h 的 rel_direct_*）认不出它；
+ *   ② 走边（ai_edge_walkable）/预测（ai_predict_readonly）挡掉它；
+ *   ③ 削弱只走 ai_weaken_causal。 */
+static inline int edge_is_causal_guess(const AssocEntry *e) {
+    return e && e->action && e->action->name &&
+           strcmp(e->action->name, AI_CAUSAL_MARK) == 0;
+}
+/* 「这条边是**普通边**（观测/共现/知识/缓存）」吗？—— 因果猜想**不是**。
+ * v9 里这个区分靠"边上有没有语境字段"（`n_subs == 0` 就是普通边）；语境字段删掉之后
+ * 判据搬到动作槽上，于是**所有"按 main 找那条边"的循环都必须用这个函数跳过猜想边**：
+ * token_edge_is_derived / token_add_assoc_unique / token_tag_* / token_observe_pair /
+ * token_remove_assoc / token_set_action_by_target / micro_edge_index / rel.h 的各查询。
+ * ⚠ 少写一处，猜想就会冒充知识 —— 实测过一次：`token_edge_is_derived` 漏了这一条，
+ *   「撤销缓存」静默失效（tests/consolidate.sh 第 ④ 节红，见 §6.50 的返工记录）。 */
+static inline int edge_is_plain(const AssocEntry *e) { return !edge_is_causal_guess(e); }
 
 /* A 到 P 的那条**前提链接**边的指针（没有就 NULL） */
 static inline const AssocEntry *token_premise_link(const Token *from, const Token *to) {
@@ -516,8 +540,7 @@ static inline Token *pool_unknowing(TokenPool *p) {
 static inline int token_edge_is_derived(const Token *t, const Token *main) {
     if (!t || !main) return 0;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && t->assocs[i].n_subs == 0 &&
-            t->assocs[i].n_not == 0)
+        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i]))
             return t->assocs[i].role == ASSOC_ROLE_DERIVED;
     return 0;
 }
@@ -548,10 +571,8 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
 
 /* ============================ 关联编辑 ============================ */
 
-static inline int token_add_assoc_ex(Token *t, Token **subs, size_t n_subs,
-                                     Token **subs_not, size_t n_not,
-                                     Token *main, Token *action) {
-    if (!t || n_subs > TOKEN_CTX_MAX || n_not > TOKEN_CTX_MAX) return -1;
+static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
+    if (!t) return -1;
     if (t->count == t->cap) {
         size_t ncap = t->cap ? t->cap * 2 : 4;
         AssocEntry *na = (AssocEntry *)realloc(t->assocs, ncap * sizeof *na);
@@ -559,10 +580,6 @@ static inline int token_add_assoc_ex(Token *t, Token **subs, size_t n_subs,
         t->assocs = na; t->cap = ncap;
     }
     AssocEntry *e = &t->assocs[t->count];
-    e->n_subs = (uint8_t)n_subs;
-    e->n_not  = (uint8_t)n_not;
-    for (size_t i = 0; i < n_subs; ++i) e->subs[i] = subs[i];
-    for (size_t i = 0; i < n_not; ++i) e->subs_not[i] = subs_not[i];
     e->main = main; e->action = action;
     e->hits = 0;
     e->seq = t->next_seq++;
@@ -578,32 +595,29 @@ static inline int token_add_assoc_ex(Token *t, Token **subs, size_t n_subs,
     t->count++;
     return 0;
 }
-static inline int token_add_assoc(Token *t, Token *sub, Token *main) {
-    if (sub) { Token *s[1] = { sub }; return token_add_assoc_ex(t, s, 1, NULL, 0, main, NULL); }
-    return token_add_assoc_ex(t, NULL, 0, NULL, 0, main, NULL);
-}
-static inline int token_add_assoc_multi(Token *t, Token **subs, size_t n, Token *main) {
-    return token_add_assoc_ex(t, subs, n, NULL, 0, main, NULL);
-}
-static inline int token_add_assoc_action(Token *t, Token **subs, size_t n,
-                                         Token *main, Token *action) {
-    return token_add_assoc_ex(t, subs, n, NULL, 0, main, action);
-}
-static inline int token_add_assoc_not(Token *t, Token **subs, size_t n_subs,
-                                      Token **subs_not, size_t n_not, Token *main) {
-    return token_add_assoc_ex(t, subs, n_subs, subs_not, n_not, main, NULL);
-}
-static inline int token_add_assoc_unique(Token *t, Token **subs, size_t n_subs, Token *main) {
+/* 「t —main→ 这条边在不在」—— v10 起边上没有语境，所以只看 main。
+ * （同 main 的两条边只可能是**动作槽不同**，那种用 token_find_assoc_action。） */
+static inline int token_add_assoc_unique(Token *t, Token *main) {
     if (!t) return -1;
-    for (size_t i = 0; i < t->count; ++i) {
-        const AssocEntry *e = &t->assocs[i];
-        if (e->main != main || e->n_subs != n_subs || e->n_not != 0) continue;
-        int same = 1;
-        for (size_t k = 0; k < n_subs; ++k)
-            if (e->subs[k] != subs[k]) { same = 0; break; }
-        if (same) return 0;
-    }
-    return token_add_assoc_ex(t, subs, n_subs, NULL, 0, main, NULL);
+    for (size_t i = 0; i < t->count; ++i)
+        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i])) return 0;
+    return token_add_assoc_ex(t, main, NULL);
+}
+/* 找 (main, action) 都对的那条边（没有就 NULL）。
+ * 为什么需要：因果猜想边（动作槽 = `[因果]`）要和**普通观测边并存** ——
+ * 「猫 吃 鱼」是观测到的知识，「我做 X 之后 Y 出现」是猜想，两者不是同一条边。 */
+static inline AssocEntry *token_find_assoc_action(Token *t, Token *main, Token *action) {
+    if (!t) return NULL;
+    for (size_t i = 0; i < t->count; ++i)
+        if (t->assocs[i].main == main && t->assocs[i].action == action) return &t->assocs[i];
+    return NULL;
+}
+/* 按 (main, action) 建边：已经有了就把那条返回（不新建、不动 hits）。 */
+static inline AssocEntry *token_add_assoc_action_unique(Token *t, Token *main, Token *action) {
+    AssocEntry *e = token_find_assoc_action(t, main, action);
+    if (e) return e;
+    if (token_add_assoc_ex(t, main, action) != 0) return NULL;
+    return &t->assocs[t->count - 1];
 }
 
 /* 「这条知识是显式教我的（基准），还是我自己经历/推出来的」——
@@ -614,7 +628,7 @@ static inline int assoc_role_is_innate(const AssocEntry *e) {
 /* 给一条（已存在的）边打上「基准」档；边不在就先建再打。 */
 static inline void token_mark_innate(Token *a, Token *b) {
     if (!a || !b) return;
-    (void)token_add_assoc_unique(a, NULL, 0, b);
+    (void)token_add_assoc_unique(a, b);
     for (size_t i = 0; i < a->count; ++i)
         if (a->assocs[i].main == b) { a->assocs[i].role = ASSOC_ROLE_INNATE; return; }
 }
@@ -665,7 +679,7 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
     if (!a || !b || a == b) return -1;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || !edge_is_plain(e)) continue;
         e->role = role;
         e->topic = topic;
         if (pattern) e->pattern = pattern;
@@ -673,7 +687,7 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
-    if (token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL) != 0) return -1;
+    if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->role = role;
     e->topic = topic;
@@ -711,7 +725,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || !edge_is_plain(e)) continue;
         /* **观测压过缓存**：这条边若是以前推出来沉淀的，而现在来了观测
          * （不管说的是同一件事还是它的反面），先把缓存**整个撤掉**再落观测。
          * 理由：同一条边上不混两种来源 —— 混了之后
@@ -732,7 +746,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
-    if (token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL) != 0) return -1;
+    if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->rel = bit;
     e->hits = bump;
@@ -746,7 +760,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || !edge_is_plain(e)) continue;
         /* 同 token_tag_rel：观测进来时先把这条边上的缓存整个撤掉 */
         if (e->role == ASSOC_ROLE_DERIVED) {
             e->rel = 0; e->nrel = 0;
@@ -760,7 +774,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
-    if (token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL) != 0) return -1;
+    if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->nrel = bit;
     e->hits = bump;
@@ -772,14 +786,14 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
     if (!a || !b || a == b || dyn_id == 0) return -1;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || !edge_is_plain(e)) continue;
         if (e->dyn == dyn_id) return 0;
         e->dyn = dyn_id;
         if (bump) e->hits += bump;
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
-    if (token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL) != 0) return -1;
+    if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->dyn = dyn_id;
     e->hits = bump;
@@ -797,23 +811,18 @@ static inline int token_tag_role(Token *a, Token *b, uint8_t role, uint32_t bump
 
 static inline int token_link_bidirectional(Token *a, Token *b) {
     if (!a || !b) return -1;
-    if (token_add_assoc_unique(a, NULL, 0, b) != 0) return -1;
-    if (token_add_assoc_unique(b, NULL, 0, a) != 0) return -1;
+    if (token_add_assoc_unique(a, b) != 0) return -1;
+    if (token_add_assoc_unique(b, a) != 0) return -1;
     return 0;
 }
-static inline int token_remove_assoc(Token *t, Token *sub, Token *main) {
+static inline int token_remove_assoc(Token *t, Token *main) {
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i) {
         AssocEntry *e = &t->assocs[i];
-        if (e->main != main) continue;
-        int hit = 0;
-        if (!sub && e->n_subs == 0 && e->n_not == 0) hit = 1;
-        else if (sub && e->n_subs == 1 && e->subs[0] == sub) hit = 1;
-        if (hit) {
-            memmove(e, e + 1, (t->count - i - 1) * sizeof *e);
-            t->count--;
-            return 0;
-        }
+        if (e->main != main || !edge_is_plain(e)) continue;
+        memmove(e, e + 1, (t->count - i - 1) * sizeof *e);
+        t->count--;
+        return 0;
     }
     return -1;
 }
@@ -823,13 +832,13 @@ static inline int token_set_action(Token *t, uint32_t seq, Token *action) {
         if (t->assocs[i].seq == seq) { t->assocs[i].action = action; return 0; }
     return -1;
 }
-static inline int token_set_action_by_target(Token *t, Token *sub, Token *main, Token *action) {
+static inline int token_set_action_by_target(Token *t, Token *main, Token *action) {
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i) {
         AssocEntry *e = &t->assocs[i];
-        if (e->main != main) continue;
-        if (!sub && e->n_subs == 0) { e->action = action; return 0; }
-        if (sub && e->n_subs == 1 && e->subs[0] == sub) { e->action = action; return 0; }
+        if (e->main != main || !edge_is_plain(e)) continue;
+        e->action = action;
+        return 0;
     }
     return -1;
 }
@@ -838,30 +847,22 @@ static inline void token_clear_actions(Token *t) {
     for (size_t i = 0; i < t->count; ++i) t->assocs[i].action = NULL;
 }
 
-/* ============================ 语境匹配 ============================ */
-
-static inline int ctx_satisfies(const Token *need, Token *const *ctx, size_t n) {
-    if (!need) return 1;
-    for (size_t i = 0; i < n; ++i) {
-        if (ctx[i] == need) return 1;
-        if (need->is_category && token_is_descendant(ctx[i], need)) return 1;
-    }
-    return 0;
-}
-static inline int ctx_hits_excluded(const Token *excl, Token *const *ctx, size_t n) {
-    if (!excl) return 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (ctx[i] == excl) return 1;
-        if (excl->is_category && token_is_descendant(ctx[i], excl)) return 1;
-    }
-    return 0;
-}
+/* ============================ 条件：**不在边上**（v10 起） ============================
+ *
+ * 语境（subs/subs_not）从边上删掉之后，这里不再有"语境筛选"。
+ * 留着这一个函数（而不是顺手把 ctx 参数链一起拆掉）有两个理由：
+ *   ① 筛选点散在 8 处（联想 / 激活 / 两个信号 / 选择器 / focus_step），
+ *      `ctx/n_ctx` 参数横跨 token.h → token_lang.h → ai.h → think.h 四层；
+ *   ② 把"边上的条件"收在**一个地方**：以后真要给边接条件，从这里接（别处不许偷偷加）。
+ * 它现在**只做一件事**：挡掉**因果猜想**（那不是知识 —— 见 ai.h 的三条护栏）。
+ * 这一条在 v9 里是靠"带语境"顺带挡住的（n_subs>0），语境字段删了就必须在这里显式挡，
+ * 否则猜想边会漏进联想/扩散激活/置信度（**实测会改回答**：见 §6.50 的返工记录）。
+ * **条件本身没丢，是搬走了**（用户原话：联想本来不依赖前提，逻辑才知道前提是什么）：
+ *   · 前提 → 动作槽上的 `[前提]`/`[前提不]`（edge_premise_polarity），逻辑/思维层用；
+ *   · 因果猜想 → 动作槽上的 `[因果]`（edge_is_causal_guess），这里挡住不算知识。 */
 static inline int entry_matches(const AssocEntry *e, Token *const *ctx, size_t n_ctx) {
-    for (uint8_t i = 0; i < e->n_subs; ++i)
-        if (!ctx_satisfies(e->subs[i], ctx, n_ctx)) return 0;
-    for (uint8_t i = 0; i < e->n_not; ++i)
-        if (ctx_hits_excluded(e->subs_not[i], ctx, n_ctx)) return 0;
-    return 1;
+    (void)ctx; (void)n_ctx;
+    return !edge_is_causal_guess(e);
 }
 
 /* ============================ 稳定 handle ============================ */
@@ -1013,12 +1014,12 @@ static inline void token_observe_pair(Token *a, Token *b) {
     if (!a || !b || a == b) return;
     for (size_t k = 0; k < a->count; ++k) {
         AssocEntry *e = &a->assocs[k];
-        if (e->main == b && e->n_subs == 0 && e->n_not == 0) {
+        if (e->main == b && edge_is_plain(e)) {
             token_touch_entry(a, e);
             return;
         }
     }
-    if (token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL) == 0)
+    if (token_add_assoc_ex(a, b, NULL) == 0)
         token_touch_entry(a, &a->assocs[a->count - 1]);
 }
 static inline void token_observe(Token *const *seq, size_t n, size_t window) {
@@ -1327,202 +1328,8 @@ static inline int r_bytes(Reader *r, void *dst, size_t n) {
 static inline uint8_t  r_u8 (Reader *r) { uint8_t b = 0; r_bytes(r, &b, 1); return b; }
 static inline uint32_t r_u32(Reader *r) { uint8_t b[4]; if (r_bytes(r, b, 4)) return 0; return get_u32(b); }
 
-static inline size_t token_pool_dump(const TokenPool *p, uint8_t *out, size_t cap,
-                                     const MeaningCodec *codec) {
-    Writer w = { out, 0, cap, 0 };
-    w_u32(&w, TOKEN_MAGIC);
-    w_u32(&w, TOKEN_VERSION);
-    w_u32(&w, VSA_DIM);
-    w_u32(&w, (uint32_t)p->count);
-
-    for (size_t i = 0; i < p->count; ++i) {
-        const Token *t = p->tokens[i];
-        w_u32(&w, t->id);
-        const char *name = t->name ? t->name : "";
-        size_t nlen = t->name ? strlen(t->name) : 0;
-        w_u32(&w, (uint32_t)nlen);
-        w_bytes(&w, name, nlen);
-
-        if (codec && codec->dump_meaning && t->meaning) {
-            size_t mlen = codec->dump_meaning(t->meaning, NULL, 0);
-            if (mlen > 0xFFFFFFFFu) { w.overflow = 1; return 0; }
-            w_u32(&w, (uint32_t)mlen);
-            if (mlen && w.buf) {
-                if (w.len + mlen > w.cap) w.overflow = 1;
-                else {
-                    uint8_t *tmp = (uint8_t *)malloc(mlen);
-                    if (!tmp) w.overflow = 1;
-                    else {
-                        size_t wrote = codec->dump_meaning(t->meaning, tmp, mlen);
-                        if (wrote != mlen) w.overflow = 1;
-                        else memcpy(w.buf + w.len, tmp, mlen);
-                        free(tmp);
-                    }
-                }
-            }
-            w.len += mlen;
-        } else w_u32(&w, 0);
-
-        w_u32(&w, t->misses);
-        w_u32(&w, t->recent_misses);
-        w_u32(&w, t->parent ? t->parent->id : TOKEN_ID_NONE);
-        w_u8 (&w, t->is_category);
-        w_u32(&w, (uint32_t)t->count);
-
-        if (t->hv) w_bytes(&w, t->hv, VSA_DIM);
-        else { uint8_t *z = (uint8_t *)calloc(VSA_DIM, 1); w_bytes(&w, z, VSA_DIM); free(z); }
-
-        for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
-            w_u8(&w, e->n_subs);
-            for (uint8_t k = 0; k < e->n_subs; ++k) w_u32(&w, e->subs[k]->id);
-            w_u8(&w, e->n_not);
-            for (uint8_t k = 0; k < e->n_not; ++k) w_u32(&w, e->subs_not[k]->id);
-            w_u32(&w, e->main->id);
-            w_u32(&w, e->action ? e->action->id : TOKEN_ID_NONE);
-            w_u32(&w, e->hits);
-            w_u32(&w, e->seq);
-        }
-    }
-    return w.overflow ? 0 : w.len;
-}
-
-static inline TokenPool *token_pool_load(const uint8_t *in, size_t len,
-                                         const MeaningCodec *codec) {
-    Reader r = { in, len, 0, 0 };
-    if (r_u32(&r) != TOKEN_MAGIC) return NULL;
-    if (r_u32(&r) != TOKEN_VERSION) return NULL;
-    if (r_u32(&r) != VSA_DIM) return NULL;
-    uint32_t n = r_u32(&r);
-    if (r.err) return NULL;
-
-    TokenPool *p = pool_new();
-    if (!p) return NULL;
-    if (codec) p->meaning_free = codec->free_meaning;
-
-    size_t   *assoc_off = (size_t   *)calloc(n ? n : 1, sizeof(size_t));
-    uint32_t *assoc_n   = (uint32_t *)calloc(n ? n : 1, sizeof(uint32_t));
-    uint32_t *parent_id = (uint32_t *)calloc(n ? n : 1, sizeof(uint32_t));
-    if (!assoc_off || !assoc_n || !parent_id) {
-        free(assoc_off); free(assoc_n); free(parent_id);
-        pool_free(p); return NULL;
-    }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        uint32_t id   = r_u32(&r);
-        uint32_t nlen = r_u32(&r);
-        char *name = NULL;
-        if (nlen) {
-            name = (char *)malloc(nlen + 1);
-            if (!name) goto fail;
-            if (r_bytes(&r, name, nlen) != 0) { free(name); goto fail; }
-            name[nlen] = 0;
-        }
-        uint32_t mlen = r_u32(&r);
-        void *meaning = NULL;
-        if (mlen) {
-            if (codec && codec->load_meaning)
-                meaning = codec->load_meaning(r.buf + r.pos, mlen);
-            if (r_bytes(&r, NULL, mlen) != 0) {
-                free(name);
-                if (meaning && codec && codec->free_meaning)
-                    codec->free_meaning(meaning);
-                goto fail;
-            }
-        }
-        uint32_t t_misses = r_u32(&r);
-        uint32_t t_recent = r_u32(&r);
-        uint32_t p_id     = r_u32(&r);
-        uint8_t  is_cat   = r_u8(&r);
-        uint32_t na       = r_u32(&r);
-
-        Token *t = pool_token(p, name, meaning);
-        free(name);
-        if (!t) {
-            if (meaning && codec && codec->free_meaning)
-                codec->free_meaning(meaning);
-            goto fail;
-        }
-        if (t->id != id) goto fail;
-        t->misses = t_misses; t->recent_misses = t_recent;
-        t->is_category = is_cat;
-        parent_id[i] = p_id;
-
-        if (t->hv) { if (r_bytes(&r, t->hv, VSA_DIM) != 0) goto fail; }
-        else       { if (r_bytes(&r, NULL, VSA_DIM) != 0) goto fail; }
-        if (t->hv_prev) memcpy(t->hv_prev, t->hv, VSA_DIM);
-
-        assoc_off[i] = r.pos;
-        assoc_n[i]   = na;
-        for (uint32_t j = 0; j < na; ++j) {
-            uint8_t n_subs = r_u8(&r);
-            if (r_bytes(&r, NULL, (size_t)4 * n_subs) != 0) goto fail;
-            uint8_t n_not = r_u8(&r);
-            if (r_bytes(&r, NULL, (size_t)4 * n_not + 16u) != 0) goto fail;
-        }
-        if (r.err) goto fail;
-    }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        if (parent_id[i] == TOKEN_ID_NONE) continue;
-        Token *t = pool_token_by_id(p, i);
-        Token *par = pool_token_by_id(p, parent_id[i]);
-        if (!t || !par) goto fail;
-        t->parent = par;
-    }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        Token *t = pool_token_by_id(p, i);
-        if (!t) goto fail;
-        Reader r2 = { in, len, assoc_off[i], 0 };
-        for (uint32_t j = 0; j < assoc_n[i]; ++j) {
-            uint8_t n_subs = r_u8(&r2);
-            if (n_subs > TOKEN_CTX_MAX) goto fail;
-            Token *subs[TOKEN_CTX_MAX];
-            for (uint8_t k = 0; k < n_subs; ++k) {
-                uint32_t sid = r_u32(&r2);
-                subs[k] = pool_token_by_id(p, sid);
-                if (!subs[k]) goto fail;
-            }
-            uint8_t n_not = r_u8(&r2);
-            if (n_not > TOKEN_CTX_MAX) goto fail;
-            Token *subs_not[TOKEN_CTX_MAX];
-            for (uint8_t k = 0; k < n_not; ++k) {
-                uint32_t sid = r_u32(&r2);
-                subs_not[k] = pool_token_by_id(p, sid);
-                if (!subs_not[k]) goto fail;
-            }
-            uint32_t mid = r_u32(&r2);
-            uint32_t aid = r_u32(&r2);
-            uint32_t hits = r_u32(&r2);
-            uint32_t seq = r_u32(&r2);
-            Token *main = pool_token_by_id(p, mid);
-            Token *action = (aid == TOKEN_ID_NONE) ? NULL : pool_token_by_id(p, aid);
-            if (!main) goto fail;
-            if (aid != TOKEN_ID_NONE && !action) goto fail;
-            if (token_add_assoc_ex(t, subs, n_subs, subs_not, n_not, main, action) != 0)
-                goto fail;
-            AssocEntry *e = &t->assocs[t->count - 1];
-            e->hits = hits; e->seq = seq;
-            if (seq >= t->next_seq && seq != TOKEN_SEQ_NONE) t->next_seq = seq + 1;
-        }
-        if (r2.err) goto fail;
-    }
-
-    for (size_t i = 0; i < p->count; ++i) {
-        const char *nm = p->tokens[i]->name;
-        if (nm && strcmp(nm, TOKEN_UNKNOWING_NAME) == 0) {
-            p->unknowing = p->tokens[i];
-            break;
-        }
-    }
-
-    free(assoc_off); free(assoc_n); free(parent_id);
-    return p;
-fail:
-    free(assoc_off); free(assoc_n); free(parent_id);
-    pool_free(p);
-    return NULL;
-}
-
+/* 旧词池序列化（token_pool_dump / token_pool_load / TOKEN_MAGIC / TOKEN_VERSION）**已删**：
+ * 它自 model_io.h 那份存档出现起就被取代（见 model_io.h 文件头：那条路装不下意义指针/派生层），
+ * 仓里没有任何调用者，而且它也在写 subs/subs_not 那套已经退役的语境字段 ——
+ * 2026-10-07「删历史遗留」时一并删掉（v10）。 */
 #endif /* TOKEN_H */

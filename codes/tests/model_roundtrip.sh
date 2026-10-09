@@ -40,9 +40,9 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 cd "$WORK"
 
-CC=${CC:-gcc}
-$CC -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
-    -o aip "$ROOT/main.c" -lm 2>cc.log || true
+# aip 从哪来只有一处实现：tests/prebuilt.sh（第 0 步编好的二进制优先，否则自己编）
+sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" \
+    -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror 2>cc.log || true
 if [ ! -x aip ]; then cat cc.log; echo "FAIL: 编译失败"; exit 1; fi
 
 # 帧库 / 关系库也要一起进工作目录，否则这两层在两条路径里都是空的（测试会假通过）
@@ -57,19 +57,19 @@ fail() { echo "FAIL: $1"; exit 1; }
 # 存盘/读盘必须一致 —— 放进对话里，[4/5] 的逐字节比较就顺带看护了它。
 printf '猫\n你好\n我\n猫 吃 鱼\n谢谢\n他 以为 猫 会 飞\n' > chat.txt
 
-echo "[1/5] 训练语料 → slot0"
+echo "[1/6] 训练语料 → slot0"
 printf '::save slot0\n::stats\n::quit\n' > in1.txt
 ./aip "$CORPUS" < in1.txt > run1.log 2>&1 || fail "run1 退出非 0"
 [ -s slot0 ] || fail "slot0 没生成"
 grep -q '帧生成=' run1.log || fail "训练态没有帧层统计行"
 
-echo "[2/5] 加载 slot0 → 立刻存 slot1"
+echo "[2/6] 加载 slot0 → 立刻存 slot1"
 printf '::save slot1\n::stats\n::quit\n' > in2.txt
 ./aip --model slot0 < in2.txt > run2.log 2>&1 || fail "run2 退出非 0"
 cmp -s slot0 slot1 || fail "加载后重存(slot1) != 原件(slot0)"
 echo "  OK slot0 == slot1（$(wc -c < slot0) 字节）"
 
-echo "[3/5] 装载态 vs 训练态：规范状态 dump 逐行一致"
+echo "[3/6] 装载态 vs 训练态：规范状态 dump 逐行一致"
 printf '::pooldump\n::derivedump\n::quit\n' > in3.txt
 ./aip --model slot0 < in3.txt > dump_load.log 2>&1 || fail "dump_load 退出非 0"
 ./aip "$CORPUS"  < in3.txt > dump_train.log 2>&1 || fail "dump_train 退出非 0"
@@ -91,7 +91,7 @@ fi
 grep -q '^Z ' st_load.txt || fail "状态 dump 里没有特殊 Token 行（Z）"
 grep -q 'split=[0-9]' st_load.txt || fail "装载后 [原语:分割] 指针没有还原（split=-1）"
 
-echo "[4/5] 加载 slot0 + 对话 vs 训练 + 对话"
+echo "[4/6] 加载 slot0 + 对话 vs 训练 + 对话"
 cat chat.txt > in4.txt
 printf '::save slot2\n::quit\n' >> in4.txt
 ./aip --model slot0 < in4.txt > run3.log 2>&1 || fail "run3 退出非 0"
@@ -107,9 +107,45 @@ else fail "加载前后回复不一致"; fi
 cmp -s slot2 slot3 || fail "加载后对话轨迹(slot2) != 原地训练(slot3)"
 echo "  OK 加载后状态与原地训练逐字节一致（$(wc -c < slot2) 字节）"
 
-echo "[5/5] 统计对比"
+echo "[5/6] 统计对比"
 grep -m1 '^\[统计\]' run1.log > s1.stat || true
 grep -m1 '^\[统计\]' run2.log > s2.stat || true
 if diff -u s1.stat s2.stat; then echo "  OK 加载前后统计一致"; else fail "统计丢层"; fi
+
+echo "[6/6] v9 → v10：旧格式读得回来，「v9 读 → v10 存 → v10 读」等价"
+# 输入是**冻结的 v9 样本** tests/v9_sample.bin —— 它故意在边上带**非空的语境字段**
+# （n_subs=1 / n_subs=2+n_not=1 / 动作槽+语境同时非空）。为什么要专门造它：
+# 出厂 model.bin 里那些字段实测**全是 0**，而"跳过 N 个 4 字节 id"那几行在全 0 时
+# 跳 0 个 —— 写错了也看不出来（"拿旧二进制量出新结论"那个坑的存档版）。
+# 生成器源码 + 复现命令见 docs/audit-vs-deepseek看这里.md §6.50
+# （v10 之后那个工具编译不了，所以源码留档；样本本身冻在这里）。
+V9="$ROOT/tests/v9_sample.bin"
+[ -f "$V9" ] || fail "缺 v9 样本 $V9（v9→v10 迁移看护的输入）"
+# 先复核样本身份：文件头声明的 n_tok / n_assoc（magic + version + VSA_DIM 之后两个 u32）
+declared=$(od -An -tu4 -j12 -N8 "$V9" | tr -s ' ' | sed 's/^ //;s/ $//')
+[ "$declared" = "38 25" ] || fail "v9 样本头里 n_tok/n_assoc = 「$declared」（应当是 38 25：样本被换了？）"
+printf '::load %s\n::stats\n::fp\n::save v10slot\n::quit\n' "$V9" > in6.txt
+./aip < in6.txt > run6.log 2>&1 || fail "读 v9 样本退出非 0"
+grep -q '边=25' run6.log \
+    || fail "v9 样本读进来边数 ≠ 文件头声明的 25：$(grep -m1 '统计' run6.log)"
+# 另存出来必须真的是 **v10**（版本号 = magic 之后的第二个 u32）
+v10ver=$(od -An -tu4 -j4 -N4 v10slot | tr -d ' ')
+[ "$v10ver" = "10" ] || fail "另存文件的版本号是 $v10ver（应当是 10）"
+# 关键等价：v9 直接读进来的内存态 与 把它存成 v10 再读回来，**指纹逐位一致**
+fp_v9=$(grep -o '\[指纹\] [0-9a-f]*' run6.log | head -1)
+printf '::load v10slot\n::fp\n::quit\n' > in7.txt
+./aip < in7.txt > run7.log 2>&1 || fail "读 v10slot 退出非 0"
+fp_v10=$(grep -o '\[指纹\] [0-9a-f]*' run7.log | head -1)
+[ -n "$fp_v9" ] || fail "v9 装载态没打出指纹"
+[ "$fp_v9" = "$fp_v10" ] || fail "v9→v10 不等价：$fp_v9 vs $fp_v10"
+echo "  OK 边=25（与文件头一致）、另存版本=10、指纹 $fp_v9 前后一致"
+# 顺带钉住"语境字段真的没了"：新代码 ::edges 里不许再出现「语境[」。
+# （同一份样本在旧代码上会打出 `语境[水里]` / `语境[水里,岸上] 非[岸上]` —— 实测的 A/B，
+#  见 §6.50；所以这条断言不是看格式，是看"旧字段确实被丢掉了"。）
+printf '::load %s\n::edges 猫\n::quit\n' "$V9" > in8.txt
+./aip < in8.txt > run8.log 2>&1 || fail "读样本看边退出非 0"
+grep -q '语境\[' run8.log && fail "v10 的 ::edges 还在打语境字段（字段应当已删）"
+grep -q '→ 鱼' run8.log || fail "样本里的边（猫→鱼）没读出来"
+echo "  OK 语境字段不再出现在 ::edges（旧边当普通边读进来 —— 少一层条件，见 §6.50 局限）"
 
 echo "PASS model_roundtrip"

@@ -19,6 +19,10 @@
 #       SUITES="features tokenop" sh tests/all.sh  只跑这几套（名字＝清单第一列）
 #
 # 产物：_t/par/<名字>.log（该套全部输出）、_t/par/<名字>.rc（退出码 + 毫秒）
+#
+# 套件要的 `aip` 从哪来：第 0 步刚编好 build_aip，把它当**预置件**发给套件
+# （AIP_PREBUILT + 源码内容哈希；套件那头只有 tests/prebuilt.sh 一份实现）。
+# 原先 9 个套件各自再编一遍同一个 main.c（各 ~16 s）—— 这是套件相位的一半。
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
@@ -72,8 +76,12 @@ JOBS=4 sh tests/probes_build.sh > "$PAR/probes.log" 2>&1 &
 probes_pid=$!
 gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_aip main.c -lm
 echo "BUILD OK"
+# 预置件的"新鲜度"凭据：源码 + 全部头文件的内容哈希（口径同 tests/probes_build.sh）。
+# 套件那头对不上就自己编（防"拿旧二进制量出新结论"）。
+AIP_PREBUILT_HASH=$(cat "$ROOT"/*.h "$ROOT"/*.c | md5sum | cut -d' ' -f1)
+export AIP_PREBUILT_HASH
 # 探针也要编译得过、跑得出结论 —— 它们是"把拍的变成量的"那件工具，自己不能没看护。
-# （血泪：affectprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
+# （血泪：driveprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
 if ! wait "$probes_pid"; then
     echo "  ^^^ 探针门失败："
     cat "$PAR/probes.log"
@@ -97,6 +105,8 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
     cp -a "$ROOT/tools" "$SB/tools"
     cp "$ROOT/model.bin" "$SB/model.bin"
     cp "$ROOT/build_aip" "$SB/build_aip"
+    # 套件里 `sh "$ROOT/tests/prebuilt.sh" aip …` 复制的就是这一份（不再各编 16 s）
+    AIP_PREBUILT="$SB/build_aip"; export AIP_PREBUILT
     for f in frames.txt relations.txt; do
         if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$SB/$f"; fi
     done

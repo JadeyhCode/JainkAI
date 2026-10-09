@@ -5,7 +5,7 @@
  *   ① `ai_learn_causal` 只看时序相邻：一次巧合建一条 `hits=0`、状态=活跃的边，
  *      **出现一百次和出现一次没区别**（post hoc 迷信）；
  *   ② `ai_learn_counterfactual` 调 `ai_weaken_edge`，而后者要求 `n_subs==0`，
- *      因果边带 `[因果]` 语境（`n_subs==1`）→ **永远匹配不上**：
+ *      因果边当时靠语境字段标出来，而 ai_weaken_edge 只认无语境的边 → **永远匹配不上**：
  *      计数器 `反事实=` 每次 +1，边却一点没变（机制在、行为不在）。
  *
  * 这个探针把三个时刻的状态直接打出来，改这条语义之前先跑它 ——
@@ -25,12 +25,12 @@ static void show(AI *ai, const char *from, const char *to) {
     Token *b = pool_find(ai->pool, to);
     AssocEntry *e = a && b ? ai_causal_edge(a, b, ai->causal) : NULL;
     if (!e) { printf("  %s -> %s : （还没有这条猜想）\n", from, to); return; }
-    printf("  %s -> %s : hits=%u mem=%u（%s） 语境=%s walkable=%d\n",
+    printf("  %s -> %s : hits=%u mem=%u（%s） 标记=%s walkable=%d\n",
            from, to, (unsigned)e->hits, (unsigned)e->mem_state,
            e->mem_state == MEM_ACTIVE ? "升格/可信" :
            e->mem_state == MEM_FADING ? "暂时" :
            e->mem_state == MEM_DORMANT ? "雪藏" : "遗忘",
-           e->n_subs && e->subs[0] && e->subs[0]->name ? e->subs[0]->name : "-",
+           edge_is_causal_guess(e) ? AI_CAUSAL_MARK : "-",
            ai_edge_walkable(ai, e, 1.0f));
 }
 

@@ -14,7 +14,7 @@
  *
  * 踩过的坑（写在这儿，免得下一个改这段代码的人再踩）：
  *   `ai_learn_counterfactual` 原来调 `ai_weaken_edge`，而后者要求 `n_subs == 0`；
- *   因果边带 `[因果]` 语境（`n_subs == 1`）→ **永远匹配不上**。
+ *   因果边当时靠语境字段标出来，而 ai_weaken_edge 只认无语境的边 → **永远匹配不上**。
  *   症状极隐蔽：计数器 `反事实=` 每次都 +1（看起来机制在跑），
  *   边上的 hits/状态却一直没变 —— **声明了机制，行为不在**。
  *
@@ -74,7 +74,7 @@ static void test_superstition(void) {
     ok(e != NULL, "第一次「我说猫 → 对方说鱼」建了一条**猜想**边");
     ok(e && e->hits == 1, "一次巧合：hits=1（而不是被当成已证实的连结）");
     ok(e && e->mem_state == MEM_FADING, "一次巧合：状态=淡化（会淡、可被反例雪藏）");
-    ok(e && e->n_subs == 1 && e->subs[0] == ai->causal, "带 [因果] 标记（所以知识查询认不出它）");
+    ok(e && edge_is_causal_guess(e), "动作槽带 [因果] 标记（所以知识查询认不出它）");
     ok(e && ai_edge_walkable(ai, e, 1.0f) == 0, "不参与走边（猜想的身份不会被生成器用掉）");
     ok(rel_direct(cat, REL_IS_A, fish) == 0 && rel_direct(cat, REL_HAS, fish) == 0,
        "它**不是**知识：任何核心关系上都没有它");
@@ -89,7 +89,7 @@ static void test_superstition(void) {
     /* 上限：见得多不代表能刷成事实 */
     for (int k = 0; k < 50; ++k) ai_learn_causal(ai, w, 1);
     ok(e && e->hits == AI_CAUSAL_HITS_CAP, "重复有上限（刷不到「事实」那一档）");
-    ok(e && e->n_subs == 1 && ai_edge_walkable(ai, e, 1.0f) == 0,
+    ok(e && edge_is_causal_guess(e) && ai_edge_walkable(ai, e, 1.0f) == 0,
        "升格之后仍然是猜想：带标记、不走边、不进关系表");
     ai_free(ai);
 }

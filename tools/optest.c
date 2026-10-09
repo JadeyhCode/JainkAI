@@ -14,7 +14,7 @@
  * 用法：gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest
  */
 #include "../agent.h"
-#include "../affect.h"
+#include "../drive.h"
 #include "../model_io.h"
 #include "../token_lang.h"
 
@@ -85,7 +85,7 @@ static void test_insert_between(void) {
 
 /* ============================ ④ 临时 Token 不存盘 ============================ */
 static void test_temp_not_saved(void) {
-    printf("== ④ 临时 Token 与指向它的边**不进存档**（格式不动、v9 不变） ==\n");
+    printf("== ④ 临时 Token 与指向它的边**不进存档**（草稿不写进知识） ==\n");
     AI *ai = ai_new();
     Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
     Token *via = T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]");
@@ -99,12 +99,15 @@ static void test_temp_not_saved(void) {
     for (size_t i = 0; i < cat->count; ++i) if (cat->assocs[i].main == via) i_via = i;
     ok(i_via != (size_t)-1 && !mio_edge_saved(&cat->assocs[i_via]),
        "指向临时 Token 的边不存盘（否则装载会指向不存在的 id）");
-    Token *subs[1] = { via };
-    (void)token_add_assoc_ex(moon, subs, 1, NULL, 0, cat, NULL);
-    size_t i_ctx = (size_t)-1;
-    for (size_t i = 0; i < moon->count; ++i) if (moon->assocs[i].n_subs == 1) i_ctx = i;
-    ok(i_ctx != (size_t)-1 && !mio_edge_saved(&moon->assocs[i_ctx]),
-       "**语境里**带临时 Token 的边也不存盘");
+    /* v10：语境字段删了，「不存盘」的判据只看两端（main / action）。
+     * 补一条现在**真的存在**的路径：**动作槽**里是临时 Token 的边也不存盘。 */
+    {
+        Token *mark = pool_token_intern(ai->pool, MICRO_TEMP_TOKEN_PREFIX "草稿标记]");
+        (void)token_add_assoc_action_unique(moon, cat, mark);
+        long i_act = micro_edge_index(moon, cat);
+        ok(i_act >= 0 && !mio_edge_saved(&moon->assocs[i_act]),
+           "**动作槽**里带临时 Token 的边也不存盘");
+    }
     ok(!token_is_temp(cat) && !token_is_temp(NULL), "普通 Token / NULL 不是临时");
     ai_free(ai);
 }
@@ -153,16 +156,18 @@ static void test_edge_budget_charged(void) {
        "第二条新边：预算拦下（**这条以前永远拦不住** —— 记账排在应用之后）");
     safety_step_begin(ai);
     ok(micro_try(ai, &m2, note, sizeof note) == SAFE_OK, "新的一步：预算重置，又能建");
-    /* 带语境的边也算新边（不然「给同一条边加不同语境」会绕过预算） */
+    /* v10：语境字段删掉之后，「给同一条边加不同语境来绕过预算」这条路**不存在了** ——
+     * 判据只有 (target, main)。这里钉住新的真话：同一条边再提一次是幂等，不占新边预算。 */
     safety_step_begin(ai);
     mk->safe.max_new_edges_step = 1;
     ModIntent m3; memset(&m3, 0, sizeof m3);
-    m3.type = MOD_ADD_ASSOC; m3.target = a; m3.main = b; m3.n_subs = 1; m3.subs[0] = c;
-    ok(micro_try(ai, &m3, note, sizeof note) == SAFE_OK, "带语境的边（不同语境）算新边：放过第一条");
+    m3.type = MOD_ADD_ASSOC; m3.target = a; m3.main = b;
+    ok(micro_try(ai, &m3, note, sizeof note) == SAFE_OK,
+       "新边判据只看 (target, main)：这条放过");
     ModIntent m4; memset(&m4, 0, sizeof m4);
-    m4.type = MOD_ADD_ASSOC; m4.target = a; m4.main = b; m4.n_subs = 1; m4.subs[0] = d;
-    ok(micro_try(ai, &m4, note, sizeof note) == SAFE_DENY_BUDGET_EDGE,
-       "另一种语境的边也要占预算（不能靠 micro_has_edge 只看无语境那条绕过）");
+    m4.type = MOD_ADD_ASSOC; m4.target = a; m4.main = b;
+    ok(micro_try(ai, &m4, note, sizeof note) == SAFE_OK,
+       "同一条边再提一次：幂等（**语境没了 ⇒ 绕不过预算，也不可能重复**）");
     ai_free(ai);
 }
 
@@ -409,31 +414,34 @@ static void test_premise(void) {
         ai_free(ai4);
     }
 
-    /* **语境退役**：跑完上面所有创建路径，池子里不该有 n_subs/n_not */
-    size_t legacy = 0;
+    /* **语境退役**（v10）：字段已经从 AssocEntry 里删掉了（编译期即证）。
+     * 这里钉一条**现在还在**的结构不变式：同一对词最多一条**无标记**边 ——
+     * 以前靠语境区分的那多条边不复存在（带标记的 [前提]/[因果] 边不算，它们有别的用途）。 */
+    size_t dup = 0;
     for (size_t i = 0; i < ai->pool->count; ++i) {
         Token *t = ai->pool->tokens[i];
         if (!t || t->is_garbage) continue;
-        for (size_t j = 0; j < t->count; ++j)
-            if (t->assocs[j].n_subs || t->assocs[j].n_not) legacy++;
+        for (size_t j = 0; j < t->count; ++j) {
+            if (t->assocs[j].action) continue;
+            for (size_t k = j + 1; k < t->count; ++k)
+                if (!t->assocs[k].action && t->assocs[k].main == t->assocs[j].main) dup++;
+        }
     }
-    ok(legacy == 0, "语境（subs/subs_not）**没有任何创建者**了（退役）");
+    ok(dup == 0, "v10 结构不变式：同一对词最多一条**无标记**边（语境没了 ⇒ 不会再冒出第二条）");
 
-    /* 旧模型容忍：字段还在，旧边读回来照样按老语义匹配（不当成坏数据） */
+    /* 条件搬到了标记上：联想这条路**恒真**（用户原话：联想本来不依赖前提），
+     * 逻辑层才按 edge_premise_polarity / edge_is_causal_guess 决定用不用。 */
     {
         AI *ai3 = ai_new();
         Token *a = T(ai3, "甲"), *b = T(ai3, "乙"), *cx = T(ai3, "丙");
-        Token *subs[1] = { cx };
-        (void)token_add_assoc_ex(a, subs, 1, NULL, 0, b, NULL);
-        long i3 = -1;
-        for (size_t k = 0; k < a->count; ++k) if (a->assocs[k].main == b) i3 = (long)k;
+        (void)token_add_assoc_unique(a, b);
+        long i3 = micro_edge_index(a, b);
         Token *ctx_yes[1] = { cx };
         Token *ctx_no[1]  = { T(ai3, "丁") };
-        ok(i3 >= 0 && a->assocs[i3].n_subs == 1, "旧边（带语境）还写得进去（兼容路径在）");
         ok(i3 >= 0 && entry_matches(&a->assocs[i3], ctx_yes, 1) == 1,
-           "旧模型读回来：语境在 → 匹配（容忍，不当坏数据）");
-        ok(i3 >= 0 && entry_matches(&a->assocs[i3], ctx_no, 1) == 0,
-           "旧模型读回来：语境不在 → 不匹配（老语义没坏）");
+           "注意窗口里提到过什么 → 边照样匹配");
+        ok(i3 >= 0 && entry_matches(&a->assocs[i3], ctx_no, 1) == 1,
+           "注意窗口里没提到 → **也**匹配：条件不在边上，联想不依赖前提");
         ai_free(ai3);
     }
     ai_free(ai);
@@ -589,7 +597,7 @@ static void test_restore_pending(void) {
     /* 模拟思维层当初落下的标记（真流程里由 MOD_ADD_TOKEN 建，这里直接建同名节点） */
     Token *mark = pool_token_intern(ai->pool, MICRO_ASK_TOKEN_PREFIX "猫_会_跳舞_吗]");
     ok(mark != NULL, "前置：存盘里带着 [自问:猫_会_跳舞_吗] 标记");
-    (void)token_add_assoc_unique(mark, NULL, 0, cat);
+    (void)token_add_assoc_unique(mark, cat);
     Think *t = think_of(ai);
     ok(t->n_open == 0, "前置：内存里还没挂着问题（Think 是瞬态的）");
     ok(think_restore_pending(ai) == 1 && t->n_open == 1,
@@ -742,7 +750,7 @@ static void test_d4_conditional(void) {
         AI *ai = ai_new();
         Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
         (void)T(ai, "水");
-        (void)token_add_assoc_unique(cat, NULL, 0, fish);      /* 先有连结（共现学来的） */
+        (void)token_add_assoc_unique(cat, fish);      /* 先有连结（共现学来的） */
         {   /* 把这条连结"做实"：观测到的连结至少命中过 2 次（刚造出来的边不算证据） */
             long ei = micro_edge_index(cat, fish);
             if (ei >= 0) cat->assocs[ei].hits = 5;
@@ -766,7 +774,7 @@ static void test_d4_conditional(void) {
         AI *ai = ai_new();
         Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
         (void)T(ai, "水");
-        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        (void)token_add_assoc_unique(cat, fish);
         {
             long ei = micro_edge_index(cat, fish);
             if (ei >= 0) cat->assocs[ei].hits = 5;
@@ -785,7 +793,7 @@ static void test_d4_conditional(void) {
     {
         AI *ai = ai_new();
         Token *cat = T(ai, "猫"), *fish = T(ai, "鱼");
-        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        (void)token_add_assoc_unique(cat, fish);
         {
             long ei = micro_edge_index(cat, fish);
             if (ei >= 0) cat->assocs[ei].hits = 5;
@@ -811,7 +819,7 @@ static void test_d4_conditional(void) {
         AI *ai = ai_new();
         Token *cat = T(ai, "猫4"), *fish = T(ai, "鱼4");
         (void)T(ai, "水4");
-        (void)token_add_assoc_unique(cat, NULL, 0, fish);
+        (void)token_add_assoc_unique(cat, fish);
         {
             long ei = micro_edge_index(cat, fish);
             if (ei >= 0) cat->assocs[ei].hits = 5;
@@ -1188,15 +1196,15 @@ static void test_credibility(void) {
     }
 }
 
-/* ============================ ⑳ 结构类比 / 情绪参与决策 / 时间顺序 ============================
+/* ============================ ⑳ 结构类比 / 驱动参与决策 / 时间顺序 ============================
  *
  * 清单里的 #6 三小件，各做成**窄而可测**的一步：
  *   ① **结构映射式类比**：R5 现在不只看 emb 像不像，还看**关系骨架**像不像
  *      （用词完全不同也能借答案）—— 这是"结构映射"与"最近邻"的区别；
- *   ② **情绪参与决策**：一张耦合表（驱动 → 参数 → 增减），默认关，`::drive` 全列出来；
+ *   ② **驱动参与决策**：一张耦合表（驱动 → 参数 → 增减），默认关，`::drive` 全列出来；
  *   ③ **时间顺序**：谁先出现（按首次见到的 tick），带顺序证据。 */
-static void test_struct_affect_order(void) {
-    printf("== ⑳ 结构类比 / 情绪参与决策 / 时间顺序 ==\n");
+static void test_struct_drive_order(void) {
+    printf("== ⑳ 结构类比 / 驱动参与决策 / 时间顺序 ==\n");
     /* ① 结构类比：骨架一样、emb 都没有（新 AI 没算 emb）也能借到答案 */
     {
         AI *ai = ai_new();
@@ -1230,28 +1238,28 @@ static void test_struct_affect_order(void) {
         ok(strstr(txt, "像") != NULL, "链上写明「像」（不是当成事实）");
         ai_free(ai);
     }
-    /* ② 情绪参与决策：表 + 开关（默认关时一个修正都不施加） */
+    /* ② 驱动参与决策：表 + 开关（默认关时一个修正都不施加） */
     {
         AI *ai = ai_new();
-        ok(ai->affect_on == 0, "默认**关**（不改任何行为参数）");
+        ok(ai->drive_on == 0, "默认**关**（不改任何行为参数）");
         ai->inner.fatigue = 0.9f;
-        affect_policy_step(ai);
-        ok(ai->affect_d_steps == 0, "关着的时候疲劳再高也不施加减步修正");
-        ai->affect_on = 1;
-        affect_policy_step(ai);
-        ok(ai->affect_d_steps < 0, "打开后：疲劳高 → 思考步数减（表里那一行）");
+        drive_policy_step(ai);
+        ok(ai->drive_d_steps == 0, "关着的时候疲劳再高也不施加减步修正");
+        ai->drive_on = 1;
+        drive_policy_step(ai);
+        ok(ai->drive_d_steps < 0, "打开后：疲劳高 → 思考步数减（表里那一行）");
         ai->inner.fatigue = 0.0f; ai->inner.arousal = 0.8f;
-        affect_policy_step(ai);
-        ok(ai->affect_d_gen > 0, "唤醒高 → 生成长度加（另一行）");
+        drive_policy_step(ai);
+        ok(ai->drive_d_gen > 0, "唤醒高 → 生成长度加（另一行）");
         /* 表按实测重调过：「唤醒低」那行**永不触发**（唤醒最低也 0.46），
-         * 换成了**真的会低**的量 —— 不适高（没底）→ 少说。见 affect.h 的实测注释。 */
+         * 换成了**真的会低**的量 —— 不适高（没底）→ 少说。见 drive.h 的实测注释。 */
         ai->inner.arousal = 0.1f; ai->inner.discomfort = 0.95f; ai->inner.comfort = 0.2f;
-        affect_policy_step(ai);
-        ok(ai->affect_d_gen < 0 && ai->affect_d_cutoff > 0.0f,
+        drive_policy_step(ai);
+        ok(ai->drive_d_gen < 0 && ai->drive_d_cutoff > 0.0f,
            "没底（不适高）→ 少说；不舒服 → 阈值抬高（保守）");
         ai->inner.discomfort = 0.1f; ai->inner.comfort = 0.8f;
-        affect_policy_step(ai);
-        ok(ai->affect_d_cutoff < 0.0f, "舒服 → 阈值降（敢想远一点）—— 对称的那一行");
+        drive_policy_step(ai);
+        ok(ai->drive_d_cutoff < 0.0f, "舒服 → 阈值降（敢想远一点）—— 对称的那一行");
         ai_free(ai);
     }
     /* ③ 时间顺序：先出现的 tick 更小 */
@@ -1275,7 +1283,7 @@ static void test_premise_tiers(void) {
     AI *ai = ai_new();
     Token *cat = T(ai, "猫5"), *cook = T(ai, "做饭5"), *who = T(ai, "人5");
     (void)token_tag_rel(who, cook, REL_CAN, REL_BOOST);
-    (void)token_add_assoc_unique(cook, NULL, 0, who);   /* 反向共现边：扩散要能走过去 */
+    (void)token_add_assoc_unique(cook, who);   /* 反向共现边：扩散要能走过去 */
     char note[200];
     char *a1[3] = {(char *)"猫5", (char *)"做饭5", (char *)"人5"};
     ok(token_op_run(ai, "加前提", a1, 3, note, sizeof note) == 1, "建 猫5 —[前提]→ 人5 → 做饭5");
@@ -1400,8 +1408,8 @@ static void test_lease_gate_tiers(void) {
                 char nm[16];
                 snprintf(nm, sizeof nm, "子%d", i);
                 Token *o = T(a2, nm);
-                (void)token_add_assoc_unique(p1, NULL, 0, o);
-                (void)token_add_assoc_unique(p2, NULL, 0, o);
+                (void)token_add_assoc_unique(p1, o);
+                (void)token_add_assoc_unique(p2, o);
             }
             ok(ai_pair_jaccard(p1, p2) > 0.5, "邻居几乎一样 → Jaccard 高");
             ok(ai_write_importance(a2, p1, p2) < ai_write_importance(a2, x, y),
@@ -1425,7 +1433,7 @@ static void test_lease_gate_tiers(void) {
             char nm[16];
             snprintf(nm, sizeof nm, "辛%d", i);
             Token *o = T(a3, nm);
-            (void)token_add_assoc_unique(fat, NULL, 0, o);
+            (void)token_add_assoc_unique(fat, o);
             long k = micro_edge_index(fat, o);
             if (k >= 0) fat->assocs[k].hits = 3;
         }
@@ -1454,7 +1462,7 @@ int main(void) {
     test_dialog_trigger();
     test_write_ledger();
     test_credibility();
-    test_struct_affect_order();
+    test_struct_drive_order();
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();

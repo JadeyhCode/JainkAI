@@ -38,9 +38,6 @@ static uint64_t state_fingerprint(const AI *ai) {
         MIX(t->count);
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
-            MIX(e->n_subs); MIX(e->n_not);
-            for (uint8_t k = 0; k < e->n_subs; ++k) MIX(e->subs[k] ? e->subs[k]->id : TOKEN_ID_NONE);
-            for (uint8_t k = 0; k < e->n_not;  ++k) MIX(e->subs_not[k] ? e->subs_not[k]->id : TOKEN_ID_NONE);
             MIX(e->main ? e->main->id : TOKEN_ID_NONE);
             MIX(e->action ? e->action->id : TOKEN_ID_NONE);
             MIX(e->hits); MIX(e->seq); MIX(e->mem_state);
@@ -70,9 +67,6 @@ static void fingerprint_dims(const AI *ai) {
         if (t->hv_prev) for (size_t k = 0; k < VSA_DIM; ++k) MIXH(hhv, (uint8_t)t->hv_prev[k]);
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
-            MIXH(he, e->n_subs); MIXH(he, e->n_not);
-            for (uint8_t k = 0; k < e->n_subs; ++k) MIXH(he, e->subs[k] ? e->subs[k]->id : TOKEN_ID_NONE);
-            for (uint8_t k = 0; k < e->n_not;  ++k) MIXH(he, e->subs_not[k] ? e->subs_not[k]->id : TOKEN_ID_NONE);
             MIXH(he, e->main ? e->main->id : TOKEN_ID_NONE);
             MIXH(he, e->action ? e->action->id : TOKEN_ID_NONE);
             MIXH(he, e->hits); MIXH(he, e->seq); MIXH(he, e->mem_state);
@@ -100,9 +94,6 @@ static void fingerprint_all(const AI *ai) {
         if (t->name) for (const char *s = t->name; *s; ++s) MIXH(hm, (unsigned char)*s);
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
-            MIXH(he, e->n_subs); MIXH(he, e->n_not);
-            for (uint8_t k = 0; k < e->n_subs; ++k) MIXH(he, e->subs[k] ? e->subs[k]->id : TOKEN_ID_NONE);
-            for (uint8_t k = 0; k < e->n_not;  ++k) MIXH(he, e->subs_not[k] ? e->subs_not[k]->id : TOKEN_ID_NONE);
             MIXH(he, e->main ? e->main->id : TOKEN_ID_NONE);
             MIXH(he, e->action ? e->action->id : TOKEN_ID_NONE);
             MIXH(he, e->hits); MIXH(he, e->seq); MIXH(he, e->mem_state);
@@ -528,7 +519,7 @@ typedef enum {
     CMD_TRUST,              /* 逐条可信度是否参与判定（默认关） */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
-    CMD_DRIVE,              /* 情绪参与决策：耦合表 + 当前生效的修正 */
+    CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
     CMD_ORDER,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
@@ -630,7 +621,7 @@ static const CmdDef CMDS[] = {
     { "premise", NULL, 2, "基本",
       "问 A 与 B 之间的**前提 token** 是什么（前提是普通 token：联想照走、逻辑查得到）", CMD_PREMISE },
     { "drive", NULL, 1, "基本",
-      "情绪参与决策：off（默认）| on；列出**耦合表**与当前生效的修正", CMD_DRIVE },
+      "驱动参与决策：off（默认）| on；列出**耦合表**与当前生效的修正", CMD_DRIVE },
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**（按首次见到的 tick），并给顺序证据", CMD_ORDER },
     { "wgate", NULL, 1, "基本",
@@ -853,23 +844,11 @@ static void cmd_edges(const AI *ai, const char *word) {
         printf("  → %-16s hits=%-4u seq=%-4u 角色=%u 状态=%u",
                e->main && e->main->name ? e->main->name : "(无名)",
                e->hits, e->seq, (unsigned)e->role, (unsigned)e->mem_state);
-        if (e->n_subs) {
-            printf("  语境[");
-            for (uint8_t k = 0; k < e->n_subs; ++k)
-                printf("%s%s", k ? "," : "",
-                       e->subs[k] && e->subs[k]->name ? e->subs[k]->name : "?");
-            printf("]");
-        }
-        if (e->n_not) {
-            printf("  非[");
-            for (uint8_t k = 0; k < e->n_not; ++k)
-                printf("%s%s", k ? "," : "",
-                       e->subs_not[k] && e->subs_not[k]->name ? e->subs_not[k]->name : "?");
-            printf("]");
-        }
         if (edge_is_premise_link(e))
             printf("  **前提**（%s 是这两个词之间的前提 token）",
                    e->main && e->main->name ? e->main->name : "?");
+        else if (edge_is_causal_guess(e))
+            printf("  **因果猜想**（动作槽上的 [因果] 标记；不是知识，不参与走边）");
         else if (e->action) printf("  动作=%s", e->action->name ? e->action->name : "?");
         /* **来源档放行尾**：老看护按「状态=N 语境[...]」的顺序钉格式，
          * 追加在最后就不会打断它们（来源是**新增**信息，不是改老字段）。 */
@@ -1435,14 +1414,12 @@ int main(int argc, char **argv) {
                 printf("[%s] count=%zu cap=%zu next_seq=%u\n", arg, t->count, t->cap, t->next_seq);
                 for (size_t j = 0; j < t->count; ++j) {
                     const AssocEntry *e = &t->assocs[j];
-                    printf("  E%zu main=%s act=%s hits=%u seq=%u mem=%u bt=%llu lt=%llu ns=%u",
+                    printf("  E%zu main=%s act=%s hits=%u seq=%u mem=%u bt=%llu lt=%llu",
                            j, e->main ? e->main->name : "-",
                            e->action ? e->action->name : "-", e->hits, e->seq,
                            (unsigned)e->mem_state,
                            (unsigned long long)e->birth_tick,
-                           (unsigned long long)e->last_touch_tick, (unsigned)e->n_subs);
-                    for (uint8_t k = 0; k < e->n_subs; ++k)
-                        printf(" sub[%u]=%s", k, e->subs[k] && e->subs[k]->name ? e->subs[k]->name : "?");
+                           (unsigned long long)e->last_touch_tick);
                     printf("\n");
                 }
                 continue;
@@ -2021,18 +1998,13 @@ int main(int argc, char **argv) {
                            (unsigned long long)t->birth_tick, (unsigned long long)t->last_touch_tick);
                     for (size_t j = 0; j < t->count; ++j) {
                         const AssocEntry *e = &t->assocs[j];
-                        printf("  E %d h=%u s=%u mem=%u role=%u top=%u pat=%u rel=%u nrel=%u dyn=%u b=%llu tt=%llu act=%d ns=%u nn=%u",
+                        printf("  E %d h=%u s=%u mem=%u role=%u top=%u pat=%u rel=%u nrel=%u dyn=%u b=%llu tt=%llu act=%d",
                                e->main ? (int)e->main->id : -1, e->hits, e->seq,
                                (unsigned)e->mem_state, (unsigned)e->role, (unsigned)e->topic,
                                (unsigned)e->pattern, (unsigned)e->rel, (unsigned)e->nrel,
                                (unsigned)e->dyn,
                                (unsigned long long)e->birth_tick, (unsigned long long)e->last_touch_tick,
-                               e->action ? (int)e->action->id : -1,
-                               (unsigned)e->n_subs, (unsigned)e->n_not);
-                        for (unsigned k = 0; k < e->n_subs; ++k)
-                            printf(" s%u", e->subs[k] ? e->subs[k]->id : 0u);
-                        for (unsigned k = 0; k < e->n_not; ++k)
-                            printf(" n%u", e->subs_not[k] ? e->subs_not[k]->id : 0u);
+                               e->action ? (int)e->action->id : -1);
                         printf("\n");
                     }
                 }
@@ -2258,17 +2230,17 @@ int main(int argc, char **argv) {
                 const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
                 while (arg && *arg == ' ') arg++;
                 if (arg && *arg) {
-                    if (!strcmp(arg, "on"))       a->brain->affect_on = 1;
-                    else if (!strcmp(arg, "off")) a->brain->affect_on = 0;
+                    if (!strcmp(arg, "on"))       a->brain->drive_on = 1;
+                    else if (!strcmp(arg, "off")) a->brain->drive_on = 0;
                     else { printf("[用法] ::drive [on|off]\n"); continue; }
                 }
-                affect_policy_step(a->brain);
-                printf("[情绪参与决策 = %s]\n", a->brain->affect_on ? "开" : "关（默认）");
+                drive_policy_step(a->brain);
+                printf("[驱动参与决策 = %s]\n", a->brain->drive_on ? "开" : "关（默认）");
                 printf("  当前驱动：舒适=%.2f 唤醒=%.2f 疲劳=%.2f\n",
                        a->brain->inner.comfort, a->brain->inner.arousal, a->brain->inner.fatigue);
                 printf("  耦合表（驱动 → 参数 → 生效条件 → 增减）：\n");
-                for (size_t i = 0; i < AI_AFFECT_N; ++i) {
-                    const AffectCoupling *c = &AI_AFFECT[i];
+                for (size_t i = 0; i < AI_DRIVE_N; ++i) {
+                    const DriveCoupling *c = &AI_DRIVE[i];
                     float v = ai_drive_value(a->brain, c->drive);
                     int active = (v >= c->lo && v <= c->hi);
                     printf("    %-4s → %-6s  %.2f..%.2f  %+d  %s%s\n",
@@ -2276,8 +2248,8 @@ int main(int argc, char **argv) {
                            active ? "  ← 现在命中" : "");
                 }
                 printf("  这一轮生效：思考步数 %+d、生成长度 %+d、激活阈值 %+.2f\n",
-                       a->brain->affect_d_steps, a->brain->affect_d_gen,
-                       (double)a->brain->affect_d_cutoff);
+                       a->brain->drive_d_steps, a->brain->drive_d_gen,
+                       (double)a->brain->drive_d_cutoff);
                 printf("  没打开时这些修正**一律不施加**（行为与从前逐字节相同）\n");
                 continue;
             }

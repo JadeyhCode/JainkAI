@@ -9,7 +9,7 @@
  *
  * 用法：./build_premholdprobe [模型] [阈值扫描上限] */
 #include "../agent.h"
-#include "../affect.h"
+#include "../drive.h"
 #include "../model_io.h"
 #include <stdio.h>
 

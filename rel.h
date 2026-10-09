@@ -219,7 +219,7 @@ static inline int rel_obs_opposite(const Token *a, uint8_t rid, const Token *b, 
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->role == ASSOC_ROLE_DERIVED) continue;      /* 缓存不是观测，该被推翻 */
         if (neg ? (e->rel & bit) : (e->nrel & bit)) return 1;
     }
@@ -477,7 +477,7 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->rel & bit) {
             if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
             return 1;
@@ -491,7 +491,7 @@ static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b,
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->nrel & bit) {
             if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
             return 1;
@@ -690,7 +690,7 @@ static inline int rel_direct_review(const Token *a, uint8_t rid, const Token *b,
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
-        if (e->main != b || e->n_subs != 0 || e->n_not != 0) continue;
+        if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->role == ASSOC_ROLE_DERIVED) continue;       /* 缓存不算依据 */
         if ((e->rel & bit) && (e->nrel & bit)) continue;   /* 自己打架的边不算依据 */
         if (want_neg ? (e->nrel & bit) : (e->rel & bit)) return 1;

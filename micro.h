@@ -243,38 +243,21 @@ static inline int micro_endpoint_reserved(const Token *t) {
     return !micro_internal_ns(t->name);
 }
 
-/* a→b 这条边在不在？返回下标，-1 = 没有。只看无语境的那条（自修改建的就是这种）。 */
+/* a→b 这条**普通边**在不在？返回下标，-1 = 没有。
+ * v10：语境字段没了，但判据不是"只看 main" —— **因果猜想边不算**（`[因果]` 标记）。
+ * v9 里 `n_subs == 0` 那个条件是同一个意思（猜想边当时带语境）：
+ * 少了这一条，MOD_TAG_DERIVED / MOD_REMOVE_ASSOC 会去动猜想边（实测让"撤销缓存"静默失效）。 */
 static inline long micro_edge_index(const Token *t, const Token *main) {
     if (!t || !main) return -1;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && t->assocs[i].n_subs == 0 &&
-            t->assocs[i].n_not == 0) return (long)i;
+        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i])) return (long)i;
     return -1;
 }
 static inline int micro_has_edge(const Token *t, const Token *main) {
     return micro_edge_index(t, main) >= 0;
 }
-/* **带语境的边**的查询。上面那两个只管「无语境的那条」——
- * 于是 n_subs>0 的边在它们眼里等于**不存在**：加权加不上、预算也不算。
- * 这类「辅助函数默认无边」的坑这一轮修了两处（另一处是 ai_weaken_edge 的反事实，见
- * docs/人思考的原理-采用与不采用.md），所以这里给出带语境的版本，别再各写一遍。 */
-static inline long micro_edge_index_ctx(const Token *t, Token *const *subs,
-                                        uint8_t n_subs, const Token *main) {
-    if (!t || !main) return -1;
-    for (size_t i = 0; i < t->count; ++i) {
-        const AssocEntry *e = &t->assocs[i];
-        if (e->main != main || e->n_subs != n_subs || e->n_not != 0) continue;
-        int same = 1;
-        for (uint8_t k = 0; k < n_subs; ++k)
-            if (e->subs[k] != (subs ? subs[k] : NULL)) { same = 0; break; }
-        if (same) return (long)i;
-    }
-    return -1;
-}
-static inline int micro_has_edge_ctx(const Token *t, Token *const *subs,
-                                     uint8_t n_subs, const Token *main) {
-    return micro_edge_index_ctx(t, subs, n_subs, main) >= 0;
-}
+/* 说明（历史）：这里原来还有一对 `micro_edge_index_ctx` / `micro_has_edge_ctx`（按语境查边）。
+ * 语境退役、字段删掉（v10）之后它们没有意义了 —— 删掉，别留"看着像机制"的空函数。 */
 /* 这条边是**推出来沉淀的**吗？（缓存可撤，观测不可撤 —— 安全内核要用） */
 static inline int micro_edge_is_derived(const Token *t, const Token *main) {
     return token_edge_is_derived(t, main);
@@ -334,8 +317,6 @@ static inline const char *micro_mod_type_name(ModType t) {
 typedef struct {
     ModType  type;
     Token   *target;                    /* 对哪个 Token 动手 */
-    Token   *subs[TOKEN_CTX_MAX];        /* 语境（加边用） */
-    uint8_t  n_subs;
     Token   *main;                      /* 边的另一头 / 新 Token 要连回谁 */
     Token   *action;                    /* 设动作 */
     uint8_t  rel_id;                    /* 打关系 / 沉淀 */
@@ -374,8 +355,6 @@ static inline uint32_t micro_intent_key(const ModIntent *m) {
     MIXK((uintptr_t)m->type);
     MIXK((uintptr_t)m->target);
     MIXK((uintptr_t)m->main);
-    MIXK((uintptr_t)m->n_subs);
-    for (uint8_t i = 0; i < m->n_subs && i < TOKEN_CTX_MAX; ++i) MIXK((uintptr_t)m->subs[i]);
     MIXK((uintptr_t)m->rel_id);
     MIXK((uintptr_t)m->neg);          /* 正/负是两条不同的意图（否则同一步里会被去重） */
     MIXK((uintptr_t)m->flags);
@@ -486,8 +465,6 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
     /* 引用合法性：任何一条意图都不许引用空/垃圾 Token */
     if (!m->target || m->target->is_garbage) return SAFE_DENY_BADREF;
     if (m->main && m->main->is_garbage) return SAFE_DENY_BADREF;
-    for (uint8_t i = 0; i < m->n_subs && i < TOKEN_CTX_MAX; ++i)
-        if (!m->subs[i] || m->subs[i]->is_garbage) return SAFE_DENY_BADREF;
 
     switch (m->type) {
     case MOD_ADD_TOKEN:
@@ -505,9 +482,8 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
             return SAFE_DENY_RESERVED;
         if (m->target->count >= (size_t)sk->max_edges_per_token)
             return SAFE_DENY_EDGE_CAP;
-        /* 带语境的边也要算「新边」—— micro_has_edge 只看无语境那条，
-         * 拿它判会让「给同一条边加不同语境」白白绕过预算。 */
-        if (!micro_has_edge_ctx(m->target, m->subs, m->n_subs, m->main) &&
+        /* 「这条边是不是新的」要按 (main) 判 —— v10 起没有语境可以区分了。 */
+        if (!micro_has_edge(m->target, m->main) &&
             sk->step_new_edges >= (size_t)sk->max_new_edges_step)
             return SAFE_DENY_BUDGET_EDGE;
         return SAFE_OK;
@@ -620,7 +596,7 @@ static inline void safety_charge(SafetyKernel *sk, const TokenPool *pool, const 
     switch (m->type) {
     case MOD_ADD_TOKEN: sk->step_new_tokens++; break;
     case MOD_ADD_ASSOC:
-        if (!micro_has_edge_ctx(m->target, m->subs, m->n_subs, m->main))
+        if (!micro_has_edge(m->target, m->main))
             sk->step_new_edges++;
         break;
     case MOD_TAG_DERIVED:      /* 沉淀也是「新建一条边」，照占预算 */
@@ -912,7 +888,7 @@ static inline void micro_remind(AI *ai, MicroRemind kind, const char *who) {
      * 提醒要是每次冷却到点就多一个同名节点，图会被刷烂。 */
     Token *t = pool_token_intern(ai->pool, nm);
     if (t && ai->self) {
-        token_add_assoc_unique(ai->self, NULL, 0, t);
+        token_add_assoc_unique(ai->self, t);
         token_touch(t);
     }
 }
@@ -1677,7 +1653,7 @@ static inline void micro_detect_prune(AI *ai, Micro *mk) {
         for (size_t j = 0; j < t->count && budget; ++j) {
             AssocEntry *e = &t->assocs[j];
             if (e->hits || e->rel || e->nrel || e->dyn) continue;
-            if (e->n_subs || e->n_not) continue;
+            if (edge_is_causal_guess(e)) continue;   /* 猜想边不剪（它不是知识，另有雪藏路径） */
             if (!e->main || micro_token_reserved(e->main)) continue;
             if (e->last_touch_tick + MICRO_D3_MIN_AGE > ai->pool->current_tick) continue;
             if (e->main->count < MICRO_D1_MIN_EDGES) continue;
@@ -1708,7 +1684,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         Token *nt = pool_token_intern(p, m->name);
         if (!nt) return -1;
         if (m->target && m->target != nt) {
-            token_add_assoc_unique(nt, NULL, 0, m->target);
+            token_add_assoc_unique(nt, m->target);
             token_touch(nt);
         }
         if (note) {
@@ -1725,17 +1701,11 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
     }
     case MOD_ADD_ASSOC: {
         if (!m->main) return -1;
-        Token *subs[TOKEN_CTX_MAX];
-        for (uint8_t i = 0; i < m->n_subs && i < TOKEN_CTX_MAX; ++i) subs[i] = m->subs[i];
-        int created = !micro_has_edge_ctx(m->target, m->n_subs ? subs : NULL,
-                                          m->n_subs, m->main);
-        int rc = token_add_assoc_unique(m->target, m->n_subs ? subs : NULL, m->n_subs, m->main);
-        if (rc != 0) return -1;
-        long idx = micro_edge_index_ctx(m->target, m->n_subs ? subs : NULL,
-                                        m->n_subs, m->main);
+        int created = !micro_has_edge(m->target, m->main);
+        if (token_add_assoc_unique(m->target, m->main) != 0) return -1;
+        long idx = micro_edge_index(m->target, m->main);
         if (idx >= 0 && m->bump) m->target->assocs[idx].hits += m->bump;
-        if (m->action) token_set_action_by_target(m->target,
-                            m->n_subs ? subs[0] : NULL, m->main, m->action);
+        if (m->action) token_set_action_by_target(m->target, m->main, m->action);
         if (note) snprintf(note, note_cap, "%s→%s%s",
                            m->target->name ? m->target->name : "?",
                            m->main->name ? m->main->name : "?",
@@ -1746,10 +1716,8 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         /* 沉淀：先保证边在，再按极性置位，最后把 role 标成「推出来的」。
          * 顺序要紧：token_tag_rel/nrel 会把缓存标记清掉（那是「观测压过缓存」
          * 的不变式），所以**标记必须最后打**。 */
-        Token *subs[TOKEN_CTX_MAX];
-        (void)subs;
         int created = !micro_has_edge(m->target, m->main);
-        if (token_add_assoc_unique(m->target, NULL, 0, m->main) != 0) return -1;
+        if (token_add_assoc_unique(m->target, m->main) != 0) return -1;
         long idx = micro_edge_index(m->target, m->main);
         if (idx < 0) return -1;
         AssocEntry *e = &m->target->assocs[idx];
@@ -1806,8 +1774,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         if (note) snprintf(note, note_cap, "衰减 %s", m->target->name ? m->target->name : "?");
         return 1;
     case MOD_SET_ACTION:
-        if (token_set_action_by_target(m->target, m->n_subs ? m->subs[0] : NULL,
-                                       m->main, m->action) != 0) return -1;
+        if (token_set_action_by_target(m->target, m->main, m->action) != 0) return -1;
         if (note) snprintf(note, note_cap, "设动作 %s", m->action->name ? m->action->name : "?");
         return 1;
     case MOD_SET_PARENT:
@@ -1821,8 +1788,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         if (note) snprintf(note, note_cap, "设类别 %s", m->target->name ? m->target->name : "?");
         return 1;
     case MOD_REMOVE_ASSOC: {
-        Token *sub = m->n_subs ? m->subs[0] : NULL;
-        if (token_remove_assoc(m->target, sub, m->main) != 0) return -1;
+        if (token_remove_assoc(m->target, m->main) != 0) return -1;
         if (note) snprintf(note, note_cap, "删 %s→%s",
                            m->target->name ? m->target->name : "?",
                            m->main->name ? m->main->name : "?");
@@ -1835,8 +1801,8 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         int existed = pool_find(p, m->name) != NULL;
         Token *N = pool_token_intern(p, m->name);
         if (!N || N == A || N == B) return -1;
-        if (token_add_assoc_unique(A, NULL, 0, N) != 0) return -1;   /* A → N */
-        if (token_add_assoc_unique(N, NULL, 0, B) != 0) return -1;   /* N → B */
+        if (token_add_assoc_unique(A, N) != 0) return -1;   /* A → N */
+        if (token_add_assoc_unique(N, B) != 0) return -1;   /* N → B */
         {   /* 给这两条中转边一点初始权重：hits==0 的边会被当成「没语义依据的残留」 */
             uint32_t bump = m->bump ? m->bump : 1;
             for (size_t k = 0; k < A->count; ++k)
@@ -1852,14 +1818,14 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             const char *mk = (m->flags & MOD_FLAG_MARK_PREMISE_NOT) ? AI_PREMISE_NOT_MARK
                                                                     : AI_PREMISE_MARK;
             Token *mark = pool_token_intern(p, mk);
-            if (mark) (void)token_set_action_by_target(A, NULL, N, mark);
+            if (mark) (void)token_set_action_by_target(A, N, mark);
         }
         int cut = 0, kept = 0;
         if (m->flags & MOD_FLAG_SPLIT_DIRECT) {
             long i = micro_edge_index(A, B);
             if (i >= 0) {
                 if (micro_edge_removable(&A->assocs[i])) {
-                    if (token_remove_assoc(A, NULL, B) == 0) cut = 1;
+                    if (token_remove_assoc(A, B) == 0) cut = 1;
                 } else {
                     kept = 1;      /* 直连是**知识**（观测关系边）→ 铁律 2：不许拆 */
                 }
@@ -2440,7 +2406,7 @@ static inline size_t micro_patch_sense(AI *ai) {
         Token *t = out[i].tok;
         if (!t) continue;
         ai_focus_push(ai, t, out[i].w > 0 ? out[i].w : 1.0f);
-        if (now) token_add_assoc_unique(now, NULL, 0, t);
+        if (now) token_add_assoc_unique(now, t);
     }
     return n;
 }

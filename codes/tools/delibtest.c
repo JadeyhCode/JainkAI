@@ -543,7 +543,7 @@ static void test_premise_follow(void) {
     ok(t->n_stale == 0, "依据还在时**不误撤**");
 
     /* 前提没了：把「动物 有 毛」这条依据拿掉（模拟前提被撤/被改口） */
-    ok(token_remove_assoc(animal, NULL, fur) == 0, "撤掉前提边");
+    ok(token_remove_assoc(animal, fur) == 0, "撤掉前提边");
 
     /* 实时闸：不用等收尾，求解器当场就不再拿这条缓存当数 */
     Proof pf;

@@ -17,8 +17,8 @@ MODEL=${1:-$ROOT/model.bin}
 WORK="$ROOT/_t/biases"
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 
-CC=${CC:-gcc}
-$CC -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o aip "$ROOT/main.c" -lm
+# aip 从哪来只有一处实现：tests/prebuilt.sh（第 0 步编好的二进制优先，否则自己编）
+sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror
 [ -s "$MODEL" ] || { echo "FAIL: 找不到模型 $MODEL"; exit 1; }
 cp "$MODEL" model.bin
 for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done
@@ -32,14 +32,14 @@ echo "== ① 因果猜想：一次=暂时，协变才升格，且永远是猜想
 # 「我 知道 ： 猫 吃 鱼」是同一输入下的稳定答复，所以 (我的答复词 → 你的输入词)
 # 这一对会**反复协变** —— 正好用来量「一次 vs 多次」的差别。
 run '猫 吃 鱼\n猫 吃 鱼\n::edges 我\n' o1
-grep -q '语境\[\[因果\]\]' o1 \
+grep -q '\*\*因果猜想\*\*' o1 \
     && ok "因果猜想带 [因果] 标记（可辨识，不是知识）" || bad "因果标记" "$(grep '→' o1 | tail -3)"
-grep -qE '→ 猫 +hits=1 +seq=[0-9]+ +角色=0 状态=1 +语境\[\[因果\]\]' o1 \
+grep -qE '→ 猫 +hits=1 +seq=[0-9]+ +角色=0 状态=1 +\*\*因果猜想\*\*' o1 \
     && ok "只见一次：hits=1、状态=1（暂时）" \
     || bad "一次巧合是暂时的" "$(grep '因果' o1 | head -3)"
 
 run '猫 吃 鱼\n猫 吃 鱼\n猫 吃 鱼\n猫 吃 鱼\n::edges 我\n::stats\n' o2
-grep -qE '→ 猫 +hits=3 +seq=[0-9]+ +角色=0 状态=0 +语境\[\[因果\]\]' o2 \
+grep -qE '→ 猫 +hits=3 +seq=[0-9]+ +角色=0 状态=0 +\*\*因果猜想\*\*' o2 \
     && ok "协变到第 3 次：升格成「可信的猜想」（状态=0）" \
     || bad "协变升格" "$(grep '因果' o2 | head -3)"
 grep -qE '因果=[0-9]+\(升格[1-9]' o2 \

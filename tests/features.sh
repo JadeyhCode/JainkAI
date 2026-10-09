@@ -10,8 +10,8 @@ MODEL=${1:-$ROOT/model.bin}
 WORK="$ROOT/_t/feat"
 rm -rf "$WORK"; mkdir -p "$WORK"; cd "$WORK"
 
-CC=${CC:-gcc}
-$CC -std=c11 -O2 -Wall -Wextra -o aip "$ROOT/main.c" -lm
+# aip 从哪来只有一处实现：tests/prebuilt.sh（第 0 步编好的二进制优先，否则自己编）
+sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra
 [ -s "$MODEL" ] || { echo "FAIL: 找不到模型 $MODEL"; exit 1; }
 cp "$MODEL" model.bin
 
@@ -43,22 +43,34 @@ has '\*\*前提\*\*' "$(cat o3)" && ok "前提链接：前关联+连接 建出 A
     || bad "前提链接" "$(grep -E '饿|前提' o3 | head -3)"
 has '之间的前提 token' "$(cat o3)" && ok "逻辑查得到前提 token 是什么（::premise 猫 饿 → $(grep -A1 '之间的前提 token' o3 | tail -1 | tr -d ' ' | cut -d'（' -f1)）" \
     || bad "::premise" "$(grep -A2 '前提' o3 | head -4)"
-# 语境字段退役：语言层不再有任何原语能写它（旧模型仍读得回来）。
-# ⚠ 这条原来**两个分支都写 ok**，等于永不红（外部评审点出来的）；现在"有引用"就是 bad。
-# 判据是**可证伪的文本检查**：语言层里不许再出现 `n_subs`（创建者 `token_add_assoc_ex`
-# 的那个参数名；字段本身还在 token.h 里，旧模型要读得回来）。
-# ⚠ 路径必须带 $ROOT：这套**早就 cd 进工作目录**了，那里没有 token_lang.h ——
-# 原来写相对路径时 grep 永远找不到文件、永远走 else，所以这条断言**真红了才怪**
-# （外部评审说它"等于没测"，两次都对：先是两个分支都 ok，改掉之后才发现路径也是坏的）。
-if grep -q 'n_subs' "$ROOT/token_lang.h" 2>/dev/null; then
-    bad "语境字段在语言层又被引用了（应当是 0 处）" "$(grep -n 'n_subs' "$ROOT/token_lang.h" | head -2)"
+# 语境退役（v10）：**连字段都删了**。这条断言两件可证伪的事 ——
+#   ① AssocEntry 里不许再长回 subs/subs_not（结构体正文里 grep 不到）；
+#   ② 存档版本是 10（旧 v9 文件仍读得回来：tests/model_roundtrip.sh 第 ⑥ 步拿
+#      tests/v9_sample.bin 走 "v9 读 → v10 存 → v10 读" 的等价）。
+# ⚠ 路径必须带 $ROOT：这套**早就 cd 进工作目录**了，那里没有 token.h ——
+# 原来写相对路径时 grep 永远找不到文件、永远走 else（外部评审点过：那条断言"等于没测"）。
+# 判据只看**字段声明行**（注释里提到 subs 是在讲历史，不算）：结构体正文里以类型开头的行
+# 不许出现 subs/subs_not/n_subs/n_not；再加一条**全仓**检查：没有任何地方**访问**这些字段
+# （`->n_subs` / `.n_subs` / `->subs[` / `->subs_not[`）—— 部分回滚会立刻红。
+legacy_decl=$(sed -n '/^struct AssocEntry {/,/^};/p' "$ROOT/token.h" \
+    | grep -E '^[[:space:]]+(Token|uint8_t|uint16_t|uint32_t)' \
+    | grep -E '(^|[^[:alnum:]_])(subs|subs_not|n_subs|n_not)([^[:alnum:]_]|$)' || true)
+legacy_use=$(grep -rnE '[-.]n_subs|[-.]n_not|->subs\[|->subs_not\[' \
+    "$ROOT"/*.h "$ROOT"/main.c "$ROOT"/tools/*.c 2>/dev/null || true)
+if [ -n "$legacy_decl" ]; then
+    bad "AssocEntry 里又长回语境字段了（v10 应当没有）" "$legacy_decl"
+elif [ -n "$legacy_use" ]; then
+    bad "还有代码在访问已删的语境字段" "$(printf '%s\n' "$legacy_use" | head -2)"
 else
-    ok "语境（subs）已退役：语言层不再创建它 —— 见 docs/语境退役-前提token.md"
+    ok "语境（subs/subs_not）字段已从 AssocEntry 删掉，且全仓没有访问点（v10，省 64 字节/条）"
 fi
+grep -q '^#define MODEL_VERSION 10u' "$ROOT/model_io.h" \
+    && ok "存档版本 = 10（旧 v9 文件仍读得回来）" \
+    || bad "存档版本" "$(grep -m1 'MODEL_VERSION' "$ROOT/model_io.h")"
 run '::tokens 12\n' o3b
 has '分类=1' "$(cat o3b)" && ok "类别继承：模型里已有自动抽象类别（分类=1）" || ok "类别继承机制在位"
 
-echo "== 3.5 来源账 / 顺序 / 情绪参与决策（三条新能力） =="
+echo "== 3.5 来源账 / 顺序 / 驱动参与决策（三条新能力） =="
 # 注意：这一套**不加载 model.bin**（空脑子起步），所以先在会话里教一句再查来源账；
 # 「基准（relations.txt 教的）」那一档由 tests/belief.sh / optest 用真模型钉。
 run '猫 属于 动物\n::src 猫 属于 动物\n' o3c
@@ -84,8 +96,8 @@ has 'activate' "$(cat o3f)" && ok "前提成立有**两档判据**：提到过�
 has '前提本身有据' "$(cat o3f)" && ok "第三档 verified：够得着**且前提本身有据**才算" \
     || bad "verified 档" "$(grep '前提成立判据' o3f | head -3)"
 run '::drive on\n::drive\n' o3e
-has '耦合表' "$(cat o3e)" && ok "情绪参与决策：耦合表列得出来（驱动 → 参数 → 增减）" \
-    || bad "::drive" "$(grep -A3 '情绪' o3e | head -4)"
+has '耦合表' "$(cat o3e)" && ok "驱动参与决策：耦合表列得出来（驱动量 → 参数 → 增减）" \
+    || bad "::drive" "$(grep -A3 '驱动参与决策' o3e | head -4)"
 has '现在命中' "$(cat o3e)" && ok "表里标出**现在命中的那一行**（可解释）" \
     || ok "耦合表在，当前没有命中的行（也算正常）"
 

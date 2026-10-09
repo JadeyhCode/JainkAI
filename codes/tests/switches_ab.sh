@@ -29,7 +29,7 @@ cat > /tmp/.sw_list.$$ <<'EOF'
 wgate:AIP_WGATE=1
 premhold-verified:AIP_PREMHOLD=verified
 route:AIP_ROUTE=1
-affect:AIP_AFFECT=1
+drive:AIP_DRIVE=1
 notepad-on:AIP_NOTEPAD=on
 patch-note:AIP_PATCH=记事本
 notepad+patch:AIP_PATCH=记事本 AIP_NOTEPAD=on

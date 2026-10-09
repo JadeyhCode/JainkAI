@@ -250,12 +250,12 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
 
     case PK_GOOD: {
         Token *x = interp_top(ip);
-        if (x) token_add_assoc_unique(x, NULL, 0, interp_sym(ip, &ip->sym_good, SYM_GOOD));
+        if (x) token_add_assoc_unique(x, interp_sym(ip, &ip->sym_good, SYM_GOOD));
         break;
     }
     case PK_BAD: {
         Token *x = interp_top(ip);
-        if (x) token_add_assoc_unique(x, NULL, 0, interp_sym(ip, &ip->sym_bad, SYM_BAD));
+        if (x) token_add_assoc_unique(x, interp_sym(ip, &ip->sym_bad, SYM_BAD));
         break;
     }
     case PK_SPLIT:
@@ -277,12 +277,12 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
     }
     case PK_EXECUTE:
         if (ip->pending && ip->pending_from && ip->pending_to)
-            token_add_assoc_unique(ip->pending_to, NULL, 0, ip->pending_from);
+            token_add_assoc_unique(ip->pending_to, ip->pending_from);
         ip->pending = 0;
         break;
     case PK_REFUSE:
         if (ip->pending && ip->pending_from)
-            token_add_assoc_unique(ip->pending_from, NULL, 0,
+            token_add_assoc_unique(ip->pending_from,
                                    interp_sym(ip, &ip->sym_refused, SYM_REFUSED));
         ip->pending = 0;
         break;
@@ -294,8 +294,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *c = pool_token(ip->pool, NULL, NULL);
         if (!c) break;
         for (size_t i = ip->stmt_start; i < ip->n; ++i)
-            token_add_assoc_unique(c, NULL, 0, ip->stack[i]);
-        token_add_assoc_unique(c, NULL, 0, w);
+            token_add_assoc_unique(c, ip->stack[i]);
+        token_add_assoc_unique(c, w);
         ip->n = ip->stmt_start;
         interp_push(ip, c);
         break;
@@ -320,7 +320,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
                 interp_ask_op(ip, ip->pending_not ? IPOP_PREMISE_CONNECT_NOT
                                                   : IPOP_PREMISE_CONNECT, ops, 3);
             } else {
-                token_add_assoc_ex(a, NULL, 0, NULL, 0, b, NULL);
+                token_add_assoc_ex(a, b, NULL);
             }
         }
         ip->pending_sub = NULL;
@@ -329,7 +329,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
     case PK_DISCONNECT: {
         Token *b = interp_pop(ip);
         Token *a = interp_pop(ip);
-        if (a && b) token_remove_assoc(a, ip->pending_sub, b);
+        if (a && b) token_remove_assoc(a, b);
         ip->pending_sub = NULL;
         ip->pending_not = 0;
         break;
@@ -403,8 +403,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
             Token *r = pool_token(ip->pool, NULL, NULL);
             if (!r || !r->hv) break;
             vsa_bind(left->hv, acc->hv, r->hv);
-            token_add_assoc_unique(r, NULL, 0, left);
-            token_add_assoc_unique(r, NULL, 0, acc);
+            token_add_assoc_unique(r, left);
+            token_add_assoc_unique(r, acc);
             acc = r;
         }
         ip->n = ip->stmt_start;
@@ -440,8 +440,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *r = pool_token(ip->pool, NULL, NULL);
         if (!r || !r->hv) break;
         vsa_bind_perspective(ip->pool, content->hv, r->hv);
-        token_add_assoc_unique(r, NULL, 0, holder);
-        token_add_assoc_unique(r, NULL, 0, content);
+        token_add_assoc_unique(r, holder);
+        token_add_assoc_unique(r, content);
         r->perspective_of = holder;
         interp_push(ip, r);
         break;
@@ -459,8 +459,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *a = interp_pop(ip);
         if (a && b) {
             Token *rel = pool_token_intern(ip->pool, "[关系:之前]");
-            token_add_assoc_unique(a, NULL, 0, rel);
-            token_add_assoc_unique(a, NULL, 0, b);
+            token_add_assoc_unique(a, rel);
+            token_add_assoc_unique(a, b);
             if (!a->next_in_time) a->next_in_time = b;
         }
         break;
@@ -470,8 +470,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *a = interp_pop(ip);
         if (a && b) {
             Token *rel = pool_token_intern(ip->pool, "[关系:之后]");
-            token_add_assoc_unique(a, NULL, 0, rel);
-            token_add_assoc_unique(a, NULL, 0, b);
+            token_add_assoc_unique(a, rel);
+            token_add_assoc_unique(a, b);
             if (!b->next_in_time) b->next_in_time = a;
         }
         break;
@@ -485,8 +485,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
             if (a && b) {
                 if (!a->next_in_time) a->next_in_time = b;
                 Token *rel = pool_token_intern(ip->pool, "[关系:之后]");
-                token_add_assoc_unique(a, NULL, 0, rel);
-                token_add_assoc_unique(a, NULL, 0, b);
+                token_add_assoc_unique(a, rel);
+                token_add_assoc_unique(a, b);
             }
         }
         break;
@@ -498,8 +498,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *r = pool_token(ip->pool, NULL, NULL);
         if (!r || !r->hv) break;
         vsa_bind(a->hv, b->hv, r->hv);
-        token_add_assoc_unique(r, NULL, 0, a);
-        token_add_assoc_unique(r, NULL, 0, b);
+        token_add_assoc_unique(r, a);
+        token_add_assoc_unique(r, b);
         interp_push(ip, r);
         break;
     }
@@ -510,8 +510,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *r = pool_token(ip->pool, NULL, NULL);
         if (!r || !r->hv) break;
         vsa_unbind(bound->hv, role->hv, r->hv);
-        token_add_assoc_unique(r, NULL, 0, role);
-        token_add_assoc_unique(r, NULL, 0, bound);
+        token_add_assoc_unique(r, role);
+        token_add_assoc_unique(r, bound);
         interp_push(ip, r);
         break;
     }
@@ -527,7 +527,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         if (!r || !r->hv) { free(vecs); break; }
         vsa_bundle(vecs, m, r->hv);
         for (size_t i = ip->stmt_start; i < ip->n; ++i)
-            token_add_assoc_unique(r, NULL, 0, ip->stack[i]);
+            token_add_assoc_unique(r, ip->stack[i]);
         free(vecs);
         ip->n = ip->stmt_start;
         interp_push(ip, r);
@@ -548,8 +548,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *r = pool_token(ip->pool, NULL, NULL);
         if (!r || !r->hv) break;
         vsa_unbind(pair->hv, item->hv, r->hv);
-        token_add_assoc_unique(r, NULL, 0, pair);
-        token_add_assoc_unique(r, NULL, 0, item);
+        token_add_assoc_unique(r, pair);
+        token_add_assoc_unique(r, item);
         interp_push(ip, r);
         break;
     }
@@ -560,8 +560,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *r = pool_token(ip->pool, NULL, NULL);
         if (!r || !r->hv) break;
         vsa_bind(item->hv, rel->hv, r->hv);
-        token_add_assoc_unique(r, NULL, 0, rel);
-        token_add_assoc_unique(r, NULL, 0, item);
+        token_add_assoc_unique(r, rel);
+        token_add_assoc_unique(r, item);
         interp_push(ip, r);
         break;
     }
