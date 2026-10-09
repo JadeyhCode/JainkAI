@@ -54,16 +54,23 @@
   2. ~~改名 + 删历史遗留（v10）~~ ✅ **已完成**（细节与账见 audit §6.50；
      `tests/model_roundtrip.sh` 第 ⑥ 步用冻结样本 `tests/v9_sample.bin` 钉住
      "v9 读 → v10 存 → v10 读 等价"）。
-  3. **`action.h`（受审的外部执行 + 写文件）** ← **下一件**。六步见 audit §6.49，**两处按本轮拍板**：
-     · **不用 shell**：`fork/exec` + `argv` 白名单 → 元字符注入问题**自消**（`;|&` 只是普通参数）
-     · **超时自己 `fork`/`kill`**：`popen` 做不到超时（原设计里这两条是矛盾的）
-     · 白名单：`echo cat wc gcc grep head tail sed ls`；写文件只在 `_t/work/`；不联网
-     看护 `tests/action.sh`：默认关不执行 / 白名单拒 `rm` / 超时被杀 / 写文件越界拒 /
-     输出变观测 / **拒绝要留理由** / 审计账对得上。
-  4. **"写-跑-看错-改"机械闭环**（**降级版**，别指望它一天内自主改对）：
-     通道打通 + 一次真实闭环 + 日志留档。
+  3. ~~`action.h`（受审的外部执行 + 写文件）~~ ✅ **已完成**（细节见 audit §6.51）：
+     · 新层 `action.h`：**不用 shell**（`fork/exec` + argv 白名单；`;|&` 只是普通参数）、
+       **超时自己 `fork`/`kill`**（rc 约定 -9）、子进程 cwd 固定 `_t/work/`、
+       stdin=/dev/null、参数不许绝对路径/不许 `..`、写文件只在 `_t/work/`
+     · 白名单：`echo cat wc gcc grep head tail sed ls`（**没有 sh**）；不联网（没放网络工具）
+     · 输出算观测：落 `[运行:<rc>]` 标记（不是知识，`::rel` 里查不到）；
+       受审写入的**唯一一份**实现抽成 `micro_drain_queue()`（`micro_step` 与它共用）
+     · CLI：`::act` / `::act on|off` / `run <命令…>` / `write <相对路径> <文本…>` / `out` / `timeout <ms>`
+     · 看护 `tests/action.sh`（**第 31 套**）22 项：默认关不执行 + 留理由 / 白名单拒 `rm` /
+       三次越界拒 / 没有 shell（`;|&` 原样进 argv）/ 超时 SIGKILL / 输出变观测且不是知识 / 账对得上；
+       支持反向测量 `AIP_ACT=1`（已进 `tests/switches_ab.sh` 的开关表）
+     · 真闭环验过：`::act write hello.c …` → `cat` 读回来 → `gcc -c hello.c` 出 `hello.o`
+  4. **"写-跑-看错-改"机械闭环**（**降级版**，别指望它一天内自主改对）← **下一件**：
+     通道已经有了（`::act`），要做的是让**代理循环**在一轮里自己走"写文件 → 编译 → 读错误 → 再改一次"，
+     并把这一轮的痕/账留档。验收 = 闭环真的走了一遍（不是"改对了"）。
   5. **原语语言加解析器/校验器**（比改 C 词法划算，也是第 4 步的便宜目标语言；现在 `::asm` 是边读边执行）
-     → 再接**词法层 ASCII 逐字保留**（默认关 + A/B）→ 再落**第 31 套看护**（代码任务回归）。
+     → 再接**词法层 ASCII 逐字保留**（默认关 + A/B）→ 再落**第 32 套看护**（代码任务回归）。
   6. 顺手件（小）：#2 尾巴（机制路径候选的 `hops/cred` 接全）→ #4 尾巴（"大家怎么看"进回答路径；
      **时间维度不做**）→ tests/ 清单系统性扫一遍。
      ✗ **不做**：#5 尾巴（拆预测簇 —— 共线是真的但语义正确）、分页/懒加载、4B/27B 存储改造
@@ -71,10 +78,11 @@
 
 四、当前状态速览（2026-10-08 夜，本轮收尾）
   提交：`bbbc89a`（本轮：套件相位提速 + affect→drive 改名 + 删语境字段 v10；上一个 `fcad3f0` 是交接）
-  整包 **31 步全绿**（30 套 + 冒烟；套件相位 26 s、端到端 54 s —— 机器空闲时 39.5 s）；
+  整包 **32 步全绿**（31 套 + 冒烟；套件相位 26 s、端到端 ~40 s 空闲 / 54 s 带负载）；
   `sizeof(AssocEntry)` **128 → 56**（出厂 41138 条边 ⇒ 内存省 ≈2.9 MB）；
   `model.bin` **仍是 v9 文件**、md5 = `bb5142627e94a4c5e435618a35450be7`（第一次 `::save` 后才写 v10）；
-  `codes/` 镜像 **94 文件逐字节一致**（含 `tests/v9_sample.bin`）；工作区干净。
+  `codes/` 镜像 **96 文件逐字节一致**（含 `tests/v9_sample.bin`、`action.h`、`tests/action.sh`）；
+  外部执行层：`AIP_ACT=1` / `::act`（白名单 9 条，**默认关**；看护 `tests/action.sh` 22 项）。
   本轮验过：`-Werror` 编译、30 套全绿、26 个探针门、`ONLY=drive` 开关对照（基线不动）、
   旧代码/新代码读同一个 v9 样本的 A/B（49 Token/25 边一致）、`FORCE_CC=1` 与"哈希不符自编"两条路。
   逐轮记录：docs/audit-vs-deepseek看这里.md §6.42~§6.50（**本轮在 §6.50**，含两处返工的复盘）。
@@ -179,12 +187,12 @@
     thinking 37 / features 32 / belief **21**（他者视角那节加了 12 条）/ dupcheck 24 / cmdtable 13 …
   · 探针：d4probe（D4 阈值标定）、wgateprobe（闸门评分分布）、driveprobe（耦合表命中率+分位）、
     premholdprobe（有据度分布）+ 22 个老探针
-  · 常用命令：::mod ::premhold ::wgate ::notepad ::trust ::drive ::src ::why ::safe ::delib ::edges
+  · 常用命令：::act（外部执行/写文件，默认关）::mod ::premhold ::wgate ::notepad ::trust ::drive ::src ::why ::safe ::delib ::edges
     ::premise ::lease?（无，租约在 ::src/::why 里） ::stats
   · 写入闸门：闸门本身**默认关**（`::wgate on` 开）；闸门里的**候选证据项默认开**
     （`AIP_WGATE_EV=0` / `::wgate ev off` 关）——翻默认前三跑法整包全绿（§6.43）
   · 对话触发：**说法归一表 + 槽位**（默认；`AIP_TRIGGER=kw` / `::triggers norm off` 切回老那套）
-  · 测量钩子：AIP_ROUTE / AIP_DRIVE / AIP_WGATE / AIP_WGATE_EV / AIP_PREMHOLD / AIP_D4 / AIP_PATCH /
+  · 测量钩子：AIP_ACT / AIP_ROUTE / AIP_DRIVE / AIP_WGATE / AIP_WGATE_EV / AIP_PREMHOLD / AIP_D4 / AIP_PATCH /
     AIP_NOTEPAD / AIP_THINKOUT / AIP_PREMISEOUT / AIP_TRUST / AIP_TRIGGER
 
 六、本轮之后新增/改变了什么（原清单之外）

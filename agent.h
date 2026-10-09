@@ -6,6 +6,7 @@
 
 #include "ai.h"
 #include "drive.h"
+#include "action.h"      /* 受审的外部执行 + 写文件（层；默认关） */
 #include "frame_io.h"
 
 typedef const char *(*AgentPerceiveFn)(void *user);

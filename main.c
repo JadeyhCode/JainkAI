@@ -520,6 +520,7 @@ typedef enum {
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
+    CMD_ACT,                /* 受审的外部执行 + 写文件（默认关） */
     CMD_ORDER,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
@@ -622,6 +623,8 @@ static const CmdDef CMDS[] = {
       "问 A 与 B 之间的**前提 token** 是什么（前提是普通 token：联想照走、逻辑查得到）", CMD_PREMISE },
     { "drive", NULL, 1, "基本",
       "驱动参与决策：off（默认）| on；列出**耦合表**与当前生效的修正", CMD_DRIVE },
+    { "act", NULL, 1, "基本",
+      "受审的外部执行 + 写文件（默认关）：::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>", CMD_ACT },
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**（按首次见到的 tick），并给顺序证据", CMD_ORDER },
     { "wgate", NULL, 1, "基本",
@@ -2251,6 +2254,69 @@ int main(int argc, char **argv) {
                        a->brain->drive_d_steps, a->brain->drive_d_gen,
                        (double)a->brain->drive_d_cutoff);
                 printf("  没打开时这些修正**一律不施加**（行为与从前逐字节相同）\n");
+                continue;
+            }
+            case CMD_ACT: {
+                /* 受审的外部执行 + 写文件（层在 action.h；这里只做参数分发）。
+                 * 默认关：没 `::act on` 之前 action_run/write 一律拒，并且**留理由**。 */
+                const char *arg = (cmd[3] == ' ') ? cmd + 4 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (!arg || !*arg) { action_print(a->brain); continue; }
+                if (!strcmp(arg, "on")) {
+                    a->brain->act_on = 1;
+                    printf("[外部执行 + 写文件 = 开]白名单 / 超时 / 账 / 观测标记见下：\n");
+                    action_print(a->brain);
+                    continue;
+                }
+                if (!strcmp(arg, "off")) {
+                    a->brain->act_on = 0;
+                    printf("[外部执行 + 写文件 = 关]（再跑一律拒）\n");
+                    continue;
+                }
+                if (strncmp(arg, "run", 3) == 0 && (arg[3] == 0 || arg[3] == ' ')) {
+                    const char *rest = arg + 3;
+                    while (*rest == ' ') rest++;
+                    int rc = action_run(a->brain, rest);
+                    if (rc == -2) {
+                        printf("[没跑] %s\n", action_book()->last_reason);
+                    } else {
+                        printf("[跑了] rc=%d（%ld ms）%s%s\n", rc, action_book()->last_ms,
+                               action_book()->last_reason[0] ? " " : "", action_book()->last_reason);
+                        action_print_out("    ");
+                        if (action_book()->last_mark[0])
+                            printf("    落图：%s（观测标记，不是知识）\n", action_book()->last_mark);
+                    }
+                    continue;
+                }
+                if (strncmp(arg, "write", 5) == 0 && (arg[5] == 0 || arg[5] == ' ')) {
+                    const char *rest = arg + 5;
+                    while (*rest == ' ') rest++;
+                    char path[ACTION_PATH_CAP] = {0};
+                    size_t k = 0;
+                    const char *q = rest;
+                    while (*q && *q != ' ' && *q != '\t' && k + 1 < sizeof path) path[k++] = *q++;
+                    path[k] = 0;
+                    while (*q == ' ' || *q == '\t') q++;
+                    int rc = action_write_file(a->brain, path, q);
+                    if (rc == -2)      printf("[没写] %s\n", action_book()->last_reason);
+                    else if (rc != 0)  printf("[没写成] %s\n", action_book()->last_reason);
+                    else               printf("[写了] %s（%zu 字节）→ 落图 %s\n",
+                                              path, strlen(q), action_book()->last_mark);
+                    continue;
+                }
+                if (strncmp(arg, "out", 3) == 0 && (arg[3] == 0 || arg[3] == ' ')) {
+                    action_print_out("");
+                    continue;
+                }
+                if (strncmp(arg, "timeout", 7) == 0 && (arg[7] == 0 || arg[7] == ' ')) {
+                    const char *v = arg + 7;
+                    while (*v == ' ') v++;
+                    action_set_timeout(strtol(v, NULL, 10));
+                    printf("[超时覆盖 = %ld ms]（0 = 用白名单表里每条自己的；上限 %ld）\n",
+                           action_timeout_override(), ACTION_TIMEOUT_MAX);
+                    continue;
+                }
+                printf("[用法] ::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>\n");
                 continue;
             }
             case CMD_ORDER: {

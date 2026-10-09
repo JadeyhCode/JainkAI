@@ -4,9 +4,14 @@
  *       因果边 + 反事实 / 多信号元认知 / 表达自举 / 信用分配
  *       想象 / 类比 / 内部对话 / 概念漂移 / 自我叙事
  *       失败诊断 / 置信度校准 / 抽象形成 / 睡眠（增量）/ 遗忘（GC）
- *
- * 依赖：token.h
+ * * 依赖：token.h
  */
+/* 特性测试宏：`action.h` 要用 fork/exec/poll/kill/clock_gettime，而这些声明只在
+ * POSIX 模式下可见；**特性宏必须在第一个 libc 头之前**定义（本项目用 `-std=c11`，
+ * 那是严格 ISO 模式）。放这里是因为 ai.h 是所有 TU 的第一个头
+ * （main.c 与 tools/ 下的每个工具都从 agent.h → ai.h 进来）：一处生效，处处生效。 */
+#define _DEFAULT_SOURCE 1
+
 #ifndef AI_H
 #define AI_H
 
@@ -634,6 +639,11 @@ typedef struct {
     float   time_gamma;
     int     drive_d_steps, drive_d_gen;    /* 这一轮实际生效的修正（::drive 看得到） */
     float   drive_d_cutoff;
+    /* **受审的外部执行 + 写文件**（`action.h` 层）的开关：默认 0 = 关。
+     * 层本身（白名单/超时/账/观测标记）全在 action.h，内核只看到这一个数字 ——
+     * 和情绪那张表同一个放法（用户 2026-10-08 拍板：白名单 echo/cat/wc/gcc+grep/head/tail/sed/ls、
+     * 写文件只在 _t/work/、不联网）。**不进存档**（格式 v10 不动）。 */
+    int     act_on;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1081,8 +1091,10 @@ static inline void ai_switches_init(AI *ai) {
     ai->last_write_hops = ai->last_write_cred = ai->last_write_ev = -1;
     ai->route_writes = 0;
     ai->drive_on = 0;
+    ai->act_on = 0;                  /* 外部执行 + 写文件：默认**关**（action.h 层） */
     { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
     { const char *af = getenv("AIP_DRIVE"); if (af && af[0] == '1') ai->drive_on = 1; }
+    { const char *ac = getenv("AIP_ACT");   if (ac && ac[0] == '1') ai->act_on = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
     { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }

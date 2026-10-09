@@ -37,6 +37,7 @@ thinkout-off:AIP_THINKOUT=0
 premiseout-off:AIP_PREMISEOUT=0
 trust:AIP_TRUST=1
 d4:AIP_D4=1
+act:AIP_ACT=1
 # 闸门里的候选证据项现在是**默认开**，所以反向测它要成对给：
 #   闸门开 + 证据项关 = 老公式（阈值也回到老那套）
 wgate-ev0:AIP_WGATE=1 AIP_WGATE_EV=0

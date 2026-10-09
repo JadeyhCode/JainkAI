@@ -207,13 +207,17 @@ static inline int micro_token_reserved(const Token *t) {
 /* **草稿持久化**用的标记：`[草稿:<文本>]`（普通 token，随图存盘）。
  * 草稿区本身是瞬态的，靠它恢复 —— 和未解问题用 `[自问:…]` 同一个路子，**不改格式**。 */
 #define MICRO_DRAFT_TOKEN_PREFIX "[草稿:"
+/* **外部执行的观测标记**：`[运行:<rc>]`（普通 token，随图存盘）——
+ * `action.h` 每跑一次外部命令落一个（rc = 退出码，超时约定 -9）。
+ * 和 `[草稿:…]` 一样是**留痕/观测**，不是知识：只连回宿主"我"，不建关系边、不进关系表。 */
+#define MICRO_RUN_TOKEN_PREFIX "[运行:"
 
 /* 内核自有的**图内节点**命名空间（可以参与边）。
  * 别的 '[' 名字是协议骨架（[原语:]/[时刻:]/[提醒:]…），一律不许碰。 */
 static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
-                                      MICRO_DRAFT_TOKEN_PREFIX, NULL };
+                                      MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
      * 它是精确名字，不是前缀命名空间。 */
@@ -2294,42 +2298,15 @@ static inline void micro_metacog(AI *ai) {
 
 /* ============================ 安全点（一轮的收尾） ============================ */
 
-/* 一轮的**唯一**结构修改入口。放在输出成句之后 ——
- * 此时遍历早就结束了（不在任何 for (i < t->count) 里），
- * 加边/加 Token 不会破坏任何正在进行的迭代。 */
-static inline void micro_step(AI *ai, char *const *words, size_t n, const char *out) {
-    if (!ai) return;
+/* 安全点：逐条「审查 → 记账 → 应用 → 审计」。**唯一一份** ——
+ * micro_step（每轮）与 action.h 的"一次动作落一个观测标记"都走它：
+ * 入口不同但口径必须一样（被拒的不占预算、应用失败要退款、末尾清队列）。
+ * 返回真正应用了几条。 */
+static inline size_t micro_drain_queue(AI *ai) {
+    if (!ai) return 0;
     Micro *mk = micro_of(ai);
-    if (!mk) return;
+    if (!mk) return 0;
     ModQueue *q = &mk->queue;
-    /* 刻意**不**在这里清队列：思维层（think.h）和补丁都在这一轮里更早的时候
-     * 提议，安全点只负责消费。末尾 q->n = 0 保证意图不跨轮。 */
-    mk->safe.step_new_tokens = 0;
-    mk->safe.step_new_edges = 0;
-    mk->safe.step_patch_calls = 0;
-    /* 测量钩子：`AIP_PATCH=记事本` 自动挂一个内建补丁（只给 A/B 用，不进业务逻辑）。
-     * 用它跑整包回归，回答的是"挂上这个外设到底改不改既有行为"。 */
-    if (!mk->meta.patch_auto_tried) {
-        mk->meta.patch_auto_tried = 1;
-        const char *pn = getenv("AIP_PATCH");
-        if (pn && pn[0]) (void)patch_mount_builtin(ai, pn);
-    }
-    mk->meta.n_steps++;
-    if (mk->propose_off > 0) mk->propose_off--;
-
-    /* ① 补丁提议（内核不知道补丁内部怎么想） */
-    patch_propose_all(ai, q);
-
-    /* ② 内建检测器：从图里量出「该改什么」 */
-    if (!mk->safe.mod_off && mk->propose_off == 0) {
-        micro_detect_coactivation(ai, words, n, mk);
-        micro_detect_conditional(ai, words, n, mk);   /* D4：从反复出现的谈话里长前提 */
-        micro_detect_gap(ai, words, n, out, mk);
-        micro_detect_prune(ai, mk);
-    }
-
-    /* ③ 安全点：逐条审查 → 应用 → 记账。**被拒的一条不占预算**。 */
-    size_t proposed = q->n;
     size_t applied = 0;
     for (size_t i = 0; i < q->n; ++i) {
         ModIntent *m = &q->items[i];
@@ -2377,8 +2354,50 @@ static inline void micro_step(AI *ai, char *const *words, size_t n, const char *
         }
         micro_log_apply(mk, m, note);
     }
-    mk->meta.n_proposed += proposed;
     q->n = 0;   /* 意图不跨轮：要么在这一步应用，要么被拒 */
+    return applied;
+}
+
+/* 一轮的**唯一**结构修改入口。放在输出成句之后 ——
+ * 此时遍历早就结束了（不在任何 for (i < t->count) 里），
+ * 加边/加 Token 不会破坏任何正在进行的迭代。 */
+static inline void micro_step(AI *ai, char *const *words, size_t n, const char *out) {
+    if (!ai) return;
+    Micro *mk = micro_of(ai);
+    if (!mk) return;
+    ModQueue *q = &mk->queue;
+    /* 刻意**不**在这里清队列：思维层（think.h）和补丁都在这一轮里更早的时候
+     * 提议，安全点只负责消费。末尾 q->n = 0 保证意图不跨轮。 */
+    mk->safe.step_new_tokens = 0;
+    mk->safe.step_new_edges = 0;
+    mk->safe.step_patch_calls = 0;
+    /* 测量钩子：`AIP_PATCH=记事本` 自动挂一个内建补丁（只给 A/B 用，不进业务逻辑）。
+     * 用它跑整包回归，回答的是"挂上这个外设到底改不改既有行为"。 */
+    if (!mk->meta.patch_auto_tried) {
+        mk->meta.patch_auto_tried = 1;
+        const char *pn = getenv("AIP_PATCH");
+        if (pn && pn[0]) (void)patch_mount_builtin(ai, pn);
+    }
+    mk->meta.n_steps++;
+    if (mk->propose_off > 0) mk->propose_off--;
+
+    /* ① 补丁提议（内核不知道补丁内部怎么想） */
+    patch_propose_all(ai, q);
+
+    /* ② 内建检测器：从图里量出「该改什么」 */
+    if (!mk->safe.mod_off && mk->propose_off == 0) {
+        micro_detect_coactivation(ai, words, n, mk);
+        micro_detect_conditional(ai, words, n, mk);   /* D4：从反复出现的谈话里长前提 */
+        micro_detect_gap(ai, words, n, out, mk);
+        micro_detect_prune(ai, mk);
+    }
+
+    /* ③ 安全点：逐条「审查 → 记账 → 应用 → 审计」。**唯一一份**实现 ——
+     * micro_step（每轮）与 action.h 的"一次动作落一个观测标记"都调它，
+     * 这样"受审的写入"口径不会因为入口不同而分叉。 */
+    size_t proposed = q->n;
+    (void)micro_drain_queue(ai);
+    mk->meta.n_proposed += proposed;
 
     /* ④ 元认知：看速率 / 拒绝率 / 补丁健康，必要时自己踩刹车 */
     micro_metacog(ai);
