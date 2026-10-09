@@ -2309,9 +2309,10 @@ int main(int argc, char **argv) {
 - 开关对照：`ONLY=drive`（改名那条）**基线不动**；`action.sh` 自己支持反向测量（`AIP_ACT=1`）。
 - 存档：`model.bin` **仍是 v9 文件**、md5 `bb5142627e94a4c5e435618a35450be7` 未变；
   另存才会写 v10。口径从今天起是「**v9 读得回来；新存是 v10**」。
-- `codes/` 镜像 **96 文件逐字节一致**（含 `tests/v9_sample.bin`、`tests/prebuilt.sh`、`action.h`、`tests/action.sh`）。
+- `codes/` 镜像 **97 文件逐字节一致**（含 `tests/v9_sample.bin`、`tests/prebuilt.sh`、
+  `action.h`、`code.h`、`tests/action.sh`）。
 
-#### 三、下一件
+#### 三、下一件（**第 4 条已在 §6.53 做完**，这里是当时的停放点）
 
 `deepseek看这里.txt` 开头那份**唯一**清单的第 4 条：
 **"写-跑-看错-改"机械闭环（降级版）** —— 通道已经有了（`::act`），
