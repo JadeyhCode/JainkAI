@@ -521,6 +521,7 @@ typedef enum {
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
     CMD_ACT,                /* 受审的外部执行 + 写文件（默认关） */
+    CMD_CODE,               /* 写-跑-看错-改 的机械闭环（降级版） */
     CMD_ORDER,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
@@ -625,6 +626,8 @@ static const CmdDef CMDS[] = {
       "驱动参与决策：off（默认）| on；列出**耦合表**与当前生效的修正", CMD_DRIVE },
     { "act", NULL, 1, "基本",
       "受审的外部执行 + 写文件（默认关）：::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>", CMD_ACT },
+    { "code", NULL, 1, "基本",
+      "写-跑-看错-改 的机械闭环（降级版）：::code try <相对路径>｜::code 看痕。修法只有两类，最多改一次", CMD_CODE },
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**（按首次见到的 tick），并给顺序证据", CMD_ORDER },
     { "wgate", NULL, 1, "基本",
@@ -2297,11 +2300,22 @@ int main(int argc, char **argv) {
                     while (*q && *q != ' ' && *q != '\t' && k + 1 < sizeof path) path[k++] = *q++;
                     path[k] = 0;
                     while (*q == ' ' || *q == '\t') q++;
-                    int rc = action_write_file(a->brain, path, q);
+                    /* 文本里支持 `\n` `\t` `\\` 三个转义 —— 否则**多行源码根本写不进去**
+                     * （一条命令就是一行输入；这是 CLI 的语法，不是 action.h 的语义）。 */
+                    char body[8192];
+                    size_t bn = 0;
+                    for (const char *p2 = q; *p2 && bn + 1 < sizeof body; ++p2) {
+                        if (p2[0] == '\\' && p2[1] == 'n')      { body[bn++] = '\n'; p2++; }
+                        else if (p2[0] == '\\' && p2[1] == 't') { body[bn++] = '\t'; p2++; }
+                        else if (p2[0] == '\\' && p2[1] == '\\') { body[bn++] = '\\'; p2++; }
+                        else                                     body[bn++] = *p2;
+                    }
+                    body[bn] = 0;
+                    int rc = action_write_file(a->brain, path, body);
                     if (rc == -2)      printf("[没写] %s\n", action_book()->last_reason);
                     else if (rc != 0)  printf("[没写成] %s\n", action_book()->last_reason);
                     else               printf("[写了] %s（%zu 字节）→ 落图 %s\n",
-                                              path, strlen(q), action_book()->last_mark);
+                                              path, (size_t)bn, action_book()->last_mark);
                     continue;
                 }
                 if (strncmp(arg, "out", 3) == 0 && (arg[3] == 0 || arg[3] == ' ')) {
@@ -2317,6 +2331,25 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 printf("[用法] ::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>\n");
+                continue;
+            }
+            case CMD_CODE: {
+                /* 写-跑-看错-改（降级版）：一次真实闭环，痕留在 code.h 的 CodeRun 里。 */
+                const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && strncmp(arg, "try", 3) == 0 && (arg[3] == 0 || arg[3] == ' ')) {
+                    const char *rel = arg + 3;
+                    while (*rel == ' ') rel++;
+                    int rc = code_round(a->brain, rel);
+                    code_print();
+                    if (rc == -2) printf("  （没跑成）\n");
+                    continue;
+                }
+                if (arg && *arg) {
+                    printf("[用法] ::code try <相对路径>（文件在 " ACTION_WORK_DIR "/ 里）｜::code 看痕\n");
+                    continue;
+                }
+                code_print();
                 continue;
             }
             case CMD_ORDER: {

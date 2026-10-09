@@ -218,12 +218,13 @@ static inline int action_path_check(const char *rel, char *why, size_t cap) {
     return 0;
 }
 
-/* 输出算**观测**：落一个 `[运行:<rc>]` 标记节点（不建关系边、不进知识）。
- * 进图只走安全点：micro_drain_queue()（与 micro_step 同一份实现）。 */
-static inline int action_observe(AI *ai, int rc) {
-    if (!ai || !ai->pool) return -1;
+/* 落一个**观测标记**节点 `[<prefix><rc>]`（不建关系边、不进知识）。
+ * 进图只走安全点：micro_drain_queue()（与 micro_step 同一份实现）。
+ * **唯一一份**实现：动作层（`[运行:rc]`）与写代码闭环（`[代码:rc]`）都走它。 */
+static inline int action_observe_mark(AI *ai, const char *prefix, int rc, const char *source) {
+    if (!ai || !ai->pool || !prefix) return -1;
     char nm[48];
-    snprintf(nm, sizeof nm, MICRO_RUN_TOKEN_PREFIX "%d]", rc);
+    snprintf(nm, sizeof nm, "%s%d]", prefix, rc);
     ModIntent m;
     memset(&m, 0, sizeof m);
     m.type = MOD_ADD_TOKEN;
@@ -237,7 +238,7 @@ static inline int action_observe(AI *ai, int rc) {
         }
     m.target = host;
     snprintf(m.name, sizeof m.name, "%s", nm);
-    snprintf(m.source, sizeof m.source, "动作:运行");
+    snprintf(m.source, sizeof m.source, "%s", source ? source : "观测");
     Micro *mk = micro_of(ai);
     if (!mk) return -1;
     /* 一次动作算内核眼里的**一小步**：重开这一步的预算，否则第一条标记就把
@@ -249,6 +250,9 @@ static inline int action_observe(AI *ai, int rc) {
     snprintf(g_act.last_mark, sizeof g_act.last_mark, "%s", nm);
     g_act.last_rc = rc;
     return 0;
+}
+static inline int action_observe(AI *ai, int rc) {
+    return action_observe_mark(ai, MICRO_RUN_TOKEN_PREFIX, rc, "动作:运行");
 }
 
 /* 拒绝的**统一出口**：记账 + 写理由（别的路径不许自己拼理由） */

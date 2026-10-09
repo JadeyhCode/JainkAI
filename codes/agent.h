@@ -7,6 +7,7 @@
 #include "ai.h"
 #include "drive.h"
 #include "action.h"      /* 受审的外部执行 + 写文件（层；默认关） */
+#include "code.h"        /* 写-跑-看错-改 的机械闭环（降级版；默认关） */
 #include "frame_io.h"
 
 typedef const char *(*AgentPerceiveFn)(void *user);
@@ -1396,6 +1397,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     think_settle(ai);
 
     micro_step(ai, words, n, out);
+
+    /* ---- 写代码闭环（降级版；默认关）----
+     * `AIP_CODE=<相对路径>` 时，**代理循环自己**在安全点之后走一遍
+     * "写文件 → 跑编译器 → 看错误 → 按规则改一次 → 再跑一次"（一个进程只走一次）。
+     * 它落的观测标记（`[代码:<rc>]`）走的是同一条意图队列 —— 所以上面那个安全点之后
+     * 再单独 drain 一次（见 code.h）。默认不设这个环境变量就一个字都不做。 */
+    if (code_auto_step(ai)) micro_step(ai, NULL, 0, out);
 
     /* ---- 输出侧补丁（第二步）：**问"这一轮到底发什么"** ----
      * 放在安全点**之后**：思维层这一轮要不要说、说什么（写草稿 / 发送 / 按住不说）

@@ -66,10 +66,19 @@
        三次越界拒 / 没有 shell（`;|&` 原样进 argv）/ 超时 SIGKILL / 输出变观测且不是知识 / 账对得上；
        支持反向测量 `AIP_ACT=1`（已进 `tests/switches_ab.sh` 的开关表）
      · 真闭环验过：`::act write hello.c …` → `cat` 读回来 → `gcc -c hello.c` 出 `hello.o`
-  4. **"写-跑-看错-改"机械闭环**（**降级版**，别指望它一天内自主改对）← **下一件**：
-     通道已经有了（`::act`），要做的是让**代理循环**在一轮里自己走"写文件 → 编译 → 读错误 → 再改一次"，
-     并把这一轮的痕/账留档。验收 = 闭环真的走了一遍（不是"改对了"）。
-  5. **原语语言加解析器/校验器**（比改 C 词法划算，也是第 4 步的便宜目标语言；现在 `::asm` 是边读边执行）
+  4. ~~"写-跑-看错-改"机械闭环（降级版）~~ ✅ **已完成**（细节见 audit §6.53）：
+     · 新层 `code.h`：写文件 → 跑 `gcc` → 取**第一条 error**（带 `文件:行:列`）→
+       按**修法表**改一次 → 写回去 → 再编一次
+     · 修法表只有两类：`expected … ;` → **上一行末尾**补分号；
+       `implicit declaration of function` → 按函数名补 `#include`（printf/puts→stdio.h…）
+     · 认不出的错**停在原地并说明**（"没有已知的机械修法"，不猜）；最多改一次（`CODE_MAX_FIX=1`）
+     · **进了代理循环**：`AIP_CODE=<相对路径>` 时 `agent_step` 自己走一遍（只走一次，并把痕打出来）；
+       CLI 同入口 `::code try <相对路径>` / `::code` 看痕；落 `[代码:<rc>]` 观测标记（不是知识）
+     · `::act write` 支持 `\n` `\t` `\\` 转义（否则多行源码写不进去 —— 踩过）
+     · 看护 `tests/action.sh` 第 ⑧ 节（6 项，合计 **28 项**）：补分号 / 补 include / 认不出就停 /
+       只编一次 / **代理循环自己走了一遍**
+     · ⚠ 它**不会写代码**：源文件是外面写的（`::act write`、草稿、人给的），这一层只改已知形状的错
+  5. **原语语言加解析器/校验器**（下一件）（比改 C 词法划算，也是第 4 步的便宜目标语言；现在 `::asm` 是边读边执行）
      → 再接**词法层 ASCII 逐字保留**（默认关 + A/B）→ 再落**第 32 套看护**（代码任务回归）。
   6. 顺手件（小）：#2 尾巴（机制路径候选的 `hops/cred` 接全）→ #4 尾巴（"大家怎么看"进回答路径；
      **时间维度不做**）→ tests/ 清单系统性扫一遍。
@@ -78,11 +87,12 @@
 
 四、当前状态速览（2026-10-08 夜，本轮收尾）
   提交：`bbbc89a`（本轮：套件相位提速 + affect→drive 改名 + 删语境字段 v10；上一个 `fcad3f0` 是交接）
-  整包 **32 步全绿**（31 套 + 冒烟；套件相位 26 s、端到端 ~40 s 空闲 / 54 s 带负载）；
+  整包 **32 步全绿**（31 套 + 冒烟；套件相位 26 s、端到端 ~40 s 空闲 / 45~55 s 带负载）；
   `sizeof(AssocEntry)` **128 → 56**（出厂 41138 条边 ⇒ 内存省 ≈2.9 MB）；
   `model.bin` **仍是 v9 文件**、md5 = `bb5142627e94a4c5e435618a35450be7`（第一次 `::save` 后才写 v10）；
   `codes/` 镜像 **96 文件逐字节一致**（含 `tests/v9_sample.bin`、`action.h`、`tests/action.sh`）；
-  外部执行层：`AIP_ACT=1` / `::act`（白名单 9 条，**默认关**；看护 `tests/action.sh` 22 项）。
+  外部执行层：`AIP_ACT=1` / `::act`（白名单 9 条，**默认关**）；写代码闭环：`AIP_CODE=<相对路径>` /
+  `::code try`（★ 降级版：只两类修法、最多改一次）；看护 `tests/action.sh` **28 项**（含闭环那节）。
   本轮验过：`-Werror` 编译、30 套全绿、26 个探针门、`ONLY=drive` 开关对照（基线不动）、
   旧代码/新代码读同一个 v9 样本的 A/B（49 Token/25 边一致）、`FORCE_CC=1` 与"哈希不符自编"两条路。
   逐轮记录：docs/audit-vs-deepseek看这里.md §6.42~§6.50（**本轮在 §6.50**，含两处返工的复盘）。
@@ -192,7 +202,7 @@
   · 写入闸门：闸门本身**默认关**（`::wgate on` 开）；闸门里的**候选证据项默认开**
     （`AIP_WGATE_EV=0` / `::wgate ev off` 关）——翻默认前三跑法整包全绿（§6.43）
   · 对话触发：**说法归一表 + 槽位**（默认；`AIP_TRIGGER=kw` / `::triggers norm off` 切回老那套）
-  · 测量钩子：AIP_ACT / AIP_ROUTE / AIP_DRIVE / AIP_WGATE / AIP_WGATE_EV / AIP_PREMHOLD / AIP_D4 / AIP_PATCH /
+  · 测量钩子：AIP_ACT / AIP_CODE / AIP_ROUTE / AIP_DRIVE / AIP_WGATE / AIP_WGATE_EV / AIP_PREMHOLD / AIP_D4 / AIP_PATCH /
     AIP_NOTEPAD / AIP_THINKOUT / AIP_PREMISEOUT / AIP_TRUST / AIP_TRIGGER
 
 六、本轮之后新增/改变了什么（原清单之外）

@@ -125,8 +125,44 @@ else
 fi
 
 echo
+echo "== ⑧ 写-跑-看错-改 的机械闭环（降级版：只两类修法、最多改一次、**不生成代码**） =="
+# 单独一次会话（否则上面那份"账"的计数会被这里的编译搅乱）
+{
+  printf '::act on\n'
+  printf '::act write 缺分号.c int main(void) {\\n    int x = 1\\n    return x;\\n}\\n\n'
+  printf '::code try 缺分号.c\n'
+  printf '::act write 缺头文件.c int main(void) { return puts("hi") == 0 ? 0 : 1; }\n'
+  printf '::code try 缺头文件.c\n'
+  printf '::act write 改不动.c int main(void) { return 不存在的东西; }\n'
+  printf '::code try 改不动.c\n'
+  printf '::quit\n'
+} > code_in.txt
+./aip < code_in.txt > code.log 2>&1 || true
+grep -q '缺分号.c：编译 2 次，首次 rc=1 → 最终 rc=0' code.log \
+    && ok "缺分号：编译 → 看错 → 补分号 → 再编，**过了**" \
+    || bad "补分号闭环" "$(grep -m2 '写代码闭环' code.log)"
+grep -q 'int x = 1;' _t/work/缺分号.c \
+    && ok "改的是**文件本身**（第 2 行末尾真的多了分号）" \
+    || bad "改后文件" "$(sed -n '2p' _t/work/缺分号.c)"
+grep -q '#include <stdio.h>' _t/work/缺头文件.c \
+    && ok "缺头文件：按函数名补 #include <stdio.h>，再编过了" \
+    || bad "补头文件" "$(head -2 _t/work/缺头文件.c)"
+grep -q '没有已知的机械修法' code.log \
+    && ok "认不出的错**停在原地并说明**（降级版不猜）" \
+    || bad "不猜" "$(grep -A2 '改不动' code.log | tail -2)"
+grep -q '改不动.c：编译 1 次' code.log \
+    && ok "认不出就只编一次（不进入无限重试）" \
+    || bad "重试次数" "$(grep -m1 '改不动.c：' code.log)"
+# 代理循环自己走一遍（`AIP_CODE`）—— 这才是"闭环进了循环"，不只是 CLI 的一个入口
+printf 'int main(void) {\n    int x = 1\n    return x;\n}\n' > _t/work/闭环.c
+AIP_ACT=1 AIP_CODE=闭环.c sh -c 'printf "你好\n::quit\n" | ./aip' > auto.log 2>&1 || true
+grep -q '闭环.c：编译 2 次，首次 rc=1 → 最终 rc=0' auto.log \
+    && ok "代理循环**自己**走了一遍（AIP_ACT=1 AIP_CODE=闭环.c，一句话就跑完闭环）" \
+    || bad "代理循环那条路" "$(grep -m2 '写代码闭环\|编译' auto.log)"
+
+echo
 if [ "$fail" -eq 0 ]; then
-    echo "PASS action（受审的外部执行 + 写文件：$pass 项；默认关/白名单/边界/无 shell/超时/观测/账）"
+    echo "PASS action（受审的外部执行 + 写文件 + 写代码闭环：$pass 项）"
 else
     echo "FAIL action（$fail 项失败，$pass 项通过）"; exit 1
 fi

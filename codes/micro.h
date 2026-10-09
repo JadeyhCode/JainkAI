@@ -211,13 +211,17 @@ static inline int micro_token_reserved(const Token *t) {
  * `action.h` 每跑一次外部命令落一个（rc = 退出码，超时约定 -9）。
  * 和 `[草稿:…]` 一样是**留痕/观测**，不是知识：只连回宿主"我"，不建关系边、不进关系表。 */
 #define MICRO_RUN_TOKEN_PREFIX "[运行:"
+/* **写代码闭环的观测标记**：`[代码:<最终rc>]`（普通 token，随图存盘）——
+ * `code.h` 走完一轮"写-跑-看错-改"落一个。和 `[运行:…]` 一样是留痕，不是知识。 */
+#define MICRO_CODE_TOKEN_PREFIX "[代码:"
 
 /* 内核自有的**图内节点**命名空间（可以参与边）。
  * 别的 '[' 名字是协议骨架（[原语:]/[时刻:]/[提醒:]…），一律不许碰。 */
 static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
-                                      MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX, NULL };
+                                      MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
+                                      MICRO_CODE_TOKEN_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
      * 它是精确名字，不是前缀命名空间。 */
