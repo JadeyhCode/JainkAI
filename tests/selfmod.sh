@@ -5,6 +5,7 @@
 # 在 tools/microtest.c 里；这里盯的是**端到端**：
 #
 #   ::mod / ::safe / ::patch 三个入口真的接在链路上，
+#   （N2）思考的**中间步**也能写进草稿区，而且走的是同一条受审通道；
 #   「提议 → 审查 → 安全点应用 → 记账 → 审计」这一条走通了，
 #   自修改**产生的结构随图存盘**（格式没动，不用重训），
 #   补丁能热插拔、能停用、坏了不影响内核。
@@ -167,6 +168,57 @@ grep -q '不认这个操作' o26 && ok "不认的操作：说清楚（不崩）"
 grep -q '已停用' o26 && ok "连续 3 次出错 → 补丁自己停用" || bad "故障隔离" "$(grep '记事本' o26 | head -3)"
 grep -q 'AI >' o26 && ok "补丁停用后内核照跑（照常回答）" || bad "内核" "$(grep 'AI >' o26 | tail -1)"
 
+echo "== 9.5 N2 轮中草稿（默认关）：一边想一边把中间步写进草稿区 =="
+# 默认关那一侧：草稿一个字都不写（与今天逐字节相同）。
+# ⚠ 开关反向测量（AIP_DRAFTMID=1，见 tests/switches_ab.sh）时这几条**自动跳过**。
+if [ -z "${AIP_DRAFTMID:-}" ]; then
+    run '::notepad off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n猫 会 跳舞 吗\n::patch op 记事本 读\n::notepad\n' o34
+    grep -qa '草稿\[0字节\]=(空)' o34 && ok "默认关：跑完一轮草稿还是空的（一个字都不写）" \
+        || bad "默认关的草稿" "$(grep -a '草稿\[' o34 | head -2)"
+    grep -q '轮中打草稿 = 关（默认）' o34 && ok "::notepad 自报「轮中打草稿 = 关（默认）」" \
+        || bad "mid 默认" "$(grep -m2 '轮中打草稿' o34)"
+    # 别 grep 「轮中打草稿」——`::notepad` 的**说明文字**里也有这四个字（踩过）；
+    # `[想] ` 这种行只可能来自草稿/痕，拿它当判据才不假红。
+    grep -qa '\[想\]' o34 && bad "默认关时不该往草稿里写" "$(grep -a -m1 '\[想\]' o34)" \
+        || ok "默认关：日志里一行 [想] 都没有（草稿空、痕里也没有）"
+else
+    ok "AIP_DRAFTMID=1（反向测量）：默认值断言按规矩跳过"
+fi
+
+# 开着那一侧：**受审通道**（MOD_PATCH_CALL）+ 一轮最多 3 行 + 中间步进草稿
+# 用 **manual 模式**看草稿：auto 模式下这一轮的发送会把草稿用掉并清空（既有行为，没改），
+# manual 模式正好是用户设想的"AI 自己决定什么时候发送"，草稿留着。
+run '::notepad off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n::notepad mid on\n猫 会 跳舞 吗\n::patch op 记事本 读\n::delib\n::mod\n' o35
+grep -q '轮中打草稿 = 开' o35 && ok "::notepad mid on 打开了" || bad "mid on" "$(grep -m2 '轮中打草稿' o35)"
+grep -qa '\[想\] 要弄清：猫 会 跳舞 吗' o35 && ok "草稿里有**目标**那一行（[想] 要弄清：…）" \
+    || bad "目标行" "$(grep -a -m2 '草稿\[' o35)"
+grep -qa '\[想\] 够不着，先拆成子目标接着够' o35 && ok "草稿里有**中间步**（够不着 → 拆子目标）" \
+    || bad "中间步行" "$(grep -a -m3 '\[想\]' o35)"
+grep -qa '\[想\] 还没结论（停因：原地打转）' o35 && ok "草稿里有**收束**那一行（还没结论 + 停因）" \
+    || bad "收束行" "$(grep -a -m4 '\[想\]' o35)"
+n_mid=$(grep -ac '\[想\]' o35 || true)
+[ "$n_mid" -ge 3 ] && [ "$n_mid" -le 6 ] \
+    && ok "一轮最多 3 行（这份日志里 3 行：读一次 + 痕里也各一条）" \
+    || bad "行数" "[想] 出现了 $n_mid 次"
+grep -q '轮中打草稿' o35 && ok "::delib 的痕里也看得到（过程留痕）" \
+    || bad "痕" "$(grep -a -m2 '打草稿' o35)"
+grep -q '调用补丁 记事本.写.*思维:轮中草稿' o35 \
+    && ok "**走受审通道**：登记成「调用补丁 记事本.写」、来源写着 思维:轮中草稿（不是直写）" \
+    || bad "受审通道" "$(grep -a -m3 '调用补丁' o35)"
+# **不能把轮末那一手挤掉**：安全内核每步只批 4 次补丁操作，
+# `::notepad on|hold` 要留 2 格给"写结论 + 发送/不发"（实测踩过：不预留 → 发送被预算拒，
+# 回答退回流水线；而且当时审计的拒绝理由还是 `(null)`，因为理由表缺两条）。
+run '::patch mount 记事本\n::notepad on\n::notepad mid on\n猫 会 唱歌 吗\n::safe\n' o37
+grep -qE '判定：允许 [1-9] 拒绝 0' o37 && ok "mid + on 同时开：补丁调用一次都没被拒（预算留够了）" \
+    || bad "补丁预算被挤爆" "$(grep -aE '判定：|超预算|(null)' o37 | head -4)"
+grep -qa '(null)' o37 && bad "审计里打出了 (null)" "$(grep -a -m1 '(null)' o37)" \
+    || ok "审计里没有 (null)（拒绝理由表逐条有名字）"
+
+# 没挂补丁 → 一行都不写（层不知道补丁在不在，但**不动**）
+run '::notepad mid on\n猫 会 跳舞 吗\n::patch\n' o36
+grep -qa '\[想\]' o36 && bad "没挂补丁却写了草稿" "$(grep -a -m1 '\[想\]' o36)" \
+    || ok "没挂「记事本」时一行都不写（层不越界）"
+
 echo "== 8. D4 条件依赖：前提从反复出现的谈话里**自己长出来** =="
 # 行为断言都**显式写开关**（不依赖环境默认），这样反向测量 AIP_D4=1 也能整包跑绿；
 # 默认值单列一条断言（被环境变量强制时跳过）——规矩同 ::premiseout 那次。
@@ -207,9 +259,17 @@ else
         || bad "默认值" "$(grep '记事本 =' o30 | head -2)"
 fi
 # 有结论 + on：说出来的是**它自己写的那句**（不是流水线那句，链式渲染不见了）
+# ⚠ `AIP_DRAFTMID=1`（N2 轮中草稿）时草稿里还有"过程"那几行 ⇒ 发出去的是「过程 + 结论」，
+#   这是 N2 的直接效果（opt-in），所以那一种跑法换一条断言（见下）。
 run '::notepad off\n::patch mount 记事本\n::notepad on\n猫 会 唱歌 吗\n' o31
-grep -q 'AI > 猫 不 会 唱歌' o31 && ok "on：AI 把结论写进草稿并发送 → 说的是它自己写的那句" \
-    || bad "on 模式" "$(grep 'AI >' o31 | tail -2)"
+if [ -z "${AIP_DRAFTMID:-}" ]; then
+    grep -q 'AI > 猫 不 会 唱歌' o31 && ok "on：AI 把结论写进草稿并发送 → 说的是它自己写的那句" \
+        || bad "on 模式" "$(grep 'AI >' o31 | tail -2)"
+else
+    grep -qa '\[想\] 要弄清' o31 && grep -q '猫 不 会 唱歌' o31 \
+        && ok "AIP_DRAFTMID=1：发出去的是「过程 + 结论」（草稿就是这一轮的话）" \
+        || bad "draftmid 跑法" "$(grep -a 'AI >' o31 | head -3)"
+fi
 grep -q '依据：' o31 && ok "on：**依据（链）也带回来了**（规则名/链式渲染不再丢）" \
     || bad "on 模式的依据" "$(grep 'AI >' o31 | tail -2)"
 grep -q -- '-\[会' o31 && ok "链上看得见走的是哪条规则" \
@@ -227,7 +287,7 @@ grep -q 'AI > 猫' o33 && ok "off：回到流水线（照常回答，一个字�
 
 echo
 if [ "$fail" -eq 0 ]; then
-    echo "PASS selfmod（微内核：自修改 / 安全内核 / 统一写入通道 / 补丁边界 / 记事本 / D4，$pass 项）"
+    echo "PASS selfmod（微内核：自修改 / 安全内核 / 统一写入通道 / 补丁边界 / 记事本 / 轮中草稿 / D4，$pass 项）"
 else
     echo "FAIL selfmod（$fail 项失败，$pass 项通过）"
     exit 1

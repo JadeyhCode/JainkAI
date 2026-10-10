@@ -50,6 +50,7 @@
 #define THINK_STALL_LIM 3       /* 同一件事试几次没进展就算停滞 */
 #define THINK_NAME_MAX   48     /* [自问:…] 这个名字最多多少字节（按 UTF-8 边界截） */
 #define THINK_CACHE_MAX   8     /* 一轮最多沉淀/撤销几条（和意图队列的预算一起限流） */
+#define THINK_DRAFT_MAX   3     /* N2 轮中草稿：一轮最多往草稿区写几行（中间步） */
 
 /* 一条「事实」：A -[rid]-> B 还是它的否定
  * ev/hops/cred 是**候选自己的证据**（只给"AI 自己想沉淀"那条路用，见 §6.43）：
@@ -274,6 +275,14 @@ typedef struct {
     size_t    n_idle;                   /* 空闲想了几轮 */
     char      idle_note[THINK_TEXT];    /* 最近一次挑的是哪个问题（给人看） */
 
+    /* ---- N2：**轮中草稿**（一边想一边把中间步写进草稿区）----
+     * 缺口（§6.54 N2）：草稿只在**轮末**打（think_settle 是"想完 → 写草稿"）；
+     * 现在把中间步也写进去 —— 走**受审通道**（MOD_PATCH_CALL 调 `记事本` 的 `写`），
+     * 不是直写（§6.55 K4）。默认关（`draft_mid == 0`）。 */
+    int       draft_mid;                /* 1 = 轮中打草稿（默认 0） */
+    size_t    n_draft_mid;              /* 这一轮写了几行（每轮清零） */
+    size_t    n_draft_total;            /* 累计写了几行（给人看） */
+
     /* ---- 元认知（看思维本身） ---- */
     size_t    n_stalls, n_over_budget, n_conflicts, n_blocked;
     size_t    stall_run;                /* 本轮连续没推进的步数 */
@@ -365,6 +374,11 @@ static inline Think *think_of(AI *ai) {
         t->n_idle = 0;
         t->idle_note[0] = 0;
         { const char *ib = getenv("AIP_IDLE"); if (ib && ib[0] == '1') t->idle_every = 1; }
+        /* N2 轮中草稿**默认关**；`AIP_DRAFTMID=1` 打开（还要挂上 `记事本` 补丁才动得了笔）。 */
+        t->draft_mid = 0;
+        t->n_draft_mid = 0;
+        t->n_draft_total = 0;
+        { const char *dm = getenv("AIP_DRAFTMID"); if (dm && dm[0] == '1') t->draft_mid = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -1511,6 +1525,60 @@ static inline int think_make_goal(AI *ai, Think *t, char *const *words, size_t n
     return 1;
 }
 
+/* ============================ N2：轮中草稿（一边想一边写） ============================
+ *
+ * 缺口（§6.54 N2）：草稿只在**轮末**打（`think_settle` 是"想完 → 写草稿"）。
+ * 用户要的是「草稿是思考的**媒介**，不是副本」—— 所以思考的**中间步**也要能写进去。
+ *
+ * 四条边界（§6.55 K4 定的）：
+ *   · **走受审通道**：一行 = 一条 `MOD_PATCH_CALL`（调 `记事本` 的 `写`），
+ *     审查/预算/记账/审计一样不少 —— **不直写**补丁的缓冲；
+ *   · **一轮最多 `THINK_DRAFT_MAX` 行**（还要给"结论/停因"留一行）：不刷屏、不刷预算；
+ *   · **默认关**（`draft_mid == 0`）：关着时一行都不提（与今天逐字节相同）；
+ *   · **没挂 `记事本` 就什么都不做**（补丁没挂时行不通，也不用记账）。
+ * 写进去的样子（`::patch op 记事本 读` 看得到）：
+ *     [想] 要弄清：猫 会 跳舞 吗
+ *     [想] 够不着，先拆子目标
+ *     [想] 还没结论（停因：原地打转）
+ * 也就是"过程"本身进了草稿，而不是等想完只留一句结论。 */
+static inline size_t think_draft_cap(const Think *t) {
+    if (!t) return 0;
+    /* 安全内核**每步**只批 `max_patch_calls_step`（=4）次补丁操作；
+     * `::notepad on|hold` 时轮末那一手要写结论 + 发送/不发 = 2 次 ——
+     * 不预留就会把「发送」挤掉（实测：5 条意图 → 第 5 条被预算拒，回答退回流水线，
+     * 而且当时审计的拒绝理由还是 `(null)`，因为名字表缺两条）。 */
+    if (t->notepad) return 2;
+    return THINK_DRAFT_MAX;
+}
+
+static inline void think_draft_mid(AI *ai, Think *t, const char *line) {
+    if (!ai || !t || !line || !line[0]) return;
+    if (!t->draft_mid) return;
+    if (t->n_draft_mid >= think_draft_cap(t)) return;
+    Micro *mk = micro_of(ai);
+    if (!mk || mk->safe.mod_off) return;
+    Patch *np = patch_find(&mk->patches, "记事本");
+    if (!np || !np->mounted || !np->enabled) return;
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_PATCH_CALL;
+    snprintf(m.patch, sizeof m.patch, "记事本");
+    snprintf(m.name, sizeof m.name, "写");
+    snprintf(m.args[0], sizeof m.args[0], "%s", line);
+    m.n_args = 1;
+    snprintf(m.source, sizeof m.source, "思维:轮中草稿");
+    if (mod_propose(&mk->queue, &m)) {
+        t->n_draft_mid++;
+        t->n_draft_total++;
+        think_step(t, TH_LEARN, 1, 40, "轮中打草稿", line);
+    }
+}
+
+/* 还能再写几行？给"结论/停因"那行**留一格**（否则长回合会把结论挤掉）。 */
+static inline int think_draft_room(const Think *t) {
+    return t && t->draft_mid && t->n_draft_mid + 1 < think_draft_cap(t);
+}
+
 static inline void think_run(AI *ai, char *const *words, size_t n) {
     Think *t = think_of(ai);
     if (!t || !ai) return;
@@ -1527,6 +1595,7 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
     think_goal_reset(t);
     /* N1：这一轮的思考对象从空的开始（开关关着时这一行什么也不做） */
     if (t->obj_on) think_obj_reset(t);
+    t->n_draft_mid = 0;                  /* N2：轮中草稿的每轮配额 */
 
     /* 上一轮想通、还没说出口的旧问题：先记在痕上，
      * 否则这一轮的痕迹一重置，就说不清那句补充是哪儿来的。 */
@@ -1628,6 +1697,14 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
         think_step(t, TH_GOAL, 1, 80, "立目标（关系问题）", why);
     }
 
+    /* N2：轮中草稿的第一行 —— "我要弄清什么"（走受审通道，见 think_draft_mid） */
+    {
+        char dline[THINK_TEXT + 16];
+        snprintf(dline, sizeof dline, "[想] 要弄清：%s\n",
+                 qtext[0] ? qtext : (main_goal.a && main_goal.a->name ? main_goal.a->name : "?"));
+        think_draft_mid(ai, t, dline);
+    }
+
     /* ③ 把主目标压进议程，开始循环 */
     think_goal_push(t, TG_REL, main_goal.a, main_goal.b, main_goal.rid,
                     main_goal.want_neg, 0);
@@ -1684,6 +1761,8 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                 break;
             }
             progressed = think_expand_goals(ai, t, &g);
+            if (progressed > 0 && think_draft_room(t))      /* N2：给"结论"那行留一格 */
+                think_draft_mid(ai, t, "[想] 够不着，先拆成子目标接着够\n");
         } else {
             /* 不是核心那条路：按**注册表下标**调度（扩展机制因此不用抢枚举值） */
             const ThinkMech *m = (g.mech >= 0) ? think_mech_by_index((size_t)g.mech) : NULL;
@@ -1774,6 +1853,16 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
         else
             snprintf(note, sizeof note, "没依据 → 说不知道，不编（%s）", think_stop_name(t->stop));
         think_step(t, TH_REFLECT, t->concl != 0 || t->conflict, t->conf, "反省", note);
+    }
+
+    /* N2：轮中草稿的最后一行 —— 这一轮是怎么收的（结论 / 还没结论 + 停因） */
+    {
+        char dline[THINK_CONCL + 24];
+        if (t->concl != 0 && t->concl_text[0])
+            snprintf(dline, sizeof dline, "[想] 有了结论：%s\n", t->concl_text);
+        else
+            snprintf(dline, sizeof dline, "[想] 还没结论（停因：%s）\n", think_stop_name(t->stop));
+        think_draft_mid(ai, t, dline);
     }
 
     /* N1：这一轮到此为止 —— 把思考对象**定稿**（编号 / 停因 / 结论 / 复核一遍）。

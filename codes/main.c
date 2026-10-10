@@ -1269,11 +1269,25 @@ int main(int argc, char **argv) {
                 const char *arg = (cmd[7] == ' ') ? cmd + 8 : NULL;
                 while (arg && *arg == ' ') arg++;
                 Think *t = think_of(a->brain);
+                if (arg && !strncmp(arg, "mid", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+                    /* N2：**轮中**打草稿（中间步也写进草稿区）—— 单独一个开关，默认关 */
+                    const char *v = arg + 3;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       t->draft_mid = 1;
+                    else if (!strcmp(v, "off")) t->draft_mid = 0;
+                    else if (*v) { printf("[用法] ::notepad mid on|off\n"); continue; }
+                    printf("[轮中打草稿 = %s]（%s）\n",
+                           t->draft_mid ? "开" : "关（默认）",
+                           t->draft_mid ? "思考的中间步也写进草稿区（走受审通道，一轮最多 3 行）"
+                                        : "草稿只在轮末由「AI 自己用记事本」那一手写");
+                    printf("  前提：::patch mount 记事本（没挂补丁时一行都不写）；AIP_DRAFTMID=1 也能开\n");
+                    continue;
+                }
                 if (arg && *arg) {
                     if (!strcmp(arg, "off"))       t->notepad = 0;
                     else if (!strcmp(arg, "on"))   t->notepad = 1;
                     else if (!strcmp(arg, "hold")) t->notepad = 2;
-                    else { printf("[用法] ::notepad off|on|hold\n"); continue; }
+                    else { printf("[用法] ::notepad off|on|hold｜::notepad mid on|off\n"); continue; }
                 }
                 printf("[AI 自己用记事本 = %s]\n",
                        t->notepad == 0 ? "关（默认）" : t->notepad == 1 ? "开：有结论就写草稿并发送"
@@ -1281,6 +1295,10 @@ int main(int argc, char **argv) {
                 printf("  前提：::patch mount 记事本（没挂补丁时它什么都不做）\n");
                 printf("  %s\n", t->notepad ? "它会走受审通道调用 记事本 的操作（::delib 里有痕）"
                                             : "只留在 ::delib 的痕上，不改输出");
+                printf("[轮中打草稿 = %s]  这一层管「一边想一边写」：思考的中间步也进草稿区（N2）\n",
+                       t->draft_mid ? "开" : "关（默认）");
+                if (t->n_draft_total) printf("  累计写过 %zu 行（::patch op 记事本 读 看草稿）\n",
+                                             t->n_draft_total);
                 continue;
             }
             case CMD_PREMISEOUT: {

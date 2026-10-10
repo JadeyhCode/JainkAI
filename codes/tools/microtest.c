@@ -72,6 +72,18 @@ static void test_queue(void) {
 /* ============================ ② 安全内核的每一条拒绝理由 ============================ */
 static void test_safety(void) {
     printf("== ② 安全内核：拒绝理由逐条 ==\n");
+    /* 理由表自检：枚举里每一条都得有名字 —— 少了就会在审计里打出 `(null)`
+     * （实测：SAFE_DENY_BUDGET_PATCH / SAFE_DENY_NOPATCH 两条漏过，N2 的轮中草稿
+     *  把每步补丁预算挤爆时才露出来）。 */
+    {
+        int miss = 0, nul = 0;
+        for (int r = 0; r < SAFE_REASON_N; ++r) {
+            const char *nm = SAFE_REASON_NAME[r];
+            if (!nm || !nm[0]) miss++;
+            else if (strcmp(nm, "(null)") == 0) nul++;
+        }
+        ok(miss == 0 && nul == 0, "拒绝理由表逐条有名字（不会打出 (null)）");
+    }
     AI *ai = ai_new();
     Micro *mk = micro_of(ai);
     SafetyKernel *sk = &mk->safe;
