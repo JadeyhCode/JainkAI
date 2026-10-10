@@ -668,7 +668,9 @@ static const CmdDef CMDS[] = {
     { "others", NULL, 1, "基本",
       "他者模型：每个人名下**他相信的**事实（存盘里）。\n"
       "::others <A> <关系> <B>  多层合并 + 四态判定：同类别说法并进一个窗，\n"
-      "  都说认/都说不认/**有分歧（待验，不是否定）**/没人说过", CMD_OTHERS },
+      "  都说认/都说不认/**有分歧（待验，不是否定）**/没人说过\n"
+      "::others ask on|off  ③ 让**复数主语**问出来也有回答入口（默认关；AIP_OTHERS=1）：\n"
+      "  「大家/他们/别人 怎么看 X」→ 用四态判定回答，并与「我自己的知识」分开说", CMD_OTHERS },
     { "prims", NULL, 0, "基本",
       "列出所有原语 + 各自的**栈效应**（要/拿/放 + 名字与真实行为不一致的地方）——\n"
       "干跑校验器（::asm check）判的就是这张表", CMD_PRIMS },
@@ -1802,10 +1804,25 @@ int main(int argc, char **argv) {
                 while (arg && *arg == ' ') arg++;
                 /* `::others <A> <关系> <B>`：**多层合并 + 四态判定**（§6.45）——
                  * 把所有人名下"同类"的说法并进一个窗，冲突交四态（待验 ≠ 否定）。 */
+                if (arg && !strncmp(arg, "ask", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+                    /* ③ 他者视角**进回答路径**（默认关）：复数主语（大家/他们/别人）问出来时，
+                     * 用四态判定回答。开关单独一个，先 A/B 再谈翻默认。 */
+                    const char *v = arg + 3;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       B->others_ask = 1;
+                    else if (!strcmp(v, "off")) B->others_ask = 0;
+                    else if (*v) { printf("[用法] ::others ask on|off\n"); continue; }
+                    printf("[他者视角进回答路径 = %s]（%s）\n",
+                           B->others_ask ? "开" : "关（默认）",
+                           B->others_ask ? "「大家/他们/别人 怎么看 X」会用四态判定回答"
+                                         : "复数主语照走流水线（与今天逐字节相同）");
+                    printf("  只读：他者信念只在**他的**名下，判定现算不落库；答复与「我自己的知识」分开说\n");
+                    continue;
+                }
                 if (arg && *arg) {
                     char w1[64] = {0}, wr[64] = {0}, w2[64] = {0};
                     if (sscanf(arg, "%63s %63s %63s", w1, wr, w2) != 3) {
-                        printf("[用法] ::others [<A> <关系> <B>]\n");
+                        printf("[用法] ::others [<A> <关系> <B>]｜::others ask on|off\n");
                         continue;
                     }
                     Token *A = pool_find(B->pool, w1);

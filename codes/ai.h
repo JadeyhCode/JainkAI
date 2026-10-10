@@ -653,6 +653,10 @@ typedef struct {
      * 开着（`::ascii on` / `AIP_ASCII=1`）时 `::code` 的痕里多一行「逐字保留 ✓/✗」；
      * 关着时 `::code` 的输出与今天逐字节相同（`::lex` 是"看一眼"的命令，任何时候都能用）。 */
     int     lex_ascii;
+    /* **他者视角进回答路径**（③，默认 0 = 关）：复数主语（"大家/他们/别人"）问出来的话，
+     * 用 §6.45 的四态判定回答（都说认 / 都说不认 / 有分歧（待验）/ 没人说过）。
+     * 只读（他者信念只在**他的**名下，判定现算不落库）；关着时整条路不跑（与今天逐字节相同）。 */
+    int     others_ask;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1108,6 +1112,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ac = getenv("AIP_ACT");   if (ac && ac[0] == '1') ai->act_on = 1; }
     { const char *ck = getenv("AIP_ASMCHECK"); if (ck && ck[0] == '1') ai->asm_check_on = 1; }
     { const char *lx = getenv("AIP_ASCII");    if (lx && lx[0] == '1') ai->lex_ascii = 1; }
+    ai->others_ask = 0;              /* 他者视角进回答路径：默认**关** */
+    { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
     { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }

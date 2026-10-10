@@ -363,6 +363,24 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
  * 于是同一个问题换个立场答案可以不同 —— 而不同的原因很清楚：
  * 我的假设他看不见。这就是最小可用的视角推理。
  *
+ */
+/* ③ 的复数主语表：视角判定与「问大家」共用这两张表（只写一处）。 */
+static const char *const DIALOG_OTHERS_SUBJ[] = {
+    "大家", "他们", "她们", "别人", "旁人", "大伙", "众人", "其他人", NULL
+};
+static const char *const DIALOG_OTHERS_ASK[] = {
+    "怎么", "看", "想", "说", "讲", "觉得", "认为", "看法", "意见", "态度",
+    "都", "是", "的", "呢", "吗", "呀", NULL
+};
+
+static inline int dialog_others_in_list(const char *const *list, const char *w) {
+    if (!w) return 0;
+    for (size_t i = 0; list[i]; ++i)
+        if (strcmp(list[i], w) == 0) return 1;
+    return 0;
+}
+
+/*
  * 设置 ai->view_who，只在**这一轮**有效（下一轮开头清掉）。
  * 返回 1 表示认出了这个形状（调用方接着照常走推理流程）。 */
 static inline int agent_set_perspective(AI *ai, char *const *words, size_t n,
@@ -379,6 +397,11 @@ static inline int agent_set_perspective(AI *ai, char *const *words, size_t n,
     if (found < 0) return 0;
     /* 剥掉两个词之后至少要剩 3 个，否则不剥（避免把短句拆散） */
     if (n < 5) return 0;
+    /* ③（打开时）：**复数主语**（大家/他们/别人…）不站"某一个人"的立场 ——
+     * 那个形状归"问大家"（`dialog_trigger_try_others`，四态判定）。
+     * 关着时这一条不生效 ⇒ 行为与今天逐字节相同（今天它会拿我的知识冒充"大家看来"）。 */
+    if (ai->others_ask && dialog_others_in_list(DIALOG_OTHERS_SUBJ, words[0]))
+        return 0;
     /* 「我 觉得 X」= 我自己的视角 —— 标记照样剥掉，只是不换立场。
      * 不剥的话「我 觉得 猫 会 飞 吗」整句会掉到检索层去（实测）。 */
     if (strcmp(words[0], "我") == 0) {
@@ -743,6 +766,80 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
     printf("\n");
     printf("  我的知识没被改：他的信念只在**他的**名下（这条判定是现算的，不落库）\n");
     return v.verdict;
+}
+
+/* ============================ ③ 他者视角进回答路径（默认关） ============================
+ *
+ * 用户 2026-10-07 那条尾巴：「他者视角」的四态判定（§6.45：都说认 / 都说不认 /
+ * 有分歧（待验，不是否定）/ 没人说过）只有 `::others` 这个**看**的入口，
+ * **复数主语**（"大家 / 他们 / 别人"）问出来的时候没有回答入口。
+ *
+ * 三条边界：
+ *   · **默认关**（`ai->others_ask`）：关着时这条函数第一行就返回 0，行为与今天逐字节相同；
+ *   · **只读**：他者信念只在**他的**名下，判定是现算的，不落库、不改图；
+ *   · **分开说**：答复只说"他们怎么说"，我**自己**的知识另起半句 ——
+ *     别人的看法不是我的知识（这一层的老规矩）。
+ * 认法（宁可漏，不可误触发）：句首的**复数主语** + 一串"问法词"（怎么看/觉得/说…），
+ * 剩下的整段交给 `rel_parse` —— 它认不出关系问题就**整条不触发**（流水线照常回答）。 */
+static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n,
+                                            char *out, size_t out_cap) {
+    if (!ai || !ai->others_ask || !words || n < 4 || !out || out_cap == 0) return 0;
+    out[0] = 0;
+    /* ① 句首的复数主语（允许前面垫一两个指代词） */
+    size_t si = (size_t)-1;
+    for (size_t i = 0; i < n && i < 3; ++i)
+        if (dialog_others_in_list(DIALOG_OTHERS_SUBJ, words[i])) { si = i; break; }
+    if (si == (size_t)-1) return 0;
+    /* ② 跳过问法词，剩下的才是问题本身 */
+    size_t j = si + 1;
+    while (j < n && dialog_others_in_list(DIALOG_OTHERS_ASK, words[j])) j++;
+    if (n - j < 3) return 0;
+    /* ③ 交给关系解析（认不出就整条不触发 —— 宁可漏，不可误触发） */
+    char jbuf[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int is_q = 0, is_neg = 0;
+    if (!rel_parse(ai, words + j, n - j, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
+                   &bw, &is_q, &rw, 0) || !is_q || rid == 0)
+        return 0;
+    Token *A = pool_find(ai->pool, aw);
+    Token *B = pool_find(ai->pool, bw);
+    if (!A || !B) return 0;
+    /* ④ 现算四态（只读；判定不看我的知识） */
+    OtherBeliefView v;
+    other_belief_view(ai, A, rid, B, &v);
+    const char *rn = rel_name_of(ai, rid);
+    const char *an = A->name ? A->name : "?";
+    const char *bn = B->name ? B->name : "?";
+    /* 我自己的知识：另起半句（"别人的看法 ≠ 我的知识"） */
+    int own = rel_direct(A, rid, B) ? +1 : (rel_direct_neg(A, rid, B) ? -1 : 0);
+    const char *own_txt = own > 0 ? "我 也 这么 看"
+                        : (own < 0 ? "我 不 这么 看" : "我 自己 也 不 知道");
+    switch (v.verdict) {
+    case OBV_YES:
+        snprintf(out, out_cap, "大家 都 说 ： %s %s%s %s（%zu 个人 说 过 ；%s）",
+                 an, is_neg ? "不 " : "", rn ? rn : "?", bn, v.n_who, own_txt);
+        break;
+    case OBV_NO:
+        snprintf(out, out_cap, "大家 都 说 ： %s 不 %s %s（%zu 个人 说 过 ；%s）",
+                 an, rn ? rn : "?", bn, v.n_who, own_txt);
+        break;
+    case OBV_DEFER:
+        snprintf(out, out_cap,
+                 "这 件 事 大家 说 法 不 一致 ： 有人 说 %s %s %s 、 有人 说 不 %s"
+                 "（%zu 认 / %zu 不认 —— 待验 ， 不是 否定 ；%s）",
+                 an, rn ? rn : "?", bn, rn ? rn : "?", v.n_yes, v.n_no, own_txt);
+        break;
+    default:
+        if (v.n_related)
+            snprintf(out, out_cap,
+                     "这 件 事 他们 没 说 过（只 有 %zu 条 相关 说法 ， 不 算 答案 ；%s）",
+                     v.n_related, own_txt);
+        else
+            snprintf(out, out_cap, "这 件 事 他们 没 说 过（%s）", own_txt);
+        break;
+    }
+    return 1;
 }
 
 /* 站在别人的立场上回答：先把**他名下的信念**临时铺成一层假设（who = 他），
@@ -1382,7 +1479,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 但**不跳过**学习 —— 触发是"入口"，不是"特权"，动作照样走受审通道。 */
     {
         char tobuf[256];
-        if (dialog_trigger_try(ai, words, n, tobuf, sizeof tobuf)) {
+        /* ③ 他者视角（复数主语"大家/他们/别人"）先试：**默认关**，关着时这一行什么都不做 */
+        if (dialog_trigger_try_others(ai, words, n, tobuf, sizeof tobuf) ||
+            dialog_trigger_try(ai, words, n, tobuf, sizeof tobuf)) {
             snprintf(out, out_cap, "%s", tobuf);
             cot_push(ai, COT_INFER, 1, 80, "对话触发（Token 行为）", tobuf);
             ai->n_cot++;

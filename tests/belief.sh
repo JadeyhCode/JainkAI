@@ -174,6 +174,52 @@ printf '%s\n' "$out" | grep -aq '有分歧（待验，不是否定）' \
     && chk "重载后同一个问题给同一个判定（现算，不落库也不丢）" 1 \
     || chk "重载后的判定（实得：$(printf '%s\n' "$out" | grep '合并判定' | head -1)）" 0
 
+echo "⑨ ③ 他者视角**进回答路径**（复数主语，默认关）"
+# 默认关那一侧：复数主语照走流水线（今天那条"在 大家 看来"的路），没有四态答复。
+# ⚠ 开关反向测量（AIP_OTHERS=1，见 tests/switches_ab.sh）时这几条**自动跳过**。
+if [ -z "${AIP_OTHERS:-}" ]; then
+    out=$(run "甲 以为 猫 会 飞" "大家 觉得 猫 会 飞 吗")
+    if printf '%s\n' "$out" | grep -aq '大家 都 说'; then
+        chk "默认关不该有四态答复" 0
+    else
+        chk "默认关：复数主语照走流水线（与今天逐字节相同）" 1
+    fi
+    out=$(run "::others ask")
+    printf '%s\n' "$out" | grep -aq '他者视角进回答路径 = 关（默认）' \
+        && chk "::others ask 自报默认关" 1 || chk "ask 默认" 0
+else
+    chk "AIP_OTHERS=1（反向测量）：默认值断言按规矩跳过" 1
+fi
+# 开着那一侧：**都说认** / **都说不认** / **有分歧（待验）** / **没人说过** 四种都要有入口
+out=$(run "::others ask on" "甲 以为 猫 会 飞" "乙 觉得 猫 会 飞" "大家 觉得 猫 会 飞 吗")
+printf '%s\n' "$out" | grep -aq '大家 都 说 ： 猫 会 飞' \
+    && chk "都说认：两个人说会飞 → 「大家都说：猫 会 飞」" 1 \
+    || chk "都说认（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+printf '%s\n' "$out" | grep -aq '2 个人 说 过' && chk "说清是几个人说的" 1 || chk "人数" 0
+printf '%s\n' "$out" | grep -aq '我 不 这么 看' \
+    && chk "**分开说**：他们的看法与「我自己的知识」分开（猫不会飞）" 1 || chk "分开说" 0
+# 注意用**声明里的否定形式**（关系表把「会」的否定声明成两词的 `不 会`；
+# 合写的「不会」今天不被关系/信念解析认出来 —— 那是另一个真缺口，已登记，不在这一节夹带）
+out=$(run "::others ask on" "甲 认为 猫 不 会 游泳" "乙 觉得 猫 不 会 游泳" "大家 觉得 猫 会 游泳 吗")
+printf '%s\n' "$out" | grep -aq '大家 都 说 ： 猫 不 会 游泳' \
+    && chk "都说不认：都说不 会 → 「大家都说：猫 不 会 游泳」" 1 \
+    || chk "都说不认（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+out=$(run "::others ask on" "甲 以为 猫 属于 动物" "乙 说 猫 不属于 动物" "大家 怎么 看 猫 属于 动物 吗")
+printf '%s\n' "$out" | grep -aq '大家 说 法 不 一致' \
+    && chk "有分歧：两边都留着 → 「大家说法不一致」" 1 \
+    || chk "有分歧（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+printf '%s\n' "$out" | grep -aq '待验 ， 不是 否定' \
+    && chk "分歧照旧标「待验，不是否定」（不是把一边判死）" 1 || chk "待验" 0
+out=$(run "::others ask on" "甲 以为 猫 会 飞" "别人 说 猫 属于 动物 吗")
+printf '%s\n' "$out" | grep -aq '他们 没 说 过' \
+    && chk "没人说过：如实说没人说过（不拿我的知识冒充）" 1 || chk "没人说过" 0
+# 只读：他者信念只在**他的**名下 —— 问了也不会把我的知识改掉
+out=$(run "::others ask on" "甲 以为 猫 会 飞" "大家 觉得 猫 会 飞 吗" "猫 会 飞 吗")
+printf '%s\n' "$out" | reps | tail -1 | grep -aq '不 对' \
+    && chk "只读：他说的不影响我的知识（我还是答「猫不会飞」）" 1 \
+    || chk "只读（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+
+
 echo
-[ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 学出来的可信度跨重启 + 他者视角多层合并/四态）" \
+[ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 可信度跨重启 + 他者视角多层合并/四态 + 复数主语进回答路径）" \
                   || { echo "FAIL belief"; exit 1; }

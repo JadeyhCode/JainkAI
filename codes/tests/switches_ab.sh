@@ -49,6 +49,8 @@ idle:AIP_IDLE=1
 draftmid:AIP_DRAFTMID=1
 # N3 回溯 + 在线修订（默认关；看护在 tests/thinking.sh 第 11 节）
 thinkredo:AIP_THINKREDO=1
+# ③ 他者视角进回答路径（默认关；看护在 tests/belief.sh 第 ⑨ 节）
+others:AIP_OTHERS=1
 # 闸门里的候选证据项现在是**默认开**，所以反向测它要成对给：
 #   闸门开 + 证据项关 = 老公式（阈值也回到老那套）
 wgate-ev0:AIP_WGATE=1 AIP_WGATE_EV=0
