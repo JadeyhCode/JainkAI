@@ -90,6 +90,17 @@ has '最近一次 tick=' "$(cat o3d)" && ok "顺序给的是**区间**（首次�
     || bad "顺序区间" "$(grep '顺序' o3d | head -2)"
 has '先' "$(cat o3d)" && ok "顺序：谁先出现（附首次见到的 tick）" \
     || bad "::order" "$(grep '顺序' o3d | head -3)"
+# 图里写着的顺序（`[原语:时间链]` 建的 next_in_time 链）**查询层要接上** ——
+# 这一条补的是 audit §6.57 记的缺口："结构写进图了，查询层没接"。
+run '::asm [原语:对象] 甲 [原语:对象] 乙 [原语:对象] 丙 [原语:时间链]\n::order 甲 丙\n::order 丙 甲\n' o3e
+has '图里的顺序' "$(cat o3e)" && ok "::order 先读**图里的**顺序结构（不只比 tick）" \
+    || bad "图里的顺序" "$(grep '顺序' o3e | head -4)"
+has '甲 先' "$(cat o3e)" && ok "读得出「甲 先」（时间链 甲→乙→丙，2 跳）" \
+    || bad "谁先" "$(grep -A2 '图里的顺序' o3e | head -4)"
+has '链长 2 跳' "$(cat o3e)" && ok "依据写明是 `next_in_time` 链、几跳" \
+    || bad "链长" "$(grep '跳' o3e | head -3)"
+has '以图里的为准' "$(cat o3e)" && ok "图与 tick 说法不一致时**照实说**（并以图里的结构为准）" \
+    || bad "不一致" "$(grep -A3 '图里的顺序' o3e | head -5)"
 run '::premhold\n::premhold activate\n::premhold verified\n' o3f
 has 'activate' "$(cat o3f)" && ok "前提成立有**两档判据**：提到过（默认）/ 图上够得着（activate）" \
     || bad "::premhold" "$(grep '前提成立判据' o3f | head -2)"

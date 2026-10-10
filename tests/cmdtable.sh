@@ -71,7 +71,7 @@ grep -q 'edges 要参数' arity.log \
 
 echo "== ⑤ 帮助文本来自表（改表就变） =="
 # 每一条帮助行都必须以 "  ::" 开头（格式由打印器统一，说明不是手抄的）
-n_help_lines=$(grep -c '^  ::' help.log)
+n_help_lines=$(grep -c '^  ::' help.log || true)
 [ "$n_help_lines" = "$n_listed" ] \
     && ok "帮助里的每一行都来自表（$n_help_lines 行）" || bad "帮助格式" "行 $n_help_lines / 名 $n_listed"
 grep -q '::save' help.log && grep -q '默认 model.bin' help.log \
@@ -81,8 +81,8 @@ echo "== ⑥ 用法段也只有一份（来自 USAGE[] 表） =="
 # 老坑：文件头注释里抄了一份用法、cmd_help() 里又打一份，两份已经漂移
 #（`--batch --save` 只在其中一份、`--interval`/`-h` 两份都没有）。现在只有一张表。
 ./aip -h > usage.log 2>&1 || true
-n_usage_src=$(sed -n '/^static const UsageDef USAGE\[\] = {/,/^};/p' "$ROOT/main.c" | grep -c '^    { "')
-n_usage_out=$(grep -c '^  AIPoject' usage.log)
+n_usage_src=$(sed -n '/^static const UsageDef USAGE\[\] = {/,/^};/p' "$ROOT/main.c" | grep -c '^    { "' || true)
+n_usage_out=$(grep -c '^  AIPoject' usage.log || true)
 [ "$n_usage_src" -gt 0 ] && [ "$n_usage_src" = "$n_usage_out" ] \
     && ok "用法段由 USAGE[] 生成（表 $n_usage_src 行 / 打出 $n_usage_out 行）" \
     || bad "用法表" "表 $n_usage_src / 打出 $n_usage_out"

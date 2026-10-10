@@ -1166,6 +1166,51 @@ static void test_write_ledger(void) {
     ai_free(ai); ai_free(a2); ai_free(a3);
 }
 
+/* ============================ ⑳ 顺序：图里写着的 vs tick ============================
+ *
+ * audit §6.57 记的缺口："结构写进图了，查询层没接"。这一节钉 `token_order_between()`：
+ *   · `next_in_time` 链（`[原语:时间链]` 那套）—— 正反两个方向都要答对，多跳也要走得到；
+ *   · `[关系:之前]/[关系:之后]` **标记边** —— 同一个 tick 里也能分出先后；
+ *   · 图里没说 → 返回 0（调用方退回 tick 比较，不许瞎猜）。 */
+static void test_order_query(void) {
+    printf("== ⑳ 顺序查询：先读图里的结构，没有才退回 tick ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "序甲"), *b = T(ai, "序乙"), *c = T(ai, "序丙");
+    char why[160];
+    int hops = -1;
+    ok(token_order_between(a, b, why, sizeof why, &hops) == 0,
+       "图里没有顺序结构 → 返回 0（调用方退回 tick，不瞎猜）");
+    /* ① next_in_time 链：a → b → c */
+    a->next_in_time = b;
+    b->next_in_time = c;
+    ok(token_order_between(a, c, why, sizeof why, &hops) == 1 && hops == 2,
+       "多跳链读得出来（a 先，2 跳）");
+    ok(token_order_between(c, a, why, sizeof why, &hops) == -1 && hops == 2,
+       "反过来问也一样对（c 后 → 返回 -1 = b 端先）");
+    ok(token_order_between(a, b, why, sizeof why, &hops) == 1 && hops == 1, "一跳也对");
+    ok(strstr(why, "next_in_time") != NULL, "依据里写明是 next_in_time 链");
+    /* ② 标记边：同一个 tick 里也能分出先后（`[关系:之后]` 挂在 x 上 ⇒ y 先） */
+    AI *a2 = ai_new();
+    Token *x = T(a2, "标甲"), *y = T(a2, "标乙");
+    Token *mk_after = T(a2, TOKEN_ORDER_MARK_AFTER);
+    (void)token_add_assoc_unique(x, mk_after);
+    (void)token_add_assoc_unique(x, y);
+    ok(token_order_between(x, y, why, sizeof why, NULL) == -1,
+       "`[关系:之后]` 挂在 x 上 ⇒ **y 先**（返回 -1）");
+    ok(token_order_between(y, x, why, sizeof why, NULL) == 1,
+       "反过来问：x 先（返回 +1）");
+    AI *a3 = ai_new();
+    Token *p = T(a3, "标丙"), *q = T(a3, "标丁");
+    Token *mk_before = T(a3, TOKEN_ORDER_MARK_BEFORE);
+    (void)token_add_assoc_unique(p, mk_before);
+    (void)token_add_assoc_unique(p, q);
+    ok(token_order_between(p, q, why, sizeof why, NULL) == 1,
+       "`[关系:之前]` 挂在 p 上 ⇒ **p 先**（返回 +1）");
+    ok(token_order_between(p, T(a3, "没关系"), why, sizeof why, NULL) == 0,
+       "只有标记、没有和目标的连边 → 不算证据（返回 0）");
+    ai_free(ai); ai_free(a2); ai_free(a3);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -1512,6 +1557,7 @@ int main(void) {
     test_provenance();
     test_dialog_trigger();
     test_write_ledger();
+    test_order_query();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();

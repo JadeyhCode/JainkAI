@@ -27,7 +27,7 @@ reps() { sed -n 's/.*AI > //p'; }
 echo "① 多层假设：叠加而不是替换"
 out=$(run "如果 猫 属于 鸟" "猫 会 飞 吗" "如果 猫 属于 鱼" "猫 会 游泳 吗" "猫 会 飞 吗" "::hypo")
 printf '%s\n' "$out" | grep -a -E 'AI >|第 . 层' | sed 's/^你 > /     /'
-n=$(printf '%s\n' "$out" | grep -ac '当前假设世界：2 层')
+n=$(printf '%s\n' "$out" | grep -ac '当前假设世界：2 层' || true)
 [ "$n" -eq 1 ] && chk "两条「如果」共存（2 层）" 1 || chk "两条「如果」共存（2 层）" 0
 r5=$(printf '%s\n' "$out" | reps | sed -n 5p)
 case "$r5" in *"猫 -[属于·假设]-> 鸟"*) chk "第 1 层的假设仍然算数（叠加不是替换）" 1 ;;

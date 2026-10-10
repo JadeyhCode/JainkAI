@@ -635,7 +635,9 @@ static const CmdDef CMDS[] = {
     { "code", NULL, 1, "基本",
       "写-跑-看错-改 的机械闭环（降级版）：::code try <相对路径>｜::code 看痕。修法只有两类，最多改一次", CMD_CODE },
     { "order", "<A> <B>", 2, "基本",
-      "时间顺序：这两个词**谁先出现**（按首次见到的 tick），并给顺序证据", CMD_ORDER },
+      "时间顺序：这两个词**谁先出现**。先读**图里写着的顺序结构**（`next_in_time` 链 /\n"
+      "`[关系:之后]` 标记边 —— `[原语:时间链]` 建的那套），图里没说才退回 tick 比较；\n"
+      "两者不一致时照实说，并以图里的结构为准", CMD_ORDER },
     { "wgate", NULL, 1, "基本",
       "写入分级闸门：on = 情境层的随口一说**不落库**（借 imp 评分）；off（默认）\n"
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
@@ -2535,6 +2537,17 @@ int main(int argc, char **argv) {
                        (unsigned long long)A->last_touch_tick,
                        w2, (unsigned long long)B->birth_tick,
                        (unsigned long long)B->last_touch_tick);
+                /* **先看图里写着的顺序**（`next_in_time` 链 / `[关系:之后]` 标记边）——
+                 * 那是"写进图的结构"，比"第一次见到的 tick"硬；图里没说才退回 tick。
+                 * 这一条补的是 audit §6.57 记的缺口：结构写进图了、查询层没接。 */
+                char owhy[192];
+                int ohops = 0;
+                int ord = token_order_between(A, B, owhy, sizeof owhy, &ohops);
+                if (ord != 0) {
+                    printf("  → 图里的顺序：**%s 先**（依据：%s）—— 这是**写进图的结构**\n",
+                           ord > 0 ? w1 : w2, owhy);
+                    if (ohops) printf("     链长 %d 跳（沿着 `next_in_time` 走出来的）\n", ohops);
+                }
                 if (A->birth_tick == B->birth_tick)
                     printf("  → 同一轮里出现的（先后看不出来：tick 一样）\n");
                 else
@@ -2543,6 +2556,16 @@ int main(int argc, char **argv) {
                            (unsigned long long)(A->birth_tick < B->birth_tick
                                                 ? B->birth_tick - A->birth_tick
                                                 : A->birth_tick - B->birth_tick));
+                /* 图与 tick 说法不一致时**照实说**（tick 只记"第一次见到"，不是真相） */
+                if (ord != 0) {
+                    int tick_says = (A->birth_tick == B->birth_tick) ? 0
+                                  : (A->birth_tick < B->birth_tick) ? +1 : -1;
+                    if (tick_says != ord)
+                        printf("  注意：tick 那边的说法是「%s」，和图里的结构**不一致** ——"
+                               "以图里的为准（tick 只记'第一次见到'）\n",
+                               tick_says == 0 ? "同一轮里出现的（先后看不出来）"
+                                              : (tick_says > 0 ? w1 : w2));
+                }
                 /* 顺序证据：最早把两个词连在一起的 [时刻:] 标记 */
                 {
                     unsigned long long best = 0;

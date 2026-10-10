@@ -301,6 +301,100 @@ static inline size_t token_premise_between(const Token *a, const Token *b,
     return token_premises(a, b, out, NULL, cap);
 }
 
+/* ============================ 顺序：图里写着的 vs tick ============================
+ *
+ * 用户 2026-10-08 的实测（audit §6.57）留了一条缺口：**顺序结构写进图了，查询层没接**
+ * —— `::order` 只看"首次见到的 tick"，于是 `[原语:时间链]` 建的 A→B 它不认，
+ * 同一个 tick 里先后也看不出来。这一条把查询层接上（**不是新语义**：读的就是已经写进图的边）。
+ *
+ * 图里的顺序有两种写法（都是现有原语建的，没新造记号）：
+ *   ① `next_in_time` 链：`[原语:之后]/[原语:之前]/[原语:时间链]` 建的 A → … → B（可多跳）；
+ *   ② `[关系:之后]` / `[关系:之前]` **标记边**：A 的边里同时挂着标记和 B（`[原语:之后]` 的写法，
+ *      标记的含义是"a 在 b 之后/之前"）。
+ * 返回 +1 = **a 先** / −1 = **b 先** / 0 = 图里没说（调用方退回 tick 比较）。
+ * `why` 写明依据（哪条链、几跳、哪条标记边）—— 查询层必须说得出"凭什么"。 */
+#define TOKEN_ORDER_MARK_AFTER  "[关系:之后]"
+#define TOKEN_ORDER_MARK_BEFORE "[关系:之前]"
+#define TOKEN_ORDER_HOP_MAX     16
+
+/* 有界拼接（token.h 是最底层，**不引 stdio** —— 这一层不打印、也不格式化） */
+static inline void token_order_text(char *dst, size_t cap,
+                                    const char *a, const char *mid, const char *b) {
+    const char *parts[3] = { a, mid, b };
+    size_t k = 0;
+    if (!dst || cap == 0) return;
+    for (int i = 0; i < 3; ++i) {
+        if (!parts[i]) continue;
+        for (const char *q = parts[i]; *q && k + 1 < cap; ++q) dst[k++] = *q;
+    }
+    dst[k] = 0;
+}
+
+static inline int token_order_between(const Token *a, const Token *b,
+                                      char *why, size_t whycap, int *hops_out) {
+    if (why && whycap) why[0] = 0;
+    if (hops_out) *hops_out = 0;
+    if (!a || !b || a == b) return 0;
+    const char *an = a->name ? a->name : "?";
+    const char *bn = b->name ? b->name : "?";
+    /* ① next_in_time 链（最多 TOKEN_ORDER_HOP_MAX 跳；有环也不会转不出来） */
+    {
+        const Token *cur = a;
+        for (int hop = 1; hop <= TOKEN_ORDER_HOP_MAX; ++hop) {
+            cur = cur->next_in_time;
+            if (!cur) break;
+            if (cur == b) {
+                if (why && whycap)
+                    token_order_text(why, whycap, "`next_in_time` 链：", an, " → … → ");
+                if (why && whycap) {
+                    size_t l = strlen(why);
+                    if (l + 1 < whycap) token_order_text(why + l, whycap - l, bn, NULL, NULL);
+                }
+                if (hops_out) *hops_out = hop;
+                return +1;
+            }
+        }
+        cur = b;
+        for (int hop = 1; hop <= TOKEN_ORDER_HOP_MAX; ++hop) {
+            cur = cur->next_in_time;
+            if (!cur) break;
+            if (cur == a) {
+                if (why && whycap)
+                    token_order_text(why, whycap, "`next_in_time` 链：", bn, " → … → ");
+                if (why && whycap) {
+                    size_t l = strlen(why);
+                    if (l + 1 < whycap) token_order_text(why + l, whycap - l, an, NULL, NULL);
+                }
+                if (hops_out) *hops_out = hop;
+                return -1;
+            }
+        }
+    }
+    /* ② `[关系:之后]/[关系:之前]` 标记边：X 上同时挂着标记和另一个词，就说明这两个的先后 */
+    {
+        const char *marks[2] = { TOKEN_ORDER_MARK_AFTER, TOKEN_ORDER_MARK_BEFORE };
+        for (int side = 0; side < 2; ++side) {
+            const Token *x = side ? b : a;
+            const Token *y = side ? a : b;
+            int aft = 0, bef = 0, linked = 0;
+            for (size_t i = 0; i < x->count; ++i) {
+                const Token *m = x->assocs[i].main;
+                if (!m || !m->name) continue;
+                if (strcmp(m->name, marks[0]) == 0)      aft = 1;
+                else if (strcmp(m->name, marks[1]) == 0) bef = 1;
+                else if (m == y)                         linked = 1;
+            }
+            if (!linked || (!aft && !bef)) continue;
+            /* `[关系:之后]` 挂在 x 上 ⇒ **y 先**；`[关系:之前]` 挂在 x 上 ⇒ **x 先** */
+            int x_first = bef ? +1 : -1;
+            if (why && whycap)
+                token_order_text(why, whycap, "边上的 ", bef ? marks[1] : marks[0], " 标记");
+            return side ? -x_first : x_first;
+        }
+    }
+    return 0;                    /* 图里没说：调用方退回 tick 比较 */
+}
+
 
 struct NameEntry { uint32_t hash, id; NameEntry *next; };
 

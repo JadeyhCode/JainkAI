@@ -59,7 +59,8 @@ if [ -n "${SUITES:-}" ]; then
 else
     cp "$PAR/all.txt" "$TASKS"
 fi
-total=$(grep -c . "$TASKS")
+total=$(grep -c . "$TASKS" || true)      # `|| true`：一条都没匹配时 grep 退出码是 1，
+#   而 `set -e` 下那个赋值会把**整个调度器**静默弄死（连一行输出都没有）—— 这类坑本轮扫出来 5 处
 
 cpun=$(nproc 2>/dev/null || echo 4)
 JOBS=${JOBS:-$cpun}
@@ -80,6 +81,16 @@ echo "BUILD OK"
 # 套件那头对不上就自己编（防"拿旧二进制量出新结论"）。
 AIP_PREBUILT_HASH=$(cat "$ROOT"/*.h "$ROOT"/*.c | md5sum | cut -d' ' -f1)
 export AIP_PREBUILT_HASH
+# **看护的看护**：清单/脚本自身的写法（管道吃退出码 / 没兜住的 grep 赋值 / 脚本与清单对不上）。
+# 这一轮连着扫出两个真洞（C 级套件的失败被 `| tail` 吃掉、`set -e` 下 grep 赋值让整套静默消失），
+# 都是"汇总看着绿、其实没测到" —— 跟编译/探针一个规格，放在第 0 步。
+if ! sh tests/selfcheck.sh > "$PAR/selfcheck.log" 2>&1; then
+    echo "SELFCHECK FAIL（清单/脚本写法有坑，整包汇总不可信 —— 详见 _t/par/selfcheck.log）"
+    tail -20 "$PAR/selfcheck.log"
+    exit 1
+fi
+echo "SELFCHECK OK（清单与脚本写法自检过）"
+
 # 探针也要编译得过、跑得出结论 —— 它们是"把拍的变成量的"那件工具，自己不能没看护。
 # （血泪：driveprobe 改 API 后编译失败，旧二进制照跑，量出来的数看着像真的。）
 if ! wait "$probes_pid"; then
