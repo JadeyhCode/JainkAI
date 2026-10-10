@@ -195,6 +195,38 @@ static inline const char *rel_neg_of(const AI *ai, uint8_t id) {
     return "不";      /* 动态关系没有专门的否定形式，用「不」兜 */
 }
 
+
+/* 否定形式的**两种写法**（同一个判据，两处调用）。
+ *
+ * 关系表里声明的是一种写法（`不 会`），可**实际输入**可能是另一种：分词器把最常见的
+ * 「不会」切成**一个** token（`不喜欢`/`不是` 同理），而 `不属于`/`不能`/`不敢` 却是两词。
+ * 于是同一份声明得两种都认 —— 判据只写这一处：**把声明里的空格去掉再比**。
+ *
+ * ⚠ 这不是新语义：声明还是那一条（`AI_RELS[]` 里只有一份），这里只是"同一个否定词的两种切法"。
+ * 返回 1 = `w` 就是某个关系的**合写否定形式**，并把关系 id 写进 `*out`。
+ *
+ * 为什么非修不可（2026-10-10 实测，audit §6.68 三 / §6.69）：修之前
+ *   `猫 不会 飞 吗` / `甲 说 猫 不会 游泳` / `我 不喜欢 猫 吗` 全掉进**降级答复**
+ *   （"这个我 不 太 懂"），而两词写法「不 会」一切正常 —— 同一个意思两种写法两种待遇。 */
+static inline int rel_merged_neg_id(const char *w, uint8_t *out) {
+    if (out) *out = 0;
+    if (!w || !w[0]) return 0;
+    char sq[24];
+    for (size_t i = 0; AI_RELS[i].name; ++i) {
+        const char *neg = AI_RELS[i].neg;
+        if (!neg) continue;
+        size_t k = 0;
+        for (const char *q = neg; *q && k + 1 < sizeof sq; ++q)
+            if (*q != ' ') sq[k++] = *q;
+        sq[k] = 0;
+        if (k && strcmp(w, sq) == 0) {
+            if (out) *out = AI_RELS[i].id;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 把关系清单里的词**先 intern 进词池**。
  *
  * 不这么做的话，`包含` 这种词从没作为 Token 存在过（AI_RELS 只是编译期表），
@@ -265,7 +297,15 @@ static inline size_t relations_load(AI *ai, const char *path) {
             relw = "有"; neg = 1; norel = 1;
         }
         (void)norel;
-        uint8_t rid = rel_id_of(ai, relw, 1);   /* 装载知识：允许登记新谓语 */
+        /* 合写否定（`不会`/`不喜欢`/`不是`）**必须先查**：`rel_id_of(..., allow_new=1)`
+         * 会把「不会」当场登记成一个**动态谓语**（实测：那样边是建了，可它是动态关系、
+         * 不是「会」的否定边 ⇒ 断言「不 会」查不到）。与 `rel_parse` 同一份判据。 */
+        uint8_t rid = 0;
+        {
+            uint8_t mid = 0;
+            if (!neg && rel_merged_neg_id(relw, &mid)) { rid = mid; neg = 1; }
+            else rid = rel_id_of(ai, relw, 1);   /* 装载知识：允许登记新谓语 */
+        }
         if (!rid) continue;
         Token *a = pool_token_intern(ai->pool, sub);
         Token *b = pool_token_intern(ai->pool, obj);
@@ -1255,7 +1295,23 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
         return 1;
     }
     if (ri >= last) return 0;
-    uint8_t id = rel_id_of(ai, words[ri], allow_new);
+    uint8_t id = 0;
+    const char *merged_name = NULL;   /* 合写时：那个 token 里**已经含**否定了，别再拼一遍 */
+    if (!is_neg) {
+        /* 合写否定（`不会`/`不喜欢`/`不是`）：**一个 token 就是「否定 + 关系」** ——
+         * 与两词写法共用同一份声明（`rel_merged_neg_id` 去空格比）。 */
+        uint8_t mid = 0;
+        if (rel_merged_neg_id(words[1], &mid)) {
+            is_neg = 1;
+            id = mid;
+            { const RelDef *mrd = rel_by_id(mid); merged_name = mrd ? mrd->name : NULL; }
+        } else {
+            id = rel_id_of(ai, words[ri], allow_new);
+        }
+    } else {
+        id = rel_id_of(ai, words[ri], allow_new);
+    }
+    if (!id) return 0;
     if (!id) return 0;
 
     size_t nobj = last - ri - 1;
@@ -1279,7 +1335,7 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
     if (aw) *aw = words[0];
     if (rid) *rid = id;
     if (neg) *neg = is_neg;
-    if (rel_word) *rel_word = words[ri];
+    if (rel_word) *rel_word = merged_name ? merged_name : words[ri];
     if (is_q) *is_q = q;
     return 1;
 }

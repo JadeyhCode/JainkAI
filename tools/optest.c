@@ -1212,6 +1212,62 @@ static void test_order_query(void) {
     ai_free(ai); ai_free(a2); ai_free(a3);
 }
 
+/* ============================ ㉑ 合写否定：两种写法同一份声明 ============================
+ *
+ * 关系表声明的是两词形式（`不 会`），而分词器把「不会」「不喜欢」「不是」切成**一个** token
+ * （「不属于/不能」却是两词）。这一节钉：两种写法**解析结果一样**、`rel_word` 归一成关系词
+ * （否则调用方按 `is_neg` 拼一遍会得到「不 不会」）、以及关系文件装载器也认合写。 */
+static void test_merged_neg(void) {
+    printf("== ㉑ 合写否定（不会/不喜欢/不是）：两种写法同一份声明 ==\n");
+    AI *ai = ai_new();
+    char jbuf[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int neg = 0, isq = 0;
+    /* 合写 */
+    char *(w1[4]) = {(char *)"猫", (char *)"不会", (char *)"飞", (char *)"吗"};
+    int p1 = rel_parse(ai, w1, 4, jbuf, sizeof jbuf, &aw, &rid, &neg, &bw, &isq, &rw, 0);
+    ok(p1 && rid == REL_CAN && neg == 1 && isq == 1 && strcmp(aw, "猫") == 0 && strcmp(bw, "飞") == 0,
+       "「猫 不会 飞 吗」→ 关系=会、否定=1、问句（一个 token 就带否定）");
+    ok(p1 && rw && strcmp(rw, "会") == 0,
+       "`rel_word` 归一是**关系词本身**（「会」，不是输入那个「不会」）—— 不然会拼出「不 不会」");
+    /* 两词写法：同答案 */
+    const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
+    uint8_t rid2 = 0; int neg2 = 0, isq2 = 0;
+    char *(w2[5]) = {(char *)"猫", (char *)"不", (char *)"会", (char *)"飞", (char *)"吗"};
+    int p2 = rel_parse(ai, w2, 5, jbuf, sizeof jbuf, &aw2, &rid2, &neg2, &bw2, &isq2, &rw2, 0);
+    ok(p2 && rid2 == rid && neg2 == neg && isq2 == isq && rw2 && rw && strcmp(rw2, rw) == 0,
+       "两词写法（不 会）解析出**同一个** (关系, 否定, 问句, 关系词)");
+    /* 另外两个合写形式 */
+    char *(w3[4]) = {(char *)"猫", (char *)"不喜欢", (char *)"鱼", (char *)"吗"};
+    ok(rel_parse(ai, w3, 4, jbuf, sizeof jbuf, &aw, &rid, &neg, &bw, &isq, &rw, 0) &&
+       rid == REL_LIKE && neg == 1, "「猫 不喜欢 鱼 吗」→ 关系=喜欢、否定=1");
+    char *(w4[4]) = {(char *)"猫", (char *)"不是", (char *)"动物", (char *)"吗"};
+    ok(rel_parse(ai, w4, 4, jbuf, sizeof jbuf, &aw, &rid, &neg, &bw, &isq, &rw, 0) &&
+       rid == REL_IS_A && neg == 1, "「猫 不是 动物 吗」→ 关系=属于、否定=1");
+    /* 别误伤：肯定句、以及"关系词本身"都不算合写否定 */
+    char *(w5[4]) = {(char *)"猫", (char *)"会", (char *)"飞", (char *)"吗"};
+    ok(rel_parse(ai, w5, 4, jbuf, sizeof jbuf, &aw, &rid, &neg, &bw, &isq, &rw, 0) && neg == 0,
+       "肯定句（猫 会 飞 吗）否定位是 0 —— 没把关系词当成否定");
+    { uint8_t m = 0; ok(!rel_merged_neg_id("会", &m) && !rel_merged_neg_id("不", &m),
+                        "`rel_merged_neg_id` 不认「会」（关系词）也不认孤零零的「不」"); }
+    /* 关系文件装载器也认合写（不然 `甲2 不会 乙2` 这种行会被静默丢掉） */
+    {
+        AI *b = ai_new();
+        const char *path = "_t/optest_neg_src.txt";
+        (void)mkdir("_t", 0777);
+        FILE *f = fopen(path, "w");
+        if (f) { fprintf(f, "# 合写否定\n序甲 不会 序乙\n"); fclose(f); }
+        (void)relations_load(b, path);
+        Token *x = pool_token_intern(b->pool, "序甲");
+        Token *y = pool_token_intern(b->pool, "序乙");
+        ok(rel_direct_neg(x, REL_CAN, y), "关系文件里写「序甲 不会 序乙」也装得进来（不再静默丢）");
+        remove(path);
+        ai_free(b);
+    }
+    ai_free(ai);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -1561,6 +1617,7 @@ int main(void) {
     test_dialog_trigger();
     test_write_ledger();
     test_order_query();
+    test_merged_neg();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
