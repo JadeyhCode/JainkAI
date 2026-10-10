@@ -1081,11 +1081,15 @@ static void test_dialog_trigger(void) {
  *
  * `microkernel.md` 的局限 1 是「老写入者绕过安全内核」。这一轮把它变成
  * **有账 + 可路由**：所有写入记来源，知识类写入（关系事实）可以改成走受审通道。
- * 这一节钉三件事：① 账记得对（每个来源各算各的）；② 路由开/关两条路**语义一样**；
- * ③ 路由的写入**进审计**（看得见"谁批的"）。 */
+ * 这一节钉四件事：① 账记得对（每个来源各算各的）；② 路由开/关两条路**语义一样**；
+ * ③ 路由的写入**进审计**（看得见"谁批的"）；④ K6：**非观测**的共现写入也走同一套开关
+ * （感知共现 `ai_learn_pair` 仍直写 —— 那是观测的正常路径）。 */
 static void test_write_ledger(void) {
     printf("== ⑱ 统一写入通道：写入账 + 知识类写入可路由（走受审通道） ==\n");
+    /* C 级测试**自己定这一位**（不跟着 AIP_ROUTE 走）：否则反向测量整包时
+     * "默认关"那几条会假红 —— 和 delibtest 的 ⑭ 是同一个坑。 */
     AI *ai = ai_new();
+    ai->route_writes = 0;
     Token *a = T(ai, "甲1"), *b = T(ai, "乙1");
     size_t before = ai->writes[AI_WSRC_PERCEIVE];
     (void)ai_write_assoc(ai, a, b, AI_WSRC_PERCEIVE);
@@ -1094,6 +1098,7 @@ static void test_write_ledger(void) {
 
     /* 路由开：关系事实走受审通道，而且**进审计** */
     AI *a2 = ai_new();
+    a2->route_writes = 0;
     Token *p = T(a2, "丙1"), *q = T(a2, "丁1");
     ok(a2->route_writes == 0, "路由**默认关**（观测直写是正常路径）");
     ok(micro_set_route(a2, 1) == 0 && a2->route_writes == 1, "::safe route on 打开");
@@ -1112,11 +1117,52 @@ static void test_write_ledger(void) {
     }
     /* 路由关：同一件事走直写，结果一样 */
     AI *a3 = ai_new();
+    a3->route_writes = 0;
     Token *u = T(a3, "戊1"), *v = T(a3, "己1");
     ok(ai_write_rel(a3, u, v, REL_IS_A, 0, AI_WSRC_RELATION) == 0 && rel_direct(u, REL_IS_A, v),
        "路由关：同一件事走直写，结果一样（两条路语义相同）");
     ok(a3->writes[AI_WSRC_RELATION] == 1, "记账两条路都记");
     ok(micro_of(a3)->safe.n_allowed == 0, "直写不进审计（它就是观测的正常路径）");
+
+    /* ---- K6：**非观测**的共现写入（[时刻:] 链 / 内部对话 / 想象）也走**同一套**开关 ----
+     * §6.55 K6 的处理决定：`ai_write_assoc` 照 `ai_write_rel` 的样子可路由（默认关）；
+     * **感知共现（ai_learn_pair）保持直写**（它带 hits/pattern/topic，转意图会丢信息）。 */
+    {
+        AI *a4 = ai_new();
+        a4->route_writes = 0;
+        Token *kx = T(a4, "庚1"), *ky = T(a4, "辛1");
+        ok(micro_set_route(a4, 1) == 0, "K6：::safe route on 打开");
+        safety_step_begin(a4);
+        ok(ai_write_assoc(a4, kx, ky, AI_WSRC_PERCEIVE) == 1,
+           "K6：路由开 → 共现写入照样返回「新加了一条」（口径与直写一致）");
+        ok(micro_has_edge(kx, ky), "K6：边照样建出来了（语义没变，只是多了一道审查）");
+        ok(ai_write_assoc(a4, kx, ky, AI_WSRC_PERCEIVE) == 0,
+           "K6：再写一次返回「已经有了」（口径没漂）");
+        int seen_assoc = 0;
+        for (size_t i = 0; i < micro_of(a4)->safe.audit_n && i < MICRO_AUDIT_MAX; ++i)
+            if (strstr(micro_of(a4)->safe.audit[i].op, "加边")) seen_assoc = 1;
+        ok(seen_assoc, "K6：这笔写入**进了审计**（加边 —— 谁批的看得见）");
+        ok(micro_of(a4)->safe.n_allowed >= 1, "K6：受审通道的记账真的动了");
+        ok(a4->writes[AI_WSRC_PERCEIVE] == 2, "K6：账照记（两条路都记来源档）");
+
+        /* **骨架端点不路由**（K6 那条静态例外）：`[时刻:…]` 这类协议骨架名字，
+         * 内核按规矩本来就不接（"不许改保留 Token"）—— 而时间链是**内核自己的记账**，
+         * 不是自修改。所以它走直写：边照样有、审计里没有它的拒绝记录。
+         * 这一条是可证伪的：如果哪天有人把例外去掉，这里会看到"允许 0 拒绝 1"（实测过）。 */
+        AI *a6 = ai_new();
+        a6->route_writes = 0;
+        Token *tk = T(a6, "子1");
+        Token *mark = pool_token_intern(a6->pool, "[时刻:77]");
+        ok(micro_set_route(a6, 1) == 0, "K6：骨架端点这一组也把路由打开");
+        safety_step_begin(a6);
+        size_t denied_before = micro_of(a6)->safe.n_denied;
+        ok(ai_write_assoc(a6, mark, tk, AI_WSRC_PERCEIVE) == 1,
+           "K6：骨架端点的写入走直写（边照样建出来）");
+        ok(micro_has_edge(mark, tk), "K6：时间链那条边真的在");
+        ok(micro_of(a6)->safe.n_denied == denied_before,
+           "K6：内核**没有**拒它（静态例外生效，不是「拒了就绕开」）");
+        ai_free(a6);
+    }
     ai_free(ai); ai_free(a2); ai_free(a3);
 }
 

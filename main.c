@@ -1396,15 +1396,20 @@ int main(int argc, char **argv) {
                     safety_reset(a->brain);
                     printf("[安全内核：已解冻并清空本步预算与关小状态]\n");
                 } else if (!strcmp(sub, "route")) {
-                    /* 统一写入通道：把**知识类**写入（关系事实）改成走受审通道。
-                     * 默认关 —— 观测直写是正常路径；打开是"让内核看住知识写入"。 */
+                    /* 统一写入通道：把**知识类**写入（关系事实）与**非观测**的共现写入
+                     * （[时刻:] 链 / 内部对话 / 想象）改成走受审通道。
+                     * 默认关 —— 观测直写是正常路径；打开是"让内核看住这些写入"。
+                     * **感知共现（ai_learn_pair）刻意不路由**：它带 hits/pattern/topic
+                     * 这些观测细节，转成意图会丢信息（§6.55 K6）。 */
                     if (val[0] && strcmp(val, "on") && strcmp(val, "off")) {
                         printf("[用法] ::safe route on|off\n");
                         continue;
                     }
                     int on = !strcmp(val, "on");
                     (void)micro_set_route(a->brain, on);
-                    printf("[统一写入通道 路由 = %s]\n", on ? "开（关系事实走受审通道）" : "关（直写）");
+                    printf("[统一写入通道 路由 = %s]\n",
+                           on ? "开（关系事实 + 非观测共现写入走受审通道；感知共现仍直写）"
+                              : "关（都直写 —— 与今天逐字节相同）");
                     continue;
                 } else if (!strcmp(sub, "freeze")) {
                     if (val[0] && strcmp(val, "on") && strcmp(val, "off")) { printf("[用法] ::safe freeze on|off\n"); continue; }

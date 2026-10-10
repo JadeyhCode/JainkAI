@@ -3817,10 +3817,43 @@ static inline void ai_write_count(AI *ai, AiWriteSrc s) {
     if (ai && (unsigned)s < AI_WSRC_N) ai->writes[s]++;
 }
 
-/* 共现边：记一笔，直写（观测的丰富记录留在原路径里）。 */
+/* 共现边（**非观测**那一侧）：记一笔；`route_writes` 打开时走**同一套**受审通道（K6 补齐）。
+ *
+ * 谁走这里：`[时刻:]` 时间链、内部对话、想象 —— 它们都是"机器自己写下来的"，
+ * 不是观测。谁**不**走这里：感知共现（`ai_learn_pair`）**保持直写** ——
+ * 它带 hits/pattern/topic 这些观测细节，转成意图会丢信息；而且观测是知识的来源，
+ * 直写本来就是它的正常路径（§6.55 K6 的决定，`::safe` 里也这么写着）。
+ *
+ * 两条路的语义相同（`MOD_ADD_ASSOC` 内部就是 `token_add_assoc_unique`），差别只在
+ * 谁来审查、什么时候落地、有没有账 —— 所以这是**可测量**的开关，不是改行为。
+ * 返回值的口径两条路一致：1 = 新加了一条边 / 0 = 边已经有了 / -1 = 被受审通道拒了。 */
 static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
     if (!ai || !a || !b) return 0;
     ai_write_count(ai, s);
+    /* `route_writes` 关着（默认）时**一个字都不多做** —— 与今天逐字节相同。
+     * 打开时才去碰微内核状态，并且先看那条**静态例外**（见上面那段注释）。 */
+    if (ai->route_writes) {
+        Micro *mk = micro_of(ai);
+        if (mk && !mk->safe.mod_off &&
+            !micro_endpoint_reserved(a) && !micro_endpoint_reserved(b)) {
+            int had = micro_has_edge(a, b);  /* 口径要和直写那条路一致（1=新加 / 0=已有） */
+            ModIntent m;
+            memset(&m, 0, sizeof m);
+            m.type = MOD_ADD_ASSOC;
+            m.target = a; m.main = b;
+            {   /* source 只有 24 字节：有界拼接（截断是故意的，同 ai_write_rel） */
+                size_t off = 0;
+                const char *head = "统一通道:";
+                for (const char *q = head; *q && off + 1 < sizeof m.source; ++q) m.source[off++] = *q;
+                for (const char *q = ai_write_src_name(s); *q && off + 1 < sizeof m.source; ++q)
+                    m.source[off++] = *q;
+                m.source[off] = 0;
+            }
+            char note[96];
+            if (micro_try(ai, &m, note, sizeof note) != SAFE_OK) return -1;
+            return had ? 0 : 1;
+        }
+    }
     return token_add_assoc_unique(a, b) == 0;
 }
 
