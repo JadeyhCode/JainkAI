@@ -292,6 +292,15 @@ typedef struct {
     size_t    n_backtrack;              /* 这一轮退了几次（每轮清零） */
     size_t    n_backtrack_total;        /* 累计退了几次（给人看） */
 
+    /* ---- 顺手件②：**机制这条路上的「候选证据」**（链长 / 链底可信度）----
+     * §6.43 量出来的缺口：核心那条路（查/推）早就有 hops/cred 了，走**机制注册表**
+     * 那条路（换问法 / 经由中间词 / 借最近邻…）却一律按中性（hops=0、cred=50）算，
+     * 于是闸门评分里"这条推论有多少底气"对机制结论是瞎的。
+     * 这里给内置机制一个**挂证据的口子**：机制把它挂在 `mech_cand` 上，调用点有就用、
+     * 没有就按中性 —— **`ThinkMech.process` 的签名不动**（外部注册的机制不用改）。 */
+    ThinkCand mech_cand;
+    int       mech_cand_set;
+
     /* ---- 元认知（看思维本身） ---- */
     size_t    n_stalls, n_over_budget, n_conflicts, n_blocked;
     size_t    stall_run;                /* 本轮连续没推进的步数 */
@@ -928,6 +937,14 @@ static inline int think_step_lookup(AI *ai, Think *t, const ThinkGoal *g,
     return 0;
 }
 
+/* 内置机制报「候选证据」：链长 + 链底可信度（+ 证据档/缓存位）。
+ * 外部的自定义机制**不用管这个**：不报就按中性算 —— 与今天逐字节相同。 */
+static inline void think_mech_report_cand(Think *t, int ev, int cache, int hops, int cred) {
+    if (!t) return;
+    t->mech_cand = think_cand_make(ev, cache, hops, cred);
+    t->mech_cand_set = 1;
+}
+
 /* 推：交给求解器，再用**验证器**独立复核（gaps>0 就不算结论）。 */
 static inline int think_step_derive(AI *ai, Think *t, const ThinkGoal *g,
                                     char *chain, size_t chaincap, int *verified,
@@ -996,6 +1013,9 @@ static inline int think_step_analogy(AI *ai, Think *t, const ThinkGoal *g,
         der_from_proof(ai, &od, g->a, g->rid, g->b, &pf);
         der_conclude(&od, pf.status, 45);
         think_obj_take(ai, t, g, &od, 1);
+        /* 顺手件②：类比这条路的"底气" = 它那份推导的步数与链底可信度 */
+        think_mech_report_cand(t, THINK_EV_GUESS, 0,
+                               (od.n > 255) ? 255 : (int)od.n, der_base_credibility(ai, &od));
     }
     if (chain && chaincap) think_utf8_clip(chain, chaincap, why);
     return pf.status;
@@ -1083,7 +1103,8 @@ static inline int think_step_opposite(AI *ai, Think *t, const ThinkGoal *g,
     int verified = 0;
     /* 注意：这一调用会在痕上留一条 TH_DERIVE（写的是「交给求解器」），
      * 所以紧接着补一条说明，免得看痕的人以为它把方向搞反了。 */
-    int d = think_step_derive(ai, t, &o, chain, chaincap, &verified, out_class, out_cache, NULL);
+    ThinkCand ocand;
+    int d = think_step_derive(ai, t, &o, chain, chaincap, &verified, out_class, out_cache, &ocand);
     /* `d` 是**正关系的真值**（+1 真 / -1 假）。原来的问法推不出来、
      * 换成问反方向就问出来了 —— 那说明「答案就在那个真值上」，
      * 由调用方按原来的问法换算（think_answer_of(d, g->want_neg)）。 */
@@ -1094,6 +1115,8 @@ static inline int think_step_opposite(AI *ai, Think *t, const ThinkGoal *g,
                  rel_name_of(ai, o.rid) ? rel_name_of(ai, o.rid) : "?",
                  d == +1 ? "正关系成立" : "正关系不成立");
         think_step(t, TH_REFLECT, 1, 70, "反方向才是答案", why);
+        /* 顺手件②：反方向那条链的链长/链底可信度照实报上去 */
+        think_mech_report_cand(t, ocand.ev, ocand.cache, ocand.hops, ocand.cred);
         return d;
     }
     return 0;
@@ -1223,8 +1246,9 @@ static inline int think_step_through(AI *ai, Think *t, const ThinkGoal *g,
     sub.kind = TG_REL; sub.a = g->via; sub.b = g->b;
     sub.rid = g->rid; sub.want_neg = 0; sub.depth = 2; sub.mech = -1;
     int scls = THINK_EV_GUESS, sver = 0, scache = 0;
+    ThinkCand subcand;
     char hop[THINK_WHY];
-    int st = think_step_derive(ai, t, &sub, hop, sizeof hop, &sver, &scls, &scache, NULL);
+    int st = think_step_derive(ai, t, &sub, hop, sizeof hop, &sver, &scls, &scache, &subcand);
     if (out_cache) *out_cache = scache;
     if (st != +1 || !sver) return 0;
     int hop_cls = g->via_hyp ? THINK_EV_HYP : THINK_EV_FACT;
@@ -1239,6 +1263,19 @@ static inline int think_step_through(AI *ai, Think *t, const ThinkGoal *g,
                  g->b && g->b->name ? g->b->name : "?");
     think_step(t, TH_DECOMPOSE, 1, 70, "经由中间词接上了",
                note && note[0] ? note : "接上了");
+    /* 顺手件②：把这条**两跳**链的证据报上去 —— 链长 = 子链 + 1（a→via 那一跳），
+     * 链底可信度 = min(子链的链底, a→via 这条边自己的可信度)。
+     * a→via 的可信度用现成的 `der_base_credibility`（一趟一步的小推导，不新造判据）。 */
+    {
+        Derivation hd;
+        der_reset(&hd);
+        (void)der_goal(&hd, g->a, g->via_rel, g->via);
+        (void)der_fact(&hd, g->a, g->via_rel, g->via, 0, +1);
+        int hop_cred = der_base_credibility(ai, &hd);
+        int hops = (subcand.hops > 0 ? subcand.hops : 2) + 1;
+        int cred = (subcand.cred < hop_cred) ? subcand.cred : hop_cred;
+        think_mech_report_cand(t, cls, 0, hops, cred);
+    }
     return +1;   /* 正关系成立 */
 }
 
@@ -1835,6 +1872,7 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                 char note[THINK_WHY];
                 note[0] = 0;
                 int pb_before = t->premise_blocked;   /* N3：看这一步有没有**刚刚**发现前提不成立 */
+                t->mech_cand_set = 0;                 /* 顺手件②：机制自己报的证据，先清空 */
                 int truth = m->process(ai, t, &g, &mcls, &mcache, note, sizeof note);
                 /* N3（默认关）：前提不成立 ⇒ **当场回退 + 换一条**（在线修订，K3）。
                  * 位置就在这条路上：`think_mech_prem` 本来每一轮都在跑，它把状态写进
@@ -1844,9 +1882,12 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                     continue;                          /* 退了：这一步不算"没推进" */
                 if (truth != 0) {
                     int guessed = (mcls == THINK_EV_GUESS);
-                    /* ⚠ 机制路径（类比/串接等）的**链长与链底可信度还没接进来** ——
-                     * 这里按中性给（cred=50、hops 不计分），登记为已知局限（§6.43）。 */
-                    ThinkCand mc = think_cand_make(mcls, mcache, 0, 50);
+                    /* 顺手件②：机制**自己报**的链长/链底可信度优先（内置的四条都报了）；
+                     * 外部的自定义机制不报 ⇒ 按中性给（hops=0、cred=50）——
+                     * 与"没接之前"逐字节相同，所以这条改动对不认识它的机制是零影响。 */
+                    ThinkCand mc = t->mech_cand_set
+                                 ? think_cand_make(mcls, mcache, t->mech_cand.hops, t->mech_cand.cred)
+                                 : think_cand_make(mcls, mcache, 0, 50);
                     think_finish(ai, t, &g, think_answer_of(truth, g.want_neg),
                                  guessed ? 45 : 80, guessed,
                                  note[0] ? note : t->chain_text, &mc);

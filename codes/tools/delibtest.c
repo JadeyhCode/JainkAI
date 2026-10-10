@@ -13,6 +13,7 @@
  *   ⑭ N1：一轮思考产出**对象**（目标 + 结构化步骤 + 复核缺口），默认关、只进内存、不写图
  *   ⑮ N4：空闲思考（没人说话时自己挑一个未解问题来想）—— 默认关、**只读**
  *   ⑯ N3：回溯 + 在线修订（前提不成立 → 退回分支起点换一条）—— 默认关、预算不退
+ *   ⑰ 机制路的候选证据（链长/链底可信度）要真的报上来（不是中性 0/50）
  *
  * 用法：gcc -std=c11 -O2 -o build_delibtest tools/delibtest.c -lm && ./build_delibtest
  */
@@ -29,6 +30,15 @@ static void ok(int cond, const char *what) {
 }
 
 static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, name); }
+
+/* 本文件测的是**默认档**的行为（写入闸门关、统一写入通道路由关）。
+ * `AIP_WGATE=1` / `AIP_ROUTE=1` 这类反向测量不该把它们弄红 —— C 级测试**自己钉**
+ * 自己依赖的那一档（实测踩过：AIP_WGATE=1 跑整包时这里 12 项假红）。 */
+static AI *tnew(void) {
+    AI *ai = ai_new();          /* ← 这里必须是 ai_new（替换过头会变成无限递归，实测崩过） */
+    if (ai) { ai->write_gate_off = 1; ai->route_writes = 0; }
+    return ai;
+}
 
 /* 感知阶段（agent_step 的预测/学习循环）会先把输入里的词 intern 进池子，
  * 思维循环拿到的是**已经在池子里**的词。测试里要照这个前提准备，
@@ -52,7 +62,7 @@ static int has_token(AI *ai, const char *name) { return pool_find(ai->pool, name
 
 /* 造一个「猫 属于 动物、动物 有 毛」的小知识库 */
 static AI *mini(void) {
-    AI *ai = ai_new();
+    AI *ai = tnew();
     Token *cat = T(ai, "猫"), *animal = T(ai, "动物"), *fur = T(ai, "毛");
     (void)token_tag_rel(cat, animal, REL_IS_A, REL_BOOST);
     (void)token_tag_rel(animal, fur, REL_HAS, REL_BOOST);
@@ -279,6 +289,44 @@ static void test_redo(void) {
     }
     ok(after, "退回去之后**真的换了那条再试**（回退之后还有求解尝试）");
     ai_free(ai); ai_free(b);
+}
+
+/* ============================ ⑰ 顺手件②：机制那条路的候选证据 ============================ */
+static void test_mech_cand(void) {
+    printf("== ⑰ 机制路的「候选证据」：链长/链底可信度要真的报上来 ==\n");
+    /* 场景：`猫 会 唱歌 吗` —— 走的是**机制**那条路（缺前提 R9），
+     * 而机制路的 hops/cred 以前一律按中性（hops=0、cred=50）算（§6.43 的尾巴）。 */
+    AI *ai = mini();
+    Think *t = think_of(ai);
+    Token *sing = T(ai, "唱歌"), *cord = T(ai, "声带");
+    (void)token_tag_rel(sing, cord, REL_NEED, REL_BOOST);
+    (void)token_tag_nrel(T(ai, "猫"), cord, REL_HAS, REL_BOOST);
+    char *w[4] = {(char *)"猫", (char *)"会", (char *)"唱歌", (char *)"吗"};
+    prep(ai, w, 4);
+    think_run(ai, w, 4);
+    ok(t->concl == -1, "前置：走机制路推出「不成立」（缺前提 R9）");
+    ok(t->n_pend_cache >= 1, "前置：这一轮产生了「值得沉淀」的候选");
+    if (t->n_pend_cache >= 1) {
+        ok(t->pend_cache[0].hops > 0,
+           "机制路报上来的**链长是真的**（不再是中性的 0）");
+        ok(t->pend_cache[0].cred <= 100, "链底可信度在合法区间（0..100）");
+        ok(t->pend_cache[0].ev >= THINK_EV_RULE,
+           "证据档至少是「规则推导」（候选自己的证据齐了）");
+    }
+    /* 反向：外部注册的机制**不报**证据 ⇒ 按中性算（与没接之前逐字节相同） */
+    {
+        AI *b = tnew();
+        Think *tb = think_of(b);
+        Token *x = T(b, "外甲"), *y = T(b, "外乙");
+        (void)token_tag_rel(x, y, REL_IS_A, REL_BOOST);
+        tb->mech_cand_set = 0;
+        char *w2[4] = {(char *)"外甲", (char *)"属于", (char *)"外乙", (char *)"吗"};
+        prep(b, w2, 4);
+        think_run(b, w2, 4);
+        ok(!tb->mech_cand_set, "没走到机制那一步时，证据位不会被谁顺手写脏");
+        ai_free(b);
+    }
+    ai_free(ai);
 }
 
 /* ============================ ③ 矛盾 ============================ */
@@ -539,7 +587,7 @@ static void test_mech_registry(void) {
      * 子类 的上位类是 父类；父类 -[属于]-> 目标。
      * 图里**没有** 子类 -[属于]-> 父类 这条边（父子关系是结构，不是边），
      * 所以核心的「查/推」都够不着，只能靠新机制。 */
-    AI *ai2 = ai_new();
+    AI *ai2 = tnew();
     Think *t2 = think_of(ai2);                     /* 触发内建注册 */
     (void)think_mech_register(&custom);            /* 新机制也注册进来 */
     Token *child = T(ai2, "子类"), *parent = T(ai2, "父类"), *goal = T(ai2, "目标");
@@ -564,7 +612,7 @@ static void test_mech_registry(void) {
  * 类比原来把「真值」直接当「回答」用，问否定时答案会反。 */
 static void test_analogy_polarity(void) {
     printf("== ⑨ 借最近邻：问否定时答案要翻过来 ==\n");
-    AI *ai = ai_new();
+    AI *ai = tnew();
     Think *t = think_of(ai);
     Token *cat = T(ai, "猫"), *fish = T(ai, "鱼"), *like = T(ai, "像的");
     (void)token_tag_rel(like, fish, REL_LIKE, REL_BOOST);   /* 像的 喜欢 鱼 */
@@ -630,7 +678,7 @@ static void test_consolidate(void) {
     ok(strstr(t->chain_text, "不 有") != NULL, "依据是那条观测");
 
     /* 关掉沉淀：想通也不再记 */
-    AI *ai2 = ai_new();
+    AI *ai2 = tnew();
     Think *t2 = think_of(ai2);
     (void)token_tag_rel(T(ai2, "猫"), T(ai2, "动物"), REL_IS_A, REL_BOOST);
     (void)token_tag_rel(T(ai2, "动物"), T(ai2, "毛"), REL_HAS, REL_BOOST);
@@ -853,6 +901,7 @@ int main(void) {
     test_think_obj();
     test_idle_think();
     test_redo();
+    test_mech_cand();
     test_cache_retract();
     test_premise_follow();
     test_revise();

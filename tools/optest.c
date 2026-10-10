@@ -20,6 +20,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>      /* getenv：反向测量时跳过"默认关"断言 */
 #include <sys/stat.h>       /* mkdir：临时文件放 _t/ 下，而 _t/ 不一定已经存在（见 ⑯） */
 
 static int passes = 0, fails = 0;
@@ -1515,7 +1516,9 @@ static void test_lease_gate_tiers(void) {
            strcmp(ai_write_layer(AI_WGATE_KNOWLEDGE), "知识层") == 0 &&
            strcmp(ai_write_layer(0.10), "情境层（随口一说）") == 0,
            "三层名字对得上（≥0.70 长期 / ≥0.40 知识 / 更低 情境）");
-        ok(a2->write_gate_off == 1, "闸门**默认关**（不由它决定写不写）");
+        /* 反向测量（AIP_WGATE=1）时"默认关"这条按规矩跳过：那时它本来就是开的 */
+        if (!getenv("AIP_WGATE")) ok(a2->write_gate_off == 1, "闸门**默认关**（不由它决定写不写）");
+        else ok(a2->write_gate_off == 0, "AIP_WGATE=1（反向测量）：启动即开（默认值断言按规矩跳过）");
         ai_free(a2);
     }
 
