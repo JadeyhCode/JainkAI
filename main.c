@@ -545,6 +545,7 @@ typedef enum {
     CMD_THINKLEARN,
     CMD_THINKCACHE,
     CMD_THINKBUDGET,
+    CMD_THINKOBJ,           /* N1：思考对象（`[思考:N]`，内存对象 + 复核） */
     CMD_MOD,
     CMD_SAFE,
     CMD_PATCH,
@@ -701,6 +702,11 @@ static const CmdDef CMDS[] = {
       "推理沉淀：想通的记成一条缓存（默认 on；标成『推出来的』，\n可被观测推翻、可撤销、前提没了会自动失效）", CMD_THINKCACHE },
     { "thinkbudget", NULL, 2, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
       "思维步数预算（默认 12）", CMD_THINKBUDGET },
+    { "thinkobj", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
+      "**思考对象**（N1，默认关；AIP_THINKOBJ=1）：一轮思考的产物 = 目标 + 结构化步骤\n"
+      "（derive.h 那套 Derivation）+ 复核结果（der_verify，缺口数）。\n"
+      "::thinkobj on|off 开关；::thinkobj verify 当场把对象里的链**独立重推**一遍；\n"
+      "不给参数看当前对象（只进内存，不存盘 —— 存档格式没动）", CMD_THINKOBJ },
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加Token|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
@@ -1156,6 +1162,35 @@ int main(int argc, char **argv) {
                 } else {
                     printf("[用法] ::thinkbudget <步数>（上限 %d）\n", THINK_MAX_STEP);
                 }
+                continue;
+            }
+            case CMD_THINKOBJ: {
+                /* N1：看/切「思考对象」、当场复核。层里的实现在 think.h（think_obj_*）。 */
+                Think *tt = think_of(a->brain);
+                if (!tt) { printf("[思维还没起来]\n"); continue; }
+                const char *arg = (cmd[8] == ' ') ? cmd + 9 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "on")) {
+                    tt->obj_on = 1;
+                    printf("[思考对象 = 开]这一轮之后产出 `[思考:N]`（内存对象，不存盘）。\n");
+                    printf("  对象 = 目标 + 结构化步骤（derive.h 那套）+ 复核结果（der_verify，缺口数）。\n");
+                    printf("  `::delib` 里会多一节「思考对象」；`::thinkobj verify` 能当场独立重推一遍。\n");
+                    continue;
+                }
+                if (arg && !strcmp(arg, "off")) {
+                    tt->obj_on = 0;
+                    printf("[思考对象 = 关]（默认；关着时 trace / ::delib 与从前逐字节相同）\n");
+                    continue;
+                }
+                if (arg && !strcmp(arg, "verify")) {
+                    int gaps = think_obj_reverify(a->brain, tt);
+                    if (gaps < 0) printf("[没得复核] 还没有对象（先 `::thinkobj on` 再想一轮）\n");
+                    else printf("[当场复核] 把对象里的链**又独立重推了一遍**：缺口 %d%s\n",
+                                gaps, gaps == 0 ? "（站得住）" : "（有缺口就不许当结论用）");
+                    continue;
+                }
+                if (arg && *arg) { printf("[用法] ::thinkobj [on|off|verify]\n"); continue; }
+                think_obj_print(a->brain, tt, "");
                 continue;
             }
             /* ---- 微内核：自修改通道 ---- */

@@ -10,6 +10,7 @@
  *   ⑥ 铁律：**思维不把推出来的东西写进图**（观测才配进图）
  *   ⑦ 元认知：原地打转 / 步数预算 / 挂满被拦
  *   ⑧ UTF-8：定长缓冲里的中文截断必须落在字符边界上（这个项目踩过乱码）
+ *   ⑭ N1：一轮思考产出**对象**（目标 + 结构化步骤 + 复核缺口），默认关、只进内存、不写图
  *
  * 用法：gcc -std=c11 -O2 -o build_delibtest tools/delibtest.c -lm && ./build_delibtest
  */
@@ -110,6 +111,73 @@ static void test_conclude(void) {
     think_run(ai, w4, 4);
     ok(t->concl == 0, "没知识就是没结论（不编）");
     ok(t->stop == TH_STOP_UNKNOWN || t->stop == TH_STOP_STALL, "停因写明「想不下去」");
+    ai_free(ai);
+}
+
+/* ============================ ⑭ N1：思考对象（[思考:N]） ============================ */
+static void test_think_obj(void) {
+    printf("== ⑭ N1：一轮思考产出**对象**（目标 + 结构化步骤 + 复核），只进内存 ==\n");
+    AI *ai = mini();
+    Think *t = think_of(ai);
+    /* C 级测试**自己定这一位**：不跟着 AIP_THINKOBJ 走（否则反向测量时
+     * "默认关"那几条会假红 —— 实测踩过：整包在 AIP_THINKOBJ=1 下这里报 5 项失败）。 */
+    t->obj_on = 0;
+
+    /* 默认关：这一轮不产出对象（与从前逐字节相同的那一侧） */
+    {
+        char *w[4] = {(char *)"猫", (char *)"有", (char *)"毛", (char *)"吗"};
+        prep(ai, w, 4);
+        think_run(ai, w, 4);
+        ok(!t->obj_on && !t->obj.have, "默认关：跑完一轮也不产出对象（obj_on=0）");
+        ok(t->n_obj == 0, "默认关：对象计数一个不涨");
+    }
+
+    /* 开着：推得出来的那一轮 —— 对象里要有目标 + 规则步 + 结论，复核缺口=0 */
+    t->obj_on = 1;
+    size_t edges_before = count_rel_edges(ai);
+    {
+        char *w[4] = {(char *)"猫", (char *)"有", (char *)"毛", (char *)"吗"};
+        prep(ai, w, 4);
+        think_run(ai, w, 4);
+        ok(t->obj.have, "开着：这一轮产出了对象");
+        ok(t->obj.seq == 1 && t->n_obj == 1, "对象有编号（[思考:1]，N 从 1 起）");
+        ok(t->obj.have_goal && t->obj.goal.rid == REL_HAS && t->obj.goal.a == T(ai, "猫"),
+           "对象里记着**目标**（猫 -[有]-> 毛）");
+        ok(t->obj.der.n >= 3, "对象里是**结构化步骤**（不是文本痕迹）");
+        ok(t->obj.verified && t->obj.gaps == 0, "定稿时跑过复核器，缺口=0（站得住）");
+        int saw_rule = 0, saw_concl = 0;
+        for (size_t i = 0; i < t->obj.der.n; ++i) {
+            if (t->obj.der.step[i].kind == DER_RULE) saw_rule = 1;
+            if (t->obj.der.step[i].kind == DER_CONCLUDE) saw_concl = 1;
+        }
+        ok(saw_rule && saw_concl, "步骤里有 RULE（继承那一跳）和 CONCLUDE");
+        ok(t->obj.n_trace > 0, "对象记下了「这一轮痕迹几条」（痕迹↔对象对得上）");
+        /* 当场复核：再独立重推一遍，结论不变 */
+        ok(think_obj_reverify(ai, t) == 0, "::thinkobj verify 那条路：当场复核还是缺口 0");
+    }
+
+    /* 想不出来的那一轮：对象照旧产出，但要**照实留一条缺口** */
+    {
+        char *w[4] = {(char *)"猫", (char *)"会", (char *)"跳舞", (char *)"吗"};
+        prep(ai, w, 4);
+        think_run(ai, w, 4);
+        ok(t->obj.have && t->obj.seq == 2, "想不出来的那一轮也有对象（[思考:2]）");
+        ok(t->obj.gaps > 0, "没接出链 ⇒ 对象里留一条**缺口**（不许把空对象说成想通了）");
+        ok(think_obj_reverify(ai, t) == t->obj.gaps, "当场复核是幂等的（缺口数不会越复核越多）");
+    }
+
+    /* 铁律：对象是"想法"，一个字节都不改图 */
+    ok(count_rel_edges(ai) == edges_before, "对象**没往图里写**断言边（只有观测进图）");
+
+    /* 关掉开关：下一轮就不再产出对象了（历史对象留在内存里不动 ——
+     * `::thinkobj` 那时打的是"关着"，不会把上一轮的对象冒充成这一轮的） */
+    t->obj_on = 0;
+    {
+        char *w[4] = {(char *)"猫", (char *)"有", (char *)"毛", (char *)"吗"};
+        prep(ai, w, 4);
+        think_run(ai, w, 4);
+        ok(t->n_obj == 2 && t->obj.seq == 2, "关掉之后不再产出（n_obj 不变 = 2，历史对象不冒充新的）");
+    }
     ai_free(ai);
 }
 
@@ -682,6 +750,7 @@ int main(void) {
     test_mech_registry();
     test_analogy_polarity();
     test_consolidate();
+    test_think_obj();
     test_cache_retract();
     test_premise_follow();
     test_revise();

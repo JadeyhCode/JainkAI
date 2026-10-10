@@ -20,6 +20,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>       /* mkdir：临时文件放 _t/ 下，而 _t/ 不一定已经存在（见 ⑯） */
 
 static int passes = 0, fails = 0;
 static void ok(int cond, const char *what) {
@@ -947,6 +948,10 @@ static void test_provenance(void) {
     /* ② relations_load 装载的知识打「基准」档（写一个临时关系文件，真走装载路径） */
     {
         const char *path = "_t/optest_rel_src.txt";
+        /* `_t/` 是**相对**路径：整包并行时每套在自己的沙箱里跑，沙箱里没有 `_t/`
+         * （实测：这一条曾经长期静默失败 —— 见 tests/suites.txt 头部那段）。
+         * 自己建一层就够了（仓库根里本来就有 `_t/`，mkdir 失败也无所谓）。 */
+        (void)mkdir("_t", 0777);
         FILE *f = fopen(path, "w");
         ok(f != NULL, "写一个临时关系文件");
         if (f) {

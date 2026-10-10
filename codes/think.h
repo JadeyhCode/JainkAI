@@ -186,6 +186,26 @@ typedef struct {
     char     text[THINK_TEXT];/* 原话（给人看的） */
 } ThinkOpen;
 
+/* **思考对象**（`[思考:N]`，N1）：一轮思考的产物 —— 目标 + 结构化步骤 + 复核结果。
+ * 只进内存（`model_io.h` 序列化的是池层轨迹，`Think` 一个字都不进存档 ⇒ 零存档风险）；
+ * 默认关（`::thinkobj on` / `AIP_THINKOBJ=1`）。步骤直接用 derive.h 的 `Derivation`：
+ * 不新造格式，`::thinkobj` / `::delib` 拿 `der_dump()` 打出来就是那套既有渲染。 */
+typedef struct {
+    int        have;              /* 这一轮产出对象了吗 */
+    uint64_t   seq;               /* N：第几个对象（从 1 起） */
+    uint64_t   tick;              /* 哪一轮（pool tick） */
+    int        have_goal;         /* 主目标在不在（普通陈述句那轮只有读入） */
+    ThinkGoal  goal;              /* 主目标：这一轮要弄清的事 */
+    Derivation der;               /* 结构化步骤（FACT/RULE/HYP/DEFAULT/GAP/CONCLUDE…） */
+    int        verified;          /* 定稿时跑过 der_verify */
+    int        gaps;              /* 复核结果：缺口数（0 = 站得住） */
+    int        guessed;           /* 对象里有"猜的"步骤 */
+    size_t     n_trace;           /* 定稿时本轮 trace 有几条（痕迹↔对象对得上） */
+    char       stop[64];          /* 停因（文本） */
+    char       concl[THINK_CONCL];/* 结论投影的快照 */
+    char       chain[THINK_WHY];  /* 依据链的快照 */
+} ThinkObj;
+
 typedef struct {
     /* ---- 议程 ---- */
     ThinkGoal agenda[THINK_MAX_GOAL];
@@ -236,6 +256,14 @@ typedef struct {
     size_t    n_pend_retract;
     size_t    n_cache_blocked;      /* 沉淀的账在 AI 上（n_cached/n_retracted）：来源档可信度要用 */
     size_t    n_stale;                  /* 「前提没了」被撤掉的缓存条数 */
+
+    /* ---- N1：**思考对象**（`[思考:N]`）----
+     * 一轮思考除了留痕，还落一个对象：目标 + 结构化步骤（`Derivation`）+ 复核结果。
+     * 只进内存（不动存档）；默认关（`::thinkobj on` / `AIP_THINKOBJ=1`）。
+     * 关着时这条路一行都不走 —— trace/::delib 与今天逐字节相同。 */
+    ThinkObj  obj;
+    int       obj_on;                   /* 1 = 产出对象（默认 0） */
+    uint64_t  n_obj;                    /* 一共产出过几个对象（`[思考:N]` 的 N） */
 
     /* ---- 元认知（看思维本身） ---- */
     size_t    n_stalls, n_over_budget, n_conflicts, n_blocked;
@@ -318,6 +346,11 @@ static inline Think *think_of(AI *ai) {
         /* 「AI 自己用记事本」默认关；测量钩子 AIP_NOTEPAD=on|hold（只给 A/B 用）。 */
         t->notepad = 0;
         t->trust_on = 0;
+        /* N1「思考对象」**默认关**：开着才产出 `[思考:N]`（内存对象 + 复核）；
+         * 关着时 `::delib` / trace 与今天逐字节相同。测量钩子 AIP_THINKOBJ=1。 */
+        t->obj_on = 0;
+        t->n_obj = 0;
+        { const char *ob = getenv("AIP_THINKOBJ"); if (ob && ob[0] == '1') t->obj_on = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -382,6 +415,113 @@ static inline void think_step(Think *t, ThinkKind kind, int ok, int score,
     s->score = score;
     think_utf8_clip(s->what, sizeof s->what, what ? what : "");
     think_utf8_clip(s->why, sizeof s->why, why ? why : "");
+}
+
+/* ============================ N1：思考对象（`[思考:N]`） ============================
+ *
+ * 缺口（audit §6.54 的 N1）：一轮思考过后只剩一叠**文本**痕迹（`Think.trace[]`，
+ * 轮末清空、不进图、不可复用）—— 于是"这是我刚才那一次的思考"说不出口。
+ *
+ * 现在：一轮思考（`think_run`）除了留痕，还落一个**对象**：
+ *   · 目标：这一轮要弄清的事（主目标）；
+ *   · 步骤：**结构化**的链 —— 直接用 derive.h 那套 `Derivation`/`DerStep`，不新造格式；
+ *   · 复核：对象定稿时**再跑一遍** `der_verify`（独立重推），把缺口数记在对象上；
+ *   · 停因 / 结论投影 / 依据链：这一轮怎么收的。
+ * 三条边界（铁律推出来的）：
+ *   ① **只进内存**：`model_io.h` 序列化的是池层轨迹，`Think` 一个字都不进存档（§6.55 K1）
+ *      ⇒ 这个对象**零存档风险**；
+ *   ② **只有观测进图**：对象是"想法"，一个字节都不改图（要沉淀照旧走意图队列 + 安全内核）；
+ *   ③ **默认关**：`obj_on == 0` 时这条路一行都不走（trace / `::delib` 与今天逐字节相同）。
+ *
+ * "可复用"在今天 = 别的层能**读**它（`::delib` 打的就是它、`::thinkobj verify` 能当场复核）；
+ * "可存图"**没做** —— 那要动存档格式，得用户单独拍板。 */
+
+static inline void think_obj_reset(Think *t) {
+    if (!t) return;
+    memset(&t->obj, 0, sizeof t->obj);
+    der_reset(&t->obj.der);
+}
+
+/* 收一条**结构化**链进对象。收的条件是"比现在这条更好"：
+ * 复核缺口更少就换（同样少 = 先到先得，所以主目标的链不会被后来拆出来的子目标挤掉）。
+ * `claim` = 这条链敢不敢当结论（给了 1，der_verify 会把结论**独立重推**一遍）。 */
+static inline void think_obj_take(AI *ai, Think *t, const ThinkGoal *g,
+                                  Derivation *d, int claim) {
+    if (!ai || !t || !t->obj_on || !d || d->n == 0) return;
+    d->has_claim = claim ? 1 : 0;
+    int gaps = der_verify(ai, d);        /* 存的必须是**复核过**的链（verifier 不信构造者） */
+    if (t->obj.have && t->obj.der.n > 0 && t->obj.gaps <= gaps) return;
+    t->obj.der = *d;                     /* 结构体拷贝：步骤是定长数组，没有指针所有权 */
+    t->obj.have = 1;
+    t->obj.verified = 1;
+    t->obj.gaps = gaps;
+    t->obj.guessed = d->guessed ? 1 : 0;
+    if (g) { t->obj.goal = *g; t->obj.have_goal = 1; }
+}
+
+/* 一轮结束：把对象**定稿**（编号 / 停因 / 结论 / 复核一遍）。
+ * 没收到任何链时也定稿，但会在对象里留一条**缺口** —— 照实说"这一轮没接出站得住的链"，
+ * 而不是把空对象说成"想通了"。 */
+static inline void think_obj_finish(AI *ai, Think *t) {
+    if (!ai || !t || !t->obj_on) return;
+    ThinkObj *o = &t->obj;
+    if (!o->have) {
+        der_reset(&o->der);
+        if (o->have_goal) (void)der_goal(&o->der, o->goal.a, o->goal.rid, o->goal.b);
+        (void)der_gap(&o->der, "这一轮没接出一条站得住的链（停因见下）");
+        o->have = 1;
+    }
+    o->seq = ++t->n_obj;
+    o->tick = ai->pool ? ai->pool->current_tick : 0;
+    o->n_trace = t->trace_n;
+    think_utf8_clip(o->stop, sizeof o->stop, think_stop_name(t->stop));
+    think_utf8_clip(o->concl, sizeof o->concl, t->concl_text);
+    think_utf8_clip(o->chain, sizeof o->chain, t->chain_text);
+    o->gaps = der_verify(ai, &o->der);   /* **复核器**：定稿时独立重推一遍 */
+    o->verified = 1;
+    o->guessed = o->der.guessed ? 1 : 0;
+}
+
+/* 当场复核（`::thinkobj verify`）：**现在**把对象里的链再独立重推一遍。
+ * 和定稿那次是同一个函数、同一条路 —— 不另写一份判据。 */
+static inline int think_obj_reverify(AI *ai, Think *t) {
+    if (!ai || !t || !t->obj_on || !t->obj.have) return -1;
+    t->obj.gaps = der_verify(ai, &t->obj.der);
+    t->obj.verified = 1;
+    t->obj.guessed = t->obj.der.guessed ? 1 : 0;
+    return t->obj.gaps;
+}
+
+/* 白箱呈现（`::thinkobj` 与 `::delib` 的那一节**共用这一处**；
+ * 步骤用 derive.h 的 der_dump 打 —— 打的是**对象**，不是另一份日志）。 */
+static inline void think_obj_print(const AI *ai, const Think *t, const char *ind) {
+    if (!t) return;
+    const ThinkObj *o = &t->obj;
+    const char *p = ind ? ind : "";
+    if (!t->obj_on) {
+        printf("%s[思考对象] 关着（默认关；`::thinkobj on` / AIP_THINKOBJ=1 打开）\n", p);
+        return;
+    }
+    if (!o->have) {
+        printf("%s[思考对象] 还没有：这一轮没产出对象（开关刚打开 / 这一轮思维关着）\n", p);
+        return;
+    }
+    printf("%s[思考对象 #%llu] tick=%llu  结构化步骤 %zu 条  复核：%s，缺口 %d%s  停因：%s\n",
+           p, (unsigned long long)o->seq, (unsigned long long)o->tick, o->der.n,
+           o->verified ? "跑过 der_verify（独立重推）" : "没跑过",
+           o->gaps, o->guessed ? "（含猜测步骤）" : "",
+           o->stop[0] ? o->stop : "-");
+    if (o->have_goal)
+        printf("%s       目标：%s %s%s %s\n", p,
+               o->goal.a && o->goal.a->name ? o->goal.a->name : "?",
+               o->goal.want_neg ? "不 " : "",
+               rel_name_of(ai, o->goal.rid) ? rel_name_of(ai, o->goal.rid) : "?",
+               o->goal.b && o->goal.b->name ? o->goal.b->name : "?");
+    if (o->n_trace) printf("%s       这一轮的痕迹 %zu 条（对象与痕迹对得上）\n", p, o->n_trace);
+    if (o->concl[0]) printf("%s       结论投影：%s\n", p, o->concl);
+    if (o->chain[0]) printf("%s       依据：%s\n", p, o->chain);
+    printf("%s       步骤（derive.h 那套结构化链，打的是对象本身）：\n", p);
+    der_dump(ai, &o->der, DER_STYLE_PLAIN, stdout);
 }
 
 /* [自问:…] 这个名字要塞进 ModIntent.name（48 字节），必须**按 UTF-8 边界**截，
@@ -721,6 +861,22 @@ static inline int think_step_lookup(AI *ai, Think *t, const ThinkGoal *g,
                  truth == +1 ? "正关系成立" : "正关系不成立",
                  answer > 0 ? "对" : "不对");
         think_step(t, TH_LOOKUP, 1, 95, "直接查图", why);
+        /* N1：这一手也落进思考对象（FACT 或 HYP + CONCLUDE）——
+         * 来自**假设层**的记成 DER_HYP（复核器去覆盖层核对），不是查图那条路。 */
+        if (t->obj_on) {
+            Derivation od;
+            der_reset(&od);
+            (void)der_goal(&od, g->a, g->rid, g->b);
+            if (hpos || hneg) {
+                DerStep *h = der_add(&od, DER_HYP);
+                if (h) { h->subj = g->a; h->obj = g->b; h->rid = g->rid;
+                         h->neg = (uint8_t)(neg ? 1 : 0); h->truth = truth; }
+            } else {
+                (void)der_fact(&od, g->a, g->rid, g->b, neg, truth);
+            }
+            der_conclude(&od, truth, (hpos || hneg) ? 55 : 85);
+            think_obj_take(ai, t, g, &od, 1);
+        }
         return answer;
     }
     snprintf(why, whycap, "直接查不到 `%s %s%s %s`",
@@ -762,6 +918,9 @@ static inline int think_step_derive(AI *ai, Think *t, const ThinkGoal *g,
     char why[THINK_WHY];
     proof_text(ai, &pf, why, sizeof why);
     think_step(t, TH_DERIVE, 1, pf.guessed ? 55 : 85, "交给求解器 + 验证器复核", why);
+    /* N1：这条**过了验证器**的链收进本轮的对象（`[思考:N]`）。收的条件见 think_obj_take：
+     * 缺口更少的才顶替 —— 先到的（主目标）不会被后拆出来的子目标挤掉。 */
+    if (t->obj_on) think_obj_take(ai, t, g, &d, 1);
     if (chain && chaincap) think_utf8_clip(chain, chaincap, why);
     if (verified) *verified = 1;
     if (out_class) *out_class = think_evidence_class(&d);
@@ -788,6 +947,14 @@ static inline int think_step_analogy(AI *ai, Think *t, const ThinkGoal *g,
     char why[THINK_WHY];
     proof_text(ai, &pf, why, sizeof why);
     think_step(t, TH_ANALOGY, 1, 45, "类比（借最近的词）", why);
+    /* N1：类比也落进对象（DER_DEFAULT 步骤；复核器照旧会查"是不是真推不出来 + 近邻够不够近"） */
+    if (t->obj_on) {
+        Derivation od;
+        der_reset(&od);
+        der_from_proof(ai, &od, g->a, g->rid, g->b, &pf);
+        der_conclude(&od, pf.status, 45);
+        think_obj_take(ai, t, g, &od, 1);
+    }
     if (chain && chaincap) think_utf8_clip(chain, chaincap, why);
     return pf.status;
 }
@@ -1344,6 +1511,8 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
     t->trust_c1 = t->trust_c2 = 0; t->trust_pick = 0;
     t->stall_run = 0;
     think_goal_reset(t);
+    /* N1：这一轮的思考对象从空的开始（开关关着时这一行什么也不做） */
+    if (t->obj_on) think_obj_reset(t);
 
     /* 上一轮想通、还没说出口的旧问题：先记在痕上，
      * 否则这一轮的痕迹一重置，就说不清那句补充是哪儿来的。 */
@@ -1353,7 +1522,7 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
     if (t->run_off) {
         think_step(t, TH_STOP, 1, 0, "收束", "思维循环关着（::thinkrun on 打开）");
         t->stop = TH_STOP_OFF;
-        return;
+        return;                      /* 没想过 ⇒ 不产出对象（N1：对象=真的想过一轮） */
     }
     t->n_think++;
 
@@ -1419,11 +1588,13 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
         } else {
             think_step(t, TH_STOP, 1, 30, "收束", "没有要弄清的关系问题（普通陈述句）");
             t->stop = TH_STOP_NO_GOAL;
+            think_obj_finish(ai, t);   /* N1：想过一轮就定稿（没链 ⇒ 对象里留一条缺口） */
             return;
         }
         think_step(t, TH_STOP, 1, 30, "收束",
                    "有词我还不认识 —— 挂起来等以后遇见它，这一轮想不深");
         t->stop = TH_STOP_UNKNOWN;
+        think_obj_finish(ai, t);
         return;
     }
 
@@ -1590,6 +1761,10 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
             snprintf(note, sizeof note, "没依据 → 说不知道，不编（%s）", think_stop_name(t->stop));
         think_step(t, TH_REFLECT, t->concl != 0 || t->conflict, t->conf, "反省", note);
     }
+
+    /* N1：这一轮到此为止 —— 把思考对象**定稿**（编号 / 停因 / 结论 / 复核一遍）。
+     * 关着开关时这一步什么也不做（行为与今天逐字节相同）。 */
+    think_obj_finish(ai, t);
 }
 
 /* ============================ 收尾（后段：用新知识再想一遍 + 改脑） ============================ */
@@ -2040,6 +2215,12 @@ static inline void think_report(const AI *ai) {
                    s->ok ? "✓" : "✗", s->what);
             if (s->why[0]) printf("            %s\n", s->why);
         }
+    }
+    /* N1：开着「思考对象」时这一节打的是**对象**（结构化链 + 复核结果），
+     * 不是上面那份文本痕迹 —— 白箱呈现只有这一处（`::thinkobj` 用同一个函数）。 */
+    if (t->obj_on) {
+        printf("       —— 思考对象（`::thinkobj` 看的就是它）——\n");
+        think_obj_print(ai, t, "       ");
     }
 }
 

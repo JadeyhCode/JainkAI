@@ -14,6 +14,13 @@
 # 每条后面的「本机实测 Xs」是 2026-10-07 串行整包量出来的（那一轮的对照表在
 # docs/audit-vs-deepseek看这里.md 的 §6.42）；换机器/改套件后可以重新量再重排。
 # 加一套：在这里加一行 + 写 tests/<名字>.sh；别忘 `codes/` 镜像同步要带上本文件。
+#
+# ⚠ **C 级套件的退出码必须真的传出来**（2026-10-10 量出来的洞）：原先那几条写的是
+#   `./build_xxx | tail -3` —— 管道的退出码是 `tail` 的（永远 0），于是
+#   **C 测试自己报的失败在整包汇总里是隐形的**（实测：`AIP_THINKOBJ=1` 跑整包时
+#   delibtest 报了「125 项通过，5 项失败」，而整套照旧显示 [OK]）。
+#   现在的写法是 `./build_xxx > ctest.log 2>&1; rc=$?; tail -N ctest.log; [ "$rc" -eq 0 ]`：
+#   输出照样只留尾巴几行，但退出码**真的**决定这一套红不红。
 
 # 微内核端到端（CLI）：::mod/::safe/::patch 三个入口 + 自修改结构随图存盘（本机实测 22.9s）
 selfmod|sh tests/selfmod.sh
@@ -36,13 +43,13 @@ cmdtable|sh tests/cmdtable.sh
 # 帧读关联链产物（Gate B）的 A/B 与反面看护（本机实测 14.5s）
 framegate_ab|sh tests/framegate_ab.sh
 # Token 行为/临时 Token/修正的记忆自测（C 级）：接线/插词/中转/不存盘/预算真扣（本机实测 6.9s）
-optest|gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest | tail -3
+optest|gcc -std=c11 -O2 -Wall -Wextra -o build_optest tools/optest.c -lm && ./build_optest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # L3 神经表示：emb 真学出来了 + 钉住它的边界（本机实测 6.3s）
 embed|gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -o build_slotprobe tools/slotprobe.c -lm && sh tests/embed.sh
 # 归属：每个人一份信念表（持久、不进我的知识、问他就查他的）（本机实测 6.1s）
 belief|sh tests/belief.sh
 # 思维循环自测（C 级）：议程/反方向/矛盾/跨轮/铁律/元认知/UTF-8（本机实测 4.7s）
-delibtest|gcc -std=c11 -O2 -Wall -Wextra -o build_delibtest tools/delibtest.c -lm && ./build_delibtest | tail -3
+delibtest|gcc -std=c11 -O2 -Wall -Wextra -o build_delibtest tools/delibtest.c -lm && ./build_delibtest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 四个局限：多层假设 / 独占健全否定 / 假设不被接管 / 嵌套+归属（本机实测 4.2s）
 logic4|sh tests/logic4.sh
 # L2 关系层：静态知识 / 传递推理 / 对话中现学知识 / 持久化（本机实测 4.0s）
@@ -54,9 +61,9 @@ hypothesis|sh tests/hypothesis.sh
 # 现场造词：没见过的复合词造成 Token 并现场接线（本机实测 3.6s）
 coining|sh tests/coining.sh
 # 验证器自身的测试：伪造/非法/断链/假依据必须被拒（本机实测 3.6s）
-dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin | tail -12
+dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin > ctest.log 2>&1; rc=$?; tail -12 ctest.log; [ "$rc" -eq 0 ]
 # 反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化（本机实测 3.2s）
-biastest|gcc -std=c11 -O2 -Wall -Wextra -o build_biastest tools/biastest.c -lm && ./build_biastest | tail -3
+biastest|gcc -std=c11 -O2 -Wall -Wextra -o build_biastest tools/biastest.c -lm && ./build_biastest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 假设的作用域回溯：按序号/主语/内容撤**指定**那层（本机实测 2.7s）
 hypo_scope|sh tests/hypo_scope.sh
 # 假设进检索/帧层：与假设相反的话被否决，并记在链上（本机实测 2.6s）
@@ -64,7 +71,7 @@ hypo_frames|sh tests/hypo_frames.sh
 # 推导层：链结构化 / 验证器在验 / 缺口不断言 / 语言是投影（本机实测 2.5s）
 derivation|sh tests/derivation.sh
 # 微内核自测（C 级）：队列去重/预算/每条拒绝理由/检测器/补丁故障隔离/冻结（本机实测 2.4s）
-microtest|gcc -std=c11 -O2 -Wall -Wextra -o build_microtest tools/microtest.c -lm && ./build_microtest | tail -3
+microtest|gcc -std=c11 -O2 -Wall -Wextra -o build_microtest tools/microtest.c -lm && ./build_microtest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 思维链：骨架→校验→降级 咬合，降级答复可关（本机实测 2.1s）
 cot|sh tests/cot.sh
 # 结构化帧生成（语料里没写过的句子）（本机实测 1.5s）
@@ -72,7 +79,7 @@ frames|sh tests/frames.sh
 # 缺前提 → 否定能力：训练数据里没有的结论也能推出来（本机实测 1.2s）
 prerequisite|sh tests/prerequisite.sh
 # 清单自检：疑问词/虚词/助词/规则/关系表里没有重复项，两张 frame 词表不分家（本机实测 0.7s）
-dupcheck|gcc -std=c11 -O2 -Wall -Wextra -o build_dupcheck tools/dupcheck.c -lm && ./build_dupcheck | tail -3
+dupcheck|gcc -std=c11 -O2 -Wall -Wextra -o build_dupcheck tools/dupcheck.c -lm && ./build_dupcheck > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 受审的外部执行 + 写文件（CLI）：默认关 / 白名单 / 边界 / **没有 shell** / 超时被杀 / 输出变观测 / 审计账
 #   （本机实测 17.5s 是**单跑**时的自编 16s；整包内复用第 0 步的二进制 ⇒ ~1.5s）
 action|sh tests/action.sh

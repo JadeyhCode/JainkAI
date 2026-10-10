@@ -12,6 +12,8 @@
 #   ⑥ 矛盾：教一条和缺前提推理相反的事 → 下一轮 ::delib 报「正反都能推出来」
 #   ⑦ 开关与预算：::thinkrun / ::thinklearn / ::thinkbudget 都真的生效
 #   ⑧ 铁律：**推导不动图**（::mod 里 新边/打关系 都是 0）
+#   ⑨ N1「思考对象」（[思考:N]，默认关）：一轮思考产出**结构化**对象（目标 + 步骤 + 复核），
+#      ::delib 那一节打的是对象本身；缺口=0 才算站得住；**只进内存**（不进图、不存盘）
 #
 # 用法：sh tests/thinking.sh [模型文件]     默认 <repo>/model.bin
 set -e
@@ -121,9 +123,62 @@ grep -q -- '- 猫 会 跳舞 吗' o14 && ok "恢复出来的问句**完整**（�
 grep -qE '装载恢复 [1-9]' o14 && ok "计数里如实报「装载恢复 N」" \
     || bad "恢复计数" "$(grep '累计' o14 | head -2)"
 
+echo "== 9. N1 思考对象（[思考:N]，默认关）：目标/结构化步骤/复核/只进内存 =="
+# 默认关那一侧：与从前逐字节相同（没有对象这一节）。
+# ⚠ 开关反向测量（AIP_THINKOBJ=1，见 tests/switches_ab.sh）时这几条**自动跳过**。
+run '猫 有 毛 吗\n::delib\n::thinkobj\n::thinkobj verify\n' o15
+if [ -z "${AIP_THINKOBJ:-}" ]; then
+    if grep -q '—— 思考对象' o15; then bad "默认关时不该有对象节" "$(grep -m1 -- '—— 思考对象' o15)"
+    else ok "默认关：::delib 里没有「思考对象」这一节（与从前逐字节相同）"; fi
+    grep -q '\[思考对象\] 关着' o15 && ok "::thinkobj 自报默认关" \
+        || bad "thinkobj 状态" "$(grep -m2 '思考对象' o15)"
+    grep -q '\[没得复核\]' o15 && ok "没对象时 ::thinkobj verify 明说没得复核" \
+        || bad "空对象复核" "$(grep -m1 '复核' o15)"
+else
+    ok "AIP_THINKOBJ=1（反向测量）：默认值断言按规矩跳过"
+fi
+
+# 开着那一侧：结论=成立（继承链）的那一轮，对象必须在、复核缺口=0、步骤是**结构化**的
+run '::thinkobj on\n猫 有 毛 吗\n::delib\n::thinkobj\n::thinkobj verify\n::edges [思考:1]\n' o16
+grep -q '—— 思考对象（`::thinkobj` 看的就是它）——' o16 \
+    && ok "::delib 多出「思考对象」一节（打的是对象，不是另一份日志）" \
+    || bad "::delib 的对象节" "$(grep -m3 '思考对象' o16)"
+grep -qE '\[思考对象 #[0-9]+\].*结构化步骤 [0-9]+ 条.*缺口 0' o16 \
+    && ok "对象在：有编号、有结构化步骤数、**复核缺口 0**（der_verify 独立重推过）" \
+    || bad "对象头" "$(grep -m1 '思考对象 #' o16)"
+grep -q '目标：猫 有 毛' o16 && ok "对象里有**目标**（这一轮要弄清的事）" \
+    || bad "对象目标" "$(grep -m3 '目标' o16)"
+grep -q '规则 ✓' o16 && grep -q '事实 ✓' o16 && grep -q '结论' o16 \
+    && ok "步骤是结构化的（规则/事实/结论三类，每步带验证标记）—— 用的是 derive.h 那套" \
+    || bad "结构化步骤" "$(grep -A6 '推导' o16 | head -8)"
+grep -q '（继承）' o16 && ok "步骤里带得出规则名（继承）—— 与 ::delib 的依据链对得上" \
+    || bad "规则名" "$(grep -m2 '继承' o16)"
+grep -q '\[当场复核\].*缺口 0（站得住）' o16 \
+    && ok "::thinkobj verify 当场把对象里的链**又独立重推了一遍**：缺口 0" \
+    || bad "当场复核" "$(grep -m1 '当场复核' o16)"
+grep -q '没有这个 Token: \[思考:1\]' o16 \
+    && ok "对象**没进图**（铁律：只有观测进图 —— ::edges 找不到它这个 Token）" \
+    || bad "对象进图了" "$(grep -m2 '思考:1' o16)"
+
+# 没接出链的那一轮也要照实留一条**缺口**（不许把空对象说成"想通了"）
+run '::thinkobj on\n猫 会 跳舞 吗\n::thinkobj\n' o17
+grep -qE '\[思考对象 #[0-9]+\].*缺口 [1-9]' o17 \
+    && ok "想不出来的那一轮：对象在，但**缺口>0**（照实说，不当结论用）" \
+    || bad "诚实缺口" "$(grep -m1 '思考对象 #' o17)"
+grep -q '没接出一条站得住的链' o17 && ok "缺口那一步写明了原因" \
+    || bad "缺口原因" "$(grep -A4 '推导' o17 | head -6)"
+
+# 只进内存：存盘再读回来，对象**不在**（存档格式没动 —— N1 一个字都不进文件）
+run '::thinkobj on\n猫 有 毛 吗\n::save n1slot\n' o18
+[ -s n1slot ] && ok "存盘成功（存档格式没动）" || bad "存盘" "$(tail -2 o18)"
+mv n1slot m.bin
+printf '::thinkobj\n::quit\n' | AIP_THINKOBJ=1 ./aip --model m.bin > o19 2>&1 || true
+grep -q '还没有' o19 && ok "重载后对象**不在**（只进内存：跨重启不复用）" \
+    || bad "对象跨重启" "$(grep -m2 '思考对象' o19)"
+
 echo
 if [ "$fail" -eq 0 ]; then
-    echo "PASS thinking（思维循环：议程 / 分步 / 反方向 / 跨轮 / 矛盾 / 元认知 / 未解问题持久化，$pass 项）"
+    echo "PASS thinking（思维循环：议程 / 分步 / 反方向 / 跨轮 / 矛盾 / 元认知 / 未解问题持久化 / 思考对象，$pass 项）"
 else
     echo "FAIL thinking（$fail 项失败，$pass 项通过）"
     exit 1
