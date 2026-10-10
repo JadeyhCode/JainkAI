@@ -28,6 +28,7 @@
 #define CODE_H
 
 #include "ai.h"
+#include "lex.h"        /* ASCII 代码词法（::ascii on 时把"逐字保留"记进痕；见下） */
 
 #define CODE_MAX_FIX   1
 #define CODE_SRC_CAP   16384      /* 源文件读进来的上限（够写个小程序） */
@@ -59,9 +60,10 @@ typedef struct {
     char where[80];                /* 第一条错误的位置（如 `草稿.c:3:5`） */
     char err[CODE_ERR_CAP];        /* 第一条错误原文（截断） */
     char note[CODE_ERR_CAP];       /* 改了什么 / 为什么没改 */
+    char lex[CODE_ERR_CAP];        /* 词法往返（只在 `::ascii on` 时算；空 = 这一层关着） */
 } CodeRun;
 
-static CodeRun g_code = { 0, -1, -1, -1, {0}, {0}, {0}, {0} };
+static CodeRun g_code = { 0, -1, -1, -1, {0}, {0}, {0}, {0}, {0} };
 static int g_code_auto_done = 0;   /* `AIP_CODE` 那条路只走一次（别每轮都编译） */
 static inline CodeRun *code_last(void) { return &g_code; }
 
@@ -184,7 +186,7 @@ static inline int code_first_error(const char *out, char *where, size_t wcap,
 static inline int code_round(AI *ai, const char *rel) {
     CodeRun *cr = &g_code;
     cr->attempts = 0; cr->first_rc = cr->final_rc = -1; cr->rule = -1;
-    cr->where[0] = cr->err[0] = cr->note[0] = 0;
+    cr->where[0] = cr->err[0] = cr->note[0] = cr->lex[0] = 0;
     snprintf(cr->path, sizeof cr->path, "%s", rel ? rel : "");
     if (!ai || !rel || !rel[0]) { snprintf(cr->note, sizeof cr->note, "没给源文件"); return -2; }
     if (!ai->act_on) {
@@ -201,6 +203,17 @@ static inline int code_round(AI *ai, const char *rel) {
     size_t got = fread(src, 1, CODE_SRC_CAP - 1, f);
     fclose(f);
     src[got] = 0;
+
+    /* 代码词法（`::ascii on` 才走）：源码先过一遍 **ASCII 逐字保留** 判据 ——
+     * "我写出去的字节，词法层一个都没改" 是写代码这件事的前置条件（线 A ③）。
+     * 判据只有一处实现：lex.h 的 lex_roundtrip()。默认关 → 这一行不算、输出逐字节同今天。 */
+    if (ai->lex_ascii) {
+        char why[160];
+        if (lex_roundtrip(src, why, sizeof why))
+            snprintf(cr->lex, sizeof cr->lex, "ASCII 逐字保留 ✓（canonical 幂等）");
+        else
+            snprintf(cr->lex, sizeof cr->lex, "ASCII 逐字保留 ✗：%s", why);
+    }
 
     char cmd[ACTION_CMD_CAP];
     snprintf(cmd, sizeof cmd,
@@ -302,6 +315,7 @@ static inline void code_print(void) {
     printf("[写代码闭环] %s：编译 %d 次，首次 rc=%d → 最终 rc=%d\n",
            cr->path[0] ? cr->path : "?", cr->attempts, cr->first_rc, cr->final_rc);
     if (cr->where[0]) printf("  第一条错误：%s：%s\n", cr->where, cr->err);
+    if (cr->lex[0])   printf("  词法：%s\n", cr->lex);
     if (cr->note[0])  printf("  改了什么：%s\n", cr->note);
     if (cr->attempts >= 2 || cr->first_rc == 0)
         printf("  产物：%s/%s%s（在 " ACTION_WORK_DIR "/ 里）\n", ACTION_WORK_DIR, cr->path, CODE_OUT_NAME);

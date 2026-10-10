@@ -76,5 +76,9 @@ dupcheck|gcc -std=c11 -O2 -Wall -Wextra -o build_dupcheck tools/dupcheck.c -lm &
 # 受审的外部执行 + 写文件（CLI）：默认关 / 白名单 / 边界 / **没有 shell** / 超时被杀 / 输出变观测 / 审计账
 #   （本机实测 17.5s 是**单跑**时的自编 16s；整包内复用第 0 步的二进制 ⇒ ~1.5s）
 action|sh tests/action.sh
+# 原语语言的干跑校验 + ASCII 代码词法（CLI）：默认关 / 六条判据 / 干跑不 intern / 没过就不执行 /
+#   `分割`=清空整栈（按真实行为）/ `展开` 栈深不确定就跳过记账 / `::lex` 往返判据 / `::ascii` 接进 ::code
+#   （本机实测：整包内复用第 0 步的二进制 ⇒ ~1.5s；单跑时自编 ~16s + 5 个小会话）
+asmcheck|sh tests/asmcheck.sh
 # 「独占」由数据判定：可印证、可改口、改口后推理跟着变（本机实测 0.07s —— 它用预编好的 build_aip + 小语料，是真的快；评审以为 0.0s 是没量）
 exclusivity|sh tests/exclusivity.sh

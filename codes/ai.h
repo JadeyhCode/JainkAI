@@ -644,6 +644,15 @@ typedef struct {
      * 和情绪那张表同一个放法（用户 2026-10-08 拍板：白名单 echo/cat/wc/gcc+grep/head/tail/sed/ls、
      * 写文件只在 _t/work/、不联网）。**不进存档**（格式 v10 不动）。 */
     int     act_on;
+    /* **原语程序的干跑校验**（`token_lang.h` 的 `token_check_program`）：默认 0 = 关。
+     * 关着时 `::asm` 与今天**逐字节相同**（打错的原语名照旧被静默 intern 成数据词）；
+     * 开着（`::asm check on` / `AIP_ASMCHECK=1`）时 `::asm` 先干跑，没过就**不执行**。
+     * 校验器只按原语表里**代码真实行为**的栈效应判（见 token_lang.h 那张表的注释）。 */
+    int     asm_check_on;
+    /* **ASCII 代码词法**（`lex.h`）接不接进代码通道：默认 0 = 关。
+     * 开着（`::ascii on` / `AIP_ASCII=1`）时 `::code` 的痕里多一行「逐字保留 ✓/✗」；
+     * 关着时 `::code` 的输出与今天逐字节相同（`::lex` 是"看一眼"的命令，任何时候都能用）。 */
+    int     lex_ascii;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1092,9 +1101,13 @@ static inline void ai_switches_init(AI *ai) {
     ai->route_writes = 0;
     ai->drive_on = 0;
     ai->act_on = 0;                  /* 外部执行 + 写文件：默认**关**（action.h 层） */
+    ai->asm_check_on = 0;            /* 原语程序干跑校验：默认**关**（token_lang.h） */
+    ai->lex_ascii = 0;               /* ASCII 代码词法接进代码通道：默认**关**（lex.h） */
     { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
     { const char *af = getenv("AIP_DRIVE"); if (af && af[0] == '1') ai->drive_on = 1; }
     { const char *ac = getenv("AIP_ACT");   if (ac && ac[0] == '1') ai->act_on = 1; }
+    { const char *ck = getenv("AIP_ASMCHECK"); if (ck && ck[0] == '1') ai->asm_check_on = 1; }
+    { const char *lx = getenv("AIP_ASCII");    if (lx && lx[0] == '1') ai->lex_ascii = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
     { const char *we = getenv("AIP_WGATE_EV"); if (we) ai->wgate_ev = (we[0] == '1') ? 1 : 0; }

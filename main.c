@@ -9,6 +9,7 @@
  */
 #include "agent.h"
 #include "token_lang.h"
+#include "lex.h"          /* ASCII 代码词法（线 A ③；`::lex` / `::ascii`） */
 #include "model_io.h"
 #include <stdio.h>
 #include <string.h>
@@ -532,6 +533,8 @@ typedef enum {
     CMD_PRIMS,
     CMD_GC,
     CMD_ASM,
+    CMD_LEX,                /* ASCII 代码词法：看一眼切成哪些 token + 往返判据 */
+    CMD_ASCII,              /* 把代码词法接进代码通道（默认关） */
     CMD_LEARN,
     CMD_EDGES,
     CMD_QUIT,
@@ -662,11 +665,22 @@ static const CmdDef CMDS[] = {
       "::others <A> <关系> <B>  多层合并 + 四态判定：同类别说法并进一个窗，\n"
       "  都说认/都说不认/**有分歧（待验，不是否定）**/没人说过", CMD_OTHERS },
     { "prims", NULL, 0, "基本",
-      "列出所有原语", CMD_PRIMS },
+      "列出所有原语 + 各自的**栈效应**（要/拿/放 + 名字与真实行为不一致的地方）——\n"
+      "干跑校验器（::asm check）判的就是这张表", CMD_PRIMS },
     { "gc", NULL, 0, "基本",
       "手动跑一遍遗忘", CMD_GC },
     { "asm", NULL, 2, "基本",
-      "语言层直接执行 <原语序列>", CMD_ASM },
+      "语言层直接执行 <原语序列>（按空白切词）。\n"
+      "::asm check on|off   **干跑校验**（默认关；AIP_ASMCHECK=1）：开着时先按原语表的真实\n"
+      "  栈效应干跑一遍，认「未知原语名 / 括号不配对 / 操作数不够 / 如果-结束不配对 / 空程序 /\n"
+      "  参数缺失」，**没过就不执行**（关着时错名字照旧被静默吞掉，与今天逐字节相同）", CMD_ASM },
+    { "lex", "<代码文本>", 2, "基本",
+      "ASCII 代码词法**看一眼**：这段文本会被切成哪些 token（标识符/数字/**标点逐字符**、\n"
+      "空白归一——token 里不能有空格）。判据只有一处（lex.h 的 lex_roundtrip）：\n"
+      "① 逐字保留（非空白字节一个不少不改）② canonical 幂等；另打括号 `()[]{}` 配对", CMD_LEX },
+    { "ascii", NULL, 1, "基本",
+      "把 ASCII 代码词法接进代码通道（默认关；AIP_ASCII=1）：开着时 `::code` 的痕里多一行\n"
+      "「ASCII 逐字保留 ✓/✗」（写出去的字节词法层有没有改过一个）。关着时输出逐字节同今天", CMD_ASCII },
     { "learn", NULL, 2, "基本",
       "按共现学一句普通文本", CMD_LEARN },
     { "edges", NULL, 2, "基本",
@@ -871,7 +885,8 @@ static void cmd_prims(AI *ai) {
     while (PRIM_SYMS[ns]) ns++;
     printf("[原语 %zu 条 + 符号 %zu 个]\n", np, ns);
     for (size_t i = 0; PRIMS[i].name; ++i) {
-        printf("  %s\n", PRIMS[i].name);
+        /* 名字 + **栈效应**（同一张表；干跑校验器判的就是它 —— 白箱：别让人猜） */
+        printf("  %s  （%s）\n", PRIMS[i].name, prim_effect_text(PRIMS[i].kind));
         if (ai) (void)pool_token_intern(ai->pool, PRIMS[i].name);   /* 列出来就顺带认得出 */
     }
     for (size_t i = 0; PRIM_SYMS[i]; ++i) {
@@ -938,15 +953,14 @@ static void cmd_think(AI *ai, const char *text) {
     ai_free_words(words, n);
 }
 
-/* 语言层直接执行一串原语名（与语料同一路径）。 */
-static void cmd_asm(AI *ai, const char *src) {
-    if (!src || !*src) { printf("[用法] ::asm <原语序列>\n"); return; }
-    char buf[4096];
-    snprintf(buf, sizeof buf, "%s", src);
-    const char *names[256];
+/* 把一行按空白切成词（`::asm` 的输入语法；**不许**用 ai_tokenize —— 那是中文/词表那一路的）。
+ * 返回词数；`names` 指向 `buf` 里的片段。 */
+static size_t asm_split(const char *src, char *buf, size_t cap, const char **names, size_t nmax) {
     size_t n = 0;
+    if (!src || !buf || !cap) return 0;
+    snprintf(buf, cap, "%s", src);
     char *q = buf;
-    while (*q && n < 256) {
+    while (*q && n < nmax) {
         while (*q == ' ' || *q == '\t') q++;
         if (!*q) break;
         char *s = q;
@@ -954,9 +968,48 @@ static void cmd_asm(AI *ai, const char *src) {
         if (*q) *q++ = 0;
         names[n++] = s;
     }
-    if (n == 0) { printf("[空的序列]\n"); return; }
+    return n;
+}
+
+/* 语言层直接执行一串原语名（与语料同一路径）。
+ * `ai->asm_check_on` 开着时先**干跑校验**（token_check_program）：没过就不执行 ——
+ * 这是"语法约束/校验"落到 CLI 的那一步（线 A ④）。默认关 = 与今天逐字节相同。 */
+static void cmd_asm(AI *ai, const char *src) {
+    if (!src || !*src) { printf("[用法] ::asm <原语序列>｜::asm check on|off\n"); return; }
+    char buf[4096];
+    const char *names[256];
+    size_t n = asm_split(src, buf, sizeof buf, names, 256);
+    if (n == 0) {
+        if (ai->asm_check_on) {                       /* 空程序在校验里也是一条问题 */
+            TokenCheck ck;
+            token_check_program(names, 0, &ck);
+            token_check_print(&ck);
+            return;
+        }
+        printf("[空的序列]\n");
+        return;
+    }
+    if (ai->asm_check_on) {
+        TokenCheck ck;
+        token_check_program(names, n, &ck);
+        token_check_print(&ck);
+        if (ck.n_err) return;                         /* 没过就不执行：图一个字都不动 */
+    }
     token_run_names_ctx(ai->pool, names, n, interp_op_host, ai);
     printf("[执行了 %zu 个 token]\n", n);
+}
+
+/* `::asm check [on|off]`：看/切干跑校验（默认关，`AIP_ASMCHECK=1`） */
+static void cmd_asm_check(AI *ai, const char *arg) {
+    if (arg && !strcmp(arg, "on"))  { ai->asm_check_on = 1; printf("[原语干跑校验 = 开]\n"); }
+    else if (arg && !strcmp(arg, "off")) { ai->asm_check_on = 0; printf("[原语干跑校验 = 关]\n"); }
+    else if (arg && *arg) { printf("[用法] ::asm check on|off\n"); return; }
+    else printf("[原语干跑校验 = %s（默认关；AIP_ASMCHECK=1）]\n", ai->asm_check_on ? "开" : "关");
+    printf("开着时 `::asm <序列>` 先干跑：认「未知原语名 / 括号不配对 / 操作数不够 /"
+           " 如果-结束不配对 / 空程序 / 参数缺失」，**没过就不执行**。\n");
+    printf("  判据来自原语表里**代码真实行为**的栈效应（`[原语:分割]` 是清空整栈、"
+           "`包裹/嵌套/捆绑` 是整栈折成一个 —— 名字与行为不一致的地方按行为写）。\n");
+    printf("  干跑**不 intern**：打错的原语名不会被当场造成 Token。\n");
 }
 
 int main(int argc, char **argv) {
@@ -2637,7 +2690,37 @@ int main(int argc, char **argv) {
             case CMD_ASM: {
                 const char *src = (cmd[3] == ' ') ? cmd + 4 : NULL;
                 while (src && *src == ' ') src++;
+                /* `::asm check on|off` 是**开关**（不给参数看状态）；别的都当原语序列跑 */
+                if (src && strncmp(src, "check", 5) == 0 && (src[5] == 0 || src[5] == ' ')) {
+                    const char *v = src + 5;
+                    while (*v == ' ') v++;
+                    cmd_asm_check(a->brain, *v ? v : NULL);
+                    continue;
+                }
                 cmd_asm(a->brain, src);
+                continue;
+            }
+            case CMD_LEX: {
+                const char *src = (cmd[3] == ' ') ? cmd + 4 : NULL;
+                while (src && *src == ' ') src++;
+                if (!src || !*src) { printf("[用法] ::lex <代码文本>\n"); continue; }
+                lex_print(src);
+                printf("  （这一层接没接进代码通道：%s —— `::ascii on|off` / AIP_ASCII=1 控制）\n",
+                       a->brain->lex_ascii ? "接着（`::code` 痕里有往返一行）" : "没接（默认关）");
+                continue;
+            }
+            case CMD_ASCII: {
+                const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "on"))       a->brain->lex_ascii = 1;
+                else if (arg && !strcmp(arg, "off")) a->brain->lex_ascii = 0;
+                else if (arg && *arg) { printf("[用法] ::ascii on|off\n"); continue; }
+                printf("[ASCII 代码词法接进代码通道 = %s]（默认关；AIP_ASCII=1）\n",
+                       a->brain->lex_ascii ? "开" : "关");
+                printf("  开着：`::code try` 读进来的源码先过一遍**逐字保留**判据"
+                       "（lex.h 的 lex_roundtrip，判据只有那一处），痕里多一行「词法：…」。\n");
+                printf("  关着：`::code` 的输出与今天逐字节相同；`::lex <文本>` 是「看一眼」的命令，"
+                       "任何时候都能用。\n");
                 continue;
             }
             case CMD_LEARN: {

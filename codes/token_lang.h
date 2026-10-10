@@ -57,6 +57,12 @@
 #define PRIM_INSERT_NAMED "[原语:插词为]"
 #define PRIM_COLLECT_TEMP "[原语:回收临时]"
 
+/* 原语**命名空间**的前缀：只写一份。
+ * 校验器靠它把「打错的原语名」和「普通数据 token」分开 —— 别的 `[xxx:yyy]`
+ * （`[符号:好]`、`[时刻:12]`、`[关系:之前]`…）都是运行时的**数据**，不许当成原语名报错。 */
+#define PRIM_PREFIX       "[原语:"
+#define PRIM_PREFIX_LEN   (sizeof(PRIM_PREFIX) - 1)
+
 #define SYM_GOOD          "[符号:好]"
 #define SYM_BAD           "[符号:坏]"
 #define SYM_WRAP          "[符号:包裹]"
@@ -131,53 +137,90 @@ static inline void token_run_names_ctx(TokenPool *p, const char *const *names, s
 
 /* ============================ 原语识别 ============================ */
 
-/* **原语表：名字只写一份。**
+/* **原语表：名字只写一份；栈效应同一张表里写。**
  * 以前名字写了两处（这里的 if 链 + pool_init_prims 的清单），加一条原语要改两处 ——
  * 「同一份清单出现在两处」正是设计原则要清掉的东西。现在一张 name→kind 表：
- * 识别走它、intern 也走它；新增一条原语 = 表里加一行 + 写它的执行分支。 */
-typedef struct { const char *name; PrimKind kind; } PrimDef;
+ * 识别走它、intern 也走它；新增一条原语 = 表里加一行 + 写它的执行分支。
+ *
+ * 每一行还带**栈效应**（干跑校验器 `token_check_program()` 按它算）：
+ *   need  至少要几个操作数才**真的做事**（栈上不够 = 操作数不够）
+ *   pop   做那一手时从栈上拿走几个（不够就"有多少拿多少"—— 代码里就是 `interp_pop` 返回 NULL）
+ *   push  至少放回几个（净效果 = push − pop）
+ *   flags PF_*（见下）
+ *
+ * ⚠ **这张表按 `interp_exec_prim` 的真实行为抄，不按名字猜**（§6.58）：
+ *   `Interp::stmt_start` 全仓从没被赋值过 ⇒ **恒为 0**。所以
+ *     · `[原语:分割]` 的真实行为是**清空整栈**（不是"退回本语句开头"）；
+ *     · `[原语:包裹]/[原语:嵌套]/[原语:捆绑]` 的真实行为是**把整栈折成一个**
+ *       （栈上不够 need 时它们 `break`，**什么都不做**）。
+ *   名字暗示"按语句分段"，实际没有分段这个概念。**行为不改**（改了会动一堆看护），
+ *   校验器照真实行为判 —— 否则会认出假错误，"认错比不认更糟"。
+ * 另：`绑定/解绑/认为/抽关系/套关系` 那几条在 `!hv` 时不推结果 —— 那是**池子能力**
+ * 决定的（正常池子每个 Token 都有 hv），不算"看数据"，所以表里按"推"记；
+ * 真正看数据的是 `展开`（推 0~2）与 `检索`（中没中），它们标 PF_INEXACT。 */
+typedef enum {
+    PF_NONE     = 0,
+    PF_ARG      = 1u << 0,   /* 吃掉**下一个词**当参数（序列驱动：对象/创建/运行/插词为） */
+    PF_OPEN     = 1u << 1,   /* 如果：开一层块 */
+    PF_MID      = 1u << 2,   /* 否则：块中间 */
+    PF_CLOSE    = 1u << 3,   /* 结束：关一层块 */
+    PF_CLEAR    = 1u << 4,   /* 整栈折叠/清空（真实行为，见上；pop/push 栏对它无意义） */
+    PF_INEXACT  = 1u << 5,   /* 推几个**看数据** ⇒ 从那一步起栈深不确定（校验器不再查操作数） */
+} PrimFlags;
+
+typedef struct {
+    const char *name;
+    PrimKind    kind;
+    signed char need;        /* 至少几个操作数 */
+    signed char pop;         /* 拿走几个 */
+    signed char push;        /* 放回几个 */
+    unsigned char flags;     /* PF_* */
+} PrimDef;
 
 static const PrimDef PRIMS[] = {
-    { PRIM_OBJECT,       PK_OBJECT },
-    { PRIM_GOOD,         PK_GOOD },
-    { PRIM_BAD,          PK_BAD },
-    { PRIM_SPLIT,        PK_SPLIT },
-    { PRIM_REQUEST,      PK_REQUEST },
-    { PRIM_EXECUTE,      PK_EXECUTE },
-    { PRIM_REFUSE,       PK_REFUSE },
-    { PRIM_WRAP,         PK_WRAP },
-    { PRIM_PRE_ASSOC,    PK_PRE_ASSOC },
-    { PRIM_CONNECT,      PK_CONNECT },
-    { PRIM_DISCONNECT,   PK_DISCONNECT },
-    { PRIM_CREATE,       PK_CREATE },
-    { PRIM_RUN,          PK_RUN },
-    { PRIM_IF,           PK_IF },
-    { PRIM_ELSE,         PK_ELSE },
-    { PRIM_END,          PK_END },
-    { PRIM_ACTIVATE,     PK_ACTIVATE },
-    { PRIM_NEST,         PK_NEST },
-    { PRIM_EXPAND,       PK_EXPAND },
-    { PRIM_PERSPECTIVE,  PK_PERSPECTIVE },
-    { PRIM_BELIEVE,      PK_BELIEVE },
-    { PRIM_QUOTE,        PK_QUOTE },
-    { PRIM_TIME_NOW,     PK_TIME_NOW },
-    { PRIM_TIME_BEFORE,  PK_TIME_BEFORE },
-    { PRIM_TIME_AFTER,   PK_TIME_AFTER },
-    { PRIM_TIME_CHAIN,   PK_TIME_CHAIN },
-    { PRIM_BIND,         PK_BIND },
-    { PRIM_UNBIND,       PK_UNBIND },
-    { PRIM_BUNDLE,       PK_BUNDLE },
-    { PRIM_QUERY,        PK_QUERY },
-    { PRIM_EXTRACT_REL,  PK_EXTRACT_REL },
-    { PRIM_APPLY_REL,    PK_APPLY_REL },
-    { PRIM_PRE_ASSOC_NOT, PK_PRE_ASSOC_NOT }, /* 反前提（[原语:前关联不]） */
-    { PRIM_PREMISE_TIE,  PK_PREMISE_TIE },   /* Token 行为入口（见文件头注释） */
+    /*                          name                  kind                  need pop push flags */
+    { PRIM_OBJECT,       PK_OBJECT,        0, 0, 1, PF_ARG },   /* 要的是"下一个词"，不是栈上操作数 */
+    { PRIM_GOOD,         PK_GOOD,          1, 0, 0, PF_NONE },     /* 只看栈顶（不改栈） */
+    { PRIM_BAD,          PK_BAD,           1, 0, 0, PF_NONE },
+    { PRIM_SPLIT,        PK_SPLIT,         0, 0, 0, PF_CLEAR },    /* 真实行为：清空整栈 */
+    { PRIM_REQUEST,      PK_REQUEST,       0, 0, 0, PF_NONE },     /* 栈空就拿原语自己兜底 */
+    { PRIM_EXECUTE,      PK_EXECUTE,       0, 0, 0, PF_NONE },
+    { PRIM_REFUSE,       PK_REFUSE,        0, 0, 0, PF_NONE },
+    { PRIM_WRAP,         PK_WRAP,          1, 0, 0, PF_CLEAR },    /* 真实行为：整栈折成一个 */
+    { PRIM_PRE_ASSOC,    PK_PRE_ASSOC,     1, 1, 0, PF_NONE },
+    { PRIM_CONNECT,      PK_CONNECT,       2, 2, 0, PF_NONE },
+    { PRIM_DISCONNECT,   PK_DISCONNECT,    2, 2, 0, PF_NONE },
+    { PRIM_CREATE,       PK_CREATE,        0, 0, 1, PF_ARG },
+    { PRIM_RUN,          PK_RUN,           0, 0, 0, PF_ARG },     /* 参数是"跑哪个名字"，不进栈 */
+    { PRIM_IF,           PK_IF,            1, 1, 0, PF_OPEN },
+    { PRIM_ELSE,         PK_ELSE,          0, 0, 0, PF_MID },
+    { PRIM_END,          PK_END,           0, 0, 0, PF_CLOSE },
+    { PRIM_ACTIVATE,     PK_ACTIVATE,      1, 0, 0, PF_NONE },     /* 只看栈顶 */
+    { PRIM_NEST,         PK_NEST,          2, 0, 0, PF_CLEAR },    /* 栈上不够 2 个：什么也不做 */
+    { PRIM_EXPAND,       PK_EXPAND,        1, 1, 1, PF_INEXACT },  /* 推 0~2 个 → 栈深不确定 */
+    { PRIM_PERSPECTIVE,  PK_PERSPECTIVE,   1, 1, 1, PF_NONE },     /* pop 之后又 push 回去 */
+    { PRIM_BELIEVE,      PK_BELIEVE,       1, 1, 1, PF_NONE },
+    { PRIM_QUOTE,        PK_QUOTE,         1, 1, 1, PF_NONE },
+    { PRIM_TIME_NOW,     PK_TIME_NOW,      0, 0, 1, PF_NONE },
+    { PRIM_TIME_BEFORE,  PK_TIME_BEFORE,   2, 2, 0, PF_NONE },
+    { PRIM_TIME_AFTER,   PK_TIME_AFTER,    2, 2, 0, PF_NONE },
+    { PRIM_TIME_CHAIN,   PK_TIME_CHAIN,    2, 0, 0, PF_NONE },     /* 整栈成链，不改栈 */
+    { PRIM_BIND,         PK_BIND,          2, 2, 1, PF_NONE },
+    { PRIM_UNBIND,       PK_UNBIND,        2, 2, 1, PF_NONE },
+    { PRIM_BUNDLE,       PK_BUNDLE,        1, 0, 0, PF_CLEAR },    /* 真实行为：整栈折成一个 */
+    { PRIM_QUERY,        PK_QUERY,         1, 1, 1, PF_INEXACT },  /* 没中就只推 0 个 */
+    { PRIM_EXTRACT_REL,  PK_EXTRACT_REL,   2, 2, 1, PF_NONE },
+    { PRIM_APPLY_REL,    PK_APPLY_REL,     2, 2, 1, PF_NONE },
+    { PRIM_PRE_ASSOC_NOT, PK_PRE_ASSOC_NOT, 1, 1, 0, PF_NONE },    /* 反前提（[原语:前关联不]） */
+    { PRIM_PREMISE_TIE,  PK_PREMISE_TIE,   3, 3, 0, PF_NONE },     /* Token 行为入口（见文件头注释） */
 
-    { PRIM_INSERT,       PK_INSERT },
-    { PRIM_INSERT_NAMED, PK_INSERT_NAMED },
-    { PRIM_COLLECT_TEMP, PK_COLLECT_TEMP },
-    { NULL, PK_NONE }
+    { PRIM_INSERT,       PK_INSERT,        2, 2, 0, PF_NONE },
+    { PRIM_INSERT_NAMED, PK_INSERT_NAMED,  2, 2, 0, PF_ARG },      /* 多一个名字当参数 */
+    { PRIM_COLLECT_TEMP, PK_COLLECT_TEMP,  0, 0, 0, PF_NONE },
+    { NULL, PK_NONE, 0, 0, 0, PF_NONE }
 };
+/* 表里的条数（不算结尾那条空行）—— 别的清单别再数一遍 */
+#define PRIM_N ((sizeof PRIMS / sizeof PRIMS[0]) - 1)
 
 /* 符号（不是原语，但要 intern 进池子，切词器和 ::asm 才认得出） */
 static const char *const PRIM_SYMS[] = {
@@ -190,11 +233,55 @@ static inline size_t prim_count(void) {
     return n;
 }
 
-static inline PrimKind prim_kind(const Token *t) {
-    if (!t || !t->name) return PK_NONE;
+/* 按 kind 找表里那一行（栈效应、flags 都从这儿取 —— 只有这一张表） */
+static inline const PrimDef *prim_def_of(PrimKind k) {
     for (size_t i = 0; PRIMS[i].name; ++i)
-        if (strcmp(t->name, PRIMS[i].name) == 0) return PRIMS[i].kind;
-    return PK_NONE;
+        if (PRIMS[i].kind == k) return &PRIMS[i];
+    return NULL;
+}
+static inline const PrimDef *prim_def_by_name(const char *name) {
+    if (!name) return NULL;
+    for (size_t i = 0; PRIMS[i].name; ++i)
+        if (strcmp(name, PRIMS[i].name) == 0) return &PRIMS[i];
+    return NULL;
+}
+/* 这个原语在**序列驱动**下吃不吃下一个词当参数（`interp_step` 与校验器同一判据）。
+ * 注意 `focus_step` / `lang_on_visit` 那两条路没有"下一个词"，参数是从图上联想来的
+ * （它们用的是对象/创建/运行三条 + 图上取参数），所以不走这个函数。 */
+static inline int prim_eats_arg(PrimKind k) {
+    const PrimDef *d = prim_def_of(k);
+    return d && (d->flags & PF_ARG);
+}
+
+/* 把一行的栈效应渲染成人话（`::prims` 用）—— 措辞与校验器**同一张表**，
+ * 名字与真实行为不一致的地方（分割/包裹/嵌套/捆绑）在这儿就写明白，别让人按名字猜。 */
+static inline const char *prim_effect_text(PrimKind k) {
+    static char buf[192];
+    const PrimDef *d = prim_def_of(k);
+    if (!d) { snprintf(buf, sizeof buf, "（表里没有）"); return buf; }
+    const char *note = "";
+    if (d->flags & PF_ARG)          note = "，吃下一个词当参数";
+    else if (d->flags & PF_CLEAR)   note = (d->kind == PK_SPLIT) ? "（真实行为：清空整栈）"
+                                                                 : "（真实行为：整栈折成一个）";
+    else if (d->flags & PF_OPEN)    note = "，开一层块";
+    else if (d->flags & PF_MID)     note = "，块中";
+    else if (d->flags & PF_CLOSE)   note = "，关一层块";
+    else if (d->flags & PF_INEXACT) note = "，推几个看数据 ⇒ 栈深不确定";
+    snprintf(buf, sizeof buf, "栈：要 %d 拿 %d 放 %d%s",
+             (int)d->need, (int)d->pop, (int)d->push, note);
+    return buf;
+}
+
+/* 按**名字**认原语。校验器走的就是这一条：它拿到的是一串词，还没有 Token
+ * （干跑不许 intern —— 一 intern 就等于把打错的名字当场造成新 Token，
+ * 那正是今天"错名字被静默吞掉"的机制本身）。 */
+static inline PrimKind prim_kind_name(const char *name) {
+    const PrimDef *d = prim_def_by_name(name);   /* 同一张表，不再抄一遍循环 */
+    return d ? d->kind : PK_NONE;
+}
+
+static inline PrimKind prim_kind(const Token *t) {
+    return prim_kind_name(t ? t->name : NULL);
 }
 
 static inline void pool_init_prims(TokenPool *p) {
@@ -570,6 +657,191 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
     }
 }
 
+/* ============================ 干跑校验（解析器/校验器） ============================
+ *
+ * 用户 2026-10-07 的线 A ④「语法约束/校验」：**执行之前**先干跑一遍，把
+ * 「打错的原语名 / 括号不配对 / 操作数不够 / 如果-结束不配对 / 空程序」认出来。
+ * 今天没有这一步：`::asm` 里写 `[原语:连结]`（错字）会被当成**普通数据词**压进栈、
+ * 一声不响 —— 错名字被静默吞掉，正是"看起来跑了、其实没跑"那类坑。
+ *
+ * 三条硬规矩（都是本项目已经踩出来的）：
+ *   ① **干跑不许 intern**：只按名字查表（`prim_def_by_name`）。一 intern 就等于把
+ *      打错的名字当场造成一个新 Token —— 校验器自己把那件事做成了。
+ *   ② **只按代码真实行为判**（§6.58）：栈效应来自上面那张表，名字与行为不一致的地方
+ *      （分割=清空整栈、包裹/嵌套/捆绑=整栈折成一个）就按真实行为写，别按名字猜。
+ *   ③ **不确定就不判**：`展开/检索` 推几个看数据 ⇒ 从那一步起栈深不确定，
+ *      后面的操作数检查**跳过并记账**（认错比不认更糟）。
+ *
+ * 判据一共六条（tests/asmcheck.sh 一条一条钉着）：
+ *   ① 未知原语名 ② 括号不配对 ③ 操作数不够 ④ 如果-结束不配对 ⑤ 空程序 ⑥ 参数缺失
+ * 只认 `[原语:` 前缀的词当原语名 —— 别的 `[xxx:yyy]`（`[符号:好]`/`[时刻:12]`/`[关系:之前]`）
+ * 都是运行时的**数据**，不许当原语报错。 */
+
+#define TOKEN_CHECK_MAX_ERR  16      /* 最多记几条明细（多的只计数） */
+#define TOKEN_CHECK_MSG_CAP  192
+#define TOKEN_CHECK_BLOCK_MAX 16     /* 如果-结束 的嵌套上限（再深只报"太深"） */
+
+typedef struct {
+    size_t      at_i;                        /* 第几个词（0 起；(size_t)-1 = 不属于某个词） */
+    const char *at;                          /* 出问题的那个词（指调用方的词表，不拷贝） */
+    char        msg[TOKEN_CHECK_MSG_CAP];
+} TokenCheckErr;
+
+typedef struct {
+    size_t        n_tok;                     /* 词数 */
+    int           n_err;                     /* 错误条数（0 = 通过） */
+    size_t        n_show;                    /* 记了明细几条（≤ TOKEN_CHECK_MAX_ERR） */
+    TokenCheckErr err[TOKEN_CHECK_MAX_ERR];
+    int           depth;                     /* 干跑末态栈深（下界）；-1 = 不确定 */
+    size_t        uncertain_at;              /* 从第几个词起栈深不确定（(size_t)-1 = 一直确定） */
+    size_t        n_skip;                    /* 因为不确定而跳过的操作数检查次数 */
+    size_t        blocks_left;               /* 收尾时还开着的块数 */
+} TokenCheck;
+
+static inline void token_check_add(TokenCheck *c, size_t at_i, const char *at, const char *msg) {
+    if (!c) return;
+    if ((size_t)c->n_err < TOKEN_CHECK_MAX_ERR) {
+        c->err[c->n_err].at_i = at_i;
+        c->err[c->n_err].at   = at;
+        snprintf(c->err[c->n_err].msg, TOKEN_CHECK_MSG_CAP, "%s", msg ? msg : "");
+        c->n_err++;
+        c->n_show = (size_t)c->n_err;
+    } else {
+        c->n_err++;                          /* 只计数（汇总行会说"还有 N 条"） */
+    }
+}
+
+/* `[`/`]` 在**一个词里**必须成对（`[原语:对象]` 这种整体词才是完整的原语） */
+static inline void token_check_brackets(TokenCheck *c, size_t i, const char *w) {
+    int bal = 0;
+    for (const char *q = w; *q; ++q) {
+        if (*q == '[') bal++;
+        else if (*q == ']' && --bal < 0) break;
+    }
+    if (bal != 0) {
+        char msg[TOKEN_CHECK_MSG_CAP];
+        snprintf(msg, sizeof msg, "括号不配对：`%s`（`[` 与 `]` 要成对）", w);
+        token_check_add(c, i, w, msg);
+    }
+}
+
+static inline int token_check_program(const char *const *names, size_t n, TokenCheck *out) {
+    if (out) {
+        memset(out, 0, sizeof *out);
+        out->depth = 0;
+        out->uncertain_at = (size_t)-1;
+        out->n_tok = n;
+    }
+    if (!out) return 0;
+    if (n == 0) { token_check_add(out, (size_t)-1, "", "空程序：一个词都没有"); return out->n_err; }
+
+    int    d = 0;                             /* 已知栈深（≥0）；-1 = 不确定 */
+    size_t open_pos[TOKEN_CHECK_BLOCK_MAX];   /* 还开着的 如果 在第几个词 */
+    size_t n_open = 0;
+    int    eats_next = 0;                     /* 上一个词是 PF_ARG：这个词是它的参数 */
+
+    for (size_t i = 0; i < n; ++i) {
+        const char *w = names[i] ? names[i] : "";
+        token_check_brackets(out, i, w);
+
+        int is_param = eats_next;
+        eats_next = 0;
+        if (is_param) continue;               /* 参数词由上一个原语吃掉，不单独进栈 */
+
+        const PrimDef *pd = NULL;
+        if (strncmp(w, PRIM_PREFIX, PRIM_PREFIX_LEN) == 0 ||
+            strncmp(w, "[原语", 7) == 0) {    /* 认得的前缀写错（少冒号）也算原语名 */
+            pd = prim_def_by_name(w);
+            if (!pd) {
+                char msg[TOKEN_CHECK_MSG_CAP];
+                snprintf(msg, sizeof msg,
+                         "未知原语名：`%s`（表里没有这种写法；干跑**不**intern，"
+                         "不会当场造一个 Token 把错字吞掉）", w);
+                token_check_add(out, i, w, msg);
+                continue;                     /* 认不出就不猜它的栈效应 */
+            }
+        }
+        if (!pd) { if (d >= 0) d++; continue; }   /* 普通数据词：进栈 */
+
+        if (pd->flags & PF_ARG) {             /* 对象/创建/运行/插词为：吃掉下一个词 */
+            if (i + 1 >= n) {
+                char msg[TOKEN_CHECK_MSG_CAP];
+                snprintf(msg, sizeof msg,
+                         "参数缺失：`%s` 后面没有词了（真实行为是拿它自己当参数）", w);
+                token_check_add(out, i, w, msg);
+            } else {
+                eats_next = 1;
+            }
+        }
+
+        /* 块配对：如果 / 否则 / 结束 */
+        if (pd->flags & PF_OPEN) {
+            if (n_open < TOKEN_CHECK_BLOCK_MAX) open_pos[n_open] = i;
+            n_open++;
+        } else if (pd->flags & PF_MID) {
+            if (n_open == 0) token_check_add(out, i, w, "否则 没有对应的 如果");
+        } else if (pd->flags & PF_CLOSE) {
+            if (n_open == 0) token_check_add(out, i, w, "结束 没有对应的 如果");
+            else n_open--;
+        }
+
+        if (d < 0) { out->n_skip++; continue; }   /* 栈深不确定：只查名字/配对/括号 */
+
+        if (d < pd->need) {
+            char msg[TOKEN_CHECK_MSG_CAP];
+            snprintf(msg, sizeof msg, "操作数不够：`%s` 要 %d 个操作数，栈上只有 %d 个",
+                     w, (int)pd->need, d);
+            token_check_add(out, i, w, msg);
+            /* 真实行为：不够就"有多少拿多少"（`interp_pop` 空栈返回 NULL），推的部分不发生 */
+            d = (d > pd->pop) ? d - pd->pop : 0;
+            continue;
+        }
+        if (pd->flags & PF_CLEAR) {
+            /* 真实行为（stmt_start 恒 0）：分割 = 清空整栈；包裹/嵌套/捆绑 = 整栈折成一个 */
+            d = (pd->kind == PK_SPLIT) ? 0 : 1;
+        } else {
+            d = d - pd->pop + pd->push;
+            if (pd->flags & PF_INEXACT) {
+                d = -1;                       /* 从那一步起栈深不确定 */
+                if (out->uncertain_at == (size_t)-1) out->uncertain_at = i;
+            }
+        }
+    }
+
+    out->depth = d;
+    out->blocks_left = n_open;
+    if (n_open > 0) {
+        char msg[TOKEN_CHECK_MSG_CAP];
+        size_t first = (n_open <= TOKEN_CHECK_BLOCK_MAX) ? open_pos[0] : 0;
+        snprintf(msg, sizeof msg,
+                 "如果-结束不配对：还开着 %zu 层（第 %zu 个词那个 `%s` 没等到 `%s`）",
+                 n_open, first + 1, PRIM_IF, PRIM_END);
+        token_check_add(out, first, names[first] ? names[first] : "", msg);
+    }
+    return out->n_err;
+}
+
+/* 校验结果的呈现（`::asm check on` 走这一条；只有这一处拼） */
+static inline void token_check_print(const TokenCheck *c) {
+    if (!c) return;
+    if (c->n_err == 0) {
+        printf("[校验] 通过：%zu 个词", c->n_tok);
+        if (c->depth >= 0) printf("，干跑末态栈深 %d", c->depth);
+        else               printf("，干跑末态栈深不确定（`展开`/`检索` 推几个看数据）");
+        if (c->n_skip)     printf("，跳过 %zu 次操作数检查", c->n_skip);
+        printf("\n");
+        return;
+    }
+    printf("[校验] 没过：%d 条问题（干跑**没执行**，图一个字都没动）\n", c->n_err);
+    for (size_t i = 0; i < c->n_show; ++i) {
+        if (c->err[i].at_i == (size_t)-1) printf("  %zu) %s\n", i + 1, c->err[i].msg);
+        else printf("  %zu) 第 %zu 个词：%s\n", i + 1, c->err[i].at_i + 1, c->err[i].msg);
+    }
+    if ((size_t)c->n_err > c->n_show)
+        printf("  …还有 %d 条（只列前 %d 条）\n",
+               c->n_err - (int)c->n_show, TOKEN_CHECK_MAX_ERR);
+}
+
 /* ============================ 序列驱动 ============================ */
 
 static inline size_t interp_step(Interp *ip, Token **prog, size_t n, size_t pc) {
@@ -581,7 +853,7 @@ static inline size_t interp_step(Interp *ip, Token **prog, size_t n, size_t pc) 
         else if (k == PK_END) ip->skip_depth--;
         return 1;
     }
-    if (k == PK_OBJECT || k == PK_CREATE || k == PK_RUN || k == PK_INSERT_NAMED) {
+    if (prim_eats_arg(k)) {      /* 判据来自原语表（PF_ARG），不再另抄一份 kind 清单 */
         Token *param = (pc + 1 < n) ? prog[pc + 1] : t;   /* 下一个词是参数（对象/名字） */
         interp_exec_prim(ip, t, param);
         return 2;
