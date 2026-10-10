@@ -872,6 +872,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     char **words_alloc = words;
     size_t n_alloc = n;
     if (!words || n == 0) {
+        /* **没人说话的这一轮**：N4 的空闲思考（默认关）自己从 `[自问:…]` 里挑一个
+         * 没想通的问题来想。它**只读**（不提议意图、不沉淀、不动图，见 think.h 的
+         * `think_idle`），所以回复一个字都不变（还是"……"）—— 变的是痕 / 思考对象。
+         * 这一轮照旧**不进**下面的维护段：睡眠 / 巩固 / 衰减的账一点不动。 */
+        (void)think_idle(ai);
         snprintf(out, out_cap, "……");
         ai_free_words(words_alloc, n_alloc);
         return strlen(out);

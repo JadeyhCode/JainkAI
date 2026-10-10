@@ -43,6 +43,8 @@ asmcheck:AIP_ASMCHECK=1
 ascii:AIP_ASCII=1
 # N1 思考对象（默认关；看护在 tests/thinking.sh 第 9 节）
 thinkobj:AIP_THINKOBJ=1
+# N4 空闲思考（默认关；看护在 tests/thinking.sh 第 10 节）
+idle:AIP_IDLE=1
 # 闸门里的候选证据项现在是**默认开**，所以反向测它要成对给：
 #   闸门开 + 证据项关 = 老公式（阈值也回到老那套）
 wgate-ev0:AIP_WGATE=1 AIP_WGATE_EV=0

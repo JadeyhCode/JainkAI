@@ -11,6 +11,7 @@
  *   ⑦ 元认知：原地打转 / 步数预算 / 挂满被拦
  *   ⑧ UTF-8：定长缓冲里的中文截断必须落在字符边界上（这个项目踩过乱码）
  *   ⑭ N1：一轮思考产出**对象**（目标 + 结构化步骤 + 复核缺口），默认关、只进内存、不写图
+ *   ⑮ N4：空闲思考（没人说话时自己挑一个未解问题来想）—— 默认关、**只读**
  *
  * 用法：gcc -std=c11 -O2 -o build_delibtest tools/delibtest.c -lm && ./build_delibtest
  */
@@ -178,6 +179,40 @@ static void test_think_obj(void) {
         think_run(ai, w, 4);
         ok(t->n_obj == 2 && t->obj.seq == 2, "关掉之后不再产出（n_obj 不变 = 2，历史对象不冒充新的）");
     }
+    ai_free(ai);
+}
+
+/* ============================ ⑮ N4：空闲思考（只读） ============================ */
+static void test_idle_think(void) {
+    printf("== ⑮ N4：空闲思考 —— 自己挑一个未解问题来想，只读 ==\n");
+    AI *ai = mini();
+    Think *t = think_of(ai);
+    t->idle_every = 0;                 /* C 级测试自己定这一位（不跟 AIP_IDLE 走） */
+    char *w[4] = {(char *)"猫", (char *)"会", (char *)"跳舞", (char *)"吗"};
+    prep(ai, w, 4);
+    think_run(ai, w, 4);
+    think_settle(ai);                  /* 这一轮会把没想通的问题挂起来（[自问:…]） */
+    ok(t->n_open == 1, "前置：挂了一个没想通的问题");
+    ok(think_idle(ai) == 0 && t->n_idle == 0, "默认关（idle_every=0）：什么都不做");
+    t->idle_every = 1;
+    ai->pool->current_tick++;          /* 空轮也会推进 tick（agent_step 开头那一下） */
+    size_t tokens0 = ai->pool->count;
+    size_t edges0  = count_rel_edges(ai);
+    size_t q0      = micro_of(ai)->queue.n;
+    int ran = think_idle(ai);
+    ok(ran == 1, "开着：真的空闲想了一轮");
+    ok(t->n_idle == 1 && t->idle_note[0], "记账：想过 1 轮 + 记下挑的是哪个问题");
+    ok(strstr(t->idle_note, "跳舞") != NULL, "挑的正是挂着的那条问题");
+    ok(ai->pool->count == tokens0 && count_rel_edges(ai) == edges0,
+       "**只读**：没往图里写（Token 数 / 关系边数都不动）");
+    ok(micro_of(ai)->queue.n == q0, "**只读**：没提议任何意图（意图队列长度不变）");
+    int saw = 0;
+    for (size_t i = 0; i < t->trace_n; ++i)
+        if (strstr(t->trace[i].what, "空闲思考")) saw = 1;
+    ok(saw, "痕上写明这一轮是「空闲思考：自己挑的」");
+    ok(think_idle(ai) == 0, "节拍：同一个 tick 里不会连着想两次");
+    ai->pool->current_tick++;
+    ok(think_idle(ai) == 1, "下一个 tick 才再想一次");
     ai_free(ai);
 }
 
@@ -751,6 +786,7 @@ int main(void) {
     test_analogy_polarity();
     test_consolidate();
     test_think_obj();
+    test_idle_think();
     test_cache_retract();
     test_premise_follow();
     test_revise();

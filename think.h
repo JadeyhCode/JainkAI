@@ -265,6 +265,15 @@ typedef struct {
     int       obj_on;                   /* 1 = 产出对象（默认 0） */
     uint64_t  n_obj;                    /* 一共产出过几个对象（`[思考:N]` 的 N） */
 
+    /* ---- N4：**空闲思考**（没人说话时自己挑一个未解问题来想）----
+     * `think_run` 的第二条入口：只从 `Think.open`（`[自问:…]` 那批）里挑，**只读**
+     * （临时打开 `learn_off` ⇒ 不提议任何意图；也不调 think_settle ⇒ 不沉淀/不撤销）。
+     * 默认关（`idle_every == 0`）；节拍 `::idle every <N>` / `AIP_IDLE=1`。 */
+    int       idle_every;               /* 0 = 关；>0 = 每 N 个 tick 最多空闲想一次 */
+    uint64_t  idle_last_tick;
+    size_t    n_idle;                   /* 空闲想了几轮 */
+    char      idle_note[THINK_TEXT];    /* 最近一次挑的是哪个问题（给人看） */
+
     /* ---- 元认知（看思维本身） ---- */
     size_t    n_stalls, n_over_budget, n_conflicts, n_blocked;
     size_t    stall_run;                /* 本轮连续没推进的步数 */
@@ -351,6 +360,11 @@ static inline Think *think_of(AI *ai) {
         t->obj_on = 0;
         t->n_obj = 0;
         { const char *ob = getenv("AIP_THINKOBJ"); if (ob && ob[0] == '1') t->obj_on = 1; }
+        /* N4 空闲思考**默认关**（`idle_every = 0`）；`AIP_IDLE=1` = 每个空闲轮都想一次。 */
+        t->idle_every = 0;
+        t->n_idle = 0;
+        t->idle_note[0] = 0;
+        { const char *ib = getenv("AIP_IDLE"); if (ib && ib[0] == '1') t->idle_every = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -1832,6 +1846,15 @@ static inline void think_revalidate_caches(AI *ai, Think *t) {
     }
 }
 
+/* 一个挂着的未解问题被想通了：**只动内存**（关掉它 + 记账）。
+ * `think_settle` 的重试与 N4 的空闲思考都走这一条 —— 判据只有一份。 */
+static inline void think_open_done(Think *t, ThinkOpen *o) {
+    if (!t || !o || !o->active) return;
+    o->active = 0;
+    if (t->n_open) t->n_open--;
+    t->n_resolved++;
+}
+
 /* 在安全点之前调用：这一轮学到的东西可能让**旧问题**想通了。
  * 也是元认知看思维本身的地方（打转 / 挂太多 / 矛盾）。 */
 static inline void think_settle(AI *ai) {
@@ -1850,7 +1873,7 @@ static inline void think_settle(AI *ai) {
         /* 第一类：「这个词我还不认识」——它现在有边了，就算想通了 */
         if (o->rid == 0 || !o->obj) {
             if (o->subj && o->subj->count > 0) {
-                o->active = 0; t->n_open--; t->n_resolved++;
+                think_open_done(t, o);
                 char note[THINK_WHY];
                 snprintf(note, sizeof note, "现在我认识「%s」了（它连上了 %zu 条边）",
                          o->subj->name ? o->subj->name : "?", o->subj->count);
@@ -1878,8 +1901,7 @@ static inline void think_settle(AI *ai) {
         }
         if (status != 0 && gaps == 0) {
             /* 想通了！但**不把推出来的东西写进图**（观测才配进图）。 */
-            o->active = 0;
-            t->n_open--; t->n_resolved++;
+            think_open_done(t, o);
             char chain[THINK_WHY];
             proof_text(ai, &pf, chain, sizeof chain);
             char note[THINK_WHY];
@@ -2113,6 +2135,87 @@ static inline void think_settle(AI *ai) {
             think_step(t, TH_REFLECT, 0, 0, "改不了脑",
                        "自修改被冻结或关着：想法留在痕上，不落地");
     }
+}
+
+
+/* ============================ N4：空闲思考（只读） ============================
+ *
+ * 缺口（§6.54 N4）：`think_run` 只由**输入**触发 —— 没人说话就没有"目标导向"的思考，
+ * 而背景活动（想象 / 内部对话 / 睡眠 / 叙事 / 漂移 / GC）都不是"追一个目标"。
+ *
+ * 这一节给它**第二条入口**（边界按 §6.55 K5 定的三条写死）：
+ *   · **自己挑**：只从 `Think.open`（`[自问:…]` 那批未解问题）里挑 ——
+ *     优先"没停滞、最久没试过"的那个（与 `think_settle` 的重试同一判据）；
+ *   · **只读**：跑这一轮之前临时把 `learn_off` 打开 ⇒ **不提议任何意图**
+ *     （自问节点、沉淀、远距离共现连接都不提）；也不调 `think_settle`
+ *     （不沉淀、不撤销、不写图）。它想出来的东西只留在**痕**（和 N1 的对象）里；
+ *   · **预算复用 think 的**（`max_steps`）：不另开预算、不绕过停滞/步数限制；
+ *   · **默认关**：`idle_every == 0` 时一个字都不做（那一轮仍是今天那句"……"）。
+ * 节拍：`::idle every <N>`（每 N 个 tick 最多一次）/ `::idle on|off` / `AIP_IDLE=1`。
+ * 返回 1 = 这一轮真的空闲想过了（调用方据此判断"这一轮不是白过"）。 */
+static inline int think_idle(AI *ai) {
+    Think *t = think_of(ai);
+    if (!ai || !t || t->run_off) return 0;
+    if (t->idle_every == 0) return 0;
+    uint64_t tick = ai->pool ? ai->pool->current_tick : 0;
+    if (t->idle_last_tick && tick < t->idle_last_tick + (uint64_t)t->idle_every) return 0;
+
+    /* 挑一个问题：没停滞、最久没试过的那个 */
+    ThinkOpen *pick = NULL;
+    for (size_t i = 0; i < THINK_MAX_OPEN; ++i) {
+        ThinkOpen *o = &t->open[i];
+        if (!o->active || o->stalled || !o->text[0]) continue;
+        if (!pick || o->last_try < pick->last_try) pick = o;
+    }
+    if (!pick) return 0;                     /* 没有挂着的、还能想的问题：这一轮就白过 */
+
+    /* 把问题还原成词（`[自问:…]` 的正文本来就是**空格连起来的原词**） */
+    char buf[THINK_TEXT];
+    think_utf8_clip(buf, sizeof buf, pick->text);
+    char *words[16];
+    size_t n = 0;
+    for (char *q = buf; *q && n < 16; ) {
+        while (*q == ' ') q++;
+        if (!*q) break;
+        words[n++] = q;
+        while (*q && *q != ' ') q++;
+        if (*q) *q++ = 0;
+    }
+    if (n == 0) return 0;
+
+    t->idle_last_tick = tick;
+    t->n_idle++;
+    pick->tries++;
+    pick->last_try = tick;
+    think_utf8_clip(t->idle_note, sizeof t->idle_note, pick->text);
+
+    /* **只读**：这一轮不提议任何意图（K5）。想完就还回去。 */
+    int learn_save = t->learn_off;
+    t->learn_off = 1;
+    think_run(ai, words, n);
+    t->learn_off = learn_save;
+
+    char note[THINK_WHY];
+    if (t->concl != 0 && !t->conflict) {
+        /* 想通了：把它从"未解"里收起来（**只动内存**），并留一句下次要说的话 */
+        think_open_done(t, pick);
+        t->mention_pending = 1;
+        snprintf(t->mention_text, sizeof t->mention_text,
+                 "你 上次 问 的 %s，我 自己 又 想 了 想 ： %s %s %s %s",
+                 pick->text,
+                 pick->subj && pick->subj->name ? pick->subj->name : "?",
+                 pick->want_neg ? "不 " : "",
+                 rel_name_of(ai, pick->rid) ? rel_name_of(ai, pick->rid) : "?",
+                 pick->obj && pick->obj->name ? pick->obj->name : "?");
+        snprintf(note, sizeof note, "没人说话，我自己挑了一个没想通的问题（%s）—— 想通了",
+                 pick->text);
+        think_step(t, TH_LEARN, 1, 80, "空闲思考：想通了", note);
+    } else {
+        snprintf(note, sizeof note, "没人说话，我自己挑了一个没想通的问题来想：%s",
+                 pick->text);
+        think_step(t, TH_GOAL, 1, 60, "空闲思考：自己挑的", note);
+    }
+    return 1;
 }
 
 /* ============================ 接管输出（默认关） ============================ */

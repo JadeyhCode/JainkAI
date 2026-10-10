@@ -546,6 +546,7 @@ typedef enum {
     CMD_THINKCACHE,
     CMD_THINKBUDGET,
     CMD_THINKOBJ,           /* N1：思考对象（`[思考:N]`，内存对象 + 复核） */
+    CMD_IDLE,               /* N4：空闲思考（只读；自己从 [自问:…] 里挑一个问题） */
     CMD_MOD,
     CMD_SAFE,
     CMD_PATCH,
@@ -707,6 +708,10 @@ static const CmdDef CMDS[] = {
       "（derive.h 那套 Derivation）+ 复核结果（der_verify，缺口数）。\n"
       "::thinkobj on|off 开关；::thinkobj verify 当场把对象里的链**独立重推**一遍；\n"
       "不给参数看当前对象（只进内存，不存盘 —— 存档格式没动）", CMD_THINKOBJ },
+    { "idle", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
+      "**空闲思考**（N4，默认关；AIP_IDLE=1）：没人说话的那些轮，自己从 `[自问:…]` 里\n"
+      "挑一个没想通的问题来想。**只读**：不提议意图、不沉淀、不动图，也不进睡眠/巩固那些账。\n"
+      "::idle on|off｜::idle every <N>（每 N 个 tick 最多想一次）｜不给参数看状态", CMD_IDLE },
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加Token|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
@@ -1191,6 +1196,31 @@ int main(int argc, char **argv) {
                 }
                 if (arg && *arg) { printf("[用法] ::thinkobj [on|off|verify]\n"); continue; }
                 think_obj_print(a->brain, tt, "");
+                continue;
+            }
+            case CMD_IDLE: {
+                /* N4：空闲思考的开关与状态（层里的实现在 think.h 的 think_idle）。 */
+                Think *tt = think_of(a->brain);
+                if (!tt) { printf("[思维还没起来]\n"); continue; }
+                const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "on"))  { tt->idle_every = 1; }
+                else if (arg && !strcmp(arg, "off")) { tt->idle_every = 0; }
+                else if (arg && strncmp(arg, "every", 5) == 0) {
+                    const char *v = arg + 5;
+                    while (*v == ' ') v++;
+                    long n = strtol(v, NULL, 10);
+                    tt->idle_every = (n > 0) ? (int)n : 0;
+                    if (n < 0) { printf("[用法] ::idle [on|off|every <N>]\n"); continue; }
+                } else if (arg && *arg) { printf("[用法] ::idle [on|off|every <N>]\n"); continue; }
+                printf("[空闲思考 = %s", tt->idle_every ? "开" : "关（默认）");
+                if (tt->idle_every) printf("（每 %d 个 tick 最多一次）", tt->idle_every);
+                printf("]  空闲想过 %zu 轮", tt->n_idle);
+                if (tt->idle_note[0]) printf("；最近挑的是：%s", tt->idle_note);
+                printf("\n");
+                printf("  只在**没人说话的那一轮**跑（空输入）；只从 [自问:…] 里挑，**只读**：\n");
+                printf("  不提议意图、不沉淀、不动图，也不进睡眠/巩固/衰减那些账。\n");
+                printf("  想看它挑了啥：`::delib` 的痕里有一条「空闲思考：自己挑的」。\n");
                 continue;
             }
             /* ---- 微内核：自修改通道 ---- */
