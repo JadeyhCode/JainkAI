@@ -531,6 +531,7 @@ typedef enum {
     CMD_FRAMES,
     CMD_OTHERS,
     CMD_PRIMS,
+    CMD_PROC,                /* 过程记号：看一个过程的步骤/调用/回边（第 9 条 ①②） */
     CMD_GC,
     CMD_ASM,
     CMD_LEX,                /* ASCII 代码词法：看一眼切成哪些 token + 往返判据 */
@@ -665,12 +666,16 @@ static const CmdDef CMDS[] = {
       "「独占」判定表：样本数 / 似然比 / 是印证还是改口", CMD_EXCL },
     { "frames", NULL, 0, "基本",
       "结构化帧库（问法骨架 + 槽位）", CMD_FRAMES },
-    { "others", NULL, 1, "基本",
+    { "others", "[<A> <关系> <B>]｜ask on|off", CARG_OPT, "基本",
       "他者模型：每个人名下**他相信的**事实（存盘里）。\n"
       "::others <A> <关系> <B>  多层合并 + 四态判定：同类别说法并进一个窗，\n"
       "  都说认/都说不认/**有分歧（待验，不是否定）**/没人说过\n"
       "::others ask on|off  ③ 让**复数主语**问出来也有回答入口（默认关；AIP_OTHERS=1）：\n"
       "  「大家/他们/别人 怎么看 X」→ 用四态判定回答，并与「我自己的知识」分开说", CMD_OTHERS },
+    { "proc", "[<名字>]", CARG_OPT, "思维",
+      "看**过程记号**：一个「过程」= 根 `[过程:名字]` + 从它出去的过程边（role=过程），\n"
+      "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
+      "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来", CMD_PROC },
     { "prims", NULL, 0, "基本",
       "列出所有原语 + 各自的**栈效应**（要/拿/放 + 名字与真实行为不一致的地方）——\n"
       "干跑校验器（::asm check）判的就是这张表", CMD_PRIMS },
@@ -895,6 +900,85 @@ static void cmd_edges(const AI *ai, const char *word) {
         printf("  来源=%s", assoc_role_name(e->role));
         printf("\n");
     }
+}
+
+/* ============================ `::proc`：看一个过程（第 9 条 ①②） ============================
+ *
+ * 过程 = 根 Token `[过程:名字]` + 从它出去的**过程边**（role=过程，动作槽上挂着
+ * `[步骤:N]` / `[调用]` / `[回边]`）。这个命令把两者一起打出来，并且**明确分开**：
+ * 哪些边是过程的一部分、哪些只是普通共现 —— 这正是用户拍板要 role 标记解决的那个问题。 */
+#define PROC_SHOW_MAX 256
+static int proc_step_cmp(const void *x, const void *y) {
+    const AssocEntry *a = *(const AssocEntry *const *)x;
+    const AssocEntry *b = *(const AssocEntry *const *)y;
+    return edge_step_index(a) - edge_step_index(b);
+}
+
+static void proc_print_one(const Token *root) {
+    /* 收集指针（边的数组是动态的，没有固定容量宏）—— 按"步骤 / 调用 / 回边 / 普通"分堆 */
+    const AssocEntry *steps[PROC_SHOW_MAX], *calls[PROC_SHOW_MAX];
+    const AssocEntry *backs[PROC_SHOW_MAX], *plain[PROC_SHOW_MAX];
+    size_t ns = 0, nc = 0, nb = 0, np = 0;
+    for (size_t i = 0; i < root->count; ++i) {
+        const AssocEntry *e = &root->assocs[i];
+        if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
+        else if (edge_is_call(e))        { if (nc < PROC_SHOW_MAX) calls[nc++] = e; }
+        else if (edge_is_back(e))        { if (nb < PROC_SHOW_MAX) backs[nb++] = e; }
+        else                             { if (np < PROC_SHOW_MAX) plain[np++] = e; }
+    }
+    if (ns > 1) qsort(steps, ns, sizeof steps[0], proc_step_cmp);
+    printf("[过程] %s —— %zu 步 + %zu 调用 + %zu 回边（过程边共 %zu 条）\n",
+           root->name ? root->name : "?", ns, nc, nb, ns + nc + nb);
+    for (size_t i = 0; i < ns; ++i)
+        printf("  第 %-2d 步 %-12s（记号 %s，角色=%s）\n", edge_step_index(steps[i]),
+               steps[i]->main && steps[i]->main->name ? steps[i]->main->name : "?",
+               steps[i]->action && steps[i]->action->name ? steps[i]->action->name : "?",
+               assoc_role_name(steps[i]->role));
+    for (size_t i = 0; i < nc; ++i)
+        printf("  调用    %-14s（记号 %s，角色=%s）\n",
+               calls[i]->main && calls[i]->main->name ? calls[i]->main->name : "?",
+               PROC_CALL_MARK, assoc_role_name(calls[i]->role));
+    for (size_t i = 0; i < nb; ++i)
+        printf("  回边 →  %-14s（记号 %s，角色=%s）\n",
+               backs[i]->main && backs[i]->main->name ? backs[i]->main->name : "?",
+               PROC_BACK_MARK, assoc_role_name(backs[i]->role));
+    if (np)
+        printf("  另有 %zu 条**不是过程边**的边（角色=%s）—— 过程与共现就靠这个分开\n",
+               np, assoc_role_name(plain[0]->role));
+    if (!ns && !nc && !nb) {
+        const char *bare = (root->name && strlen(root->name) > strlen(PROC_TOKEN_PREFIX) + 1)
+                         ? root->name + strlen(PROC_TOKEN_PREFIX) : "名字";
+        printf("  （还没有过程边 —— `::op 加步骤 %s <动作>` 加一步）\n", bare);
+    }
+}
+
+static void cmd_proc(AI *ai, const char *cmd) {
+    if (!ai) return;
+    /* 注意：`cmd` 指向的是**去掉 "::" 之后**的命令行（"proc 泡茶"）——
+     * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
+    const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+    while (arg && *arg == ' ') arg++;
+    if (arg && *arg) {
+        char w[64] = {0};
+        if (sscanf(arg, "%63s", w) != 1) return;
+        char full[80];
+        snprintf(full, sizeof full, "%s%s]", PROC_TOKEN_PREFIX, w);
+        const Token *root = find_token_const(ai->pool, full);
+        if (!root) { printf("[没有这个过程：%s —— `::op 建过程 %s` 建一个]\n", w, w); return; }
+        proc_print_one(root);
+        return;
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        const Token *t = ai->pool->tokens[i];
+        if (!t || !t->name || t->is_garbage) continue;
+        if (strncmp(t->name, PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) != 0) continue;
+        proc_print_one(t);
+        n++;
+    }
+    if (!n)
+        printf("[还没有过程 —— `::op 建过程 <名字>` 建一个，再用 `::op 加步骤` 加步骤]\n"
+               "  过程边与共现边靠 **role 标记**分开（用户 2026-10-10 拍板的方案）\n");
 }
 
 static void cmd_prims(AI *ai) {
@@ -1640,6 +1724,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_PRIMS: { cmd_prims(a->brain); continue; }
+            case CMD_PROC: { cmd_proc(a->brain, cmd); continue; }
             case CMD_GC: { ai_gc(a->brain); ai_stats(a->brain); continue; }
             case CMD_SAVE: {
                 const char *path = (cmd[4] == ' ') ? cmd + 5 : model_path;

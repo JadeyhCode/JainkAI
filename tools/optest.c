@@ -34,7 +34,8 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 static void test_table(void) {
     printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
-    ok(n == 6, "表里 6 条行为（加前提/加反前提/前提接线/中间插词/回收临时/调用补丁）");
+    ok(n == 10, "表里 10 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
+                "后 4 条 = 过程记号，**必须在表尾** —— 原语层按下标引用这张表）");
     int dup = 0, nofn = 0, noshape = 0;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
         if (!TOKEN_OPS[i].expand) nofn++;
@@ -270,6 +271,24 @@ static void test_prim_stack(void) {
     /* **编号契约**：原语层的编号必须指到 TOKEN_OPS 里那条行为（改顺序这里变红） */
     ok(strcmp(TOKEN_OPS[IPOP_PREMISE_CONNECT].name, "加前提") == 0,
        "IPOP_PREMISE_CONNECT → 加前提（[原语:前关联]+[原语:连接]）");
+    /* **每一条**编号都要钉住 —— 只钉前四条留了个洞：第 9 条把新行为插在中间时，
+     * `IPOP_COLLECT_TEMP` 悄悄指到了「建过程」上（`[原语:回收临时]` 当场变成建过程），
+     * 而当时的看护只查到下标 0~3 ⇒ 没红。表尾才是加新行为的地方。 */
+    {
+        struct { int idx; const char *name; } pin[] = {
+            { IPOP_PREMISE_CONNECT,     "加前提" },
+            { IPOP_PREMISE_CONNECT_NOT, "加反前提" },
+            { IPOP_PREMISE_TIE,         "前提接线" },
+            { IPOP_INSERT,              "中间插词" },
+            { IPOP_COLLECT_TEMP,        "回收临时" },
+        };
+        int bad_pin = 0;
+        for (size_t i = 0; i < sizeof pin / sizeof pin[0]; ++i)
+            if (!TOKEN_OPS[pin[i].idx].name ||
+                strcmp(TOKEN_OPS[pin[i].idx].name, pin[i].name) != 0) bad_pin++;
+        ok(bad_pin == 0,
+           "原语层的**每一个** IPOP_* 编号都还指着原来那条行为（编号契约，5/5）");
+    }
     ok(strcmp(TOKEN_OPS[IPOP_PREMISE_TIE].name, "前提接线") == 0,
        "IPOP_PREMISE_TIE → 前提接线");
     ok(strcmp(TOKEN_OPS[IPOP_INSERT].name, "中间插词") == 0,    "IPOP_INSERT → 中间插词");
@@ -1268,6 +1287,71 @@ static void test_merged_neg(void) {
     ai_free(ai);
 }
 
+/* ==================== ㉓ 过程记号：role 标记 + 动作槽记号（第 9 条 ①②） ====================
+ *
+ * 用户 2026-10-10 拍板："过程边 vs 共现边"用 **role 标记**。这一节钉三件事：
+ *   ① `::op 建过程/加步骤/加调用/加回边` 走**受审通道**（token_op_run），边真的建出来了；
+ *   ② 那些边的 `role` 是**过程**、动作槽上挂着 `[步骤:N]`/`[调用]`/`[回边]`（判据函数读得出来）；
+ *   ③ 普通共现边**不会**被误判成过程边（否则 role 标记就白加了）。 */
+static void test_process_marks(void) {
+    printf("== ㉓ 过程记号：过程边与共现边靠 role 分开 ==\n");
+    AI *ai = ai_new();
+    char note[200];
+    char *mk[2] = {(char *)"泡茶2"};
+    ok(token_op_run(ai, "建过程", mk, 1, note, sizeof note) >= 0, "建过程走受审通道");
+    Token *root = pool_find(ai->pool, "[过程:泡茶2]");
+    ok(root != NULL, "过程根 `[过程:泡茶2]` 建出来了（内部命名空间）");
+    ok(micro_internal_ns("[过程:泡茶2]") == 1, "过程根算内部命名空间（能当端点、过审查）");
+    {
+        char *a1[3] = {(char *)"泡茶2", (char *)"烧水2", (char *)"1"};
+        char *a2[2] = {(char *)"泡茶2", (char *)"泡茶叶2"};
+        char *a3[2] = {(char *)"泡茶2", (char *)"1"};
+        ok(token_op_run(ai, "加步骤", a1, 3, note, sizeof note) >= 0, "加步骤（带序号）");
+        ok(token_op_run(ai, "加调用", a2, 2, note, sizeof note) >= 0, "加调用");
+        ok(token_op_run(ai, "加回边", a3, 2, note, sizeof note) >= 0,
+           "加回边（给步号 → 指回 `[步骤:1]`）");
+    }
+    Token *boil = pool_find(ai->pool, "烧水2");
+    Token *leaf = pool_find(ai->pool, "泡茶叶2");
+    Token *step1 = pool_find(ai->pool, "[步骤:1]");
+    ok(boil && leaf && step1, "步骤动作与步号记号都进了池子");
+    if (root && boil && leaf && step1) {
+        long i1 = micro_edge_index(root, boil), i2 = micro_edge_index(root, leaf);
+        long i3 = micro_edge_index(root, step1);
+        ok(i1 >= 0 && i2 >= 0 && i3 >= 0, "三条过程边都建出来了");
+        if (i1 >= 0) {
+            const AssocEntry *e = &root->assocs[i1];
+            ok(edge_is_process(e), "步骤边 role = **过程**");
+            ok(edge_step_index(e) == 1, "步骤边的动作槽是 `[步骤:1]`（读得出步号）");
+            ok(edge_is_proc_step(e), "`edge_is_proc_step` = 真（role 对 + 记号在）");
+            ok(strcmp(assoc_role_name(e->role), "过程") == 0, "角色名是「过程」");
+        }
+        if (i2 >= 0) ok(edge_is_call(&root->assocs[i2]), "调用边的动作槽是 `[调用]`");
+        if (i3 >= 0) ok(edge_is_back(&root->assocs[i3]), "回边的动作槽是 `[回边]`");
+    }
+    /* ③ 普通共现边**不许**被误判（role 标记的全部意义就在这儿） */
+    if (root) {
+        Token *plain = T(ai, "普通词2");
+        (void)token_add_assoc_unique(root, plain);
+        long ip = micro_edge_index(root, plain);
+        ok(ip >= 0 && !edge_is_process(&root->assocs[ip]) && !edge_is_proc_step(&root->assocs[ip]),
+           "普通共现边不会被当成过程边（role / 记号判据都为假）");
+        ok(!edge_is_proc_step(&root->assocs[ip]) && edge_step_index(&root->assocs[ip]) == 0,
+           "`edge_step_index` 对非过程边给 0（不是瞎猜一个步号）");
+    }
+    /* 记号可以当端点（回边要用），但不是"随便谁都能改的端点" */
+    ok(micro_reserved("[步骤:1]") != 0 || micro_endpoint_reserved(step1) == 0,
+       "`[步骤:N]` 是保留名、但**允许当端点**（回边指回某一步的前提）");
+    /* 不存在的过程：明说没有，不静默建一个 */
+    {
+        char *bad[2] = {(char *)"没有的过程2", (char *)"烧水2"};
+        ok(token_op_run(ai, "加步骤", bad, 2, note, sizeof note) < 0 &&
+           strstr(note, "没有这个过程") != NULL,
+           "给不存在的过程加步骤：报「没有这个过程」（不静默建）");
+    }
+    ai_free(ai);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -1618,6 +1702,7 @@ int main(void) {
     test_write_ledger();
     test_order_query();
     test_merged_neg();
+    test_process_marks();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();

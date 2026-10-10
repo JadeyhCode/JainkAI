@@ -79,6 +79,11 @@ typedef enum {
      * 同样是 v9 之后新用的值，字节本来就在存档里（role 一直是序列化字段）→
      * **格式没动**；每次装载 `relations.txt` 都会重新打标，所以是确定性的。 */
     ASSOC_ROLE_INNATE = 5,
+    /* **过程边**（第 9 条 ①；用户 2026-10-10 拍板的 role 方案）：从**过程根**
+     * `[过程:名字]` 出去的那些边 —— 步骤（动作槽 `[步骤:N]`）、调用（`[调用]`）、
+     * 回边（`[回边]`）。它要解决的就是四选一里那个问题：**过程边与共现边分不开**。
+     * role 一直是序列化字段（0~5 已用，还剩 250 个值）⇒ **存档布局不动**。 */
+    ASSOC_ROLE_PROCESS = 6,
 } AssocRole;
 
 /* 来源档的中文名（一份，谁要显示都调它 —— 别在几个地方各写一遍）。 */
@@ -89,9 +94,24 @@ static inline const char *assoc_role_name(uint8_t role) {
     case ASSOC_ROLE_COINED:  return "造词";
     case ASSOC_ROLE_DERIVED: return "推论";
     case ASSOC_ROLE_INNATE:  return "基准";
+    case ASSOC_ROLE_PROCESS: return "过程";
     default:                 return "共现";
     }
 }
+/* ============================ 过程记号（第 9 条 ①+②） ============================
+ *
+ * 用户 2026-10-10 讨论后拍板：**"过程边 vs 共现边"用 role 标记**（四选一里的那一个）。
+ * 这一版做的是 §6.56 五步走的 **①+②**：
+ *   ① 一个"过程" = 一个**根 Token**（`[过程:名字]`，在内部命名空间里）+ 从它出去的边（结构）；
+ *   ② 控制流记号挂在**动作槽**上（和 `[前提]`/`[因果]` 同一套做法，判据是精确名字比较）：
+ *      `[步骤:N]` 第几步 / `[调用]` 这一步是"叫别人/别处" / `[回边]` 回到前面某一步。
+ * 边用 `ASSOC_ROLE_PROCESS` 标成**过程边** ⇒ 查询与推理能把"过程"与"共现"一眼分开
+ * （这正是四选一要解决的那个问题）。**不动存档布局**：role 一直是序列化字节。 */
+#define PROC_TOKEN_PREFIX  "[过程:"
+#define PROC_STEP_PREFIX   "[步骤:"
+#define PROC_CALL_MARK     "[调用]"
+#define PROC_BACK_MARK     "[回边]"
+
 /* 话题 id：语料里显式标注（`[话题:N]` 那一行属于第 N 个话题）。
  * 0 = 无话题（seed / generated 那些通用共现语料）。 */
 #define ASSOC_TOPIC_NONE 0u
@@ -395,6 +415,33 @@ static inline int token_order_between(const Token *a, const Token *b,
     return 0;                    /* 图里没说：调用方退回 tick 比较 */
 }
 
+
+/* 过程边的判据（`AssocEntry` 完整定义之后才放得下）。 */
+static inline int edge_is_process(const AssocEntry *e) {
+    return e && e->role == ASSOC_ROLE_PROCESS;
+}
+/* `[步骤:N]` → N（不是过程边 / 不是步骤边 → 0）。只认数字，别的写法一律不算。 */
+static inline int edge_step_index(const AssocEntry *e) {
+    if (!edge_is_process(e) || !e->action || !e->action->name) return 0;
+    if (strncmp(e->action->name, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) != 0) return 0;
+    const char *q = e->action->name + strlen(PROC_STEP_PREFIX);
+    if (*q < '0' || *q > '9') return 0;
+    long v = strtol(q, NULL, 10);
+    return (v > 0 && v < 1000) ? (int)v : 0;
+}
+static inline int edge_is_call(const AssocEntry *e) {
+    return edge_is_process(e) && e->action && e->action->name &&
+           strcmp(e->action->name, PROC_CALL_MARK) == 0;
+}
+static inline int edge_is_back(const AssocEntry *e) {
+    return edge_is_process(e) && e->action && e->action->name &&
+           strcmp(e->action->name, PROC_BACK_MARK) == 0;
+}
+/* 这条边算不算"过程的一部分"：role 对，**而且**动作槽上确实有个过程记号 ——
+ * 光有 role 说不出它是第几步/干什么。 */
+static inline int edge_is_proc_step(const AssocEntry *e) {
+    return edge_step_index(e) > 0 || edge_is_call(e) || edge_is_back(e);
+}
 
 struct NameEntry { uint32_t hash, id; NameEntry *next; };
 

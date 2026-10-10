@@ -125,6 +125,11 @@ typedef enum {
 #define MOD_FLAG_SPLIT_DIRECT 1u   /* 拆掉 A—B 那条直连边（拆不动就保留并说明） */
 #define MOD_FLAG_MARK_PREMISE 2u   /* 把 A→N 这条边标成「前提链接」（N 就是前提 token） */
 #define MOD_FLAG_MARK_PREMISE_NOT 4u /* 标成「**反**前提」：条件是 N 不在注意窗口里 */
+#define MOD_FLAG_PROCESS 8u        /* 这条边是**过程边**（role=过程，第 9 条 ①）——
+                                    * 由 `::op 加步骤/加调用/加回边` 提出来，走同一条受审通道 */
+#define MOD_FLAG_PROC_STEP 16u     /* 动作槽挂 `[步骤:N]`（N 放 `m->rel_id`） */
+#define MOD_FLAG_PROC_CALL 32u     /* 动作槽挂 `[调用]` */
+#define MOD_FLAG_PROC_BACK 64u     /* 动作槽挂 `[回边]` */
 
 /* ---- 安全内核的拒绝理由（审计按它分类统计）---- */
 typedef enum {
@@ -219,6 +224,7 @@ static inline int micro_token_reserved(const Token *t) {
 /* **写代码闭环的观测标记**：`[代码:<最终rc>]`（普通 token，随图存盘）——
  * `code.h` 走完一轮"写-跑-看错-改"落一个。和 `[运行:…]` 一样是留痕，不是知识。 */
 #define MICRO_CODE_TOKEN_PREFIX "[代码:"
+#define MICRO_TOKEN_PROC_PREFIX PROC_TOKEN_PREFIX   /* 过程根：`[过程:名字]`（第 9 条 ①） */
 
 /* 内核自有的**图内节点**命名空间（可以参与边）。
  * 别的 '[' 名字是协议骨架（[原语:]/[时刻:]/[提醒:]…），一律不许碰。 */
@@ -226,12 +232,18 @@ static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
-                                      MICRO_CODE_TOKEN_PREFIX, NULL };
+                                      MICRO_CODE_TOKEN_PREFIX, MICRO_TOKEN_PROC_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
      * 它是精确名字，不是前缀命名空间。 */
     if (strcmp(name, AI_PREMISE_MARK) == 0) return 1;
     if (strcmp(name, AI_PREMISE_NOT_MARK) == 0) return 1;
+    /* 过程记号（第 9 条 ②）也是**我们自己的记号**：可以当端点 ——
+     * 「回边」就是要指回某一步（`[步骤:N]`），不许它当端点的话回边根本建不起来
+     * （实测：被拒理由「不许改保留 Token」）。 */
+    if (strncmp(name, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) == 0) return 1;
+    if (strcmp(name, PROC_CALL_MARK) == 0) return 1;
+    if (strcmp(name, PROC_BACK_MARK) == 0) return 1;
     for (size_t i = 0; ns[i]; ++i)
         if (strncmp(name, ns[i], strlen(ns[i])) == 0) return 1;
     return 0;
@@ -488,18 +500,38 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
         if (sk->step_new_tokens >= (size_t)sk->max_new_tokens_step)
             return SAFE_DENY_BUDGET_TOKEN;
         return SAFE_OK;
-    case MOD_ADD_ASSOC:
-        if (!m->main) return SAFE_DENY_BADREF;
-        if (m->target == m->main) return SAFE_DENY_SELF;
-        if (micro_endpoint_reserved(m->target) || micro_endpoint_reserved(m->main))
-            return SAFE_DENY_RESERVED;
+    case MOD_ADD_ASSOC: {
+        /* 另一个端点可以**按名字**给（`::op 加步骤 泡茶 烧水` 的动作词可能还是个新词）：
+         * 名字不在池子里 = 这一步要新建一个 Token ⇒ 照 INSERT_BETWEEN 的规矩**记预算**，
+         * 不许"悄悄建词"绕过记账。 */
+        Token *Mn = m->main;        /* 池里已有的端点 */
+        int named_new = 0;          /* 端点只给了名字、而且池里还没有 ⇒ 这一步要建它 */
+        if (!Mn && m->name[0]) {
+            Mn = pool_find(pool, m->name);
+            if (!Mn) {
+                named_new = 1;
+                if (sk->new_token_off) return SAFE_DENY_TYPE;
+                if (micro_reserved_new_name(m->name)) return SAFE_DENY_RESERVED;
+                if (pool->count >= (size_t)sk->max_tokens_total) return SAFE_DENY_TOTAL;
+                if (sk->step_new_tokens >= (size_t)sk->max_new_tokens_step)
+                    return SAFE_DENY_BUDGET_TOKEN;
+            }
+        }
+        if (!Mn && !named_new) return SAFE_DENY_BADREF;
+        /* 自环：端点已存在就比指针，还不存在就比名字（别让它偷偷建一条自己到自己） */
+        if (Mn ? (m->target == Mn)
+               : (m->target->name && strcmp(m->target->name, m->name) == 0))
+            return SAFE_DENY_SELF;
+        if (micro_endpoint_reserved(m->target)) return SAFE_DENY_RESERVED;
+        if (Mn && micro_endpoint_reserved(Mn)) return SAFE_DENY_RESERVED;
         if (m->target->count >= (size_t)sk->max_edges_per_token)
             return SAFE_DENY_EDGE_CAP;
         /* 「这条边是不是新的」要按 (main) 判 —— v10 起没有语境可以区分了。 */
-        if (!micro_has_edge(m->target, m->main) &&
+        if ((!Mn || !micro_has_edge(m->target, Mn)) &&
             sk->step_new_edges >= (size_t)sk->max_new_edges_step)
             return SAFE_DENY_BUDGET_EDGE;
         return SAFE_OK;
+    }
     case MOD_TAG_REL:
         if (!m->main || m->rel_id == 0 || m->rel_id >= REL_DYN_BASE) return SAFE_DENY_TYPE;
         if (m->target == m->main) return SAFE_DENY_SELF;
@@ -608,10 +640,16 @@ static inline void safety_charge(SafetyKernel *sk, const TokenPool *pool, const 
     if ((unsigned)m->type < 16u) sk->n_applied_by_type[m->type]++;
     switch (m->type) {
     case MOD_ADD_TOKEN: sk->step_new_tokens++; break;
-    case MOD_ADD_ASSOC:
-        if (!micro_has_edge(m->target, m->main))
+    case MOD_ADD_ASSOC: {
+        Token *Mn = m->main;
+        if (!Mn && m->name[0]) {
+            Mn = pool_find(pool, m->name);
+            if (!Mn) sk->step_new_tokens++;        /* 名字端点：这一步确实要建它 */
+        }
+        if (!Mn || !micro_has_edge(m->target, Mn))
             sk->step_new_edges++;
         break;
+    };
     case MOD_TAG_DERIVED:      /* 沉淀也是「新建一条边」，照占预算 */
         if (!micro_has_edge(m->target, m->main)) sk->step_new_edges++;
         break;
@@ -1713,15 +1751,32 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         return existed ? 0 : 1;
     }
     case MOD_ADD_ASSOC: {
-        if (!m->main) return -1;
-        int created = !micro_has_edge(m->target, m->main);
-        if (token_add_assoc_unique(m->target, m->main) != 0) return -1;
-        long idx = micro_edge_index(m->target, m->main);
+        /* 另一个端点可以**按名字**给（`::op 加步骤 …` 的动作词可能是新词）：
+         * 到这一步才 intern —— **在受审通道之内**（检查器已经按名字记过新 Token 预算）。
+         * 意图本身是只读的，所以用局部 `Mn`，不改 `m`。 */
+        Token *Mn = m->main;
+        if (!Mn && m->name[0]) Mn = pool_token_intern(p, m->name);
+        if (!Mn) return -1;
+        int created = !micro_has_edge(m->target, Mn);
+        if (token_add_assoc_unique(m->target, Mn) != 0) return -1;
+        long idx = micro_edge_index(m->target, Mn);
         if (idx >= 0 && m->bump) m->target->assocs[idx].hits += m->bump;
-        if (m->action) token_set_action_by_target(m->target, m->main, m->action);
+        if (m->action) token_set_action_by_target(m->target, Mn, m->action);
+        if (m->flags & MOD_FLAG_PROCESS) {
+            /* 过程记号（第 9 条 ②）：和 `[前提]` 同一个规矩 —— 记号本身在**这一步内** intern，
+             * 随边的建立一起走账；role 标成「过程」把过程边与共现边分开。 */
+            char mk[32];
+            if (m->flags & MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
+            else if (m->flags & MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
+            else snprintf(mk, sizeof mk, "%s%u]", PROC_STEP_PREFIX, (unsigned)m->rel_id);
+            Token *mkt = pool_token_intern(p, mk);
+            if (mkt) (void)token_set_action_by_target(m->target, Mn, mkt);
+        }
+        if (idx >= 0 && (m->flags & MOD_FLAG_PROCESS))
+            m->target->assocs[idx].role = ASSOC_ROLE_PROCESS;   /* 过程边（第 9 条 ①） */
         if (note) snprintf(note, note_cap, "%s→%s%s",
                            m->target->name ? m->target->name : "?",
-                           m->main->name ? m->main->name : "?",
+                           Mn->name ? Mn->name : "?",
                            created ? "（新）" : "（已有，只加权）");
         return created ? 1 : 0;
     }
@@ -2027,6 +2082,115 @@ static inline int token_op_call_patch(AI *ai, char *const *args, size_t n, ModQu
  *   · `[前提]` 是**行为 token**（标记），挂在 A→P 的动作槽上；
  *   · 不给名字时 P 用**临时 token** `[临:前提]`（草稿：不存盘、可回收）。
  * 建好后：直接连结 A—B 会被拆掉（连结改「经过前提」），这条由安全内核裁决。 */
+/* ---- 过程记号（第 9 条 ①+②）：建过程 / 加步骤 / 加调用 / 加回边 ----
+ *
+ * 一个"过程"= 根 Token `[过程:名字]` + 从它出去的过程边；控制流记号挂在**动作槽**上。
+ * 全部走 `token_op_run`（提议 → 安全内核审查 → 应用 → 记账）—— 和自修改同一条路，
+ * "过程记号"不是绕过内核的后门。**记号与 role 都是数据**，不改存档布局。 */
+static inline Token *proc_find(AI *ai, const char *bare) {
+    if (!ai || !bare || !bare[0]) return NULL;
+    char full[128];
+    int n = snprintf(full, sizeof full, "%s%s]", PROC_TOKEN_PREFIX, bare);
+    if (n <= 0 || (size_t)n >= sizeof full) return NULL;
+    return pool_find(ai->pool, full);
+}
+
+static inline int token_op_make_proc(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                     char *note, size_t cap) {
+    if (!ai || n < 1 || !args[0] || !args[0][0]) { snprintf(note, cap, "缺过程名"); return -1; }
+    char full[64];                       /* note 只有 96 字节：名字本身短一点，免得截断告警 */
+    int ln = snprintf(full, sizeof full, "%s%s]", PROC_TOKEN_PREFIX, args[0]);
+    if (ln <= 0 || (size_t)ln >= sizeof full) { snprintf(note, cap, "过程名太长"); return -1; }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_TOKEN;
+    snprintf(m.name, sizeof m.name, "%s", full);
+    /* 挂靠点（和草稿补丁同一个规矩）：标记得有个归属，它不参与语义 ——
+     * 没有"我"（单元测试里的空脑子）就退回到池里第一个普通 token。 */
+    Token *host = ai->self;
+    if (!host)
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (t && !t->is_garbage && t->name && t->name[0] != '[') { host = t; break; }
+        }
+    m.target = host;
+    snprintf(m.source, sizeof m.source, "行为:建过程");
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s", full, ok ? " 备好了" : " 与队列重复");
+    return ok ? 1 : 0;
+}
+
+/* 加一步：`<过程> <动作> [序号]` → 边 `[过程:X] —[步骤:N]→ 动作`，role=过程。
+ * 序号不给就按已有步骤数 +1（**顺序写在记号上**，查询时才排得出来）。 */
+static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap, const char *mark) {
+    if (n < 2) { snprintf(note, cap, "要 <过程> <动作>"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s（先 `::op 建过程 %s`）", args[0], args[0]); return -1; }
+    /* `加回边 <过程> <步号>`：指回**第 N 步**（端点用 `[步骤:N]` 那个记号 Token）。
+     * 为什么给这个形状：图的边是 (起点,终点) 唯一的 —— 指回**动作词**会和那一步共用同一条边，
+     * 把它的动作槽覆盖掉（实测：`加步骤 泡茶 烧水` 之后再 `加回边 泡茶 烧水`，那一步就没了）。
+     * 指回步号不会撞车。 */
+    char backnum[32];
+    backnum[0] = 0;
+    if (mark && strcmp(mark, PROC_BACK_MARK) == 0 && args[1] && args[1][0]) {
+        int alldig = 1;
+        for (const char *q = args[1]; *q; ++q) if (*q < '0' || *q > '9') { alldig = 0; break; }
+        if (alldig) snprintf(backnum, sizeof backnum, "%s%s]", PROC_STEP_PREFIX, args[1]);
+    }
+    Token *act = pool_find(ai->pool, backnum[0] ? backnum : args[1]);   /* 可能还没有：走名字端点 */
+    (void)act;                                 /* 名字端点由内核在**这一步里**解析/intern */
+    int idx = 0;
+    uint8_t pflag = MOD_FLAG_PROC_CALL;
+    if (!mark) {
+        pflag = MOD_FLAG_PROC_STEP;
+        if (n >= 3 && args[2] && args[2][0]) idx = atoi(args[2]);
+        if (idx <= 0) {                        /* 自动排号：现有步骤里最大的 +1 */
+            for (size_t i = 0; i < root->count; ++i) {
+                int s = edge_step_index(&root->assocs[i]);
+                if (s > idx) idx = s;
+            }
+            idx++;
+        }
+        if (idx > 255) { snprintf(note, cap, "步号太大（最多 255）"); return -1; }
+    } else if (strcmp(mark, PROC_BACK_MARK) == 0) {
+        pflag = MOD_FLAG_PROC_BACK;
+    }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = act;                              /* 池里有就直接指；没有就让 name 说话 */
+    snprintf(m.name, sizeof m.name, "%s", backnum[0] ? backnum : args[1]);  /* 名字端点 */
+    m.rel_id = (uint8_t)idx;
+    m.flags = (uint8_t)(MOD_FLAG_PROCESS | pflag);
+    m.bump = 1;
+    snprintf(m.source, sizeof m.source, "行为:加步骤");
+    int ok = mod_propose(q, &m);
+    {
+        char mk[32];
+        if (pflag == MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
+        else if (pflag == MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
+        else                                  snprintf(mk, sizeof mk, "%s%d]", PROC_STEP_PREFIX, idx);
+        snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, args[1],
+                 ok ? "已提出" : "与队列重复");
+    }
+    return ok ? 1 : 0;
+}
+
+static inline int token_op_add_step_n(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                      char *note, size_t cap) {
+    return token_op_add_step(ai, args, n, q, note, cap, NULL);
+}
+static inline int token_op_add_call(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap) {
+    return token_op_add_step(ai, args, n, q, note, cap, PROC_CALL_MARK);
+}
+static inline int token_op_add_back(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap) {
+    return token_op_add_step(ai, args, n, q, note, cap, PROC_BACK_MARK);
+}
+
 static inline int token_op_add_premise(AI *ai, char *const *args, size_t n, ModQueue *q,
                                        char *note, size_t cap) {
     Token *A = pool_find(ai->pool, args[0]);
@@ -2187,6 +2351,17 @@ static const TokenOp TOKEN_OPS[] = {
     { "回收临时",   "", "回收没人引用的临时 Token（草稿纸）", 0, 0, token_op_collect_temp },
     { "调用补丁",   "<补丁> <操作> [参数…]", "走受审通道调用外设补丁的操作（如 记事本 写/提交/发送）",
       2, 6, token_op_call_patch },
+    /* ⚠ 下面四条是**第 9 条（过程记号）**新加的 —— 必须留在**表尾**：
+     * `token_lang.h` 的 `IPOP_*` 是**按下标**引用这张表的（层与层的编号契约，
+     * tools/optest.c 钉着它）。插在中间会把 `[原语:回收临时]` 指到「建过程」上（实测踩到）。 */
+    { "建过程",     "<名字>", "建一个**过程根** `[过程:名字]`（内部命名空间；过程边从它出去）",
+      1, 1, token_op_make_proc },
+    { "加步骤",     "<过程> <动作> [序号]", "给过程加一步：`[过程:X] —[步骤:N]→ 动作`，"
+      "role 标成**过程**（序号不给就自动排）", 2, 3, token_op_add_step_n },
+    { "加调用",     "<过程> <动作>", "给过程加一条**调用**边（`[调用]`）：这一步是叫别人/别处",
+      2, 2, token_op_add_call },
+    { "加回边",     "<过程> <动作或步号>", "给过程加一条**回边**（`[回边]`）：给步号就指回"
+      "`[步骤:N]`（给动作词会和那一步共用一条边、覆盖它的记号）", 2, 2, token_op_add_back },
     { NULL, NULL, NULL, 0, 0, NULL }
 };
 
