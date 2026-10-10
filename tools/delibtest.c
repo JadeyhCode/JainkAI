@@ -12,6 +12,7 @@
  *   ⑧ UTF-8：定长缓冲里的中文截断必须落在字符边界上（这个项目踩过乱码）
  *   ⑭ N1：一轮思考产出**对象**（目标 + 结构化步骤 + 复核缺口），默认关、只进内存、不写图
  *   ⑮ N4：空闲思考（没人说话时自己挑一个未解问题来想）—— 默认关、**只读**
+ *   ⑯ N3：回溯 + 在线修订（前提不成立 → 退回分支起点换一条）—— 默认关、预算不退
  *
  * 用法：gcc -std=c11 -O2 -o build_delibtest tools/delibtest.c -lm && ./build_delibtest
  */
@@ -214,6 +215,70 @@ static void test_idle_think(void) {
     ai->pool->current_tick++;
     ok(think_idle(ai) == 1, "下一个 tick 才再想一次");
     ai_free(ai);
+}
+
+/* ============================ ⑯ N3：回溯 + 在线修订（默认关） ============================ */
+static void test_redo(void) {
+    printf("== ⑯ N3：前提不成立就退回去换一条（回溯/在线修订，默认关） ==\n");
+    /* 场景：给「猫」挂一条前提链接（猫 —[前提]→ 饿 → 鱼），再问一个推不出来的问题 ——
+     * 循环会走到「问前提」那一步并判定前提没成立。 */
+    AI *ai = mini();
+    Think *t = think_of(ai);
+    t->redo_on = 0;                  /* C 级测试自己定这一位（不跟 AIP_THINKREDO 走） */
+    {
+        /* `加前提` 用 pool_find（不 intern）—— 端点词得先在池子里（CLI 那侧是分词先进池） */
+        (void)T(ai, "猫"); (void)T(ai, "鱼"); (void)T(ai, "饿");
+        char *op[3] = {(char *)"猫", (char *)"鱼", (char *)"饿"};
+        char note[160];
+        ok(token_op_run(ai, "加前提", op, 3, note, sizeof note) >= 0,
+           "前置：给猫挂一条前提链接（A —[前提]→ P → B 建出来了）");
+    }
+    char *w[4] = {(char *)"猫", (char *)"会", (char *)"跳舞", (char *)"吗"};
+    prep(ai, w, 4);
+    think_run(ai, w, 4);
+    ok(t->premise_blocked, "走到了「问前提」：判定前提没成立（触发条件）");
+    int saw_back = 0;
+    for (size_t i = 0; i < t->trace_n; ++i)
+        if (strstr(t->trace[i].what, "回退")) saw_back = 1;
+    ok(!saw_back && t->n_backtrack == 0, "默认关：**不回退**（继续硬往下想）");
+
+    /* 开着：退回去 + 换一条（改问反面） */
+    AI *b = mini();
+    Think *tb = think_of(b);
+    tb->redo_on = 0;
+    {
+        (void)T(b, "猫"); (void)T(b, "鱼"); (void)T(b, "饿");
+        char *op[3] = {(char *)"猫", (char *)"鱼", (char *)"饿"};
+        char note[160];
+        (void)token_op_run(b, "加前提", op, 3, note, sizeof note);
+    }
+    tb->redo_on = 1;
+    char *w2[4] = {(char *)"猫", (char *)"会", (char *)"跳舞", (char *)"吗"};
+    prep(b, w2, 4);
+    think_run(b, w2, 4);
+    int saw = 0, saw_why = 0;
+    for (size_t i = 0; i < tb->trace_n; ++i) {
+        if (strstr(tb->trace[i].what, "回退")) saw = 1;
+        if (strstr(tb->trace[i].why, "改问"))  saw_why = 1;
+    }
+    ok(saw, "开着：痕上多了一条「回退：前提不成立」");
+    ok(saw_why, "痕上**写明了为什么退、换的是哪一条**（改问反面）");
+    ok(tb->n_backtrack >= 1 && tb->n_backtrack <= (size_t)THINK_REDO_MAX,
+       "退了一次，而且不超过每轮上限（THINK_REDO_MAX=2）");
+    ok(tb->n_backtrack_total == tb->n_backtrack, "累计计数也在走");
+    /* 失败那一支的痕**留着**（不去删 trace） */
+    int saw_prem = 0;
+    for (size_t i = 0; i < tb->trace_n; ++i)
+        if (strstr(tb->trace[i].what, "问前提")) saw_prem = 1;
+    ok(saw_prem, "失败那一支的痕留着（「问前提」那一步还在）");
+    /* 换的那条**真的进了议程并被处理**：回退之后还有新的求解尝试 */
+    int after = 0, seen_back = 0;
+    for (size_t i = 0; i < tb->trace_n; ++i) {
+        if (strstr(tb->trace[i].what, "回退")) seen_back = 1;
+        else if (seen_back && strstr(tb->trace[i].what, "交给求解器")) after = 1;
+    }
+    ok(after, "退回去之后**真的换了那条再试**（回退之后还有求解尝试）");
+    ai_free(ai); ai_free(b);
 }
 
 /* ============================ ③ 矛盾 ============================ */
@@ -787,6 +852,7 @@ int main(void) {
     test_consolidate();
     test_think_obj();
     test_idle_think();
+    test_redo();
     test_cache_retract();
     test_premise_follow();
     test_revise();

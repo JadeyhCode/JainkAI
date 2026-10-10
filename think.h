@@ -51,6 +51,7 @@
 #define THINK_NAME_MAX   48     /* [自问:…] 这个名字最多多少字节（按 UTF-8 边界截） */
 #define THINK_CACHE_MAX   8     /* 一轮最多沉淀/撤销几条（和意图队列的预算一起限流） */
 #define THINK_DRAFT_MAX   3     /* N2 轮中草稿：一轮最多往草稿区写几行（中间步） */
+#define THINK_REDO_MAX    2     /* N3 回溯：一轮最多退几次（防止退来退去原地转） */
 
 /* 一条「事实」：A -[rid]-> B 还是它的否定
  * ev/hops/cred 是**候选自己的证据**（只给"AI 自己想沉淀"那条路用，见 §6.43）：
@@ -283,6 +284,14 @@ typedef struct {
     size_t    n_draft_mid;              /* 这一轮写了几行（每轮清零） */
     size_t    n_draft_total;            /* 累计写了几行（给人看） */
 
+    /* ---- N3：**回溯 + 在线修订**（思考循环层面的 save/restore）----
+     * 缺口（§6.54 N3）：走到一半发现前提不成立 → 今天**继续往下想**（不改主意、不回退）。
+     * 现在（默认关）：把这一支压进来的子目标**撤回分支起点**，换上**另一条**（同一个问题问反面），
+     * 痕上写明"为什么退"；**保留失败分支的痕**，而且**预算不返还**（回溯不许突破预算，K2）。 */
+    int       redo_on;                  /* 1 = 允许回溯/在线修订（默认 0） */
+    size_t    n_backtrack;              /* 这一轮退了几次（每轮清零） */
+    size_t    n_backtrack_total;        /* 累计退了几次（给人看） */
+
     /* ---- 元认知（看思维本身） ---- */
     size_t    n_stalls, n_over_budget, n_conflicts, n_blocked;
     size_t    stall_run;                /* 本轮连续没推进的步数 */
@@ -379,6 +388,11 @@ static inline Think *think_of(AI *ai) {
         t->n_draft_mid = 0;
         t->n_draft_total = 0;
         { const char *dm = getenv("AIP_DRAFTMID"); if (dm && dm[0] == '1') t->draft_mid = 1; }
+        /* N3 回溯 / 在线修订**默认关**；`AIP_THINKREDO=1` 打开。 */
+        t->redo_on = 0;
+        t->n_backtrack = 0;
+        t->n_backtrack_total = 0;
+        { const char *rd = getenv("AIP_THINKREDO"); if (rd && rd[0] == '1') t->redo_on = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -1579,6 +1593,50 @@ static inline int think_draft_room(const Think *t) {
     return t && t->draft_mid && t->n_draft_mid + 1 < think_draft_cap(t);
 }
 
+/* ============================ N3：回溯 + 在线修订（默认关） ============================
+ *
+ * 缺口（§6.54 N3）：思考**过程中**发现前提不成立，今天只会把"待验"记在痕上然后**继续往下想**
+ * （不改主意、不回退）。局部早就有 save/restore 的料：`rel_solve_go` 的路径级存档、
+ * `hypo_pop/drop` 的假设栈、`think_goal_pop`/`think_goal_reset` 的议程游标 ——
+ * 这一节把它们用在**循环层**（§6.55 K2/K3）：
+ *
+ *   · **回退到分支起点**：`ag_n = snap_n`（这一支压进来的子目标全撤掉）——
+ *     用的是现成的议程游标，不新造栈；
+ *   · **换一条**：同一个问题**问反面**（`want_neg` 翻过来）再压回议程 ——
+ *     "这条连结的前提不成立"往往正对面才是答案（R9 缺前提那条路）；
+ *   · **痕上写明为什么退**：失败那一支的 trace 一条都不删（保留证据），
+ *     另加一条 `回退：前提不成立`；
+ *   · **不许突破预算**：`steps` 已经花掉了、不返还 —— 退回去的代价就是步数；
+ *     一轮最多退 `THINK_REDO_MAX` 次（防止退来退去原地转）。
+ * 返回 1 = 真的退了（调用方据此不再把这一步算成"停滞"）。 */
+static inline int think_redo_after_premise(AI *ai, Think *t, const ThinkGoal *g,
+                                           int want_neg0, size_t snap_n) {
+    if (!ai || !t || !g || !t->redo_on) return 0;
+    if (t->n_backtrack >= THINK_REDO_MAX) return 0;
+    /* 注意：发现"前提不成立"的那一步**不是**主目标本身 ——
+     * `think_expand_goals` 会把「问前提」压成一个**子目标**（kind=TG_PREMISE）去跑，
+     * 前提状态就是在那里读出来的。所以这里不能只认 TG_REL（第一版就栽在这儿：
+     * 开关开了、痕上明明写着"前提没成立"，却一次都没退）。
+     * 判据只要"这个目标有完整的三元组"就够；要翻的极性取**原问题**的（want_neg0）。 */
+    if (!g->a || !g->b || g->rid == 0) return 0;
+    t->ag_n = snap_n;                                  /* ① 退回分支起点 */
+    int pushed = think_goal_push(t, TG_REL, g->a, g->b, g->rid,
+                                 want_neg0 ? 0 : 1, g->depth + 1);
+    if (!pushed) return 0;                             /* 反面的目标去过重了：退不回去就不硬退 */
+    t->n_backtrack++;
+    t->n_backtrack_total++;
+    char why[THINK_WHY];
+    snprintf(why, sizeof why,
+             "这条连结有前提、前提没成立 —— 退回分支起点换一条：改问「%s %s%s %s」"
+             "（失败那一支的痕留着，没删；步数不退）",
+             g->a->name ? g->a->name : "?",
+             g->want_neg ? "" : "不 ",
+             rel_name_of(ai, g->rid) ? rel_name_of(ai, g->rid) : "?",
+             g->b->name ? g->b->name : "?");
+    think_step(t, TH_REFLECT, 1, 50, "回退：前提不成立", why);
+    return 1;
+}
+
 static inline void think_run(AI *ai, char *const *words, size_t n) {
     Think *t = think_of(ai);
     if (!t || !ai) return;
@@ -1596,6 +1654,7 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
     /* N1：这一轮的思考对象从空的开始（开关关着时这一行什么也不做） */
     if (t->obj_on) think_obj_reset(t);
     t->n_draft_mid = 0;                  /* N2：轮中草稿的每轮配额 */
+    t->n_backtrack = 0;                  /* N3：回溯的每轮配额 */
 
     /* 上一轮想通、还没说出口的旧问题：先记在痕上，
      * 否则这一轮的痕迹一重置，就说不清那句补充是哪儿来的。 */
@@ -1719,6 +1778,9 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
         steps++;
         t->n_steps_total++;
         int progressed = 0;
+        /* N3：分支起点。这一支之后压进议程的子目标都在 `ag_n` 之后 ——
+         * 回退就是把 `ag_n` 收回这个值（现成的议程游标，不新造栈）。 */
+        size_t snap_ag_n = t->ag_n;
 
         if (g.kind == TG_REL) {
             int lcls = THINK_EV_FACT, lov = 0, lcache = 0;
@@ -1772,7 +1834,14 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
                 int mcls = THINK_EV_GUESS, mcache = 0;
                 char note[THINK_WHY];
                 note[0] = 0;
+                int pb_before = t->premise_blocked;   /* N3：看这一步有没有**刚刚**发现前提不成立 */
                 int truth = m->process(ai, t, &g, &mcls, &mcache, note, sizeof note);
+                /* N3（默认关）：前提不成立 ⇒ **当场回退 + 换一条**（在线修订，K3）。
+                 * 位置就在这条路上：`think_mech_prem` 本来每一轮都在跑，它把状态写进
+                 * `premise_blocked`，这里读同一个信号，不另造判据。 */
+                if (truth == 0 && !pb_before && t->premise_blocked &&
+                    think_redo_after_premise(ai, t, &g, main_goal.want_neg, snap_ag_n))
+                    continue;                          /* 退了：这一步不算"没推进" */
                 if (truth != 0) {
                     int guessed = (mcls == THINK_EV_GUESS);
                     /* ⚠ 机制路径（类比/串接等）的**链长与链底可信度还没接进来** ——
@@ -2391,8 +2460,10 @@ static inline void think_report(const AI *ai) {
     printf("       推理沉淀：记住 %zu 条 / 撤销 %zu 条 / 前提没了 %zu 条 / 被拦 %zu 条%s\n",
            ai->n_cached, ai->n_retracted, t->n_stale, t->n_cache_blocked,
            t->cache_off ? "（::thinkcache off 关着）" : "");
-    printf("       元认知：原地打转 %zu 次  超预算 %zu 次  发现矛盾 %zu 次  拦住 %zu 次\n",
-           t->n_stalls, t->n_over_budget, t->n_conflicts, t->n_blocked);
+    printf("       元认知：原地打转 %zu 次  超预算 %zu 次  发现矛盾 %zu 次  拦住 %zu 次"
+           "  回退 %zu 次（共 %zu）\n",
+           t->n_stalls, t->n_over_budget, t->n_conflicts, t->n_blocked,
+           t->n_backtrack, t->n_backtrack_total);
     printf("       机制注册表（%zu 条）：", think_mech_count());
     for (size_t i = 0; i < think_mech_count(); ++i) {
         const ThinkMech *m = think_mech_by_index(i);
@@ -2444,11 +2515,12 @@ static inline void think_stats(const AI *ai) {
     }
     const Think *t = (const Think *)ai->think;
     printf("       思维：想过 %zu 轮/%zu 步  这一轮 %s（%d%%）  停因=%s  "
-           "未解问题=%zu(想通%zu/过期%zu)  打转%zu 矛盾%zu\n",
+           "未解问题=%zu(想通%zu/过期%zu)  打转%zu 矛盾%zu 回退%zu\n",
            t->n_think, t->n_steps_total,
            t->concl > 0 ? "成立" : t->concl < 0 ? "不成立" : "无结论",
            t->conf, think_stop_name(t->stop),
-           t->n_open, t->n_resolved, t->n_expired, t->n_stalls, t->n_conflicts);
+           t->n_open, t->n_resolved, t->n_expired, t->n_stalls, t->n_conflicts,
+           t->n_backtrack_total);
 }
 
 static inline void think_set_run(AI *ai, int on) {

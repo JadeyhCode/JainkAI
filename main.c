@@ -547,6 +547,7 @@ typedef enum {
     CMD_THINKBUDGET,
     CMD_THINKOBJ,           /* N1：思考对象（`[思考:N]`，内存对象 + 复核） */
     CMD_IDLE,               /* N4：空闲思考（只读；自己从 [自问:…] 里挑一个问题） */
+    CMD_THINKREDO,          /* N3：回溯 + 在线修订（默认关） */
     CMD_MOD,
     CMD_SAFE,
     CMD_PATCH,
@@ -708,6 +709,10 @@ static const CmdDef CMDS[] = {
       "（derive.h 那套 Derivation）+ 复核结果（der_verify，缺口数）。\n"
       "::thinkobj on|off 开关；::thinkobj verify 当场把对象里的链**独立重推**一遍；\n"
       "不给参数看当前对象（只进内存，不存盘 —— 存档格式没动）", CMD_THINKOBJ },
+    { "thinkredo", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
+      "**回溯 + 在线修订**（N3，默认关；AIP_THINKREDO=1）：思考过程中发现前提不成立时，\n"
+      "把这一支压进来的子目标**退回分支起点**、换一条（同一个问题问反面）再试，\n"
+      "痕上写明「为什么退」；失败那一支的痕留着，**步数预算不退**（回溯不许突破预算）", CMD_THINKREDO },
     { "idle", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
       "**空闲思考**（N4，默认关；AIP_IDLE=1）：没人说话的那些轮，自己从 `[自问:…]` 里\n"
       "挑一个没想通的问题来想。**只读**：不提议意图、不沉淀、不动图，也不进睡眠/巩固那些账。\n"
@@ -1196,6 +1201,23 @@ int main(int argc, char **argv) {
                 }
                 if (arg && *arg) { printf("[用法] ::thinkobj [on|off|verify]\n"); continue; }
                 think_obj_print(a->brain, tt, "");
+                continue;
+            }
+            case CMD_THINKREDO: {
+                /* N3：回溯/在线修订的开关与状态（层里的实现在 think.h 的 think_redo_after_premise）。 */
+                Think *tt = think_of(a->brain);
+                if (!tt) { printf("[思维还没起来]\n"); continue; }
+                const char *arg = (cmd[9] == ' ') ? cmd + 10 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "on"))       tt->redo_on = 1;
+                else if (arg && !strcmp(arg, "off")) tt->redo_on = 0;
+                else if (arg && *arg) { printf("[用法] ::thinkredo [on|off]\n"); continue; }
+                printf("[回溯 + 在线修订 = %s]  退过 %zu 次（这一轮 %zu 次，上限 %d）\n",
+                       tt->redo_on ? "开" : "关（默认）", tt->n_backtrack_total, tt->n_backtrack,
+                       THINK_REDO_MAX);
+                printf("  触发：`问前提` 那一手在这一步判定「前提没成立」⇒ 退回分支起点换一条；\n");
+                printf("  痕迹：失败那一支留着 + 一条「回退：前提不成立」（::delib 里看得到）；\n");
+                printf("  边界：**步数不退**（回溯的代价就是步数，不许突破预算）。\n");
                 continue;
             }
             case CMD_IDLE: {
