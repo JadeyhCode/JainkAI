@@ -57,6 +57,12 @@
 #define PRIM_INSERT_NAMED "[原语:插词为]"
 #define PRIM_COLLECT_TEMP "[原语:回收临时]"
 
+/* 原语**命名空间**的前缀：只写一份。
+ * 校验器靠它把「打错的原语名」和「普通数据 token」分开 —— 别的 `[xxx:yyy]`
+ * （`[符号:好]`、`[时刻:12]`、`[关系:之前]`…）都是运行时的**数据**，不许当成原语名报错。 */
+#define PRIM_PREFIX       "[原语:"
+#define PRIM_PREFIX_LEN   (sizeof(PRIM_PREFIX) - 1)
+
 #define SYM_GOOD          "[符号:好]"
 #define SYM_BAD           "[符号:坏]"
 #define SYM_WRAP          "[符号:包裹]"
@@ -190,11 +196,18 @@ static inline size_t prim_count(void) {
     return n;
 }
 
-static inline PrimKind prim_kind(const Token *t) {
-    if (!t || !t->name) return PK_NONE;
+/* 按**名字**认原语。校验器走的就是这一条：它拿到的是一串词，还没有 Token
+ * （干跑不许 intern —— 一 intern 就等于把打错的名字当场造成新 Token，
+ * 那正是今天"错名字被静默吞掉"的机制本身）。 */
+static inline PrimKind prim_kind_name(const char *name) {
+    if (!name) return PK_NONE;
     for (size_t i = 0; PRIMS[i].name; ++i)
-        if (strcmp(t->name, PRIMS[i].name) == 0) return PRIMS[i].kind;
+        if (strcmp(name, PRIMS[i].name) == 0) return PRIMS[i].kind;
     return PK_NONE;
+}
+
+static inline PrimKind prim_kind(const Token *t) {
+    return prim_kind_name(t ? t->name : NULL);
 }
 
 static inline void pool_init_prims(TokenPool *p) {
