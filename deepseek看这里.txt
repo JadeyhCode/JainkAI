@@ -158,6 +158,24 @@
  11. 「以后你有缺陷你不用找我确认，直接在这一轮里解决」「能全干就全干」
  12. 「能不能节省一点时间」
 
+四、当前状态（**活的那份**；[历史] 五 那条"活的那份看开头那块"指的就是这里）
+  · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
+    ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
+    ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
+  · 看护数（**都是实测**）：optest **288** / tokenop **72** / delibtest **155** / microtest **71** /
+    biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
+    cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
+    **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
+  · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
+  · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
+    `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
+  · 常用命令新增：`::proc`、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
+    `::asm check`、`::lex`、`::ascii`
+  · `codes/` 镜像 **100 文件逐字节一致**；工作区干净；存档格式仍 **v10**（没动过）
+  · **局限总表**：`docs/局限总表.md`（现有局限的索引+摘要，含设计取舍/已知缺口/已知陷阱/已修索引；
+    维护纪律在那份文档开头）
+
 [历史] 二、由此定下的工程目标（可检验）
   ① 表示层：淘汰"语境" → 行为 token + 临时 token + **前提 token**（前提是**普通 token**：
      联想照走、::rel/::edges 正常处理，只有**逻辑**知道它是前提）
@@ -224,7 +242,7 @@
      · 循环里跑被测脚本会**吃光 stdin** → `< /dev/null`
      · **反复跑整包**（串行一轮 6 分钟；并行后 ≈70 秒）→ 迭代仍只跑单套；整包只在批次收尾跑一次
 
-[历史] 五、当前状态（**历史留档：2026-10-07 那时的状态**；活的那份看开头那块）
+[历史] 五、当前状态（**历史留档：2026-10-07 那时的状态**；**活的那份**见顶块「四、当前状态」）
   · 整包：**31 步全绿**（30 套 + 收官冒烟）；**并行 JOBS=8 端到端 ≈65~72 秒**
     （第 0 步 ≈17s 缓存命中 / ≈25s 全新编译；串行 6.0 分钟），
     30 套退出码与串行基线**逐个一致**（对照表见 docs/audit-vs-deepseek看这里.md §6.42）
