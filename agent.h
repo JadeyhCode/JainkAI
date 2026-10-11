@@ -800,6 +800,8 @@ typedef struct {
     size_t n_assume_ok;   /* 跑完核对：还在层里的假设数（应当 == n_assume） */
     size_t n_defer;       /* 干跑里**推迟**没执行的行为步骤数 */
     size_t n_rollback;    /* 回退（撤掉某一步的假设）次数 */
+    size_t n_skip;        /* ⑤ 条件不成立又没有否则支 / 循环条件不成立 —— 跳过的次数 */
+    size_t n_exc_handled; /* ⑤ 出错之后处理步跑通了几次 */
     size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
     size_t hypo_peak;     /* 跑的时候到过的最大深度 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
@@ -838,9 +840,13 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
     /* 这一步**加了哪些假设**（失败时按步回退，只撤这一步的；见 `hypo_del`） */
     const Token *added[8];
     size_t n_added = 0;
+    /* ⑤ 分支/异常那几条边没有步号（idx=0）→ 用 tag 当标签，别打"第 0 步" */
+    char label[48];
+    if (idx > 0) snprintf(label, sizeof label, "%s第 %d 步", tag ? tag : "", idx);
+    else         snprintf(label, sizeof label, "%s", tag && tag[0] ? tag : "这一步");
     const Token *act = se ? se->main : NULL;
     if (!act || act->is_garbage) {
-        printf("    %s第 %-2d 步 （动作词没了）\n", tag, idx);
+        printf("    %s（动作词没了）\n", label);
         der_gap(&pr->trace, "动作词没了");
         pr->n_gap++;
         return 0;
@@ -861,7 +867,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                 }
                 continue;   /* 攒着，和"过"合并成一行打（不然同一步打两遍） */
             }
-            printf("    %s第 %-2d 步 %-12s ✗ 断点：前提「%s」没成立（%s）\n", tag, idx,
+            printf("    %s %-12s ✗ 断点：前提「%s」没成立（%s）\n", label,
                    act->name ? act->name : "?", ps[k]->name ? ps[k]->name : "?",
                    pol[k] < 0 ? "要求它不在注意窗口里，可它在" : "提到过没有，这次没有");
             der_gap(&pr->trace, "前提没成立");
@@ -876,8 +882,8 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         if (op && op->min_args > 0) {
             /* **要参数是结构性问题**（干跑也一样做不了）⇒ 先判它，别拿"干跑"把问题盖过去。
              * 这一条也是"按步回退"唯一的真实可达路径：先假定了前提、随后发现这一步做不了。 */
-            printf("    %s第 %-2d 步 %-12s ⚠ 断点：这是行为「%s」，要参数（v1 不支持，不猜）\n",
-                   tag, idx, act->name, op->name);
+            printf("    %s %-12s ⚠ 断点：这是行为「%s」，要参数（v1 不支持，不猜）\n",
+                   label, act->name, op->name);
             der_gap(&pr->trace, "行为要参数（v1 不支持）");
             pr->n_gap++;
             proc_step_rollback(ai, act, added, n_added, pr);
@@ -885,8 +891,8 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         }
         if (op && dry) {
             /* 干跑：行为**不执行**（不落图），只记"假定能做" —— 这正是干跑与实跑的区别 */
-            printf("    %s第 %-2d 步 %-12s ≈ 干跑：行为「%s」**假定能做，不执行**\n",
-                   tag, idx, act->name ? act->name : "?", op->name);
+            printf("    %s %-12s ≈ 干跑：行为「%s」**假定能做，不执行**\n",
+                   label, act->name ? act->name : "?", op->name);
             DerStep *ds = der_add(&pr->trace, DER_HYP);
             if (ds) { ds->subj = (Token *)act; ds->truth = +1;
                       cot_copy(ds->note, sizeof ds->note, "干跑：假定行为能做（没执行）"); }
@@ -897,16 +903,16 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             char note2[192];
             int got = token_op_run(ai, op->name, NULL, 0, note2, sizeof note2);
             if (got >= 0) {
-                printf("    %s第 %-2d 步 %-12s ✓ 执行了行为「%s」（受审通道）：%s\n",
-                       tag, idx, act->name, op->name, note2);
+                printf("    %s %-12s ✓ 执行了行为「%s」（受审通道）：%s\n",
+                       label, act->name, op->name, note2);
                 DerStep *ds = der_add(&pr->trace, DER_FACT);
                 if (ds) { ds->subj = (Token *)act; ds->truth = +1;
                           cot_copy(ds->note, sizeof ds->note, "执行了行为"); }
                 pr->n_ok++; pr->n_ran++;
                 return 1;
             }
-            printf("    %s第 %-2d 步 %-12s ✗ 断点：行为「%s」没跑成：%s\n",
-                   tag, idx, act->name, op->name, note2);
+            printf("    %s %-12s ✗ 断点：行为「%s」没跑成：%s\n",
+                   label, act->name, op->name, note2);
             der_gap(&pr->trace, "行为没跑成");
             pr->n_gap++;
             proc_step_rollback(ai, act, added, n_added, pr);
@@ -919,15 +925,15 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         for (size_t k = 0; k < act->count; ++k)
             if (act->assocs[k].hits > 0) hits++;
         if (n_added) {
-            printf("    %s第 %-2d 步 %-12s ≈ 干跑：**过**（假定前提「%s」成立%s —— 记进假设层：%s 需要 %s，跑完 pop）\n",
-                   tag, idx, act->name ? act->name : "?",
+            printf("    %s %-12s ≈ 干跑：**过**（假定前提「%s」成立%s —— 记进假设层：%s 需要 %s，跑完 pop）\n",
+                   label, act->name ? act->name : "?",
                    added[0] && added[0]->name ? added[0]->name : "?",
                    n_added > 1 ? "…" : "", act->name ? act->name : "?",
                    added[0] && added[0]->name ? added[0]->name : "?");
         } else {
-            printf("    %s第 %-2d 步 %-12s ✓ 过（词在 + 前提成立；它自己有 %zu 条连边、%zu 条有命中"
+            printf("    %s %-12s ✓ 过（词在 + 前提成立；它自己有 %zu 条连边、%zu 条有命中"
                    " —— **做不做得了 v1 不判**）\n",
-                   tag, idx, act->name ? act->name : "?", act->count, hits);
+                   label, act->name ? act->name : "?", act->count, hits);
         }
         DerStep *ds = der_add(&pr->trace, n_added ? DER_HYP : DER_FACT);
         if (ds) { ds->subj = (Token *)act; ds->truth = +1;
@@ -956,16 +962,20 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
     struct { size_t depth; } hypo_guard = { hypo_in };   /* 作用域守卫（防漏 pop） */
     (void)hypo_guard;
     const AssocEntry *steps[PROC_SHOW_MAX], *calls[PROC_SHOW_MAX], *backs[PROC_SHOW_MAX];
-    size_t ns = 0, nc = 0, nb = 0;
+    const AssocEntry *conds[PROC_SHOW_MAX], *elses[PROC_SHOW_MAX], *excs[PROC_SHOW_MAX];
+    size_t ns = 0, nc = 0, nb = 0, ncd = 0, nel = 0, nex = 0;
     for (size_t i = 0; i < root->count; ++i) {
         const AssocEntry *e = &root->assocs[i];
         if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
+        else if (edge_is_cond(e))        { if (ncd < PROC_SHOW_MAX) conds[ncd++] = e; }
+        else if (edge_is_else(e))        { if (nel < PROC_SHOW_MAX) elses[nel++] = e; }
+        else if (edge_is_exc(e))         { if (nex < PROC_SHOW_MAX) excs[nex++] = e; }
         else if (edge_is_call(e))        { if (nc < PROC_SHOW_MAX) calls[nc++] = e; }
         else if (edge_is_back(e))        { if (nb < PROC_SHOW_MAX) backs[nb++] = e; }
     }
     if (ns > 1) qsort(steps, ns, sizeof steps[0], proc_step_ptr_cmp);
-    printf("  [进过程] %s（%zu 步 + %zu 调用 + %zu 回边）\n",
-           root->name ? root->name : "?", ns, nc, nb);
+    printf("  [进过程] %s（%zu 步 + %zu 条件 + %zu 否则 + %zu 异常 + %zu 调用 + %zu 回边）\n",
+           root->name ? root->name : "?", ns, ncd, nel, nex, nc, nb);
     size_t gaps_before = pr->n_gap;
     /* ---- 按步号逐步跑 ---- */
     for (size_t i = 0; i < ns; ++i) {
@@ -978,6 +988,60 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
         }
         pr->n_step++;
         (void)proc_step_run(ai, root, steps[i], edge_step_index(steps[i]), pr, "", dry);
+    }
+    /* ---- ⑤ 分支：条件边（成立走它自己的动作；不成立走 `[否则]` 那一支）----
+     * 条件判据**就是前提那三档**（`ai_premise_holds`）：注意窗口里 / 图上够得着 / 够得着且有据。
+     * 不另造一套"条件为真"的判据 —— §6.56 第 2 条说的就是"记号挂动作槽、判据用现成的"。 */
+    for (size_t i = 0; i < ncd; ++i) {
+        char cb[64];
+        (void)proc_mark_bare(conds[i]->action ? conds[i]->action->name : NULL,
+                             PROC_COND_PREFIX, cb, sizeof cb);
+        Token *x = cb[0] ? pool_find(ai->pool, cb) : NULL;
+        if (!x) {
+            /* 条件词**图里根本没这个词** ⇒ 不是"没提到"，是"判不了"。照实说，并按不成立走
+             * （不然一个拼错的条件会静默变成"成立"，那是最坏的一种骗人）。 */
+            printf("    条件「%s」：图里没有这个词 ⇒ **判不了**（按不成立处理）\n", cb);
+            if (nel > 0) {
+                printf("      → 走 「[否则]」 那一支 %s\n",
+                       elses[0]->main && elses[0]->main->name ? elses[0]->main->name : "?");
+                pr->n_step++;
+                (void)proc_step_run(ai, root, elses[0], 0, pr, "否则分支", dry);
+            } else {
+                printf("      没有 「[否则]」 那一支 → 跳过（不当成断点）\n");
+                pr->n_skip++;
+            }
+            continue;
+        }
+        int holds = ai_premise_holds(ai, x);
+        if (holds) {
+            printf("    条件「%s」**成立** → 走它那一支 %s\n", cb,
+                   conds[i]->main && conds[i]->main->name ? conds[i]->main->name : "?");
+            pr->n_step++;
+            (void)proc_step_run(ai, root, conds[i], 0, pr, "条件分支", dry);
+        } else if (nel > 0) {
+            printf("    条件「%s」**不成立** → 走 「[否则]」 那一支 %s\n", cb,
+                   elses[0]->main && elses[0]->main->name ? elses[0]->main->name : "?");
+            pr->n_step++;
+            (void)proc_step_run(ai, root, elses[0], 0, pr, "否则分支", dry);
+        } else {
+            printf("    条件「%s」**不成立**，也没有 `[否则]` 那一支 → 跳过（不当成断点）\n", cb);
+            pr->n_skip++;
+        }
+    }
+    /* ---- ⑤ 异常：哪一步失败了，就跑 `[异常:类型]` 那一支（v1 只跑一次；类型作标签）---- */
+    if (pr->n_gap > gaps_before && nex > 0) {
+        char xb[64];
+        (void)proc_mark_bare(excs[0]->action ? excs[0]->action->name : NULL,
+                             PROC_EXC_PREFIX, xb, sizeof xb);
+        printf("    出错了 → 跑 「[异常:%s]」 那一支 %s\n", xb,
+               excs[0]->main && excs[0]->main->name ? excs[0]->main->name : "?");
+        size_t before = pr->n_gap;
+        pr->n_step++;
+        (void)proc_step_run(ai, root, excs[0], 0, pr, "异常处理", dry);
+        if (pr->n_gap == before) {
+            printf("      （处理步过了 —— **账照旧记**：出错的那一步仍然是断点，不假装没发生）\n");
+            pr->n_exc_handled++;
+        }
     }
     /* ---- 调用：递归跑子过程 ---- */
     for (size_t i = 0; i < nc; ++i) {
@@ -1024,8 +1088,41 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
             pr->n_gap++;
             continue;
         }
-        printf("    回边 → 第 %d 步（按上限 %d 次重跑）\n", back_to, PROC_RUN_LOOP_MAX);
+        /* ⑤ 循环条件：条件写在**回边自己的记号**里（`[回边:条件词]`）——
+         * 每轮开头先看它还成不成立，不成立就跳出循环（while，不是 for）。 */
+        char loop_cond[64] = {0};
+        {
+            const char *bc = edge_back_cond(backs[i]);
+            if (bc && bc[0]) {
+                size_t k = 0;
+                while (bc[k] && bc[k] != ']' && k + 1 < sizeof loop_cond) {
+                    loop_cond[k] = bc[k];
+                    k++;
+                }
+                loop_cond[k] = 0;
+            }
+        }
+        if (loop_cond[0]) {
+            Token *lx = pool_find(ai->pool, loop_cond);
+            if (!lx || !ai_premise_holds(ai, lx)) {
+                printf("    回边 → 第 %d 步：循环条件「%s」**不成立** ⇒ 跳出循环（一次都不重跑）\n",
+                       back_to, loop_cond);
+                pr->n_skip++;
+                continue;
+            }
+            printf("    回边 → 第 %d 步（循环条件「%s」成立 ⇒ 按上限 %d 次重跑，每轮再看一次）\n",
+                   back_to, loop_cond, PROC_RUN_LOOP_MAX);
+        } else {
+            printf("    回边 → 第 %d 步（按上限 %d 次重跑）\n", back_to, PROC_RUN_LOOP_MAX);
+        }
         for (int round = 0; round < PROC_RUN_LOOP_MAX; ++round) {
+            if (loop_cond[0]) {      /* 每轮开头再看一次条件（while，不是 for） */
+                Token *lx = pool_find(ai->pool, loop_cond);
+                if (!lx || !ai_premise_holds(ai, lx)) {
+                    printf("      （第 %d 轮：循环条件「%s」不成立了 ⇒ 停）\n", round + 1, loop_cond);
+                    break;
+                }
+            }
             if (pr->n_step >= PROC_RUN_STEP_MAX) break;
             const AssocEntry *se = NULL;
             for (size_t k = 0; k < ns; ++k)
@@ -1078,6 +1175,9 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     der_conclude(&pr.trace, pr.n_gap ? 0 : +1, pr.n_gap ? 20 : 70);
     printf("  汇总：%zu 步（含调用展开）—— %zu 步过 / **%zu 个断点** / 真执行 %zu 个行为 / 进 %zu 次子过程\n",
            pr.n_step, pr.n_ok, pr.n_gap, pr.n_ran, pr.n_call);
+    if (pr.n_skip || pr.n_exc_handled)
+        printf("  ⑤ 分支/异常：跳过 %zu 次（条件不成立且没否则支 / 循环条件不成立）；"
+               "异常处理步跑通 %zu 次\n", pr.n_skip, pr.n_exc_handled);
     printf("  轨迹（复用 Derivation）：goal + %zu 步 + conclude —— %s\n",
            pr.trace.n > 0 ? pr.trace.n - 1 : 0,
            pr.n_gap ? "有断点 ⇒ **不许说跑通了**（断点在哪就停在哪）"

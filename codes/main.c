@@ -923,22 +923,50 @@ static void proc_print_one(const Token *root) {
     /* 收集指针（边的数组是动态的，没有固定容量宏）—— 按"步骤 / 调用 / 回边 / 普通"分堆 */
     const AssocEntry *steps[PROC_SHOW_MAX], *calls[PROC_SHOW_MAX];
     const AssocEntry *backs[PROC_SHOW_MAX], *plain[PROC_SHOW_MAX];
-    size_t ns = 0, nc = 0, nb = 0, np = 0;
+    const AssocEntry *conds[PROC_SHOW_MAX], *elses[PROC_SHOW_MAX], *excs[PROC_SHOW_MAX];
+    size_t ns = 0, nc = 0, nb = 0, np = 0, ncd = 0, nel = 0, nex = 0;
     for (size_t i = 0; i < root->count; ++i) {
         const AssocEntry *e = &root->assocs[i];
         if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
+        else if (edge_is_cond(e))        { if (ncd < PROC_SHOW_MAX) conds[ncd++] = e; }
+        else if (edge_is_else(e))        { if (nel < PROC_SHOW_MAX) elses[nel++] = e; }
+        else if (edge_is_exc(e))         { if (nex < PROC_SHOW_MAX) excs[nex++] = e; }
         else if (edge_is_call(e))        { if (nc < PROC_SHOW_MAX) calls[nc++] = e; }
         else if (edge_is_back(e))        { if (nb < PROC_SHOW_MAX) backs[nb++] = e; }
         else                             { if (np < PROC_SHOW_MAX) plain[np++] = e; }
     }
     if (ns > 1) qsort(steps, ns, sizeof steps[0], proc_step_cmp);
-    printf("[过程] %s —— %zu 步 + %zu 调用 + %zu 回边（过程边共 %zu 条）\n",
-           root->name ? root->name : "?", ns, nc, nb, ns + nc + nb);
+    printf("[过程] %s —— %zu 步 + %zu 条件 + %zu 否则 + %zu 异常 + %zu 调用 + %zu 回边"
+           "（过程边共 %zu 条）\n",
+           root->name ? root->name : "?", ns, ncd, nel, nex, nc, nb,
+           ns + nc + nb + ncd + nel + nex);
     for (size_t i = 0; i < ns; ++i)
-        printf("  第 %-2d 步 %-12s（记号 %s，角色=%s）\n", edge_step_index(steps[i]),
+        printf("  第 %d 步 %-12s（记号 %s，角色=%s）\n", edge_step_index(steps[i]),
                steps[i]->main && steps[i]->main->name ? steps[i]->main->name : "?",
                steps[i]->action && steps[i]->action->name ? steps[i]->action->name : "?",
                assoc_role_name(steps[i]->role));
+    for (size_t i = 0; i < ncd; ++i) {
+        char cb[64];
+        (void)proc_mark_bare(conds[i]->action ? conds[i]->action->name : NULL,
+                             PROC_COND_PREFIX, cb, sizeof cb);
+        printf("  条件 %-14s → %-12s（记号 %s，角色=%s）\n", cb,
+               conds[i]->main && conds[i]->main->name ? conds[i]->main->name : "?",
+               conds[i]->action && conds[i]->action->name ? conds[i]->action->name : "?",
+               assoc_role_name(conds[i]->role));
+    }
+    for (size_t i = 0; i < nel; ++i)
+        printf("  否则    %-14s（记号 %s，角色=%s）\n",
+               elses[i]->main && elses[i]->main->name ? elses[i]->main->name : "?",
+               PROC_ELSE_MARK, assoc_role_name(elses[i]->role));
+    for (size_t i = 0; i < nex; ++i) {
+        char xb[64];
+        (void)proc_mark_bare(excs[i]->action ? excs[i]->action->name : NULL,
+                             PROC_EXC_PREFIX, xb, sizeof xb);
+        printf("  异常 %-14s → %-12s（记号 %s，角色=%s）\n", xb,
+               excs[i]->main && excs[i]->main->name ? excs[i]->main->name : "?",
+               excs[i]->action && excs[i]->action->name ? excs[i]->action->name : "?",
+               assoc_role_name(excs[i]->role));
+    }
     for (size_t i = 0; i < nc; ++i)
         printf("  调用    %-14s（记号 %s，角色=%s）\n",
                calls[i]->main && calls[i]->main->name ? calls[i]->main->name : "?",
@@ -950,7 +978,7 @@ static void proc_print_one(const Token *root) {
     if (np)
         printf("  另有 %zu 条**不是过程边**的边（角色=%s）—— 过程与共现就靠这个分开\n",
                np, assoc_role_name(plain[0]->role));
-    if (!ns && !nc && !nb) {
+    if (!ns && !nc && !nb && !ncd && !nel && !nex) {
         const char *bare = (root->name && strlen(root->name) > strlen(PROC_TOKEN_PREFIX) + 1)
                          ? root->name + strlen(PROC_TOKEN_PREFIX) : "名字";
         printf("  （还没有过程边 —— `::op 加步骤 %s <动作>` 加一步）\n", bare);

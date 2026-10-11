@@ -110,8 +110,21 @@ static inline const char *assoc_role_name(uint8_t role) {
 #define PROC_TOKEN_PREFIX  "[过程:"
 #define PROC_STEP_PREFIX   "[步骤:"
 #define PROC_CALL_MARK     "[调用]"
+#define PROC_BACK_MARK     "[回边]"      /* 不带条件的回边 */
+#define PROC_BACK_PREFIX   "[回边:"      /* 带条件的回边：`[回边:条件词]` = 回到那一步，只要条件成立
+                                          * （图里一条 (根,目标) 只有一条边 ⇒ 条件不能另挂一条边，只能
+                                          * 写在回边自己的记号里；`[条件:X]→[步骤:N]` 那种会撞车，实测过） */
+/* ⑤ 分支/循环/异常：条件挂**这一步**上（`[条件:X]` = 走这一步要先 X 成立）、
+ * 互斥的另一支挂 `[否则]`、出错时跳的那一支挂 `[异常:类型]`。
+ * 条件判据**不另造**：就是前提那三档（`ai_premise_holds`：注意窗口里 / 图上够得着 / 够得着且有据）。 */
+#define PROC_COND_PREFIX   "[条件:"
+#define PROC_ELSE_MARK     "[否则]"
+#define PROC_EXC_PREFIX    "[异常:"
 #define PROC_SHOW_MAX      256     /* 一次最多列/跑多少条过程边（有界） */
-#define PROC_BACK_MARK     "[回边]"
+#define PROC_BACK_MARK     "[回边]"      /* 不带条件的回边 */
+#define PROC_BACK_PREFIX   "[回边:"      /* 带条件的回边：`[回边:条件词]` = 回到那一步，只要条件成立
+                                          * （图里一条 (根,目标) 只有一条边 ⇒ 条件不能另挂一条边，只能
+                                          * 写在回边自己的记号里；`[条件:X]→[步骤:N]` 那种会撞车，实测过） */
 
 /* 话题 id：语料里显式标注（`[话题:N]` 那一行属于第 N 个话题）。
  * 0 = 无话题（seed / generated 那些通用共现语料）。 */
@@ -435,13 +448,57 @@ static inline int edge_is_call(const AssocEntry *e) {
            strcmp(e->action->name, PROC_CALL_MARK) == 0;
 }
 static inline int edge_is_back(const AssocEntry *e) {
+    if (!edge_is_process(e) || !e->action || !e->action->name) return 0;
+    return strcmp(e->action->name, PROC_BACK_MARK) == 0 ||
+           strncmp(e->action->name, PROC_BACK_PREFIX, strlen(PROC_BACK_PREFIX)) == 0;
+}
+/* `[回边:条件词]` → 条件词（不带条件的回边返回 NULL） */
+static inline const char *edge_back_cond(const AssocEntry *e) {
+    if (!edge_is_back(e)) return NULL;
+    if (strncmp(e->action->name, PROC_BACK_PREFIX, strlen(PROC_BACK_PREFIX)) != 0) return NULL;
+    return e->action->name + strlen(PROC_BACK_PREFIX);
+}
+static inline int edge_is_cond(const AssocEntry *e) {
     return edge_is_process(e) && e->action && e->action->name &&
-           strcmp(e->action->name, PROC_BACK_MARK) == 0;
+           strncmp(e->action->name, PROC_COND_PREFIX, strlen(PROC_COND_PREFIX)) == 0;
+}
+/* `[条件:X]` → **去掉结尾 `]` 的 X**（拷进调用方的缓冲，返回长度）。
+ * 直接返回名字里的指针会把结尾那个 `]` 也带出去（打印时看得见 —— 实测踩过）。 */
+static inline size_t proc_mark_bare(const char *name, const char *prefix,
+                                    char *out, size_t cap) {
+    if (out && cap) out[0] = 0;
+    if (!name || !prefix) return 0;
+    size_t pl = strlen(prefix);
+    if (strncmp(name, prefix, pl) != 0) return 0;
+    const char *q = name + pl;
+    size_t k = 0;
+    while (*q && *q != ']' && k + 1 < cap) out[k++] = *q++;
+    if (out && cap) out[k] = 0;
+    return k;
+}
+
+/* `[条件:X]` → X（名字里的那一段；不是条件边就返回 NULL）。 */
+static inline const char *edge_cond_name(const AssocEntry *e) {
+    if (!edge_is_cond(e)) return NULL;
+    return e->action->name + strlen(PROC_COND_PREFIX);
+}
+static inline int edge_is_else(const AssocEntry *e) {
+    return edge_is_process(e) && e->action && e->action->name &&
+           strcmp(e->action->name, PROC_ELSE_MARK) == 0;
+}
+static inline int edge_is_exc(const AssocEntry *e) {
+    return edge_is_process(e) && e->action && e->action->name &&
+           strncmp(e->action->name, PROC_EXC_PREFIX, strlen(PROC_EXC_PREFIX)) == 0;
+}
+static inline const char *edge_exc_name(const AssocEntry *e) {
+    if (!edge_is_exc(e)) return NULL;
+    return e->action->name + strlen(PROC_EXC_PREFIX);
 }
 /* 这条边算不算"过程的一部分"：role 对，**而且**动作槽上确实有个过程记号 ——
  * 光有 role 说不出它是第几步/干什么。 */
 static inline int edge_is_proc_step(const AssocEntry *e) {
-    return edge_step_index(e) > 0 || edge_is_call(e) || edge_is_back(e);
+    return edge_step_index(e) > 0 || edge_is_call(e) || edge_is_back(e) ||
+           edge_is_cond(e) || edge_is_else(e) || edge_is_exc(e);
 }
 
 struct NameEntry { uint32_t hash, id; NameEntry *next; };

@@ -130,6 +130,8 @@ typedef enum {
 #define MOD_FLAG_PROC_STEP 16u     /* 动作槽挂 `[步骤:N]`（N 放 `m->rel_id`） */
 #define MOD_FLAG_PROC_CALL 32u     /* 动作槽挂 `[调用]` */
 #define MOD_FLAG_PROC_BACK 64u     /* 动作槽挂 `[回边]` */
+#define MOD_FLAG_PROC_ELSE 128u    /* 动作槽挂 `[否则]`（固定记号，用 flag 位） */
+/* `[条件:X]`/`[异常:类型]` 不另占位：**记号名**（带参数）放 `m.action` 里直接带过去。 */
 
 /* ---- 安全内核的拒绝理由（审计按它分类统计）---- */
 typedef enum {
@@ -244,6 +246,9 @@ static inline int micro_internal_ns(const char *name) {
     if (strncmp(name, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) == 0) return 1;
     if (strcmp(name, PROC_CALL_MARK) == 0) return 1;
     if (strcmp(name, PROC_BACK_MARK) == 0) return 1;
+    if (strncmp(name, PROC_COND_PREFIX, strlen(PROC_COND_PREFIX)) == 0) return 1;
+    if (strcmp(name, PROC_ELSE_MARK) == 0) return 1;
+    if (strncmp(name, PROC_EXC_PREFIX, strlen(PROC_EXC_PREFIX)) == 0) return 1;
     for (size_t i = 0; ns[i]; ++i)
         if (strncmp(name, ns[i], strlen(ns[i])) == 0) return 1;
     return 0;
@@ -1767,14 +1772,22 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         if (idx >= 0 && m->bump) m->target->assocs[idx].hits += m->bump;
         if (m->action) token_set_action_by_target(m->target, Mn, m->action);
         if (m->flags & MOD_FLAG_PROCESS) {
-            /* 过程记号（第 9 条 ②）：和 `[前提]` 同一个规矩 —— 记号本身在**这一步内** intern，
-             * 随边的建立一起走账；role 标成「过程」把过程边与共现边分开。 */
-            char mk[32];
-            if (m->flags & MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
-            else if (m->flags & MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
-            else snprintf(mk, sizeof mk, "%s%u]", PROC_STEP_PREFIX, (unsigned)m->rel_id);
-            Token *mkt = pool_token_intern(p, mk);
-            if (mkt) (void)token_set_action_by_target(m->target, Mn, mkt);
+            /* 过程记号（第 9 条 ②/⑤）：和 `[前提]` 同一个规矩 —— 记号本身在**这一步内** intern，
+             * 随边的建立一起走账；role 标成「过程」把过程边与共现边分开。
+             * 记号名有两种给法：**固定四个**（步骤/调用/回边/否则）用 flag 位拼；
+             * **带名字的两种**（`[条件:X]`/`[异常:类型]`）由 expand 放进 `m->action` 直接带过来
+             * —— 名字是参数，拼不进 flag。 */
+            if (m->action) {
+                (void)token_set_action_by_target(m->target, Mn, m->action);
+            } else {
+                char mk[32];
+                if (m->flags & MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
+                else if (m->flags & MOD_FLAG_PROC_ELSE) snprintf(mk, sizeof mk, "%s", PROC_ELSE_MARK);
+                else if (m->flags & MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
+                else snprintf(mk, sizeof mk, "%s%u]", PROC_STEP_PREFIX, (unsigned)m->rel_id);
+                Token *mkt = pool_token_intern(p, mk);
+                if (mkt) (void)token_set_action_by_target(m->target, Mn, mkt);
+            }
         }
         if (idx >= 0 && (m->flags & MOD_FLAG_PROCESS))
             m->target->assocs[idx].role = ASSOC_ROLE_PROCESS;   /* 过程边（第 9 条 ①） */
@@ -2171,6 +2184,8 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
         if (idx > 255) { snprintf(note, cap, "步号太大（最多 255）"); return -1; }
     } else if (strcmp(mark, PROC_BACK_MARK) == 0) {
         pflag = MOD_FLAG_PROC_BACK;
+    } else if (strcmp(mark, PROC_ELSE_MARK) == 0) {
+        pflag = MOD_FLAG_PROC_ELSE;
     }
     ModIntent m;
     memset(&m, 0, sizeof m);
@@ -2186,6 +2201,7 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
     {
         char mk[32];
         if (pflag == MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
+        else if (pflag == MOD_FLAG_PROC_ELSE) snprintf(mk, sizeof mk, "%s", PROC_ELSE_MARK);
         else if (pflag == MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
         else                                  snprintf(mk, sizeof mk, "%s%d]", PROC_STEP_PREFIX, idx);
         snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, refname,
@@ -2202,9 +2218,96 @@ static inline int token_op_add_call(AI *ai, char *const *args, size_t n, ModQueu
                                     char *note, size_t cap) {
     return token_op_add_step(ai, args, n, q, note, cap, PROC_CALL_MARK);
 }
+/* `加回边 <过程> <步号或动作> [条件词]`：给了条件词就记成 `[回边:条件词]`（每轮先看它成不成立）。
+ * 为什么条件写在记号里：图里一条 (根, 目标) 只有一条边 —— 条件另挂一条会和回边自己撞车。 */
 static inline int token_op_add_back(AI *ai, char *const *args, size_t n, ModQueue *q,
                                     char *note, size_t cap) {
-    return token_op_add_step(ai, args, n, q, note, cap, PROC_BACK_MARK);
+    if (n < 2) { snprintf(note, cap, "要 <过程> <步号或动作> [条件词]"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    char backnum[32];
+    backnum[0] = 0;
+    if (args[1] && args[1][0]) {
+        int alldig = 1;
+        for (const char *q = args[1]; *q; ++q) if (*q < '0' || *q > '9') { alldig = 0; break; }
+        if (alldig) snprintf(backnum, sizeof backnum, "%s%s]", PROC_STEP_PREFIX, args[1]);
+    }
+    const char *refname = backnum[0] ? backnum : args[1];
+    char mk[96];
+    if (n >= 3 && args[2] && args[2][0]) snprintf(mk, sizeof mk, "%s%s]", PROC_BACK_PREFIX, args[2]);
+    else                                 snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = pool_find(ai->pool, refname);
+    snprintf(m.name, sizeof m.name, "%s", refname);
+    snprintf(m.source, sizeof m.source, "行为:加回边");
+    m.flags = MOD_FLAG_PROCESS;
+    m.action = pool_token_intern(ai->pool, mk);
+    if (!m.action) { snprintf(note, cap, "回边记号建不出来"); return -1; }
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, refname,
+             ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+/* ⑤ 分支/循环/异常的三个写入口（都复用"名字端点"那条路，走同一份受审通道）。
+ * `加条件 <过程> <条件词> <动作>`：`[过程:X] —[条件:条件词]→ 动作`（条件成立才走这一步）。
+ * `加否则 <过程> <动作>`：条件不成立时走的那一支（和上面那条互斥）。
+ * `加异常 <过程> <类型> <动作>`：哪一步失败时跳去做的处理步（类型只作标签，v1 不按类型分派）。 */
+static inline int token_op_add_cond(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap) {
+    if (n < 3) { snprintf(note, cap, "要 <过程> <条件词> <动作>"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    char mk[96];
+    snprintf(mk, sizeof mk, "%s%s]", PROC_COND_PREFIX, args[1]);
+    if (micro_reserved_new_name(mk)) { snprintf(note, cap, "条件名不能用保留名"); return -1; }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = pool_find(ai->pool, args[2]);            /* 可能还没有：走名字端点 */
+    snprintf(m.name, sizeof m.name, "%s", args[2]);
+    snprintf(m.source, sizeof m.source, "行为:加条件");
+    m.flags = MOD_FLAG_PROCESS;      /* 记号名走 m.action（带名字的记号不占 flag 位） */
+    /* 条件词自己也要在（它得能当端点、能被 `ai_premise_holds` 判） */
+    m.action = pool_token_intern(ai->pool, mk);
+    if (!m.action) { snprintf(note, cap, "条件名建不出来"); return -1; }
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, args[2],
+             ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+static inline int token_op_add_else(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap) {
+    return token_op_add_step(ai, args, n, q, note, cap, PROC_ELSE_MARK);
+}
+static inline int token_op_add_exc(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                   char *note, size_t cap) {
+    if (n < 3) { snprintf(note, cap, "要 <过程> <类型> <动作>"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    char mk[96];
+    snprintf(mk, sizeof mk, "%s%s]", PROC_EXC_PREFIX, args[1]);
+    if (micro_reserved_new_name(mk)) { snprintf(note, cap, "类型名不能用保留名"); return -1; }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = pool_find(ai->pool, args[2]);
+    snprintf(m.name, sizeof m.name, "%s", args[2]);
+    snprintf(m.source, sizeof m.source, "行为:加异常");
+    m.flags = MOD_FLAG_PROCESS;
+    m.action = pool_token_intern(ai->pool, mk);
+    if (!m.action) { snprintf(note, cap, "类型名建不出来"); return -1; }
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, args[2],
+             ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
 }
 
 static inline int token_op_add_premise(AI *ai, char *const *args, size_t n, ModQueue *q,
@@ -2376,8 +2479,16 @@ static const TokenOp TOKEN_OPS[] = {
       "role 标成**过程**（序号不给就自动排）", 2, 3, token_op_add_step_n },
     { "加调用",     "<过程> <动作>", "给过程加一条**调用**边（`[调用]`）：这一步是叫别人/别处",
       2, 2, token_op_add_call },
-    { "加回边",     "<过程> <动作或步号>", "给过程加一条**回边**（`[回边]`）：给步号就指回"
-      "`[步骤:N]`（给动作词会和那一步共用一条边、覆盖它的记号）", 2, 2, token_op_add_back },
+    { "加回边",     "<过程> <步号或动作> [条件词]", "给过程加一条**回边**（`[回边]`）：给步号就指回"
+      "`[步骤:N]`；给了条件词就记成 `[回边:条件词]`（**每轮先看它成不成立** —— 这就是 while 循环）",
+      2, 3, token_op_add_back },
+    { "加条件",     "<过程> <条件词> <动作>", "⑤ 给过程加一条**条件分支**："
+      "`[过程:X] —[条件:条件词]→ 动作`（条件成立才走这一步；判据就是前提那三档）",
+      3, 3, token_op_add_cond },
+    { "加否则",     "<过程> <动作>", "⑤ 给过程加**另一支**（`[否则]`）：上面那条条件不成立时走它",
+      2, 2, token_op_add_else },
+    { "加异常",     "<过程> <类型> <动作>", "⑤ 给过程加**出错时跳的处理步**（`[异常:类型]`）："
+      "哪一步失败就跑它（类型只作标签，v1 不按类型分派）", 3, 3, token_op_add_exc },
     { NULL, NULL, NULL, 0, 0, NULL }
 };
 

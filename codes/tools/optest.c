@@ -34,8 +34,8 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 static void test_table(void) {
     printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
-    ok(n == 10, "表里 10 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
-                "后 4 条 = 过程记号，**必须在表尾** —— 原语层按下标引用这张表）");
+    ok(n == 13, "表里 13 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
+                "后 7 条 = 过程记号 ①②⑤，**必须在表尾** —— 原语层按下标引用这张表）");
     int dup = 0, nofn = 0, noshape = 0;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
         if (!TOKEN_OPS[i].expand) nofn++;
@@ -1540,6 +1540,131 @@ static void test_proc_dry(void) {
     }
 }
 
+/* ============ ㉖ ⑤ 分支/循环/异常：记号、写入口、跑法（第 9 条 ⑤） ============
+ *
+ * §6.56 五步走的最后一步。条件判据**不另造**（就是前提那三档）；循环条件写在**回边记号**
+ * 里（`[回边:条件词]`）—— 因为图里一条 (根,目标) 只有一条边，条件另挂一条会和步骤/回边撞车。 */
+static void test_proc_branch(void) {
+    printf("== ㉖ ⑤ 分支/循环/异常：条件走哪一支、出错跳哪、循环什么时候停 ==\n");
+    /* 记号判据 */
+    {
+        AssocEntry e;
+        memset(&e, 0, sizeof e);
+        Token mk; memset(&mk, 0, sizeof mk);
+        Token tgt; memset(&tgt, 0, sizeof tgt);
+        e.role = ASSOC_ROLE_PROCESS; e.action = &mk; e.main = &tgt;
+        mk.name = (char *)"[条件:猫]";
+        ok(edge_is_cond(&e) && !edge_is_else(&e) && strcmp(edge_cond_name(&e), "猫]") == 0,
+           "`[条件:猫]` 认得出（名字里带结尾的 `]` —— 打印要用 `proc_mark_bare` 去掉）");
+        { char cb[32];
+          /* 长度按**字节**算（"猫" 是 3 字节）—— 别按字数想（第一版就写成 2 了） */
+          ok(proc_mark_bare(mk.name, PROC_COND_PREFIX, cb, sizeof cb) == strlen("猫") &&
+             strcmp(cb, "猫") == 0, "`proc_mark_bare` 去掉结尾的 `]`（打印时才对）"); }
+        mk.name = (char *)"[否则]";
+        ok(edge_is_else(&e) && !edge_is_cond(&e), "`[否则]` 认得出");
+        mk.name = (char *)"[异常:没热水]";
+        ok(edge_is_exc(&e) && strcmp(edge_exc_name(&e), "没热水]") == 0, "`[异常:类型]` 认得出");
+        mk.name = (char *)"[回边]";
+        ok(edge_is_back(&e) && edge_back_cond(&e) == NULL, "不带条件的回边：认得出、没有条件");
+        mk.name = (char *)"[回边:有热水]";
+        ok(edge_is_back(&e) && edge_back_cond(&e) && strcmp(edge_back_cond(&e), "有热水]") == 0,
+           "带条件的回边 `[回边:有热水]`：认得出，条件取得出来");
+        ok(!edge_is_process(&e) == 0, "（前提：这些记号都是**过程边**上的动作槽）");
+    }
+    /* 写入口 + 跑法：分支 */
+    {
+        AI *ai = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶9"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶9", (char *)"猫", (char *)"泡茶叶9"};
+          ok(token_op_run(ai, "加条件", a, 3, note, sizeof note) >= 0, "`加条件` 走受审通道"); }
+        { char *a[2] = {(char *)"泡茶9", (char *)"去烧水9"};
+          ok(token_op_run(ai, "加否则", a, 2, note, sizeof note) >= 0, "`加否则` 走受审通道"); }
+        Token *root = proc_root_of(ai, "泡茶9");
+        ok(root != NULL, "过程根在");
+        if (root) {
+            long ic = -1, ie = -1;
+            for (size_t i = 0; i < root->count; ++i) {
+                if (edge_is_cond(&root->assocs[i])) ic = (long)i;
+                if (edge_is_else(&root->assocs[i])) ie = (long)i;
+            }
+            ok(ic >= 0 && edge_is_process(&root->assocs[ic]), "条件边建出来了，role=过程");
+            ok(ie >= 0 && edge_is_process(&root->assocs[ie]), "否则边建出来了，role=过程");
+        }
+        /* 条件成立（猫 在焦点里）→ 走条件那一支 */
+        (void)ai_focus_push(ai, (Token *)pool_find(ai->pool, "猫"), 1.0f);
+        ai->proc_run = 1; ai->proc_dry = 0;
+        ProcRun pr;
+        { size_t g = proc_run(ai, "泡茶9", &pr);
+          ok(g == 0 && pr.n_ok >= 1, "条件成立：条件那一支跑了（0 断点）"); }
+        ai_free(ai);
+    }
+    /* 条件词图里没有 → 判不了（按不成立走），有否则支就去否则支 */
+    {
+        AI *b = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶10"}; (void)token_op_run(b, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶10", (char *)"图里没这个词", (char *)"泡茶叶10"};
+          (void)token_op_run(b, "加条件", a, 3, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶10", (char *)"去烧水10"};
+          (void)token_op_run(b, "加否则", a, 2, note, sizeof note); }
+        b->proc_run = 1; b->proc_dry = 0;
+        ProcRun pr;
+        (void)proc_run(b, "泡茶10", &pr);
+        ok(pr.n_ok >= 1 && pr.n_gap == 0,
+           "条件词判不了 → 按不成立走 `[否则]` 那一支（**不静默当成立**）");
+        ai_free(b);
+    }
+    /* 异常：哪一步失败就跑异常支；**出错那一步的账照旧记** */
+    {
+        AI *c = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶11"}; (void)token_op_run(c, "建过程", a, 1, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶11", (char *)"加步骤"};      /* 要参数 ⇒ 必失败 */
+          (void)token_op_run(c, "加步骤", a, 2, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶11", (char *)"没参数", (char *)"用微波炉11"};
+          (void)token_op_run(c, "加异常", a, 3, note, sizeof note); }
+        c->proc_run = 1; c->proc_dry = 0;
+        ProcRun pr;
+        (void)proc_run(c, "泡茶11", &pr);
+        ok(pr.n_gap == 1 && pr.n_exc_handled == 1,
+           "出错那一步记 1 个断点，异常处理步跑通 1 次（**账不抹**）");
+        ai_free(c);
+    }
+    /* 循环：回边 + 上限；带条件的回边 = while */
+    {
+        AI *d = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶12"}; (void)token_op_run(d, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶12", (char *)"烧水12", (char *)"1"};
+          (void)token_op_run(d, "加步骤", a, 3, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶12", (char *)"1"};            /* 不带条件 */
+          (void)token_op_run(d, "加回边", a, 2, note, sizeof note); }
+        d->proc_run = 1; d->proc_dry = 0;
+        ProcRun p1;
+        (void)proc_run(d, "泡茶12", &p1);
+        ok(p1.n_step >= 3, "不带条件的回边：按上限 2 次重跑（总步数 ≥ 3）");
+        ai_free(d);
+    }
+    {
+        AI *e = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶13"}; (void)token_op_run(e, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶13", (char *)"烧水13", (char *)"1"};
+          (void)token_op_run(e, "加步骤", a, 3, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶13", (char *)"1", (char *)"猫"};
+          (void)token_op_run(e, "加回边", a, 3, note, sizeof note); }   /* while 猫 */
+        Token *mk = pool_find(e->pool, "[回边:猫]");
+        ok(mk != NULL, "带条件的回边记号 `[回边:猫]` 建出来了（条件写在记号里，不另挂边）");
+        e->proc_run = 1; e->proc_dry = 0;
+        ProcRun p2;
+        (void)proc_run(e, "泡茶13", &p2);
+        ok(p2.n_skip == 1 && p2.n_step == 1,
+           "条件不成立（猫不在焦点里）⇒ **一次都不重跑**（while 的正常出口）");
+        ai_free(e);
+    }
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -1893,6 +2018,7 @@ int main(void) {
     test_process_marks();
     test_proc_run();
     test_proc_dry();
+    test_proc_branch();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
