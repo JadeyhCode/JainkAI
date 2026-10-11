@@ -363,6 +363,24 @@ static inline int hypo_layer_of_subject(const Hypo *h, const Token *t) {
     return -1;
 }
 
+/* 撤掉最深那一层里的**某一条**假设（回退用）。
+ *
+ * 为什么需要它：`hypo_pop` 只能整层弹，"这一步的假设撤了、上一步的还在"做不到 ——
+ * 而过程执行（第 9 条 ④）的回退恰恰是**按步**撤：一步失败，只撤这一步刚加的那些假设。
+ * 返回 1 = 撤掉了（后面的条目往前挪，不留空位）。 */
+static inline int hypo_del(Hypo *h, const Token *a, const Token *b, uint8_t rid) {
+    if (!h || h->depth == 0 || !a || !b || rid == 0) return 0;
+    HypoFrame *f = &h->fr[h->depth - 1];
+    for (size_t i = 0; i < f->n; ++i) {
+        if (f->f[i].a != a || f->f[i].b != b || f->f[i].rid != rid) continue;
+        for (size_t k = i + 1; k < f->n; ++k) f->f[k - 1] = f->f[k];
+        f->n--;
+        memset(&f->f[f->n], 0, sizeof f->f[f->n]);
+        return 1;
+    }
+    return 0;
+}
+
 /* 往最深那一层加一条事实 */
 static inline int hypo_add(Hypo *h, Token *a, Token *b, uint8_t rid, int neg) {
     if (!h || !a || !b || rid == 0) return 0;
@@ -661,6 +679,9 @@ typedef struct {
      * 逐步核对（认识吗 / 前提成立吗 / 是不是 Token 行为），核对本身只读；真的执行某一步行为
      * 时走的是老那条受审通道。关着时那个命令只说"关着"，一个字的既有行为都不变。 */
     int     proc_run;
+    /* **干跑**（第 9 条 ④，默认 0）：过程执行时"前提不成立"改成**假定成立**（记进假设层）、
+     * 行为步骤**不执行**（只记"假定能做"）；跑完把假设层 pop 回原样 —— 一个字都不落图。 */
+    int     proc_dry;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1119,6 +1140,8 @@ static inline void ai_switches_init(AI *ai) {
     ai->others_ask = 0;              /* 他者视角进回答路径：默认**关** */
     ai->proc_run = 0;                /* 过程执行（第 9 条 ③）：默认**关** */
     { const char *pr = getenv("AIP_PROCRUN"); if (pr && pr[0] == '1') ai->proc_run = 1; }
+    ai->proc_dry = 0;                /* 干跑（假设世界）：默认**关** */
+    { const char *pd = getenv("AIP_PROCDRY"); if (pd && pd[0] == '1') ai->proc_dry = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

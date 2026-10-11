@@ -54,8 +54,8 @@
      2026-10-10 用户说"先不急"；要做就**只在补丁层**做（挂载式、默认不挂），不进内核。
 
 三、下一步顺序（**唯一一份**；①~⑤ 与第 6 条的内核四缺口（N1/K6/N4/N2/N3）**全部完成**；
-   第 7 条顺手件**整条完成**、「合写否定」缺口已修、**过程记号 ①②③ 落地**；
-   **下一件 = 过程记号 ④ Hypo 栈**（用户拍板：**用 role 标记**这个方案））
+   第 7 条顺手件**整条完成**、「合写否定」缺口已修、**过程记号 ①②③④ 落地**；
+   **下一件 = 过程记号 ⑤ 分支/循环/异常**（用户拍板：**用 role 标记**这个方案））
   1. ~~套件相位提速~~ ✅（`tests/prebuilt.sh`；快路 9 ms vs 自编 15.6 s；`FORCE_CC=1` 仍强制自编）
   2. ~~改名 + 删历史遗留（v10）~~ ✅（audit §6.50；`model_roundtrip` 第 ⑥ 步钉 "v9 读→v10 存→v10 读 等价"）
   3. ~~`action.h` 受审的外部执行 + 写文件~~ ✅（audit §6.51；白名单/无 shell/自管超时/输出当观测/账）
@@ -150,9 +150,19 @@
        看护 tokenop ⑩ 10 项、optest ㉔ 12 项；既有跑法逐字节只差 `::proc` 那两行；整包全绿。
        **顺带修一条真错**：`micro_edge_removable()` 会把**过程边**拆掉 ⇒ 给一步挂前提时
        那一步就没了（过程少一步）；现在过程边是**结构**，插词/加前提都不许拆。
-     · ⬜ **④ 加 Hypo 栈**（过程的每一步进假设层、可回滚）← **下一件**
-       → ⑤ 分支 / 循环 / 异常（`[条件:X]`/`[否则]` 这些记号还没加；届时步骤要带**对象/条件**，
-         那时才接得上"一步一步 `der_verify` 独立重推"）
+     · ~~**④ 加 Hypo 栈**~~ ✅（**audit §6.72**）：`Hypo` 当**执行栈与作用域** ——
+       进一个过程压一层（`who` = 过程根；主过程 + 递归调用，深度上限 3）、出来必须回到进来的深度、
+       **按步回退**（`hypo_del` 撤掉这一步刚加的假设，上一步的留着）。
+       **干跑**（`::proc dry on|off` / `AIP_PROCDRY=1`，默认关）：前提不成立 → **假定成立**
+       （用现成的关系 `需要` 记进层）、行为步骤**不执行**（只记"假定能做"）、
+       要参数的仍是断点（结构性做不了，也是"按步回退"唯一真实可达的路径）。
+       跑完明账：`假设层：进 N 层 / 回退 M 次 / 深度 X → Y`、`假定 K 条；撤 M 条；
+       核对 K−M 条还在层里（hypo_find 独立核过）—— 对得上/对不上`（核对在 pop **之前**做）。
+       看护 tokenop ⑪ 9 项（91 项全过）、optest ㉕ 16 项（315 项全过，三种跑法）；
+       整包四种跑法全绿。**假设层补了缺的那一半**：`hypo_del()`（撤单条）。
+     · ⬜ **⑤ 分支 / 循环 / 异常**：`[条件:X]`/`[否则]`/`[异常:类型]` 这些记号；
+       步骤要带**对象/条件**（那时才接得上"一步一步 `der_verify` 独立重推"、
+       也才有"假定某个对象存在"可记）← **下一件**
      · 方案（讨论定稿）：**"过程边 vs 共现边"用 role 标记** —— `uint8_t role` 现在只用 0~5
        （共现/输入/回复/造词/推论/基准），**还剩 250 个空位**，加 `ASSOC_ROLE_PROCESS` 是一行枚举
        + 一行中文名 + 一个判据函数（`edge_is_process()`），**不动存档布局**；
@@ -172,15 +182,15 @@
   · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
     ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
     ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
-  · 看护数（**都是实测**）：optest **299** / tokenop **82** / delibtest **155** / microtest **71** /
+  · 看护数（**都是实测**）：optest **315** / tokenop **91** / delibtest **155** / microtest **71** /
     biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
     cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
     **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
   · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
   · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
-    `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
     `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
-  · 常用命令新增：`::proc [<名字>|on|off|run <名字>]`、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
+  · 常用命令新增：`::proc [<名字>|on|off|dry on|off|run <名字>]`、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
     `::asm check`、`::lex`、`::ascii`
   · `codes/` 镜像 **100 文件逐字节一致**；工作区干净；存档格式仍 **v10**（没动过）
   · **局限总表**：`docs/局限总表.md`（现有局限的索引+摘要，含设计取舍/已知缺口/已知陷阱/已修索引；

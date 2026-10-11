@@ -53,6 +53,8 @@ thinkredo:AIP_THINKREDO=1
 others:AIP_OTHERS=1
 # 过程执行引擎（第 9 条 ③，默认关；看护在 tests/tokenop.sh 第 ⑩ 节）
 procrn:AIP_PROCRUN=1
+# 过程干跑（第 9 条 ④，默认关；看护在 tests/tokenop.sh 第 ⑪ 节）
+procdry:AIP_PROCDRY=1
 # 闸门里的候选证据项现在是**默认开**，所以反向测它要成对给：
 #   闸门开 + 证据项关 = 老公式（阈值也回到老那套）
 wgate-ev0:AIP_WGATE=1 AIP_WGATE_EV=0

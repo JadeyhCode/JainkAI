@@ -1391,7 +1391,8 @@ static void test_proc_run(void) {
     /* 开着：普通步骤过、行为步骤真执行 */
     {
         ProcRun pr;
-        ai->proc_run = 1;                    /* 这一节测的是"开着时"的行为：C 级测试自己钉开关 */
+        ai->proc_run = 1;                    /* 这一节测的是"实跑"：C 级测试自己钉开关 */
+        ai->proc_dry = 0;                    /* 干跑关（不然就会"假定成立"而不是真执行） */
         size_t g = proc_run(ai, "泡茶3", &pr);
         ok(g == 0 && pr.n_step == 2, "两步都过（0 断点）");
         ok(pr.n_ran == 1, "其中「回收临时」那一步**真的执行了**（受审通道，计数 +1）");
@@ -1409,6 +1410,7 @@ static void test_proc_run(void) {
           (void)token_op_run(b, "加前提", a, 3, note2, sizeof note2); }
         ProcRun pr;
         b->proc_run = 1;
+        b->proc_dry = 0;
         size_t g = proc_run(b, "泡茶4", &pr);
         ok(g == 1 && pr.n_gap == 1, "前提没成立 ⇒ **1 个断点**（不是「照跑不误」）");
         {   /* 断点要**既进轨迹**（有 DER_GAP 步）**又上计数**（`trace.gaps`）——
@@ -1430,11 +1432,112 @@ static void test_proc_run(void) {
           (void)token_op_run(c, "加步骤", a, 2, n3, sizeof n3); }
         ProcRun pr;
         c->proc_run = 1;
+        c->proc_dry = 0;
         size_t g = proc_run(c, "泡茶5", &pr);
         ok(g == 1 && pr.n_ran == 0, "行为要参数时**不猜参数**：记断点、不执行");
         ai_free(c);
     }
     ai_free(ai);
+}
+
+/* ==================== ㉕ ④ 干跑：假设世界（Hypo 当执行栈与作用域） ====================
+ *
+ * §6.56 第 4 条：`Hypo` 当执行栈与作用域，回退用它的 pop。这一节钉：
+ * 干跑默认关、前提不成立→假定（记进层）、行为不执行、**跑完深度回原样**、
+ * 按步回退（撤单条 —— 给假设层补的 `hypo_del`）、以及调用时多压一层。 */
+static void test_proc_dry(void) {
+    printf("== ㉕ ④ 干跑：假设世界（Hypo 当执行栈与作用域） ==\n");
+    /* `hypo_del` 本身：撤单条（这是"按步回退"缺的那一半） */
+    {
+        AI *h = ai_new();
+        Token *x = T(h, "假甲"), *y = T(h, "假乙"), *z = T(h, "假丙");
+        (void)hypo_push(&h->hypo, NULL);
+        (void)hypo_add(&h->hypo, x, y, REL_NEED, 0);
+        (void)hypo_add(&h->hypo, x, z, REL_NEED, 0);
+        size_t n0 = h->hypo.fr[0].n;
+        ok(n0 == 2, "一层里两条假设");
+        ok(hypo_del(&h->hypo, x, y, REL_NEED) == 1 && h->hypo.fr[0].n == n0 - 1,
+           "`hypo_del` 撤掉**指定那一条**（另一条还在）");
+        ok(hypo_find(&h->hypo, NULL, x, REL_NEED, z, NULL) != NULL &&
+           hypo_find(&h->hypo, NULL, x, REL_NEED, y, NULL) == NULL,
+           "撤的是对的那条（剩下那条还查得到）");
+        ok(hypo_del(&h->hypo, x, y, REL_NEED) == 0, "已经不在了 → 再撤返回 0（不谎报）");
+        ai_free(h);
+    }
+    /* 干跑：假定前提、行为不执行、深度回原样 */
+    {
+        AI *ai = ai_new();
+        char note[200];
+        ok(ai->proc_dry == 0 || getenv("AIP_PROCDRY") != NULL,
+           "干跑默认**关**（反向测量 AIP_PROCDRY=1 时按规矩跳过）");
+        { char *a[1] = {(char *)"泡茶6"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶6", (char *)"烧水6", (char *)"1"};
+          (void)token_op_run(ai, "加步骤", a, 3, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶6", (char *)"回收临时"};
+          (void)token_op_run(ai, "加步骤", a, 2, note, sizeof note); }
+        { char *a[3] = {(char *)"[过程:泡茶6]", (char *)"烧水6", (char *)"有热水6"};
+          (void)token_op_run(ai, "加前提", a, 3, note, sizeof note); }
+        size_t base = ai->hypo.depth;
+        ai->proc_run = 1;
+        /* 实跑：前提不成立 ⇒ 断点；行为真执行 */
+        ProcRun wet;
+        ai->proc_dry = 0;
+        (void)proc_run(ai, "泡茶6", &wet);
+        ok(wet.n_gap == 1 && wet.n_ran == 1,
+           "实跑：前提不成立=1 个断点，行为步骤真执行（③ 的语义）");
+        ok(ai->hypo.depth == base, "实跑之后假设层深度回原样");
+        /* 干跑：假定成立、行为不执行 */
+        ProcRun dry;
+        ai->proc_dry = 1;
+        (void)proc_run(ai, "泡茶6", &dry);
+        ok(dry.n_gap == 0 && dry.n_assume == 1 && dry.n_defer == 1,
+           "干跑：前提**假定成立**（1 条假设）、行为步骤**推迟不执行**（1 个）、0 断点");
+        ok(dry.n_ran == 0, "干跑**一个行为都没执行**（与实跑的区别）");
+        ok(ai->hypo.depth == base, "干跑之后深度也回原样（pop 干净，不漏）");
+        ok(dry.n_assume_ok == dry.n_assume - dry.n_rollback,
+           "跑完核对：没被回退的假设都还在层里（`hypo_find` 核过）");
+        ok(dry.hypo_peak > dry.hypo_base, "跑的时候确实压了层（不是空转）");
+        ai_free(ai);
+    }
+    /* 按步回退：先假定、随后发现这一步做不了（要参数）⇒ 撤掉那一步的假设 */
+    {
+        AI *b = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶7"}; (void)token_op_run(b, "建过程", a, 1, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶7", (char *)"加步骤"};
+          (void)token_op_run(b, "加步骤", a, 2, note, sizeof note); }
+        { char *a[3] = {(char *)"[过程:泡茶7]", (char *)"加步骤", (char *)"有热水7"};
+          (void)token_op_run(b, "加前提", a, 3, note, sizeof note); }
+        b->proc_run = 1; b->proc_dry = 1;
+        ProcRun pr;
+        size_t base = b->hypo.depth;
+        (void)proc_run(b, "泡茶7", &pr);
+        ok(pr.n_assume == 1 && pr.n_rollback == 1 && pr.n_assume_ok == 0,
+           "**按步回退**：假定 1 条 → 这一步做不了 → 撤 1 条 → 核对 0 条（账对得上）");
+        ok(b->hypo.depth == base, "回退之后深度仍在原样（撤的是事实，不是层）");
+        ai_free(b);
+    }
+    /* 调用：进子过程要多压一层（执行栈） */
+    {
+        AI *c = ai_new();
+        char note[200];
+        { char *a[1] = {(char *)"泡茶8"}; (void)token_op_run(c, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"泡茶8", (char *)"烧水8", (char *)"1"};
+          (void)token_op_run(c, "加步骤", a, 3, note, sizeof note); }
+        { char *a[1] = {(char *)"洗杯8"}; (void)token_op_run(c, "建过程", a, 1, note, sizeof note); }
+        { char *a[3] = {(char *)"洗杯8", (char *)"冲水8", (char *)"1"};
+          (void)token_op_run(c, "加步骤", a, 3, note, sizeof note); }
+        { char *a[2] = {(char *)"泡茶8", (char *)"洗杯8"};
+          (void)token_op_run(c, "加调用", a, 2, note, sizeof note); }
+        c->proc_run = 1; c->proc_dry = 1;
+        ProcRun pr;
+        size_t base = c->hypo.depth;
+        (void)proc_run(c, "泡茶8", &pr);
+        ok(pr.n_call == 1 && pr.hypo_peak >= base + 2,
+           "调用子过程时**多压一层**（执行栈：主过程 1 层 + 子过程 1 层）");
+        ok(c->hypo.depth == base, "跑完深度回原样（子过程那层也 pop 掉了）");
+        ai_free(c);
+    }
 }
 
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
@@ -1789,6 +1892,7 @@ int main(void) {
     test_merged_neg();
     test_process_marks();
     test_proc_run();
+    test_proc_dry();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();

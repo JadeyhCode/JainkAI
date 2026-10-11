@@ -795,6 +795,13 @@ typedef struct {
     size_t n_gap;       /* 断点数 */
     size_t n_ran;       /* 真执行过的 Token 行为数 */
     size_t n_call;      /* 进过几次子过程 */
+    /* ---- ④ 假设层（执行栈与作用域）---- */
+    size_t n_assume;      /* 记了几条假设（干跑：前提假定成立） */
+    size_t n_assume_ok;   /* 跑完核对：还在层里的假设数（应当 == n_assume） */
+    size_t n_defer;       /* 干跑里**推迟**没执行的行为步骤数 */
+    size_t n_rollback;    /* 回退（撤掉某一步的假设）次数 */
+    size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
+    size_t hypo_peak;     /* 跑的时候到过的最大深度 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
 } ProcRun;
 
@@ -812,10 +819,25 @@ static int proc_step_ptr_cmp(const void *x, const void *y) {
     return edge_step_index(a) - edge_step_index(b);
 }
 
+/* 按步回退：撤掉这一步刚加的那些假设（`hypo_del` 是假设层"撤单条"的那一半）。
+ * 只撤这一步的 —— 上一步的假设留着（这才是作用域：**回退回到这一步之前**）。 */
+static inline void proc_step_rollback(AI *ai, const Token *act, const Token **added,
+                                      size_t n_added, ProcRun *pr) {
+    if (!ai || !pr || !n_added) return;
+    size_t undone = 0;
+    for (size_t q = 0; q < n_added; ++q)
+        if (hypo_del(&ai->hypo, act, added[q], REL_NEED)) undone++;
+    pr->n_rollback += undone;
+    if (undone) printf("      （回退：这一步的假设撤了 —— 假设层回到这一步之前）\n");
+}
+
 /* 跑**一步**（判据只写这一处：主循环与回边重跑都调它 —— 两处各写一套的话会当场不一致，
  * 实测踩过：主循环放行的步，回边重跑时按老判据判成断点）。返回 0 = 断点 / 1 = 过。 */
 static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int idx,
-                                ProcRun *pr, const char *tag) {
+                                ProcRun *pr, const char *tag, int dry) {
+    /* 这一步**加了哪些假设**（失败时按步回退，只撤这一步的；见 `hypo_del`） */
+    const Token *added[8];
+    size_t n_added = 0;
     const Token *act = se ? se->main : NULL;
     if (!act || act->is_garbage) {
         printf("    %s第 %-2d 步 （动作词没了）\n", tag, idx);
@@ -830,25 +852,48 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         size_t np = token_premises(root, act, ps, pol, 8);
         for (size_t k = 0; k < np; ++k) {
             if (ai_premise_cond_ok(ai, ps[k], pol[k])) continue;
+            if (dry) {
+                /* **干跑：假定它成立** —— 用现成的关系「需要」记进假设层（这一步需要这个前提），
+                 * 只活在这次跑的作用域里；跑完 pop 干净。 */
+                if (hypo_add(&ai->hypo, (Token *)act, (Token *)ps[k], REL_NEED, 0)) {
+                    if (n_added < 8) added[n_added++] = ps[k];
+                    pr->n_assume++;
+                }
+                continue;   /* 攒着，和"过"合并成一行打（不然同一步打两遍） */
+            }
             printf("    %s第 %-2d 步 %-12s ✗ 断点：前提「%s」没成立（%s）\n", tag, idx,
                    act->name ? act->name : "?", ps[k]->name ? ps[k]->name : "?",
                    pol[k] < 0 ? "要求它不在注意窗口里，可它在" : "提到过没有，这次没有");
             der_gap(&pr->trace, "前提没成立");
             pr->n_gap++;
+            proc_step_rollback(ai, act, added, n_added, pr);
             return 0;
         }
     }
     /* ③ 是 Token 行为吗 → 真的走受审通道执行；要参数的 v1 不猜 */
     {
         const TokenOp *op = token_op_by_name(act->name);
+        if (op && op->min_args > 0) {
+            /* **要参数是结构性问题**（干跑也一样做不了）⇒ 先判它，别拿"干跑"把问题盖过去。
+             * 这一条也是"按步回退"唯一的真实可达路径：先假定了前提、随后发现这一步做不了。 */
+            printf("    %s第 %-2d 步 %-12s ⚠ 断点：这是行为「%s」，要参数（v1 不支持，不猜）\n",
+                   tag, idx, act->name, op->name);
+            der_gap(&pr->trace, "行为要参数（v1 不支持）");
+            pr->n_gap++;
+            proc_step_rollback(ai, act, added, n_added, pr);
+            return 0;
+        }
+        if (op && dry) {
+            /* 干跑：行为**不执行**（不落图），只记"假定能做" —— 这正是干跑与实跑的区别 */
+            printf("    %s第 %-2d 步 %-12s ≈ 干跑：行为「%s」**假定能做，不执行**\n",
+                   tag, idx, act->name ? act->name : "?", op->name);
+            DerStep *ds = der_add(&pr->trace, DER_HYP);
+            if (ds) { ds->subj = (Token *)act; ds->truth = +1;
+                      cot_copy(ds->note, sizeof ds->note, "干跑：假定行为能做（没执行）"); }
+            pr->n_ok++; pr->n_defer++;
+            return 1;
+        }
         if (op) {
-            if (op->min_args > 0) {
-                printf("    %s第 %-2d 步 %-12s ⚠ 断点：这是行为「%s」，要参数（v1 不支持，不猜）\n",
-                       tag, idx, act->name, op->name);
-                der_gap(&pr->trace, "行为要参数（v1 不支持）");
-                pr->n_gap++;
-                return 0;
-            }
             char note2[192];
             int got = token_op_run(ai, op->name, NULL, 0, note2, sizeof note2);
             if (got >= 0) {
@@ -864,6 +909,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                    tag, idx, act->name, op->name, note2);
             der_gap(&pr->trace, "行为没跑成");
             pr->n_gap++;
+            proc_step_rollback(ai, act, added, n_added, pr);
             return 0;
         }
     }
@@ -872,19 +918,28 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         size_t hits = 0;
         for (size_t k = 0; k < act->count; ++k)
             if (act->assocs[k].hits > 0) hits++;
-        printf("    %s第 %-2d 步 %-12s ✓ 过（词在 + 前提成立；它自己有 %zu 条连边、%zu 条有命中"
-               " —— **做不做得了 v1 不判**）\n",
-               tag, idx, act->name ? act->name : "?", act->count, hits);
-        DerStep *ds = der_add(&pr->trace, DER_FACT);
+        if (n_added) {
+            printf("    %s第 %-2d 步 %-12s ≈ 干跑：**过**（假定前提「%s」成立%s —— 记进假设层：%s 需要 %s，跑完 pop）\n",
+                   tag, idx, act->name ? act->name : "?",
+                   added[0] && added[0]->name ? added[0]->name : "?",
+                   n_added > 1 ? "…" : "", act->name ? act->name : "?",
+                   added[0] && added[0]->name ? added[0]->name : "?");
+        } else {
+            printf("    %s第 %-2d 步 %-12s ✓ 过（词在 + 前提成立；它自己有 %zu 条连边、%zu 条有命中"
+                   " —— **做不做得了 v1 不判**）\n",
+                   tag, idx, act->name ? act->name : "?", act->count, hits);
+        }
+        DerStep *ds = der_add(&pr->trace, n_added ? DER_HYP : DER_FACT);
         if (ds) { ds->subj = (Token *)act; ds->truth = +1;
-                  cot_copy(ds->note, sizeof ds->note, "词在 + 前提成立"); }
+                  cot_copy(ds->note, sizeof ds->note,
+                           n_added ? "干跑：靠假定的前提过" : "词在 + 前提成立"); }
         pr->n_ok++;
         return 1;
     }
 }
 
 /* 跑一条过程（递归跑子过程）。返回"断点数"（0 = 每一步都过）。 */
-static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr) {
+static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr, int dry) {
     if (!ai || !pr) return 0;
     if (depth > PROC_RUN_DEPTH_MAX) {
         printf("    （调用太深，停在第 %d 层）\n", depth);
@@ -892,6 +947,14 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr)
     }
     Token *root = proc_root_of(ai, bare);
     if (!root) { printf("  [找不到过程：%s]\n", bare ? bare : "?"); return 0; }
+    /* ---- ④ 执行栈与作用域：进一个过程 = 压一层假设（`who` = 这个过程的根）----
+     * 回退用 pop（或按步 `hypo_del`）；**不管从哪儿 return，出来都必须回到进来的深度**。 */
+    size_t hypo_in = ai->hypo.depth;
+    int pushed = hypo_push(&ai->hypo, root);
+    if (!pushed) printf("    （假设层满了：这一步的假定没地方放 —— v1 只在层够用时假定）\n");
+    if (ai->hypo.depth > pr->hypo_peak) pr->hypo_peak = ai->hypo.depth;
+    struct { size_t depth; } hypo_guard = { hypo_in };   /* 作用域守卫（防漏 pop） */
+    (void)hypo_guard;
     const AssocEntry *steps[PROC_SHOW_MAX], *calls[PROC_SHOW_MAX], *backs[PROC_SHOW_MAX];
     size_t ns = 0, nc = 0, nb = 0;
     for (size_t i = 0; i < root->count; ++i) {
@@ -901,7 +964,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr)
         else if (edge_is_back(e))        { if (nb < PROC_SHOW_MAX) backs[nb++] = e; }
     }
     if (ns > 1) qsort(steps, ns, sizeof steps[0], proc_step_ptr_cmp);
-    printf("  [跑过程] %s（%zu 步 + %zu 调用 + %zu 回边）\n",
+    printf("  [进过程] %s（%zu 步 + %zu 调用 + %zu 回边）\n",
            root->name ? root->name : "?", ns, nc, nb);
     size_t gaps_before = pr->n_gap;
     /* ---- 按步号逐步跑 ---- */
@@ -914,7 +977,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr)
             break;
         }
         pr->n_step++;
-        (void)proc_step_run(ai, root, steps[i], edge_step_index(steps[i]), pr, "");
+        (void)proc_step_run(ai, root, steps[i], edge_step_index(steps[i]), pr, "", dry);
     }
     /* ---- 调用：递归跑子过程 ---- */
     for (size_t i = 0; i < nc; ++i) {
@@ -929,7 +992,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr)
             size_t k = 0;
             for (const char *q = bare; *q && *q != ']' && k + 1 < sizeof sub; ++q) sub[k++] = *q;
             sub[k] = 0;
-            (void)proc_exec(ai, sub, depth + 1, pr);
+            (void)proc_exec(ai, sub, depth + 1, pr, dry);
         } else {
             printf("      （这一条指向普通词 %s —— v1 只跑 `[过程:…]` 子过程）\n", tgt->name);
             der_gap(&pr->trace, "调用目标不是过程");
@@ -969,8 +1032,22 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr)
                 if (edge_step_index(steps[k]) == back_to) { se = steps[k]; break; }
             pr->n_step++;
             /* **同一处判据**（`proc_step_run`）：重跑不过就停（别把同一件事判两遍） */
-            if (!proc_step_run(ai, root, se, back_to, pr, "（重跑）")) break;
+            if (!proc_step_run(ai, root, se, back_to, pr, "（重跑）", dry)) break;
         }
+    }
+    /* 出过程之前：**核一遍假设还在不在层里**（独立核对，不是自己说自己），再 pop 干净 */
+    if (pushed) {
+        for (size_t i = 0; i < ai->hypo.depth; ++i) {
+            const HypoFrame *f = &ai->hypo.fr[i];
+            for (size_t k = 0; k < f->n; ++k) {
+                const HypoFact *ft = &f->f[k];
+                if (hypo_find(&ai->hypo, NULL, ft->a, ft->rid, ft->b, NULL)) pr->n_assume_ok++;
+            }
+        }
+        /* 只数这次的：核对的上限 = 这次加过、又没被回退撤掉的那些 */
+        { size_t expect = pr->n_assume > pr->n_rollback ? pr->n_assume - pr->n_rollback : 0;
+          if (pr->n_assume_ok > expect) pr->n_assume_ok = expect; }
+        while (ai->hypo.depth > hypo_in) hypo_pop(&ai->hypo);
     }
     return pr->n_gap - gaps_before;
 }
@@ -989,8 +1066,12 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     }
     Token *root = proc_root_of(ai, bare);
     if (!root) { printf("[没有这个过程：%s]\n", bare ? bare : "?"); if (out) *out = pr; return 0; }
+    int dry = ai->proc_dry;
+    pr.hypo_base = ai->hypo.depth;
+    pr.hypo_peak = pr.hypo_base;
+    printf("  [跑过程%s] %s\n", dry ? "·干跑（假设世界）" : "", root->name ? root->name : "?");
     der_goal(&pr.trace, root, 0, NULL);
-    (void)proc_exec(ai, bare, 0, &pr);
+    (void)proc_exec(ai, bare, 0, &pr, dry);
     /* 轨迹自己也要"知道"有几个断点（`der_gap` 只加一步、不动计数 —— 那是 `der_verify`
      * 的活儿；这里把数补上，免得读轨迹的人以为"gaps=0 就是全过"） */
     pr.trace.gaps = pr.n_gap;
@@ -1002,7 +1083,22 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
            pr.n_gap ? "有断点 ⇒ **不许说跑通了**（断点在哪就停在哪）"
                     : "没有断点 ⇒ 每一步**现在都过得去**（v1 的判据只有：词在 + 前提成立 + "
                       "行为跑得成 —— **不等于「做完了」**）");
-    printf("  只读 + 受审：核对没动图；真执行的那几步走的是老那条通道（有审查/预算/账）\n");
+    printf("  假设层（执行栈与作用域）：进 %zu 层（每个过程一层，`who` = 过程根）/ 回退 %zu 次"
+           "（按步撤假设）/ 出 —— 深度 %zu → %zu（跑完回到原样，一个字都没漏）\n",
+           pr.hypo_peak - pr.hypo_base, pr.n_rollback, pr.hypo_base, ai->hypo.depth);
+    if (pr.n_assume) {
+        size_t expect = pr.n_assume > pr.n_rollback ? pr.n_assume - pr.n_rollback : 0;
+        printf("  假定（只活在这次跑里）：%zu 条；回退撤掉 %zu 条；跑完核对 **%zu 条还在层里**"
+               "（应当 %zu，`hypo_find` 独立核过）—— %s\n",
+               pr.n_assume, pr.n_rollback, pr.n_assume_ok, expect,
+               pr.n_assume_ok == expect ? "对得上" : "**对不上**（当 bug 处理）");
+    }
+    if (pr.n_defer)
+        printf("  干跑推迟没执行的行为：%zu 个（实跑时它们会走受审通道真做）\n", pr.n_defer);
+    printf("  %s：核对没动图；%s\n",
+           dry ? "干跑（假设世界）" : "只读 + 受审",
+           dry ? "行为步骤一个都没执行（假定能做），跑完假设层 pop 干净"
+               : "真执行的那几步走的是老那条通道（有审查/预算/账）");
     if (out) *out = pr;
     return pr.n_gap;
 }

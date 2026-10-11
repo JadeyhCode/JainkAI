@@ -677,6 +677,8 @@ static const CmdDef CMDS[] = {
       "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
       "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来\n"
       "::proc on|off       过程**执行引擎**（第 9 条 ③；默认关，AIP_PROCRUN=1）\n"
+      "::proc dry on|off   ④ **干跑**（假设世界，默认关，AIP_PROCDRY=1）：前提不成立 → 假定成立\n"
+      "  （记进假设层）、行为步骤不执行；跑完 pop 干净 —— 假设层用的是现成的 `Hypo`\n"
       "::proc run <名字>   把一条过程跑一遍：逐步核对（认识吗 / 前提成立吗 / 是不是行为）——\n"
       "  核对只读；哪一步是 Token 行为就走**受审通道**真执行；断点用 `DerGap` 记下来\n"
       "  控制流：`[调用]` 递归跑子过程（深度≤3）、`[回边]` 跳回第 N 步（迭代≤2）", CMD_PROC },
@@ -961,6 +963,20 @@ static void cmd_proc(AI *ai, const char *cmd) {
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && !strncmp(arg, "dry", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+        /* 第 9 条 ④ **干跑**（假设世界）：前提不成立改成"假定成立"（记进假设层）、
+         * 行为步骤不执行；跑完把假设层 pop 回原样 —— 默认关。 */
+        const char *v = arg + 3;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       ai->proc_dry = 1;
+        else if (!strcmp(v, "off")) ai->proc_dry = 0;
+        else if (*v) { printf("[用法] ::proc dry on|off\n"); return; }
+        printf("[过程**干跑** = %s]（%s）\n", ai->proc_dry ? "开" : "关（默认）",
+               ai->proc_dry ? "前提不成立 → 假定成立（记进假设层）；行为步骤不执行；跑完 pop 干净"
+                            : "实跑：前提不成立就是断点；行为步骤走受审通道真执行");
+        printf("  假设层就是现成的 `Hypo`（临时覆盖层）：进一个过程压一层、回退按步撤、出时 pop\n");
+        return;
+    }
     if (arg && (!strncmp(arg, "on", 2) || !strncmp(arg, "off", 3)) &&
         (arg[2] == 0 || arg[2] == ' ' || arg[3] == 0 || arg[3] == ' ')) {
         /* 过程**执行引擎**（第 9 条 ③，默认关）：只开关这一件事，别的行为一个字不变 */
