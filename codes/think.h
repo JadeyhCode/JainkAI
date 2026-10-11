@@ -527,6 +527,14 @@ static inline void think_obj_finish(AI *ai, Think *t) {
     o->n_trace = t->trace_n;
     think_utf8_clip(o->stop, sizeof o->stop, think_stop_name(t->stop));
     think_utf8_clip(o->concl, sizeof o->concl, t->concl_text);
+    /* **N1 参与决策**用的一层 AI 级缓存（ai.h 调不到 think_of ⇒ 从这儿转手） */
+    if (ai) {
+        size_t ck = 0;
+        while (ck + 1 < sizeof ai->n1_concl && o->concl[ck]) { ai->n1_concl[ck] = o->concl[ck]; ck++; }
+        ai->n1_concl[ck] = 0;
+        ai->n1_gaps = o->gaps;
+        ai->n1_verified = o->verified;
+    }
     think_utf8_clip(o->chain, sizeof o->chain, t->chain_text);
     o->gaps = der_verify(ai, &o->der);   /* **复核器**：定稿时独立重推一遍 */
     o->verified = 1;

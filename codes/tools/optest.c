@@ -1808,6 +1808,32 @@ static void test_tail_blocks(void) {
 /* ② 档：**闸门分层判据**（§6.89）—— 硬门槛 + 三档，替掉"一个阈值切不动"那条 */
 /* ② 档：**类比兜底**（§6.90）—— 规则答不出时，用同类（同一上位）互相推，答**大概** */
 /* C③ 第二/三件（§6.97）：修法表按错误文本选规则 + 多轮修正的开关默认关 */
+/* 思维侧第二条（§6.99）：**N1 参与决策** —— 走边没走出好东西时用它想通的结论 */
+static void test_n1_decide(void) {
+    printf("== ㊷ N1 参与决策：想通的结论能顶上来（默认关） ==\n");
+    AI *ai = ai_new();
+    Token *seed = T(ai, "决策种子");
+    /* ⚠ 断言写成"**不是那句结论**"而不是"返回 NULL"：裸 AI 里走边也可能走出个低分候选
+     * （实测：它不是 NULL）—— 这条测的是"关着时不拿思维结论顶"，不是"一定没输出"。 */
+    { char *r0 = ai_plan_and_act(ai, seed, NULL, NULL, NULL, 0);
+      ok(r0 == NULL || strcmp(r0, "猫 会 呼吸") != 0, "关着：不拿思维结论顶（走边自己的结果照旧）");
+      free(r0); }
+    snprintf(ai->n1_concl, sizeof ai->n1_concl, "猫 会 呼吸");
+    ai->n1_gaps = 0; ai->n1_verified = 1; ai->n1_decide = 1;
+    { char *r = ai_plan_and_act(ai, seed, NULL, NULL, NULL, 0);
+      ok(r && strcmp(r, "猫 会 呼吸") == 0, "开着：走边没走出好东西 ⇒ 用**想通的结论**当结果");
+      free(r); }
+    ai->n1_verified = 0;                       /* 没复核过的对象不算"想通" */
+    { char *r1 = ai_plan_and_act(ai, seed, NULL, NULL, NULL, 0);
+      ok(r1 == NULL || strcmp(r1, "猫 会 呼吸") != 0, "没复核过 ⇒ 不用（宁可不说话）");
+      free(r1); }
+    ai->n1_verified = 1; ai->n1_gaps = 1;      /* 有缺口也不算 */
+    { char *r2 = ai_plan_and_act(ai, seed, NULL, NULL, NULL, 0);
+      ok(r2 == NULL || strcmp(r2, "猫 会 呼吸") != 0, "有缺口 ⇒ 不用（缺口就是没想通）");
+      free(r2); }
+    ai_free(ai);
+}
+
 static void test_code_fixes(void) {
     printf("== ㊶ C③：修法表（补分号/补 #include/补声明）+ 多轮修正开关 ==\n");
     ok(code_rule_for("error: expected ';' before '}' token") != NULL, "缺分号 ⇒ 认得出（规则 0）");
@@ -2499,6 +2525,7 @@ int main(void) {
     test_wgate_tier();
     test_analogy_fallback();
     test_code_fixes();
+    test_n1_decide();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

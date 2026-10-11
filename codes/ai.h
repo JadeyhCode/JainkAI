@@ -634,6 +634,13 @@ typedef struct {
     /* **C③ 第二件：多轮自我修正**（默认 0 = 关）：第二次还编不过时，用**新的错误**再认一遍
      * 规则、再改一处、再编一次（总次数 ≤ 3）。关着 = 只改一次（与今天逐字节相同）。 */
     int    code_multi;
+    /* **N1 参与决策**（思维侧第二条，默认 0 = 关）：思维对象定稿时把它抄到这里
+     * （ai.h 在 think.h **之前**，调不到 think_of ⇒ 用一层 AI 级缓存转手），
+     * 走边没走出好东西时（best_score 低于阈值）就用**它想通的结论**当结果。 */
+    int    n1_decide;
+    char   n1_concl[96];
+    int    n1_gaps;
+    int    n1_verified;
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
@@ -1249,6 +1256,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ge = getenv("AIP_GENEXEC"); if (ge && ge[0] == '1') ai->gen_exec = 1; }
     ai->code_multi = 0;              /* 多轮自我修正：默认**关** */
     { const char *cm = getenv("AIP_CODEMULTI"); if (cm && cm[0] == '1') ai->code_multi = 1; }
+    ai->n1_decide = 0;               /* N1 参与决策：默认**关** */
+    { const char *nd = getenv("AIP_N1DECIDE"); if (nd && nd[0] == '1') ai->n1_decide = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
@@ -3159,6 +3168,20 @@ static inline char *ai_plan_and_act(AI *ai, Token *seed,
                                    input_words, n_words);
         if (out_conf) *out_conf = conf;
         if (out_steps) *out_steps = best_steps;
+    }
+    /* **N1 参与决策**（默认关）：走边没走出好东西（分数低于阈值）而**思维对象想通了**
+     * （缺口 0 + 已复核 + 有结论）时，用它的结论当结果 —— 这样"想出来的"就不只是痕了。 */
+    if (ai->n1_decide && ai->n1_verified && ai->n1_gaps == 0 && ai->n1_concl[0] &&
+        best_score < 0.40f) {
+        char *nc = (char *)malloc(strlen(ai->n1_concl) + 1);
+        if (nc) {
+            memcpy(nc, ai->n1_concl, strlen(ai->n1_concl) + 1);
+            free(best);
+            best = nc;
+            best_score = 0.60f;      /* 比"没走出来"高，但不压过正常走出来的高分候选 */
+            best_steps = 1;
+            if (out_conf) *out_conf = 0.60f;
+        }
     }
     return best;
 }

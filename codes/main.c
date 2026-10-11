@@ -2124,6 +2124,21 @@ int main(int argc, char **argv) {
             }
             case CMD_COT: {
                 AI *b = a->brain;
+                {   /* 思维侧第二条：N1 参与决策（走边没走出好东西时用它想通的结论） */
+                    const char *aa = (cmd[3] == ' ') ? cmd + 4 : NULL;
+                    while (aa && *aa == ' ') aa++;
+                    if (aa && strncmp(aa, "decide", 6) == 0) {
+                        const char *v = aa + 6;
+                        while (*v == ' ') v++;
+                        if (!strcmp(v, "on"))       b->n1_decide = 1;
+                        else if (!strcmp(v, "off")) b->n1_decide = 0;
+                        else if (*v) { printf("[用法] ::cot decide on|off\n"); continue; }
+                        printf("[N1 参与决策 = %s]（%s）\n", b->n1_decide ? "开" : "关（默认）",
+                               b->n1_decide ? "走边没走出好东西（分 <0.40）时，用思维对象**想通的结论**当结果"
+                                            : "思维对象只进痕（::cot 看得到），不影响说什么");
+                        continue;
+                    }
+                }
                 if (b->cot.n == 0) {
                     printf("[思维链] 还没有——先说句话\n");
                     continue;
