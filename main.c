@@ -1926,10 +1926,25 @@ int main(int argc, char **argv) {
                 if (arg && *arg) {
                     if (strcmp(arg, "on") == 0) a->brain->walk_output = 1;
                     else if (strcmp(arg, "off") == 0) a->brain->walk_output = 0;
-                    else { printf("[用法] ::walk on|off\n"); continue; }
+                    else if (strncmp(arg, "cache", 5) == 0) {
+                        /* ①f 缓存参与自由联想（默认关）：缓存（推出来沉淀的）作为**最后一档** */
+                        const char *v = arg + 5;
+                        while (*v == ' ') v++;
+                        if (strcmp(v, "on") == 0) a->brain->cache_walk = 1;
+                        else if (strcmp(v, "off") == 0) a->brain->cache_walk = 0;
+                        else if (*v) { printf("[用法] ::walk cache on|off\n"); continue; }
+                        printf("[缓存参与自由联想 = %s]（%s）\n",
+                               a->brain->cache_walk ? "开" : "关（默认）",
+                               a->brain->cache_walk
+                                   ? "走边的顺序里多了**最后一档**：推出来沉淀的边（可能已过时）"
+                                   : "按构造进不了联想（缓存不在 role 顺序里）");
+                        continue;
+                    }
+                    else { printf("[用法] ::walk on|off｜::walk cache on|off\n"); continue; }
                 }
-                printf("[联想直接输出 = %s]\n",
-                       a->brain->walk_output ? "开（输出会是关联链的产物）" : "关（默认：只做内部思考）");
+                printf("[联想直接输出 = %s]；[缓存参与自由联想 = %s]\n",
+                       a->brain->walk_output ? "开（输出会是关联链的产物）" : "关（默认：只做内部思考）",
+                       a->brain->cache_walk ? "开" : "关（默认）");
                 continue;
             }
             case CMD_FRAMEGATE: {

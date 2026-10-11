@@ -608,6 +608,11 @@ typedef struct {
     size_t n_walks;                 /* 逐词关联链（加权游走）跑过的次数 */
     char  *last_idea;               /* 上一次「自由联想」的产物（内部思考，不直接输出） */
     int    walk_output;             /* 1 = 允许把联想结果直接当回复（默认 0） */
+    /* **缓存参与自由联想**（①f，默认 0 = 关）：走边那套按 role 取边，而"推出来沉淀的"
+     * 缓存（`role=推论`）**不在 order 里** ⇒ 默认按构造就进不了联想。
+     * 打开后把它作为**最后一档**放进顺序里（宁可走不到，也别让缓存喧宾夺主：
+     * 缓存可能已经过时，让"想出来的"影响联想会自我强化）。 */
+    int    cache_walk;
     /* 0 = 结构化帧允许用关联链证据放行白名单外的槽位取值（默认）。
      * 故意用「反向命名」：这样 calloc 出来的 AI 骨架就是开启状态 ——
      * 这个项目已经被「calloc 骨架漏设默认值导致训练/加载两条路径分叉」坑过一次。 */
@@ -1159,6 +1164,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pk = getenv("AIP_PROCTHINK"); if (pk && pk[0] == '1') ai->proc_think = 1; }
     ai->proc_plan = 0;               /* 过程接进决策（用计划回答）：默认**关** */
     { const char *pl = getenv("AIP_PROCPLAN"); if (pl && pl[0] == '1') ai->proc_plan = 1; }
+    ai->cache_walk = 0;              /* 缓存参与自由联想：默认**关** */
+    { const char *cw = getenv("AIP_CACHEWALK"); if (cw && cw[0] == '1') ai->cache_walk = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
@@ -2700,11 +2707,14 @@ static inline Token *ai_pick_next_role_pat(AI *ai, Token *cur, float energy, int
      *   ① 目标角色没有可用出边时**必须**能退到通用边，否则该词直接饿死；
      *   ② 从输入尾词出发时 want 是 NONE，也得能挑到回复角色的边 ——
      *      否则「输入尾词 → 回复首词」这条主干永远用不上。 */
-    uint8_t order[3];
+    uint8_t order[4];
     size_t n_order = 0;
     if (want != ASSOC_ROLE_NONE) order[n_order++] = want;
     order[n_order++] = ASSOC_ROLE_NONE;
     if (want != ASSOC_ROLE_REPLY) order[n_order++] = ASSOC_ROLE_REPLY;
+    /* ①f：缓存（`role=推论`）作为**最后一档**（默认根本不进 order ⇒ 按构造进不了联想） */
+    if (ai->cache_walk && n_order < (int)(sizeof order / sizeof order[0]))
+        order[n_order++] = ASSOC_ROLE_DERIVED;
 
     /* 分两层：内容词优先，边界标记（[对话:结束]/[原语:分割]）只能兜底。
      * 否则「吗 → [对话:结束]」会被当成一次正常续接，句子刚开头就收了。 */
@@ -2776,11 +2786,14 @@ static inline Token *ai_pick_next_topic(AI *ai, Token *cur, float energy, int do
     if (topic == ASSOC_TOPIC_NONE)
         return ai_pick_next_role_pat(ai, cur, energy, do_touch, want, out_used, out_pat);
 
-    uint8_t order[3];
+    uint8_t order[4];
     size_t n_order = 0;
     if (want != ASSOC_ROLE_NONE) order[n_order++] = want;
     order[n_order++] = ASSOC_ROLE_NONE;
     if (want != ASSOC_ROLE_REPLY) order[n_order++] = ASSOC_ROLE_REPLY;
+    /* ①f：缓存（`role=推论`）作为**最后一档**（默认根本不进 order ⇒ 按构造进不了联想） */
+    if (ai->cache_walk && n_order < (int)(sizeof order / sizeof order[0]))
+        order[n_order++] = ASSOC_ROLE_DERIVED;
 
     if (g_walk_trace) fprintf(stderr, "PICKT cur=%s cnt=%zu want=%u topic=%u e=%.4f\n",
                               cur->name ? cur->name : "?", cur->count,

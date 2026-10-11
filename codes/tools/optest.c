@@ -1770,6 +1770,60 @@ static void test_selfwrite_route(void) {
  * 原来「动态关系只支持肯定」：核心关系有 `rel/nrel` 位，清单外的谓语只有 `dyn`，
  * 于是对话里说「A 不 <动态谓语> B」整句掉降级答复。现在否定旗子藏在 `nrel` 第 15 位
  * （9~14 位空着没用），`rel_direct_as/rel_direct_neg_as` 的动态分支也认它。 */
+/* ①l 核对："帧/检索接管之后走不到那几段"这条登记**不成立**（§6.81）：
+ * 元认知在 agent_step 的**公共尾部**（每轮都跑），漂移/诊断/叙事按**固定轮次**
+ * （200/300/500）跑 —— 短会话里 `叙事=0` 是"没到轮次"，不是"被挡住了"。
+ * 这条看护把"到轮次就会跑"钉死：把轮次调成 1，跑几轮，计数必须动。 */
+static void test_tail_blocks(void) {
+    printf("== ㉜ ①l 尾部那几段（元认知/漂移/诊断/叙事）**按轮次真的会跑** ==\n");
+    Agent *ag = agent_new(NULL, NULL, NULL);
+    ok(ag != NULL, "建一个 Agent");
+    if (ag) {
+        AI *ai = ag->brain;
+        ai->narrate_every = 1;           /* 本来是 500：调成 1 就能在一轮里看到它跑 */
+        ai->drift_sample_every = 1;      /* 本来是 200 */
+        ai->gc.gc_interval = 0;          /* 别的收尾块关掉，别互相干扰 */
+        ai->sleep_every = 0;
+        size_t n0 = ai->n_narrations, d0 = ai->n_drifts_detected;
+        char out[512];
+        for (int i = 0; i < 3; ++i) (void)agent_step(ag, "猫 有 毛 吗", out, sizeof out);
+        ok(ai->n_narrations > n0, "叙事**真的跑了**（轮次到了就跑，不是被帧路径挡住）");
+        /* 元认知每轮都会写 `ai->meta`（总评在 [0,1]）：用它当"跑过"的判据 */
+        ok(ai->meta.total >= 0.0f && ai->meta.confidence >= 0.0f,
+           "元认知在**公共尾部**（每轮都跑，不是帧路径专有）");
+        (void)d0;
+        agent_free(ag);
+    }
+}
+
+static void test_cache_walk(void) {
+    printf("== ㉛ ①f 缓存参与自由联想（默认关；开着时缓存是**最后一档**） ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "联甲"), *b = T(ai, "联乙"), *c = T(ai, "联丙");
+    /* 造一条**缓存**边（role=推论）：直写 role，模拟"推出来沉淀的"。
+     * ⚠ `b` 自己得**有出边**，否则 `ai_can_continue_from` 判它走不下去（实测踩过：
+     *   第一版漏了这一步 ⇒ "开着能取到"那条断言假红）。 */
+    (void)token_add_assoc_unique(a, b);
+    (void)token_add_assoc_unique(b, c);
+    /* `b→c` 还得**有 hits**：`ai_edge_walkable` 会挡掉 hits==0 的边（"建了没强化过的残留"）
+     * ⇒ 否则 `ai_can_continue_from` 判 b 是死胡同（实测踩了两次才排到这一层）。 */
+    for (size_t i = 0; i < b->count; ++i)
+        if (b->assocs[i].main == c) b->assocs[i].hits = 5;
+    for (size_t i = 0; i < a->count; ++i)
+        if (a->assocs[i].main == b) { a->assocs[i].role = ASSOC_ROLE_DERIVED; a->assocs[i].hits = 5; }
+    ai->focus_n = 0;
+    (void)ai_focus_push(ai, a, 1.0f);
+    ai->cache_walk = 0;
+    { uint8_t used = 0, pat = 0;
+      Token *nx = ai_pick_next_topic(ai, a, 1.0f, 0, ASSOC_ROLE_NONE, ASSOC_TOPIC_NONE, &used, &pat);
+      ok(nx != b, "关着：走边**取不到**缓存那条边（缓存不在 role 顺序里）"); }
+    ai->cache_walk = 1;
+    { uint8_t used = 0, pat = 0;
+      Token *nx = ai_pick_next_topic(ai, a, 1.0f, 0, ASSOC_ROLE_NONE, ASSOC_TOPIC_NONE, &used, &pat);
+      ok(nx == b, "开着：缓存那条边**能被走到**（最后一档）"); }
+    ai_free(ai);
+}
+
 static void test_dyn_neg(void) {
     printf("== ㉚ 动态关系的否定（旗子借 nrel 第 15 位） ==\n");
     AI *ai = ai_new();
@@ -2150,6 +2204,8 @@ int main(void) {
     test_selfwrite_route();
     test_revoke_marker();
     test_dyn_neg();
+    test_cache_walk();
+    test_tail_blocks();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();

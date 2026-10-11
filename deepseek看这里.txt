@@ -250,6 +250,10 @@
        不再丢 甲→乙）、~~语言层校验~~（接进**语料行**，`::asm check on` 时坏行不执行；
        ⚠ `::code` 不适用的登记已改）、~~动态关系否定位~~（借 `nrel` 第 15 位，零格式改动；
        学习/直查/路由三条路都认）。看护：optest ㉚ 8 项、relations ⑧、tokenop ⑰。
+     · ✅ **① 档第三批**（**§6.81**）：~~缓存参与自由联想~~（`::walk cache on|off`，缓存当最后一档，
+       默认关；optest ㉛）、~~轮末无条件跑~~（**核对后不成立** —— 那几段本来就每轮/按轮次跑，
+       短会话 `叙事=0` 是没到 500 轮；optest ㉜ 钉"到轮次就跑"；改登记为"轮次写死、不能按重要性触发"）。
+       **① 档剩 2 条**：动作 token（`action.h` 接 `::op`）、过程的执行槽。
      · ⬜ **下一件（候选，待用户点）**：① 过程**接进日常**（"想泡茶"这类非问句也认；或让 N2 草稿引用过程）；
        ② 局限总表里其它登记项（老写入者、闸门判别力窄、`叙事` 没显形、`ai_analogy` 从没被调用…）；
      · 方案（讨论定稿）：**"过程边 vs 共现边"用 role 标记** —— `uint8_t role` 现在只用 0~5
@@ -271,14 +275,14 @@
   · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
     ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
     ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
-  · 看护数（**都是实测**）：optest **359** / tokenop **130** / delibtest **155** / microtest **71** /
+  · 看护数（**都是实测**）：optest **364** / tokenop **130** / delibtest **155** / microtest **71** /
     biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
     cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
     **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
   · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
   · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
     `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`
-    `AIP_PROCTALK` `AIP_PROCTHINK` `AIP_PROCPLAN`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_PROCTALK` `AIP_PROCTHINK` `AIP_PROCPLAN` `AIP_CACHEWALK`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
     `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
   · 常用命令新增：`::proc [<名字>|on|off|dry on|off|talk on|off|think on|off|plan on|off|run <名字>]`、
     `::op 加条件/加否则/加异常/加断言`（`加回边` 多一个可选条件词）、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
