@@ -1740,8 +1740,18 @@ static inline int ai_premise_reachable(const AI *aic, const Token *p) {
 
 /* 前提成立吗：① 在注意窗口里（默认档）；② 开了第二档时，**图上够得着**也算。
  * 注意：它只回答"前提成立不成立"，不回答"世界上是不是真的" —— 那是知识层的事。 */
+/* 前向声明：求值层在文件后半（定义处有注释），前提判据要先用它 */
+static inline int ai_eval_cmp(const char *expr, int *out);
+
 static inline int ai_premise_holds(const AI *ai, const Token *p) {
     if (!ai || !p) return 0;
+    /* **§6.98 求值层也管前提**（② 档那条的延伸）：前提的名字本身是**可计算的**
+     * （`3<5` 这种）时，先真算一遍 —— 图内三档（提到过/够得着/有据）对"算式"永远说不清。
+     * 只在 `eval_num` 打开时生效（默认关 ⇒ 与今天逐字节相同）；算不出来就照旧走图内判据。 */
+    if (ai->eval_num && p->name && p->name[0]) {
+        int v = 0;
+        if (ai_eval_cmp(p->name, &v)) return v;
+    }
     for (size_t i = 0; i < ai->focus_n; ++i)
         if (ai->focus_ring[i] == p) return 1;
     if (ai->prem_hold_activate >= 1) {

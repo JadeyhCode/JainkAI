@@ -2025,6 +2025,15 @@ static void test_eval_num(void) {
     ai->eval_num = 1;
     { ProcRun pr; (void)proc_run(ai, "比大小", &pr);
       ok(pr.n_ok >= 1, "开着：**数值判据说了算**（3<5 成立 ⇒ 走条件那一支）"); }
+    /* §6.98：求值层也管**前提**（前提名字本身是可计算式时，先真算一遍） */
+    {
+        Token *pv = T(ai, "3<5"), *pf = T(ai, "5<3");
+        ai->eval_num = 0;
+        ok(ai_premise_holds(ai, pv) == 0, "关着：算式前提照旧走图内三档（不在窗口/够不着 ⇒ 不成立）");
+        ai->eval_num = 1;
+        ok(ai_premise_holds(ai, pv) == 1, "开着：前提 `3<5` **算得出来就成立**");
+        ok(ai_premise_holds(ai, pf) == 0, "开着：前提 `5<3` 算出来是假 ⇒ 不成立");
+    }
     ai_free(ai);
 }
 
