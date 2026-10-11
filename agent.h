@@ -1886,7 +1886,21 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 没想通的问题来想。它**只读**（不提议意图、不沉淀、不动图，见 think.h 的
          * `think_idle`），所以回复一个字都不变（还是"……"）—— 变的是痕 / 思考对象。
          * 这一轮照旧**不进**下面的维护段：睡眠 / 巩固 / 衰减的账一点不动。 */
+        /* A1：空闲思考**主动说话**（默认关）——把它刚想出来的那一步说出来，而不是只回"……"。
+         * 判据：`think_idle` 跑完之后痕里**新增了步子**（有 why 的那条）。 */
+        Think *th = think_of(ai);
+        size_t trace_before = th ? th->trace_n : 0;          /* ⚠ trace 是数组，行数是 trace_n */
         (void)think_idle(ai);
+        if (ai->idle_speak && th && th->trace_n > trace_before) {
+            const char *say = NULL;
+            for (size_t k = trace_before; k < th->trace_n; ++k)
+                if (th->trace[k].why[0]) say = th->trace[k].why;
+            if (say) {
+                snprintf(out, out_cap, "（空闲时想到的）%s", say);
+                ai_free_words(words_alloc, n_alloc);
+                return strlen(out);
+            }
+        }
         snprintf(out, out_cap, "……");
         ai_free_words(words_alloc, n_alloc);
         return strlen(out);

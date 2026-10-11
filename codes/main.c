@@ -2030,6 +2030,22 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 printf("[思维链：上一轮 %zu 步，累计 %zu 步]\n", b->cot.n, b->n_cot);
+                /* A3a：把 **N1 思考对象**也打出来（局限里写着"`::cot` 没接它"）。
+                 * 对象是"这一轮想到了什么"的结构化版本：目标 / 结论 / 缺口数 / 停因 / 链长。 */
+                {
+                    Think *th = think_of(b);
+                    if (th && th->obj_on && th->obj.have) {
+                        const ThinkObj *o = &th->obj;
+                        printf("[思考对象 #%llu] 步 %zu / **缺口 %zu** / %s%s\n",
+                               (unsigned long long)o->seq, o->der.n, (size_t)o->gaps,
+                               o->verified ? "已复核" : "未复核",
+                               o->guessed ? "（含猜测）" : "");
+                        if (o->concl[0])     printf("  结论：%s\n", o->concl);
+                        if (o->stop[0])      printf("  停因：%s\n", o->stop);
+                    } else {
+                        printf("[思考对象] 关着（`::cot obj on` / AIP_THINKOBJ=1 才有）\n");
+                    }
+                }
                 for (size_t i = 0; i < b->cot.n; ++i) {
                     const CotStep *s = &b->cot.step[i];
                     printf("  %zu. %-4s %s  %s%s\n",

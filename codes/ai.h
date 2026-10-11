@@ -632,6 +632,12 @@ typedef struct {
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
+    /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
+     * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
+    int    idle_speak;
+    /* **流水线回复也走草稿区**（A5，默认 0 = 关）：普通回复先落草稿，由 `::notepad on/hold`
+     * 决定发不发（现在的记事本只管"AI 自己写结论"那条路）。 */
+    int    note_all;
     Token *last_who;      /* 最近一次"谁 以为/觉得/说 X"里的那个谁（只在开关打开时用） */
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
@@ -1236,6 +1242,10 @@ static inline void ai_switches_init(AI *ai) {
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
+    ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
+    { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }
+    ai->note_all = 0;                /* 流水线回复进草稿：默认**关** */
+    { const char *na = getenv("AIP_NOTEALL"); if (na && na[0] == '1') ai->note_all = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
