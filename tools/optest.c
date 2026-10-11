@@ -1855,6 +1855,26 @@ static void test_redo_alt(void) {
 /* ③ 多层快照栈（§6.102）：第二次回退要**退到更外一层**，不是退回同一个起点 */
 /* §6.103 草稿留痕：**在核心里**（MOD_PATCH_CALL 的 applier）证正例 ——
  * CLI 的 `::patch op` 绕过内核（实测"允许 1 拒绝 0"），所以只能直接调核心。 */
+/* §6.110 v11：**N1 思考对象持久化**（存摘要：结论/缺口/复没复核） */
+static void test_n1_persist(void) {
+    printf("== ㊻ v11：N1 思考对象持久化（存盘→读回） ==\n");
+    AI *ai = ai_new();
+    Token *t = T(ai, "存盘用");
+    (void)t;
+    snprintf(ai->n1_concl, sizeof ai->n1_concl, "猫 会 呼吸");
+    ai->n1_gaps = 2; ai->n1_verified = 1;
+    size_t sz = ai_save_file(ai, "n1_test.bin");
+    ok(sz > 0, "存盘成功（v11 格式，多了一段 N1 摘要）");
+    AI *b = ai_load_file("n1_test.bin");
+    if (b) {
+        ok(strcmp(b->n1_concl, "猫 会 呼吸") == 0, "读回来：**结论**还在");
+        ok(b->n1_gaps == 2 && b->n1_verified == 1, "读回来：**缺口数**与**复核标记**还在");
+        ai_free(b);
+    } else ok(0, "读回来失败（v11 那段读写不一致）");
+    remove("n1_test.bin");
+    ai_free(ai);
+}
+
 static void test_draft_keep(void) {
     printf("== ㊺ 草稿留痕：发送后核心层另存一条 `[草稿:…]`（默认关） ==\n");
     AI *ai = ai_new();
@@ -2649,6 +2669,7 @@ int main(void) {
     test_n1_decide();
     test_redo_stack();
     test_draft_keep();
+    test_n1_persist();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

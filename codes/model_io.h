@@ -40,7 +40,7 @@
  *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
  *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
  *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
-#define MODEL_VERSION 10u  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+#define MODEL_VERSION 11u  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -368,6 +368,13 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
 
     /* 动态关系名表（L2）：谓词表要能开放，就必须把「id→名字」存下来，
      * 否则存盘重载之后 id 对不上号。 */
+    /* **v11：N1 思考对象**（§6.110）—— 存"摘要"（结论/缺口数/复没复核），不是整条推导链。
+     * ⚠ 位置在动态关系表**之前**：读写两侧必须同位置（`mver` 门控保证旧档没有这一段）。 */
+    mw_u32(&w, (uint32_t)ai->n1_gaps);
+    mw_u32(&w, (uint32_t)ai->n1_verified);
+    /* ⚠ `mw_str` **自带长度**（它内部先写 `mw_u32(n)`）—— 别再自己写一遍长度，
+     * 否则读侧只读一次长度 ⇒ 整段错位（这一版就是这么栽的，见 §6.110 踩坑）。 */
+    mw_str(&w, ai->n1_concl, (uint32_t)strlen(ai->n1_concl));
     mw_u32(&w, (uint32_t)ai->dynrel_n);
     for (size_t i = 0; i < ai->dynrel_n; ++i) {
         const char *nm = ai->dynrel_name[i] ? ai->dynrel_name[i] : "";
@@ -959,6 +966,14 @@ static inline AI *ai_load_file(const char *path) {
     ai->use_retrieval = 1;
     /* 动态关系名表（L2，v7 起）：必须**在** relations_load 之前读回来，
      * 否则 relations.txt 里用到的动态谓语会被重新分配 id，存盘前后对不上号。 */
+    if (mver >= 11u) {                 /* v11：N1 思考对象（旧档没有这一段 ⇒ 保持 0 = 今天的行为） */
+        ai->n1_gaps = (int)mr_u32(&r);
+        ai->n1_verified = (int)mr_u32(&r);
+        uint32_t nl = mr_u32(&r);
+        if (r.err || nl >= sizeof ai->n1_concl) goto fail_ai;
+        if (nl) { if (mr_raw(&r, ai->n1_concl, nl) != 0) goto fail_ai; }
+        ai->n1_concl[nl] = 0;
+    }
     if (mver >= 7u) {
         uint32_t nd = mr_u32(&r);
         if (r.err || nd > AI_MAX_DYNREL) goto fail_ai;

@@ -128,9 +128,10 @@ printf '::load %s\n::stats\n::fp\n::save v10slot\n::quit\n' "$V9" > in6.txt
 ./aip < in6.txt > run6.log 2>&1 || fail "读 v9 样本退出非 0"
 grep -q '边=25' run6.log \
     || fail "v9 样本读进来边数 ≠ 文件头声明的 25：$(grep -m1 '统计' run6.log)"
-# 另存出来必须真的是 **v10**（版本号 = magic 之后的第二个 u32）
-v10ver=$(od -An -tu4 -j4 -N4 v10slot | tr -d ' ')
-[ "$v10ver" = "10" ] || fail "另存文件的版本号是 $v10ver（应当是 10）"
+# 另存出来必须真的是**当前版本**（版本号 = magic 之后的第二个 u32）。
+# §6.110 起当前版本是 **11**（多了一段 N1 摘要）—— 旧 v9/v10 样本照旧读得回来。
+curver=$(od -An -tu4 -j4 -N4 v10slot | tr -d ' ')
+[ "$curver" = "11" ] || fail "另存文件的版本号是 $curver（应当是 11）"
 # 关键等价：v9 直接读进来的内存态 与 把它存成 v10 再读回来，**指纹逐位一致**
 fp_v9=$(grep -o '\[指纹\] [0-9a-f]*' run6.log | head -1)
 printf '::load v10slot\n::fp\n::quit\n' > in7.txt
