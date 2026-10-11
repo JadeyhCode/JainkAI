@@ -69,11 +69,75 @@ else
     say OK "没有没兜住的 grep 赋值"
 fi
 
+
+echo "== ⑤ 断言串别撞上**帮助文本**（本会话踩了 8 次：grep 命中帮助而不是痕）=="
+# 做法：把 `::help` 的输出抓下来当"帮助语料"，再把 tests/ 里 `grep -q '…'` 的模式串抽出来比。
+# 撞上的（且不在白名单里）= 假绿风险 ⇒ 报出来。白名单：`tests/help_overlap_ok.txt`（一行一个，
+# 那些**故意**断言帮助文本的条目）。
+if [ -x ./build_aip ]; then
+    # ⚠ 只要**帮助文本**：整段跑完的输出里还有加载横幅和退出时的 `[统计]` 块 ——
+    #   那些不是帮助（第一版把统计也算进去 ⇒ "现场造词0" 这类断言全被误报）。
+    # ⚠ 两处都踩过：① 不带 `--model` 时帮助根本不打（那一次dump只有 1 行）；
+    #   ② 输出里**统计块在最前面**（加载时就打了），所以不能"遇 [统计] 就停" ——
+    #   改成"从第一条 `  ::` 开始抓，遇到下一个 `[` 开头的行停"。
+    printf '::help\n::quit\n' | ./build_aip --model model.bin 2>&1 \
+        | awk 'BEGIN{c=0} /^  ::/{c=1} c&&/^\[/{exit} c{print}' > _t/par/help_dump.txt || true
+    awk '
+      {
+        line = $0
+        if (line !~ /grep/ || line !~ /-q/) next
+        # 只看 **&& 之前**那半句：断言串在 grep 里，后半句是 `ok "说明文字"`（说明不是模式串）。
+        # 第一版没切 ⇒ 把"说明文字"也当成模式串比，白名单永远对不上（实测）。
+        sub(/&&.*$/, "", line)
+        # 抽出所有单引号串（模式串通常写在那里）
+        n = split(line, parts, "\047")
+        for (i = 2; i <= n; i += 2) {
+            p = parts[i]
+            # 门槛：**至少 4 个汉字**（12 字节）—— 短词（"校验""矛盾"）在帮助里到处都是，
+            # 那不是"撞车"，是噪音（第一版没设门槛 ⇒ 42 条假阳性）。
+            if (length(p) < 12) continue
+            if (p ~ /^[ -~]+$/) continue          # 纯 ASCII 的（多为正则/路径）不算
+            print FILENAME ":" FNR ":" p
+        }
+      }' tests/*.sh | sort -u > _t/par/assert_pats.txt || true
+    : > _t/par/help_overlap.txt
+    if [ -s _t/par/assert_pats.txt ]; then
+        while IFS= read -r row; do
+            pat=${row#*:*:}
+            if grep -Fq -- "$pat" _t/par/help_dump.txt; then
+                case "$pat" in
+                    *::*) continue ;;                        # 显式提到命令的，算故意
+                esac
+                # 白名单：`模式<TAB>理由`（只比第一列）—— 故意断言帮助/文档格式的那几条
+                if [ -f tests/help_overlap_ok.txt ] && \
+                   awk -F'\t' -v p="$pat" '$1==p{found=1} END{exit found?0:1}' tests/help_overlap_ok.txt; then
+                    continue
+                fi
+                printf '%s\n' "$row" >> _t/par/help_overlap.txt
+            fi
+        done < _t/par/assert_pats.txt
+        n_over=$(grep -c . _t/par/help_overlap.txt || true)
+        if [ "${n_over:-0}" -gt 0 ]; then
+            say FAIL "有 $n_over 条断言的模式串**也出现在 ::help 里**（可能 grep 到帮助 = 假绿）"
+            head -12 _t/par/help_overlap.txt
+            say NOTE "确实是故意断言帮助文本的 → 加进 tests/help_overlap_ok.txt；否则改断言串"
+            bad=1
+        else
+            say OK "没有"断言串撞帮助文本"（$(grep -c . _t/par/assert_pats.txt || true) 条模式串都比过了）"
+        fi
+    else
+        say OK "没抽到可比的中文断言串"
+    fi
+else
+    say NOTE "没有 build_aip ⇒ 跳过（第 0 步会先编，编完再跑这一项）"
+fi
+
 echo "== ④ 每个套件脚本都在清单里、清单里的脚本都存在（别漏进/漏出）=="
 for f in tests/*.sh; do
     b=${f#tests/}; b=${b%.sh}
     case "$b" in
-        all|pool|prebuilt|probes_build|switches_ab|selfcheck|*_ab|meas_*|train_model) continue ;;
+        # 这些是**工具**不是套件：不进 suites.txt（新加工具脚本记得加到这里）
+        all|pool|prebuilt|probes_build|switches_ab|switches_sample|selfcheck|*_ab|meas_*|train_model) continue ;;
     esac
     if ! grep -qE "^${b}\|" tests/suites.txt; then
         say FAIL "套件脚本 $f 没进 tests/suites.txt"
