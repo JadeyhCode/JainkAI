@@ -65,8 +65,12 @@ else
 fi
 
 # ---- ④ 核对：文件数 + 内容清单的 md5（两边一致才算备份成功）----
-man() { (cd "$1" && find . -type f -not -path './_t/*' -print0 | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
-NF=$(cd "$DEST" && find . -type f | wc -l)
+# ⚠ 校验的**排除口径必须和 rsync 完全一致**：第一版只排除了 `_t/`，而 rsync 还排除了
+#   `build_*`/`*.o` ⇒ 源侧清单多算了几个编译产物，两边 md5 永远对不上（第一次跑就撞上：
+#   "两边不一致"其实是**校验错了**，不是拷贝错了）。
+man() { (cd "$1" && find . -type f -not -path './_t/*' -not -name 'build_*' -not -name '*.o' \
+         -print0 | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
+NF=$(cd "$DEST" && find . -type f -not -name 'build_*' -not -name '*.o' | wc -l)
 SZ=$(du -sh "$DEST" | cut -f1)
 H1=$(man "$ROOT"); H2=$(man "$DEST")
 say ""

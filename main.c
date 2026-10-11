@@ -2060,7 +2060,20 @@ int main(int argc, char **argv) {
                 while (arg && *arg == ' ') arg++;
                 /* `::others <A> <关系> <B>`：**多层合并 + 四态判定**（§6.45）——
                  * 把所有人名下"同类"的说法并进一个窗，冲突交四态（待验 ≠ 否定）。 */
-                if (arg && !strncmp(arg, "refine", 6) && (arg[6] == 0 || arg[6] == ' ')) {
+                if (arg && !strncmp(arg, "pron", 4) && (arg[4] == 0 || arg[4] == ' ')) {
+        /* ② 指代消解最小版：句首 他/她/它 指回最近说话的那个人 */
+        const char *v = arg + 4;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       a->brain->pron_last = 1;
+        else if (!strcmp(v, "off")) a->brain->pron_last = 0;
+        else if (*v) { printf("[用法] ::others pron on|off\n"); continue; }
+        printf("[指代消解（他/她/它）= %s]（%s）\n", a->brain->pron_last ? "开" : "关（默认）",
+               a->brain->pron_last
+                   ? "句首的 他/她/它 指回**最近说话的那个人**（认不出就不动，照旧流水线）"
+                   : "今天的行为：把「他」当成一个人名（于是问他的立场只会得到「我不知道他怎么想」）");
+        continue;
+    }
+    if (arg && !strncmp(arg, "refine", 6) && (arg[6] == 0 || arg[6] == ' ')) {
         /* ② 他者视角精化：上位降权（他说的比你问的更宽 ⇒ 半票参考） */
         const char *v = arg + 6;
         while (*v == ' ') v++;

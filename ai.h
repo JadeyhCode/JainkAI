@@ -622,6 +622,10 @@ typedef struct {
     /* **触发接求解**（② 档，默认 0 = 关）：开放式关系问句（`A R 什么` / `谁 R B`）
      * 走求解器（正向查邻居 / 反向扫一遍），而不是掉"我不太懂"。 */
     int    rel_open;
+    /* **指代消解最小版**（② 档，默认 0 = 关）：记"最近提到的那个谁"，
+     * 于是「他 觉得 猫 会 飞 吗」里的**他/她/它**能指回那个人（而不是掉流水线）。 */
+    int    pron_last;
+    Token *last_who;      /* 最近一次"谁 以为/觉得/说 X"里的那个谁（只在开关打开时用） */
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
      * `lexicon.txt`（当前目录，一行一个词，`#` 注释）里的词按整词切。没有这个文件时行为不变。 */
@@ -1187,6 +1191,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ow = getenv("AIP_OTHERWEAK"); if (ow && ow[0] == '1') ai->other_weak_up = 1; }
     ai->rel_open = 0;                /* 触发接求解（开放式关系问句）：默认**关** */
     { const char *ro = getenv("AIP_RELOPEN"); if (ro && ro[0] == '1') ai->rel_open = 1; }
+    ai->pron_last = 0;               /* 指代消解最小版：默认**关** */
+    { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
@@ -3450,6 +3456,9 @@ static inline OtherModel *other_intern(AI *ai, Token *who) {
 static inline int other_belief_learn(AI *ai, OtherModel *om,
                                      Token *a, Token *b, uint8_t rid, int neg) {
     if (!ai || !om || !a || !b || rid == 0 || a == b) return 0;
+    /* **指代消解最小版**：谁刚说过话，就记下来 —— 「他/她/它」随后指的就是这个人
+     * （只在 `pron_last` 打开时用；关着时这个字段没人读，行为逐字节相同）。 */
+    if (om->who) ai->last_who = om->who;
     for (size_t i = 0; i < om->n_bel; ++i) {
         if (om->bel[i].a == a && om->bel[i].b == b && om->bel[i].rid == rid) {
             om->bel[i].neg = (uint8_t)(neg ? 1 : 0);

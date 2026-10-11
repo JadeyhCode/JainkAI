@@ -238,5 +238,18 @@ printf '%s\n' "$out" | grep -aq '半票参考' && printf '%s\n' "$out" | grep -a
     && chk "开着：上位说法进**弱票** ⇒ 只有弱票时给倾向（都说认）" 1 \
     || chk "开着（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
 
+echo "⑪ ② 指代消解最小版（默认关）：他/她/它 指回最近说话的人"
+if [ -z "${AIP_PRONLAST:-}" ]; then
+    out=$(run "::others pron off" "甲 以为 猫 会 飞" "他 觉得 猫 会 飞 吗")
+    printf '%s\n' "$out" | grep -aq '在 他 看来' \
+        && chk "默认关：把「他」当人名（今天的行为，如实记着）" 1 || chk "默认关（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+fi
+out=$(run "::others pron on" "甲 以为 猫 会 飞" "他 觉得 猫 会 飞 吗")
+printf '%s\n' "$out" | grep -aq '在 甲 看来' \
+    && chk "开着：代词**指回甲**（不再是他那个人名）" 1 \
+    || chk "指代（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+printf '%s\n' "$out" | grep -aq '假设' && printf '%s\n' "$out" | grep -aq '这 是 他 的 看法' \
+    && chk "答的是**他的看法**（假设下 + 明说不是我的知识）" 1 || chk "归属清楚" 0
+
 [ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 可信度跨重启 + 他者视角多层合并/四态 + 复数主语进回答路径）" \
                   || { echo "FAIL belief"; exit 1; }

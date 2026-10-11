@@ -482,6 +482,18 @@ static inline int agent_set_perspective(AI *ai, char *const *words, size_t n,
         if (out_who) *out_who = NULL;
         return 1;
     }
+    /* **指代消解最小版**（② 档，默认关）：句首的**单数**代词（他/她/它）指回
+     * "最近一次说话的那个人"（`ai->last_who`，在他者信念写入时记下）——
+     * 把 `view_who` 设成他，后面整条视角路径原样复用（他的信念当假设、答完撤回）。
+     * ⚠ 必须在下面"把 words[0] 当人名 intern"**之前**返回：不然图上会多出一个叫「他」的人，
+     * 问他的立场只会得到"我不知道他怎么想"（今天就是这个行为）。认不出就照旧走流水线。 */
+    if (ai->pron_last && ai->last_who &&
+        (strcmp(words[0], "他") == 0 || strcmp(words[0], "她") == 0 ||
+         strcmp(words[0], "它") == 0)) {
+        ai->view_who = ai->last_who;
+        if (out_who) *out_who = ai->view_who;
+        return 1;
+    }
     ai->view_who = pool_token_intern(ai->pool, words[0]);
     if (out_who) *out_who = ai->view_who;
     return 1;

@@ -1803,6 +1803,39 @@ static void test_tail_blocks(void) {
 /* ② 档：**他者上位降权**（§6.85）—— 他说的比你问的**更宽**时，默认只当"相关"；
  * 开关打开 ⇒ 算**半票参考**（只在没有确定表态时才决定倾向）。 */
 /* ② 档：**触发接求解**（§6.86）—— 开放式关系问句（缺一端）走求解器 */
+/* ② 档：**指代消解最小版**（§6.87）—— 句首 他/她/它 指回最近说话的那个人 */
+static void test_pron_last(void) {
+    printf("== ㊳ ② 指代消解最小版：他/她/它 指回最近说话的人 ==\n");
+    AI *ai = ai_new();
+    Token *who = T(ai, "代词甲");
+    OtherModel *om = other_intern(ai, who);
+    ok(om != NULL, "记一个人（他者模型）");
+    Token *cat = T(ai, "代词猫"), *fly = T(ai, "代词飞");
+    (void)other_belief_learn(ai, om, cat, fly, REL_CAN, 0);      /* 甲 以为 猫 会 飞 */
+    ok(ai->last_who == who, "写他的信念时**记下「最近说话的人」**（last_who）");
+    /* 视角解析：句首代词 + 看法动词 ⇒ 站到那个人身上（要在"把人名 intern"之前返回） */
+    ai->pron_last = 0;
+    { char *w[5] = {(char *)"他", (char *)"觉得", (char *)"代词猫", (char *)"会", (char *)"飞"};
+      Token *out_who = NULL;
+      ok(agent_set_perspective(ai, w, 5, &out_who) == 1, "关着：照样认视角标记（今天的行为）");
+      ok(ai->view_who && ai->view_who->name && strcmp(ai->view_who->name, "他") == 0,
+         "关着：把「他」当成**一个人名**（图上会多出一个叫「他」的人）"); }
+    ai->view_who = NULL;
+    ai->pron_last = 1;
+    { char *w[5] = {(char *)"他", (char *)"觉得", (char *)"代词猫", (char *)"会", (char *)"飞"};
+      Token *out_who = NULL;
+      ok(agent_set_perspective(ai, w, 5, &out_who) == 1, "开着：也认（剥标记那条路不变）");
+      ok(ai->view_who == who && out_who == who, "开着：代词**指回代词甲**（不再造「他」这个人名）"); }
+    /* 认不出（还没有人说过话）⇒ 不动 */
+    ai->last_who = NULL; ai->view_who = NULL;
+    { char *w[5] = {(char *)"他", (char *)"觉得", (char *)"代词猫", (char *)"会", (char *)"飞"};
+      Token *out_who = NULL;
+      (void)agent_set_perspective(ai, w, 5, &out_who);
+      ok(ai->view_who && ai->view_who->name && strcmp(ai->view_who->name, "他") == 0,
+         "认不出（没人说过话）⇒ 不动，照旧当人名（宁可漏）"); }
+    ai_free(ai);
+}
+
 static void test_open_relation(void) {
     printf("== ㊲ ② 触发接求解：`A R 什么` / `谁 R B` 这类缺一端的问句 ==\n");
     AI *ai = ai_new();
@@ -2392,6 +2425,7 @@ int main(void) {
     test_lexicon();
     test_other_weak();
     test_open_relation();
+    test_pron_last();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();
