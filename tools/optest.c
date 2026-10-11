@@ -1805,6 +1805,28 @@ static void test_tail_blocks(void) {
 /* ② 档：**触发接求解**（§6.86）—— 开放式关系问句（缺一端）走求解器 */
 /* ② 档：**指代消解最小版**（§6.87）—— 句首 他/她/它 指回最近说话的那个人 */
 /* ② 档：**闸门分层判据**（§6.89）—— 硬门槛 + 三档，替掉"一个阈值切不动"那条 */
+/* ② 档：**类比兜底**（§6.90）—— 规则答不出时，用同类（同一上位）互相推，答**大概** */
+static void test_analogy_fallback(void) {
+    printf("== ㊵ ② 类比兜底：同类互推，答「大概」（默认关） ==\n");
+    AI *ai = ai_new();
+    Token *sup = T(ai, "类"), *a = T(ai, "熊甲"), *b = T(ai, "熊乙"), *obj = T(ai, "冬眠");
+    (void)token_tag_rel(a, sup, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, sup, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, obj, REL_CAN, REL_BOOST);
+    char *w[4] = {(char *)"熊甲", (char *)"会", (char *)"冬眠", (char *)"吗"};
+    float conf = 0.0f;
+    ai->rel_analogy = 0;
+    ok(agent_analogy_fallback(ai, w, 4, &conf) == NULL, "关着：不兜（规则答不出就说不确定）");
+    ai->rel_analogy = 1;
+    char *r = agent_analogy_fallback(ai, w, 4, &conf);
+    ok(r != NULL && strstr(r, "大概") != NULL, "开着：给**大概**（措辞一定带「大概」）");
+    ok(r && strstr(r, "熊乙") != NULL, "说清依据是谁（同类里 熊乙 也 会 冬眠）");
+    ok(r && strstr(r, "类比") != NULL, "明说这是**类比**，不是直接知识");
+    ok(conf > 0.0f && conf < 0.6f, "置信度**压低**（<0.6，不当成确定的事）");
+    free(r);
+    ai_free(ai);
+}
+
 static void test_wgate_tier(void) {
     printf("== ㊴ ② 闸门分层判据（默认关） ==\n");
     char why[96];
@@ -2445,6 +2467,7 @@ int main(void) {
     test_open_relation();
     test_pron_last();
     test_wgate_tier();
+    test_analogy_fallback();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

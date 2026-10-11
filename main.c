@@ -2175,6 +2175,18 @@ int main(int argc, char **argv) {
             }
             case CMD_REL: {
                 const char *arg = (cmd[3] == ' ') ? cmd + 4 : NULL;
+                if (arg && strncmp(arg, "analogy", 7) == 0) {
+                    const char *v = arg + 7;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->rel_analogy = 1;
+                    else if (!strcmp(v, "off")) a->brain->rel_analogy = 0;
+                    else if (*v) { printf("[用法] ::rel analogy on|off\n"); continue; }
+                    printf("[类比兜底 = %s]（%s）\n", a->brain->rel_analogy ? "开" : "关（默认）",
+                           a->brain->rel_analogy
+                               ? "规则答不出时用**上位/同类**答「大概」（降置信度，绝不硬说「对」）"
+                               : "答不出就说不知道（今天的行为）");
+                    continue;
+                }
                 if (arg && strncmp(arg, "open", 4) == 0 && (arg[4] == 0 || arg[4] == ' ')) {
                     /* ② 触发接求解：开放式关系问句（`A R 什么` / `谁 R B`）走求解器 */
                     const char *v = arg + 4;

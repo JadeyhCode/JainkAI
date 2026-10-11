@@ -78,6 +78,8 @@ static inline DerStep *der_gap(Derivation *d, const char *why) {
     if (s && why) { cot_copy(s->note, sizeof s->note, why); }
     return s;
 }
+#define DER_VERDICT_UNSURE "不 确定"   /* 判不出来时的那句措辞（唯一出处） */
+
 static inline void der_conclude(Derivation *d, int truth, int conf) {
     DerStep *s = der_add(d, DER_CONCLUDE);
     if (s) s->truth = truth;
@@ -587,7 +589,8 @@ static inline void der_say(const AI *ai, Derivation *d, int style,
     int has_hyp = 0;
     for (size_t i = 0; i < d->n; ++i)
         if (d->step[i].kind == DER_HYP) { has_hyp = 1; break; }
-    const char *verdict = (d->truth > 0) ? "对" : (d->truth < 0 ? "不 对" : "不 确定");
+    /* 判定词只此一处（下面 agent 层要靠它认"这条是没答上来"，别在两处各写一份字符串） */
+    const char *verdict = (d->truth > 0) ? "对" : (d->truth < 0 ? "不 对" : DER_VERDICT_UNSURE);
     switch (style) {
     case DER_STYLE_TERSE:
         snprintf(out, cap, "%s", verdict);

@@ -117,6 +117,58 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     return NULL;
 }
 
+/* ============ ② 类比兜底（§6.90，默认关）：规则不行时，用"上位/同类"的例子答**大概** ============
+ *
+ * 缺口：求解器只在**规则（关系边）**上走，找不到就说不知道 —— 但它手上其实还有两类"近似依据"：
+ *   ① **上位**：`A 属于 P` 且 `P —R→ B` ⇒ "A 大概也 R B"（类别继承的类比）；
+ *   ② **同类**：A 的**兄弟** A2（同一 parent）有 `A2 —R→ B` ⇒ "同类里 A2 也是 R B"。
+ * 这一版把它们当**兜底**（只在规则答不出时用），并且：
+ *   · 措辞一定是「**大概**」+ 说清依据是谁（绝不硬说"对"）；
+ *   · 置信度**压低**（0.45~0.50），进 `out_conf`；
+ *   · 上游"有没有据"的账照旧（这条不进图、不改知识，只影响这一次回答）。 */
+static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n, float *out_conf) {
+    if (!ai || !ai->rel_analogy || !words || n < 3 || n > 6) return NULL;
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int is_q = 0, is_neg = 0;
+    char jbuf[64];
+    if (!rel_parse(ai, words, n, jbuf, sizeof jbuf, &aw, &rid, &is_neg, &bw, &is_q, &rw, 0))
+        return NULL;
+    if (!is_q || rid == 0 || is_neg) return NULL;          /* 只兜肯定的疑问句（否定另说） */
+    Token *A = pool_find(ai->pool, aw);
+    Token *B = pool_find(ai->pool, bw);
+    if (!A || !B) return NULL;
+    char buf[256];
+    /* 上位（`A 属于 P` 且 `P R B`）本来由**规则层的继承**管；这里只管**同类互推**：
+     * A 和 A2 都属于同一个 P，而 A2 R B ⇒ "A 大概也 R B"（规则层**不做**兄弟互推，这才是真缺口）。
+     * 依据从 `属于` 边读（不是抽象 parent —— 抽象 parent 只有 `::abstract` 跑过才有）。 */
+    Token *sup[8];
+    uint8_t sup_h[8];
+    size_t nsup = rel_next_cands(ai, A, REL_IS_A, 0, sup, sup_h, 8);
+    for (size_t k = 0; k < nsup; ++k) {
+        Token *P = sup[k];
+        if (!P || !P->name || P->name[0] == '[' || P == B) continue;
+        size_t scanned = 0;
+        for (size_t i = 0; i < ai->pool->count && scanned < 64; ++i) {
+            Token *t2 = ai->pool->tokens[i];
+            if (!t2 || t2->is_garbage || t2 == A || !t2->name || t2->name[0] == '[') continue;
+            if (!rel_direct(t2, REL_IS_A, P)) continue;      /* 只算同一上位的"兄弟" */
+            scanned++;
+            if (rel_direct(t2, rid, B)) {
+                snprintf(buf, sizeof buf,
+                         "大概 —— 同类里 %s 也 %s %s（%s 和 %s 都 属于 %s ；**类比**，不是直接知识）",
+                         t2->name, words[1], B->name ? B->name : "?",
+                         A->name ? A->name : "?", t2->name, P->name);
+                if (out_conf) *out_conf = 0.45f;
+                char *r = (char *)malloc(strlen(buf) + 1);
+                if (r) memcpy(r, buf, strlen(buf) + 1);
+                return r;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* 步骤一：用户**陈述**了一条关系事实吗？是就当场学进图里（并写进模型）。
  * 支持肯定（`猫 属于 动物`）和否定（`猫 不 会 飞`）两种陈述。
  * 返回要说的确认话（调用方 free），不是陈述就返回 NULL。 */
@@ -1978,6 +2030,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         resp = agent_set_hypothesis(ai, words, n, &rc);
         /* ② 触发接求解：闭合问句答不了时，试**开放式**关系问句（默认关） */
         if (!resp && ai->rel_open) resp = agent_open_relation(ai, words, n, &rc);
+        /* ② 类比兜底（默认关）：规则**答不上来**时（不只是没答，而是答了 DER_VERDICT_UNSURE）
+         * 换成"同类互推"的**大概**答案。判据用 `DER_VERDICT_UNSURE` 一处定义，别抄字符串。 */
+        if (resp && !strstr(resp, DER_VERDICT_UNSURE)) {
+            /* 规则真答了（对/不对）⇒ 不动 */
+        } else {
+            char *an = agent_analogy_fallback(ai, words, n, &rc);
+            if (an) { free(resp); resp = an; }
+        }
         if (resp) conf = rc;
     }
     /* 「他 以为 X」= **他告诉我的看法**，存在他名下（持久，存盘）；

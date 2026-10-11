@@ -629,6 +629,9 @@ typedef struct {
      * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
      * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
     int    wgate_tier;
+    /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
+     * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
+    int    rel_analogy;
     Token *last_who;      /* 最近一次"谁 以为/觉得/说 X"里的那个谁（只在开关打开时用） */
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
@@ -1227,6 +1230,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
+    ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
+    { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

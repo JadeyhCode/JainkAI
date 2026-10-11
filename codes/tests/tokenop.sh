@@ -28,7 +28,7 @@ ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # `::notepad off`：**钉住"流水线模式"** —— 这样环境变量强制打开"AI 自己写草稿"时
 # （`AIP_PATCH=记事本 AIP_NOTEPAD=on`），这套看护的断言依然测的是它要测的东西。
-run() { cp model.bin m.bin; { printf '::notepad off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
+run() { cp model.bin m.bin; { printf '::notepad off\n::rel analogy off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
@@ -379,16 +379,16 @@ run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 加
 grep -q '要参数（v1 不支持，不猜）' o15 && ok "要参数的行为步骤：记断点**不猜参数**" \
     || bad "不猜参数" "$(grep -m2 '加步骤' o15)"
 # 前提不成立 = 断点（跨会话：前提不在注意窗口里）
-{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
+{ printf '::notepad off\n::rel analogy off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
     | ./aip --model model.bin > /dev/null 2>&1 || true
-{ printf '::notepad off\n::proc on\n::proc dry off\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o16 2>&1 || true
+{ printf '::notepad off\n::rel analogy off\n::proc on\n::proc dry off\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o16 2>&1 || true
 grep -q '断点：前提「有热水」没成立' o16 \
     && ok "前提没成立 ⇒ **断点**（用现成的三档判据，不是新拍的）" \
     || bad "前提断点" "$(grep -m3 '步 \|前提' o16)"
 grep -q '不许说跑通了' o16 && ok "有断点时**明说"不许说跑通了"**（断点在哪停在哪）" \
     || bad "断点措辞" "$(grep -m1 '轨迹' o16)"
 # 过程边是**结构**：加前提不许把它拆掉（拆了过程就少一步）
-{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::proc 泡茶\n::quit\n'; } \
+{ printf '::notepad off\n::rel analogy off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::proc 泡茶\n::quit\n'; } \
     | ./aip --model model.bin > o17 2>&1 || true
 grep -q '2 步 + 0 条件 + 0 否则 + 0 异常 + 0 调用 + 0 回边' o17 \
     && ok "给一步挂前提之后，**步骤还是 2 步**（过程边是结构，插词/加前提不许拆）" \
@@ -405,7 +405,7 @@ n_back=$(grep -ac '（重跑）' o18 || true)
 echo "== ⑪ ④ 干跑（假设世界）：假定前提 + 按步回退 + 跑完 pop 干净 =="
 # §6.56 第 4 条：`Hypo` 当执行栈与作用域，回退用 pop。这一节钉干跑与实跑的区别、回退、
 # 以及"跑完一个字都不漏"（假设层深度回到原样）。
-{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
+{ printf '::notepad off\n::rel analogy off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
     | ./aip --model model.bin > /dev/null 2>&1 || true
 if [ -z "${AIP_PROCDRY:-}" ]; then
     run '::proc dry\n' o19
@@ -416,7 +416,7 @@ else
     grep -q '过程\*\*干跑\*\* = 开' o19 && ok "AIP_PROCDRY=1（反向测量）：env 一开就是干跑" \
         || bad "干跑反测" "$(grep -m2 '干跑' o19)"
 fi
-{ printf '::notepad off\n::proc on\n::proc dry on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o20 2>&1 || true   # 显式开：不受 env 影响
+{ printf '::notepad off\n::rel analogy off\n::proc on\n::proc dry on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o20 2>&1 || true   # 显式开：不受 env 影响
 grep -q '干跑：\*\*过\*\*（假定前提「有热水」成立' o20 \
     && ok "干跑：前提不成立 → **假定成立**（记进假设层：烧水 需要 有热水）" \
     || bad "假定前提" "$(grep -m3 '步 \|假定' o20)"
@@ -432,16 +432,16 @@ grep -q '跑完核对 \*\*1 条还在层里\*\*（应当 1' o20 \
     && ok "假定进了层、跑完核对还在（「hypo_find」独立核过）" \
     || bad "假定核对" "$(grep -m1 '假定（' o20)"
 # 按步回退：先假定了前提、随后发现这一步做不了（要参数）⇒ 撤掉那一步的假设
-{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 加步骤\n::op 加前提 [过程:泡茶] 加步骤 有热水\n::save proc4.bin\n::quit\n'; } \
+{ printf '::notepad off\n::rel analogy off\n::op 建过程 泡茶\n::op 加步骤 泡茶 加步骤\n::op 加前提 [过程:泡茶] 加步骤 有热水\n::save proc4.bin\n::quit\n'; } \
     | ./aip --model model.bin > /dev/null 2>&1 || true
-{ printf '::notepad off\n::proc on\n::proc dry on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc4.bin > o21 2>&1 || true
+{ printf '::notepad off\n::rel analogy off\n::proc on\n::proc dry on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc4.bin > o21 2>&1 || true
 grep -q '回退：这一步的假设撤了' o21 && ok "**按步回退**：这一步的假设撤了（假设层回到这一步之前）" \
     || bad "按步回退" "$(grep -m3 '回退\|假定' o21)"
 grep -q '回退撤掉 1 条；跑完核对 \*\*0 条还在层里\*\*（应当 0' o21 \
     && ok "回退的账对得上（假定 1 条、撤 1 条、核对 0 条）" \
     || bad "回退账" "$(grep -m1 '假定（' o21)"
 # 实跑不受影响：前提不成立仍是断点、行为仍真执行
-{ printf '::notepad off\n::proc on\n::proc dry off\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o22 2>&1 || true
+{ printf '::notepad off\n::rel analogy off\n::proc on\n::proc dry off\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o22 2>&1 || true
 grep -q '断点：前提「有热水」没成立' o22 && grep -q '执行了行为「回收临时」' o22 \
     && ok "干跑关着时回到实跑：前提不成立=断点、行为真执行（③ 语义没变）" \
     || bad "实跑不变" "$(grep -m3 '步 \|执行了' o22)"

@@ -27,7 +27,7 @@ chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1;
 # run <关系库文件> <输入行...>：在 $WORK 里跑（relations.txt 是按 cwd 读的）
 run() {
     printf '%s\n' "$1" > "$WORK/relations.txt"
-    { printf '::load %s\n::notepad off\n' "$MODEL"; shift
+    { printf '::load %s\n::notepad off\n::rel analogy off\n' "$MODEL"; shift
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'; } | (cd "$WORK" && "$BIN") 2>&1
 }
@@ -67,7 +67,7 @@ echo "③ 不许误伤已经直接知道的事实（用仓库里真实的 relati
 # 注意：$WORK 里的 relations.txt 是**替换**掉的，里面没有「猫 会 抓老鼠」这类
 # 事实（它们来自仓库的 relations.txt），所以这一条必须在仓库根目录跑。
 run_root() {
-    { printf '::load %s\n::notepad off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
+    { printf '::load %s\n::notepad off\n::rel analogy off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'; } | (cd "$ROOT" && "$BIN") 2>&1
 }
 out=$(run_root "猫 会 抓老鼠 吗" "猫 会 飞 吗" "猫 会 唱歌 吗")

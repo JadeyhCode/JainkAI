@@ -45,9 +45,19 @@ if ! mkdir "$PAR/.lock" 2>/dev/null; then
         echo "确认没在跑：rm -rf \"$PAR/.lock\" 之后重试（或整个 rm -rf _t/par）。"
         exit 3
     fi
+    # 除了"pid 不在"，再加一条**按年龄**判死锁：pid 可能被系统复用（旧锁看起来"活着"），
+    # 于是整包静默退出、grep 之后看起来"什么都没输出"（实测踩过）。超过 30 分钟一律算死锁。
+    if [ -n "$old_pid" ] && [ -n "$(find "$PAR/.lock" -mmin +30 2>/dev/null)" ]; then
+        echo "（发现死锁：$PAR/.lock 已经超过 30 分钟 —— 自动清掉继续）"
+        rm -rf "$PAR/.lock"
+        mkdir "$PAR/.lock" || exit 3
+        echo $$ > "$PAR/.lock/pid"
+        trap 'rm -rf "$PAR/.lock"' EXIT INT TERM
+    else
     echo "（发现死锁：$PAR/.lock 记的 pid ${old_pid:-未知（旧版没写 pid）} 已经不在 —— 自动清掉继续）"
     rm -rf "$PAR/.lock"
     mkdir "$PAR/.lock" 2>/dev/null || { echo "锁清不掉，先手工处理：rm -rf \"$PAR/.lock\""; exit 3; }
+    fi
 fi
 echo $$ > "$PAR/.lock/pid"     # 记 pid：死锁判据（见上）
 trap 'rm -rf "$PAR/.lock"' EXIT INT TERM
