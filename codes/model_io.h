@@ -391,12 +391,23 @@ static inline size_t ai_save_file(const AI *ai, const char *path) {
     if (!buf) return 0;
     size_t got = ai_snapshot(ai, buf, sz);
     if (got != sz) { free(buf); return 0; }
-    FILE *f = fopen(path, "wb");
+    /* **原子写**（借 §6.88 那条经验）：先写同目录的临时文件 → fsync 落盘 → rename 原子替换。
+     * 为什么非改不可：原来直接 `fopen(path,"wb")` 写目标 —— 中途崩/满盘/断电，
+     * 模型文件就**截断**了，而模型就是它的全部记忆（写坏 = 记忆清零，比丢一次快照严重得多）。
+     * rename 在同一个文件系统上是原子的：要么旧文件完好，要么新文件完整，没有中间态。 */
+    char tmp[1024];
+    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) { free(buf); return 0; }
+    FILE *f = fopen(tmp, "wb");
     if (!f) { free(buf); return 0; }
     size_t wrote = fwrite(buf, 1, sz, f);
-    int bad = (fclose(f) != 0) || (wrote != sz);
+    int bad = (wrote != sz);
+    if (!bad && fflush(f) != 0) bad = 1;
+    if (!bad && fsync(fileno(f)) != 0) bad = 1;      /* 先落盘再替换：断电也不会留下半个新文件 */
+    if (fclose(f) != 0) bad = 1;
+    if (bad) { remove(tmp); free(buf); return 0; }
+    if (rename(tmp, path) != 0) { remove(tmp); free(buf); return 0; }
     free(buf);
-    return bad ? 0 : sz;
+    return sz;
 }
 
 /* 建目录（父目录用，已存在算成功） */

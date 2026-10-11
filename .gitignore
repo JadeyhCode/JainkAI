@@ -5,6 +5,8 @@ build_*
 _t/
 # 旧快照（历史留档，单独放在 _backup/，不进版本控制）
 _backup/
+# CMake/CLion 构建目录（里面有 CMakeCache.txt，带**本机绝对路径** —— 不许进公开仓库）
+cmake-build*/
 # 编辑器/系统杂物
 .idea/
 *.swp

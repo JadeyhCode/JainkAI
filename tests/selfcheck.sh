@@ -132,6 +132,32 @@ else
     say NOTE "没有 build_aip ⇒ 跳过（第 0 步会先编，编完再跑这一项）"
 fi
 
+echo "== ⑥ 对外文件里不许出现**本机绝对路径 / 凭据形态**（借 §6.88 那条 check_local_paths）=="
+# 为什么要有：仓库可能被推到公开处（本项目 2026-10-11 就推了 JainkAI）——
+# 个人家目录路径会把用户名/机器布局暴露出去，凭据形态更是绝对不能有。
+# 判据：扫**被跟踪的文件**（git ls-files；不是 git 仓库就退回 find）。
+# ⚠ 只看**被跟踪的文件**（= 会被推出去的东西）。第一版在"不是 git 仓库"时退回 find，
+#   于是把本机未跟踪的构建目录也算进来了（实测假红：cmake-build-debug 根本没进版本库）。
+files=$(git ls-files 2>/dev/null)
+if [ -z "$files" ]; then
+    say NOTE "没有跟踪文件（不是 git 仓库？）⇒ 这一项跳过"
+fi
+hits=0
+for pat in "/home/[A-Za-z0-9._-]*/" "/Users/[A-Za-z0-9._-]*/" "ghp_[A-Za-z0-9]\{20,\}" "github_pat_" "BEGIN [A-Z ]*PRIVATE KEY"; do
+    out=$(printf '%s\n' "$files" | while IFS= read -r f; do
+              [ -f "$f" ] || continue
+              grep -nE -- "$pat" "$f" 2>/dev/null | sed "s|^|$f:|"
+          done | grep -v '^tests/selfcheck.sh:' | head -6)
+    if [ -n "$out" ]; then
+        say FAIL "对外文件里命中「$pat」："
+        printf '%s\n' "$out" | head -6
+        hits=1
+    fi
+done
+if [ "$hits" -eq 0 ]; then
+    say OK "没有本机绝对路径、没有凭据形态（扫了 $(printf '%s\n' "$files" | grep -c . ) 个被跟踪文件）"
+fi
+
 echo "== ④ 每个套件脚本都在清单里、清单里的脚本都存在（别漏进/漏出）=="
 for f in tests/*.sh; do
     b=${f#tests/}; b=${b%.sh}
