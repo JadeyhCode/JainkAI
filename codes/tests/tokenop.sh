@@ -526,7 +526,8 @@ grep -aq '第 1 步 是 「 烧水 」' o35 && grep -aq '第 2 步 是 「 泡�
     && ok "「第 N 步 动作」→ 加步骤（步号认得出、动作拼回去）" || bad "第N步" "$(grep -m3 'AI >' o35)"
 grep -q '2 步 + 0 条件' o35 && ok "说出来的过程**真的建起来了**（::proc 看得到 2 步）" \
     || bad "建起来了" "$(grep -m1 '过程]' o35)"
-run '::proc talk on\n记个过程 泡茶\n第 1 步 烧水\n跑 泡茶\n' o36
+# `::proc off`：这一条测的是"引擎关着时怎么答"——显式钉住（反向测量 AIP_PROCRUN=1 时也要关）
+run '::proc talk on\n::proc off\n记个过程 泡茶\n第 1 步 烧水\n跑 泡茶\n' o36
 grep -aq '执行 引擎 关着' o36 && ok "引擎关着时：「跑 X」明说关着（不假装跑了）" \
     || bad "引擎关着" "$(grep -m2 'AI >' o36)"
 run '::proc talk on\n::proc on\n记个过程 泡茶\n第 1 步 烧水\n跑 泡茶\n' o37
