@@ -1804,6 +1804,24 @@ static void test_tail_blocks(void) {
  * 开关打开 ⇒ 算**半票参考**（只在没有确定表态时才决定倾向）。 */
 /* ② 档：**触发接求解**（§6.86）—— 开放式关系问句（缺一端）走求解器 */
 /* ② 档：**指代消解最小版**（§6.87）—— 句首 他/她/它 指回最近说话的那个人 */
+/* ② 档：**闸门分层判据**（§6.89）—— 硬门槛 + 三档，替掉"一个阈值切不动"那条 */
+static void test_wgate_tier(void) {
+    printf("== ㊴ ② 闸门分层判据（默认关） ==\n");
+    char why[96];
+    AI *ai = ai_new();
+    ok(ai_wgate_tiered(ai, 0.80, 0, 0, why, sizeof why) == 1, "高档（0.80 ≥ 0.70）：**没旁证也放行**");
+    ok(ai_wgate_tiered(ai, 0.65, 1, 0, why, sizeof why) == 1, "中档（0.65）+ 证据 1 条 ⇒ 沉淀");
+    ok(ai_wgate_tiered(ai, 0.65, 0, 65, why, sizeof why) == 1, "中档 + 链底 65 分 ⇒ 沉淀");
+    ok(ai_wgate_tiered(ai, 0.65, 0, 0, why, sizeof why) == 0, "中档但**没旁证** ⇒ 拦");
+    ok(ai_wgate_tiered(ai, 0.40, 3, 90, why, sizeof why) == 0, "低档（0.40）**有旁证也拦**（分不够就是不够）");
+    ok(ai_wgate_tiered(ai, 0.62, 0, 0, why, sizeof why) == 0 &&
+       strstr(why, "硬门槛") != NULL, "硬门槛：没旁证 + 分数不到高档 ⇒ 拦（理由写清是硬门槛）");
+    /* 反向测量（AIP_WGATETIER=1）时"默认关"这条按规矩跳过（C 级测试也要钉默认档的脾气） */
+    if (getenv("AIP_WGATETIER")) ok(1, "AIP_WGATETIER=1（反向测量）：默认值断言按规矩跳过");
+    else ok(ai->wgate_tier == 0, "默认**关**（关着时调用方走原来的单阈值，逐字节相同）");
+    ai_free(ai);
+}
+
 static void test_pron_last(void) {
     printf("== ㊳ ② 指代消解最小版：他/她/它 指回最近说话的人 ==\n");
     AI *ai = ai_new();
@@ -2426,6 +2444,7 @@ int main(void) {
     test_other_weak();
     test_open_relation();
     test_pron_last();
+    test_wgate_tier();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

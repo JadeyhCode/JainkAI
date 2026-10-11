@@ -625,6 +625,10 @@ typedef struct {
     /* **指代消解最小版**（② 档，默认 0 = 关）：记"最近提到的那个谁"，
      * 于是「他 觉得 猫 会 飞 吗」里的**他/她/它**能指回那个人（而不是掉流水线）。 */
     int    pron_last;
+    /* **写入闸门：分层判据**（② 档，默认 0 = 关）：实测 imp 落在 0.587~0.725，
+     * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
+     * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
+    int    wgate_tier;
     Token *last_who;      /* 最近一次"谁 以为/觉得/说 X"里的那个谁（只在开关打开时用） */
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
@@ -1100,6 +1104,34 @@ static inline double ai_write_support(const AiWriteCtx *ctx) {
     return s;
 }
 
+/* **闸门分层判据**（§6.89）：返回 1 = 放行沉淀，0 = 拦下（`why` 里写清卡在哪一档）。
+ * 关着时**不调用**（调用方走原来的单阈值）—— 所以这是可 A/B 的开关，不是改行为。
+ * 三档 + 一条硬门槛（都按实测分布 0.587~0.725 划的）：
+ *   ≥0.70 高：直接沉淀（这条区间本来就少，放行）；
+ *   0.60~0.70 中：**要有旁证** —— 候选证据 ≥1 条 **或** 链底分 ≥60，否则拦；
+ *   <0.60 低：拦；
+ *   硬门槛（先于分档）：既没旁证也没链底支撑、且分不到高档 ⇒ 拦（分数高也说明不了"有依据"）。 */
+static inline int ai_wgate_tiered(const AI *ai, double imp, int ev, int cred,
+                                  char *why, size_t cap) {
+    (void)ai;
+    if (why && cap) why[0] = 0;
+    if (imp >= 0.70) {
+        if (why && cap) snprintf(why, cap, "高档（%.2f ≥ 0.70）⇒ 沉淀", imp);
+        return 1;
+    }
+    if (ev <= 0 && cred <= 0) {
+        if (why && cap) snprintf(why, cap, "硬门槛：没旁证（证据 0 条、链底 0 分）⇒ 拦（%.2f）", imp);
+        return 0;
+    }
+    if (imp >= 0.60) {
+        if (why && cap) snprintf(why, cap, "中档（%.2f）但有旁证（证据 %d 条 / 链底 %d 分）⇒ 沉淀",
+                                 imp, ev, cred);
+        return 1;
+    }
+    if (why && cap) snprintf(why, cap, "低档（%.2f < 0.60）⇒ 拦（有旁证也不够）", imp);
+    return 0;
+}
+
 /* 带候选证据的评分。`ctx == NULL`（观测/基准/量测台扫图那些调用）或开关关着时，
  * 结果与 `ai_write_importance()` **逐位相同** —— 这是 A/B 的前提。 */
 static inline double ai_write_importance_ctx(const AI *ai, const Token *a, const Token *b,
@@ -1193,6 +1225,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ro = getenv("AIP_RELOPEN"); if (ro && ro[0] == '1') ai->rel_open = 1; }
     ai->pron_last = 0;               /* 指代消解最小版：默认**关** */
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
+    ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
+    { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

@@ -2901,6 +2901,20 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_WGATE: {
+                const char *arg0 = (cmd[7] == ' ') ? cmd + 8 : NULL;
+                while (arg0 && *arg0 == ' ') arg0++;
+                if (arg0 && strncmp(arg0, "tier", 4) == 0) {
+                    const char *v = arg0 + 4;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->wgate_tier = 1;
+                    else if (!strcmp(v, "off")) a->brain->wgate_tier = 0;
+                    else if (*v) { printf("[用法] ::wgate tier on|off\n"); continue; }
+                    printf("[闸门分层判据 = %s]（%s）\n", a->brain->wgate_tier ? "开" : "关（默认）",
+                           a->brain->wgate_tier
+                               ? "高档直接沉淀 / **中档要有旁证** / 低档拦 + 一条硬门槛（没旁证就拦）"
+                               : "原来的单阈值");
+                    continue;
+                }
                 const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
                 while (arg && *arg == ' ') arg++;
                 if (arg && *arg) {

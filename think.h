@@ -2189,12 +2189,25 @@ static inline void think_settle(AI *ai) {
                 ai->last_write_hops = wc.hops;
                 ai->last_write_cred = wc.cred;
                 ai->last_write_ev = wc.ev;
-                if (imp < ai_wgate_knowledge(ai)) {
+                /* ② 分层判据（默认关）：开着时按"硬门槛 + 三档"决定，而不是一个阈值 */
+                int tier_allow = -1;
+                char tier_why[96];
+                if (ai->wgate_tier) {
+                    tier_allow = ai_wgate_tiered(ai, imp, wc.ev, wc.cred, tier_why, sizeof tier_why);
+                    if (tier_allow) {
+                        think_step(t, TH_LEARN, 1, 55, "写入闸门（分层）", tier_why);
+                        ai->n_cached++;                 /* 与老路同账：放行也算一次沉淀 */
+                    }
+                }
+                if (tier_allow == 0 || (tier_allow < 0 && imp < ai_wgate_knowledge(ai))) {
                     char why2[THINK_WHY];
-                    snprintf(why2, sizeof why2,
-                             "这条太轻（重要度 %.2f，%s；链 %d 跳/链底 %d 分）——"
-                             "先不沉淀，想法留在痕上",
-                             imp, ai_write_layer_of(ai, imp), wc.hops, wc.cred);
+                    if (tier_allow == 0)
+                        snprintf(why2, sizeof why2, "写入闸门（分层）：%s —— 想法留在痕上", tier_why);
+                    else
+                        snprintf(why2, sizeof why2,
+                                 "这条太轻（重要度 %.2f，%s；链 %d 跳/链底 %d 分）——"
+                                 "先不沉淀，想法留在痕上",
+                                 imp, ai_write_layer_of(ai, imp), wc.hops, wc.cred);
                     think_step(t, TH_LEARN, 0, 30, "写入闸门", why2);
                     t->n_cache_blocked++;
                     ai->n_write_blocked++;          /* 账要对得上：拦下的也算一次"想写" */
