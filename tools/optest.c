@@ -1802,6 +1802,40 @@ static void test_tail_blocks(void) {
  * 缺口在**词表覆盖**。`lexicon.txt`（一行一个词）就是补这一块的**数据**入口。 */
 /* ② 档：**他者上位降权**（§6.85）—— 他说的比你问的**更宽**时，默认只当"相关"；
  * 开关打开 ⇒ 算**半票参考**（只在没有确定表态时才决定倾向）。 */
+/* ② 档：**触发接求解**（§6.86）—— 开放式关系问句（缺一端）走求解器 */
+static void test_open_relation(void) {
+    printf("== ㊲ ② 触发接求解：`A R 什么` / `谁 R B` 这类缺一端的问句 ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "开猫"), *dog = T(ai, "开狗"), *animal = T(ai, "开动物");
+    (void)token_tag_rel(cat, animal, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(dog, animal, REL_IS_A, REL_BOOST);
+    ai->rel_open = 0;
+    ai->rel_off = 0;
+    { char *w[3] = {(char *)"开猫", (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 3, &c) == NULL, "关着：这条路**不接**（照旧走流水线）"); }
+    ai->rel_open = 1;
+    { char *w[3] = {(char *)"开猫", (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      char *a1 = agent_open_relation(ai, w, 3, &c);
+      ok(a1 && strstr(a1, "开动物") != NULL, "`A R 什么` ⇒ 正向查邻居（答出开动物）");
+      free(a1); }
+    { char *w[3] = {(char *)"谁", (char *)"属于", (char *)"开动物"};
+      float c = 0.0f;
+      char *a2 = agent_open_relation(ai, w, 3, &c);
+      ok(a2 && strstr(a2, "开猫") && strstr(a2, "开狗"), "`谁 R B` ⇒ **反向扫**（答出开猫、开狗）");
+      free(a2); }
+    { char *w[3] = {(char *)"开猫", (char *)"没有这关系", (char *)"什么"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 3, &c) == NULL, "关系词不认识 ⇒ 不接（不瞎答）"); }
+    { char *w[3] = {(char *)"开猫", (char *)"吃", (char *)"什么"};
+      float c = 0.0f;
+      char *a3 = agent_open_relation(ai, w, 3, &c);
+      ok(a3 && strstr(a3, "没 记 过") != NULL, "图里没记过 ⇒ 明说「没记过」（不编）");
+      free(a3); }
+    ai_free(ai);
+}
+
 static void test_other_weak(void) {
     printf("== ㊱ ② 他者上位降权：更宽的说法算半票参考（默认只当相关） ==\n");
     AI *ai = ai_new();
@@ -2357,6 +2391,7 @@ int main(void) {
     test_eval_num();
     test_lexicon();
     test_other_weak();
+    test_open_relation();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

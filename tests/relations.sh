@@ -174,6 +174,21 @@ printf '%s\n' "$out" | grep -aq '记下 了 ： 猫 不 喵 狗' \
     && chk "动态谓语 + 否定：**现在也学得进**（以前整句掉降级）" 1 \
     || chk "动态否定（实得：$(printf '%s\n' "$out" | reps | nth 3)）" 0
 
+echo "== ⑨ ② 触发接求解：缺一端的问句（默认关） =="
+if [ -z "${AIP_RELOPEN:-}" ]; then
+    out=$(run "::rel open off" "猫 属于 什么")
+    printf '%s\n' "$out" | grep -aq '我 记 的 是 ： 猫 属于' \
+        && chk "默认关不该答开放式问句" 0 || chk "默认关：照旧「不太懂」（行为不变）" 1
+fi
+out=$(run "::rel open on" "猫 属于 什么" "谁 属于 动物" "猫 会 什么")
+printf '%s\n' "$out" | grep -aq '我 记 的 是 ： 猫 属于 动物' \
+    && chk "开着：`A R 什么` 正向查邻居 ⇒ 答出宾语" 1 \
+    || chk "正向（实得：$(printf '%s\n' "$out" | reps | head -1)）" 0
+printf '%s\n' "$out" | grep -aq '属于 动物 的 有 ： 猫' \
+    && chk "开着：`谁 R B` **反向扫** ⇒ 答出主语（还列了多个）" 1 \
+    || chk "反向（实得：$(printf '%s\n' "$out" | reps | sed -n 2p)）" 0
+printf '%s\n' "$out" | grep -aq '猫 会' && chk "换一条关系也走得通（`猫 会 什么`）" 1 || chk "换关系" 0
+
 rm -rf "$TMP"
-[ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定）" \
+[ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

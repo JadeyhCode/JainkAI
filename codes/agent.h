@@ -41,6 +41,82 @@ static inline void agent_revise_name(char *dst, size_t cap, const char *a, int n
     think_utf8_clip(dst, cap, full);
 }
 
+/* ==================== ② 触发接求解：**开放式关系问句**（§6.86） ====================
+ *
+ * 量出来的缺口（先量后改）：`猫 属于 什么` / `什么 属于 动物` / `谁 属于 动物` 这类
+ * **缺一端**的关系问句全掉"我不太懂" —— 可图里明明答得出来（正向查邻居 / 反向扫一遍）。
+ * 关系层此前只答**闭合**问句（`A R B 吗`）。这一段把"表面说法"接到**求解器**上：
+ *   · `A R 什么/谁`     ⇒ 正向查 `rel_neighbors(a, rid)`；
+ *   · `什么/谁 R B`     ⇒ **反向**扫一遍（谁有 `R` 边指向 B），上限 64 个 token。
+ * 默认关（`AIP_RELOPEN=1` / `::rel open on`）：关着时这些话照旧走流水线（逐字节相同）。 */
+static inline int agent_open_slot_word(const char *w) {
+    return w && (strcmp(w, "什么") == 0 || strcmp(w, "谁") == 0 || strcmp(w, "哪些") == 0 ||
+                 strcmp(w, "啥") == 0);
+}
+
+static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
+    /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
+     * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
+    if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 5) return NULL;
+    if (ai_has_question_word(words, n)) { /* 问句里除了占位词还有别的疑问词 ⇒ 不是这条路 */ }
+    /* 形状一：`A R 什么`（3 词；4/5 词时允许尾巴上挂"呢/吗"） */
+    size_t last = n;
+    while (last > 0 && (strcmp(words[last - 1], "呢") == 0 || strcmp(words[last - 1], "吗") == 0))
+        last--;
+    if (last == 3 && agent_open_slot_word(words[2])) {
+        Token *a = pool_find(ai->pool, words[0]);
+        uint8_t rid = rel_id_of(ai, words[1], 0);
+        if (!a || rid == 0) return NULL;
+        Token *out[8];
+        uint8_t from_hyp[8];
+        size_t got = rel_next_cands(ai, a, rid, 0, out, from_hyp,
+                                    (size_t)(sizeof out / sizeof out[0]));
+        char buf[256];
+        size_t off = 0;
+        off += (size_t)snprintf(buf + off, sizeof buf - off, "我 记 的 是 ： %s %s ",
+                                a->name ? a->name : "?", words[1]);
+        if (got == 0) {
+            snprintf(buf + off, sizeof buf - off, "什么 ， 图里 没 记 过（不 编）");
+        } else {
+            for (size_t i = 0; i < got && i < 4; ++i)
+                off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
+                                        i ? " 、 " : "", out[i]->name ? out[i]->name : "?");
+            if (got > 4) snprintf(buf + off, sizeof buf - off, " … 共 %zu 个", got);
+        }
+        if (out_conf) *out_conf = 0.8f;
+        char *r = (char *)malloc(strlen(buf) + 1);
+        if (r) memcpy(r, buf, strlen(buf) + 1);
+        return r;
+    }
+    /* 形状二：`什么/谁 R B`（反向扫；上限 64 个候选，避免大池子上太慢） */
+    if (last == 3 && agent_open_slot_word(words[0])) {
+        uint8_t rid = rel_id_of(ai, words[1], 0);
+        Token *b = pool_find(ai->pool, words[2]);
+        if (rid == 0 || !b) return NULL;
+        char buf[256];
+        size_t off = 0, hits = 0;
+        off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
+                                words[1], words[2]);
+        size_t scanned = 0;
+        for (size_t i = 0; i < ai->pool->count && hits < 4 && scanned < 64; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
+            scanned++;
+            if (rel_direct(t, rid, b) == 0) continue;          /* 只认肯定那档 */
+            off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
+                                    hits ? " 、 " : "", t->name);
+            hits++;
+        }
+        if (hits == 0) snprintf(buf + off, sizeof buf - off, "图里 没 记 过（不 编）");
+        else if (hits >= 4) snprintf(buf + off, sizeof buf - off, " 等（只列前几个）");
+        if (out_conf) *out_conf = hits ? 0.8f : 0.4f;
+        char *r = (char *)malloc(strlen(buf) + 1);
+        if (r) memcpy(r, buf, strlen(buf) + 1);
+        return r;
+    }
+    return NULL;
+}
+
 /* 步骤一：用户**陈述**了一条关系事实吗？是就当场学进图里（并写进模型）。
  * 支持肯定（`猫 属于 动物`）和否定（`猫 不 会 飞`）两种陈述。
  * 返回要说的确认话（调用方 free），不是陈述就返回 NULL。 */
@@ -1888,6 +1964,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_set_hypothesis(ai, words, n, &rc);
+        /* ② 触发接求解：闭合问句答不了时，试**开放式**关系问句（默认关） */
+        if (!resp && ai->rel_open) resp = agent_open_relation(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     /* 「他 以为 X」= **他告诉我的看法**，存在他名下（持久，存盘）；

@@ -619,6 +619,9 @@ typedef struct {
     /* **他者上位降权**（② 档，默认 0 = 关）：他说的比你问的**更宽**时，算**半票参考**
      * （只在没有"确定表态"时才决定倾向）。关着时它只是"相关"、不参与判定（今天的行为）。 */
     int    other_weak_up;
+    /* **触发接求解**（② 档，默认 0 = 关）：开放式关系问句（`A R 什么` / `谁 R B`）
+     * 走求解器（正向查邻居 / 反向扫一遍），而不是掉"我不太懂"。 */
+    int    rel_open;
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
      * `lexicon.txt`（当前目录，一行一个词，`#` 注释）里的词按整词切。没有这个文件时行为不变。 */
@@ -1182,6 +1185,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *en = getenv("AIP_EVALNUM"); if (en && en[0] == '1') ai->eval_num = 1; }
     ai->other_weak_up = 0;           /* 他者上位降权：默认**关** */
     { const char *ow = getenv("AIP_OTHERWEAK"); if (ow && ow[0] == '1') ai->other_weak_up = 1; }
+    ai->rel_open = 0;                /* 触发接求解（开放式关系问句）：默认**关** */
+    { const char *ro = getenv("AIP_RELOPEN"); if (ro && ro[0] == '1') ai->rel_open = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

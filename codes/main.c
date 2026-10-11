@@ -2162,6 +2162,19 @@ int main(int argc, char **argv) {
             }
             case CMD_REL: {
                 const char *arg = (cmd[3] == ' ') ? cmd + 4 : NULL;
+                if (arg && strncmp(arg, "open", 4) == 0 && (arg[4] == 0 || arg[4] == ' ')) {
+                    /* ② 触发接求解：开放式关系问句（`A R 什么` / `谁 R B`）走求解器 */
+                    const char *v = arg + 4;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->rel_open = 1;
+                    else if (!strcmp(v, "off")) a->brain->rel_open = 0;
+                    else if (*v) { printf("[用法] ::rel open on|off\n"); continue; }
+                    printf("[开放式关系问句 = %s]（%s）\n", a->brain->rel_open ? "开" : "关（默认）",
+                           a->brain->rel_open
+                               ? "`猫 属于 什么` / `谁 属于 动物` 这类**缺一端**的问句走求解器"
+                               : "照旧走流水线（多半答「我不太懂」）");
+                    continue;
+                }
                 while (arg && *arg == ' ') arg++;
                 if (!arg || !*arg) { printf("[用法] ::rel <词>\n"); continue; }
                 Token *t = pool_find(a->brain->pool, arg);
