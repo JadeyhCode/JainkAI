@@ -685,6 +685,11 @@ typedef struct {
     /* **过程记号接进对话**（第 9 条 ②入口，默认 0 = 关）：说「记个过程 泡茶」「第 1 步 烧水」
      * 「跑 泡茶」就能建/跑过程（走的还是 `::op` 那条受审通道）。关着时一句都不认。 */
     int     proc_talk;
+    /* **过程接进思维**（第 9 条 ② 的思维侧，默认 0 = 关）：一轮思考收尾时，如果这个问题
+     * 命中一个我记过的过程（`[过程:X]`，X 出现在这一轮的话里），就在**痕**里说一句
+     * "这件事我记过过程 X（N 步）"，引擎开着时再**干跑一遍**（只读）把结果并进痕。
+     * 关着时一个字都不加。 */
+    int     proc_think;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1147,6 +1152,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pd = getenv("AIP_PROCDRY"); if (pd && pd[0] == '1') ai->proc_dry = 1; }
     ai->proc_talk = 0;               /* 过程记号接进对话：默认**关** */
     { const char *pt = getenv("AIP_PROCTALK"); if (pt && pt[0] == '1') ai->proc_talk = 1; }
+    ai->proc_think = 0;              /* 过程接进思维：默认**关** */
+    { const char *pk = getenv("AIP_PROCTHINK"); if (pk && pk[0] == '1') ai->proc_think = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

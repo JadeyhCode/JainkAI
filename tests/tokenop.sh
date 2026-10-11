@@ -537,8 +537,32 @@ grep -aq "应用 1 条" o37 && ok "对话入口走的还是**受审通道**（�
     || bad "受审通道" "$(grep -m1 '记下 了' o37)"
 
 
+echo "== ⑮ ② 过程接进思维（默认关、只读）：思考收尾自己认「这事我记过过程」 =="
+if [ -z "${AIP_PROCTHINK:-}" ]; then
+    run '::proc think off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做 呢\n::delib\n' o38
+    n=$(grep -ac '这我记过过程' o38 || true)
+    [ "$n" -eq 0 ] && ok "默认关：思考里**一个字都不加**" || bad "默认关" "$(grep -m1 '记过过程' o38)"
+    run '::proc think\n' o39
+    grep -q '过程接进思维 = 关（默认）' o39 && ok "::proc think 自报默认关" || bad "think 默认" "$(head -2 o39)"
+else
+    ok "AIP_PROCTHINK=1（反向测量）：默认值断言按规矩跳过"
+fi
+run '::proc think on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做 呢\n::delib\n' o40
+grep -q '这我记过过程' o40 && grep -q '这件事我记过过程「泡茶」（1 步）' o40 \
+    && ok "开着：思考收尾认出来了，**写进痕**（追问的是一件事、答的是"我记过过程"，不是事实）" \
+    || bad "记过过程" "$(grep -m3 '记过\|过程]' o40)"
+run '::proc think on\n::proc on\n::proc dry on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做 呢\n::delib\n' o41
+grep -q '干跑一遍：每一步都过得去' o41 \
+    && ok "引擎+干跑开着时：顺手**干跑一遍**（只读 —— 不执行行为、假定只在假设层）并写进痕" \
+    || bad "干跑进痕" "$(grep -m2 '记过过程' o41)"
+run '::proc think on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n猫 有 毛 吗\n::delib\n' o42
+n=$(grep -ac '这我记过过程' o42 || true)
+[ "$n" -eq 0 ] && ok "问的是别的事（猫有毛吗）→ **不硬扯**（没命中就不说）" \
+    || bad "别的事也硬扯" "$(grep -m1 '记过过程' o42)"
+
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1

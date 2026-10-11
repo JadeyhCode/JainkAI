@@ -1253,6 +1253,56 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     return pr.n_gap;
 }
 
+/* ============================ ② 过程接进**思维**（默认关，只读） ============================
+ *
+ * 缺口（用户 2026-10-10 点的候选）：过程记号现在只有 `::op`（建）和 `::proc`（看/跑）两个**人的**入口，
+ * AI 自己在思考时**认不出"这件事我以前记过过程"**。这一版接上：
+ * 一轮思考收尾时，拿这一轮的话去对 `[过程:X]` 的根 —— X 在话里出现就算命中，
+ * 然后在**痕**里写一句"这件事我记过过程 X（N 步）"；引擎开着时顺手**干跑一遍**（`proc_run` 的
+ * 干跑是只读的：不执行行为、假定前提也只在假设层里），把"几步过/几个断点"并进痕。
+ * **关着时一个字都不加**（默认关）。不动图：这一条只往痕和思考对象上写，没有任何写入。 */
+static inline void think_note_process(AI *ai, char *const *words, size_t n) {
+    if (!ai || !ai->proc_think || !words || !n) return;
+    Think *t = (Think *)ai->think;
+    if (!t) return;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *r = ai->pool->tokens[i];
+        if (!r || !r->name || r->is_garbage) continue;
+        if (strncmp(r->name, PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) != 0) continue;
+        /* 过程名（去掉 `[过程:` 和结尾 `]`） */
+        char bare[64];
+        size_t k = 0;
+        for (const char *q = r->name + strlen(PROC_TOKEN_PREFIX); *q && *q != ']' && k + 1 < sizeof bare; ++q)
+            bare[k++] = *q;
+        bare[k] = 0;
+        if (!bare[0]) continue;
+        /* 命中判据：这一轮的话里**出现过**这个名字（分词器可能把它切开 ⇒ 也试"首字"） */
+        int hit = 0;
+        for (size_t w = 0; w < n && !hit; ++w) {
+            if (!words[w] || !words[w][0]) continue;
+            if (strcmp(words[w], bare) == 0) { hit = 1; break; }
+            /* 分词器会把「泡茶」切成 泡+茶 ⇒ 也认"**名字的前缀**"（至少一个汉字、且比名字短）。
+             * 注意按**字节**判：一个汉字 3 字节（第一版写成 strlen==1，永远不成立 —— 实测没命中）。 */
+            size_t lw = strlen(words[w]), lb = strlen(bare);
+            if (lw >= 3 && lw < lb && strncmp(bare, words[w], lw) == 0) { hit = 1; break; }
+        }
+        if (!hit) continue;
+        /* 数一下过程有多少步（只读） */
+        size_t steps = 0;
+        for (size_t e = 0; e < r->count; ++e)
+            if (edge_step_index(&r->assocs[e]) > 0) steps++;
+        char note[THINK_WHY];
+        snprintf(note, sizeof note, "这件事我记过过程「%s」（%zu 步）", bare, steps);
+        if (ai->proc_run) {
+            size_t gaps = proc_run(ai, bare, NULL);      /* 干跑是只读的（不执行行为、假定只在假设层） */
+            snprintf(note, sizeof note, "这件事我记过过程「%s」（%zu 步）→ 干跑一遍：%s",
+                     bare, steps, gaps ? "有断点（停在断点上）" : "每一步都过得去");
+        }
+        think_step(t, TH_REFLECT, 1, 55, "这我记过过程", note);
+        return;   /* 一条就够（多个命中时不再堆） */
+    }
+}
+
 /* ============================ ② 过程记号接进**对话**（默认关） ============================
  *
  * 用户 2026-10-10：三个候选都要。这一条是"AI 能靠说话把一件事记成过程、并跑它"：
@@ -2075,6 +2125,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             ai->n_cot++;
         }
     }
+
+    /* ---- ② 过程接进思维（默认关、只读）：这一步的问题是不是我以前记过的某个过程？----
+     * 放在思维循环**之后**：这时候痕已经写完了，补一条"这我记过过程"谁都不会打断。 */
+    think_note_process(ai, words, n);
 
     /* ---- 输出侧补丁（第一步）：暂存 + 动作补丁看 Token ----
      * 把"这一轮本来要说的话"先交给补丁暂存；能编辑自己发言的补丁（记事本）
