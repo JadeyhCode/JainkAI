@@ -289,6 +289,9 @@ typedef struct {
      * 现在（默认关）：把这一支压进来的子目标**撤回分支起点**，换上**另一条**（同一个问题问反面），
      * 痕上写明"为什么退"；**保留失败分支的痕**，而且**预算不返还**（回溯不许突破预算，K2）。 */
     int       redo_on;                  /* 1 = 允许回溯/在线修订（默认 0） */
+    /* **换法扩展**（§6.101，默认 0）：退第二次时不只"问反面"，还试**同类互推**
+     * （`甲熊/乙熊 属于 熊类` + `乙熊 会 冬眠` ⇒ 甲熊**大概**会冬眠）—— 这是规则层不做的那一类。 */
+    int       redo_alt;
     size_t    n_backtrack;              /* 这一轮退了几次（每轮清零） */
     size_t    n_backtrack_total;        /* 累计退了几次（给人看） */
 
@@ -402,6 +405,8 @@ static inline Think *think_of(AI *ai) {
         t->n_backtrack = 0;
         t->n_backtrack_total = 0;
         { const char *rd = getenv("AIP_THINKREDO"); if (rd && rd[0] == '1') t->redo_on = 1; }
+        t->redo_alt = 0;
+        { const char *ra = getenv("AIP_REDOALT"); if (ra && ra[0] == '1') t->redo_alt = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -1664,6 +1669,28 @@ static inline int think_redo_after_premise(AI *ai, Think *t, const ThinkGoal *g,
      * 开关开了、痕上明明写着"前提没成立"，却一次都没退）。
      * 判据只要"这个目标有完整的三元组"就够；要翻的极性取**原问题**的（want_neg0）。 */
     if (!g->a || !g->b || g->rid == 0) return 0;
+    /* **换法 2：同类互推**（`redo_alt` 开着、且已经退过一次 ⇒ 反问题那条路试过了）。
+     * 规则层**不做**同类互推，所以这是真的第二个角度：给一个**猜出来的**结论
+     * （`concl=1` + `guessed=1` + 置信度压低），痕上写清"依据是同类里的谁"。 */
+    if (t->redo_alt && t->n_backtrack >= 1) {
+        const Token *sup = NULL;
+        const Token *sib = rel_sibling_with(ai, g->a, g->rid, g->b, &sup);
+        if (sib) {
+            t->concl = 1; t->guessed = 1; t->conf = 0.40f;
+            (void)der_conclude(&t->obj.der, 1, 40);
+            char why2[THINK_WHY];
+            snprintf(why2, sizeof why2,
+                     "反问题那条路也走不通 —— 换第二个角度：**同类互推**：%s 也 %s %s"
+                     "（%s 和 %s 都 属于 %s）⇒ 猜「成立」（guess，置信 0.40）",
+                     sib->name ? sib->name : "?", rel_name_of(ai, g->rid) ? rel_name_of(ai, g->rid) : "?",
+                     g->b->name ? g->b->name : "?", g->a->name ? g->a->name : "?",
+                     sib->name ? sib->name : "?", sup && sup->name ? sup->name : "?");
+            think_step(t, TH_REFLECT, 1, 45, "回退：同类互推", why2);
+            t->n_backtrack++;
+            t->n_backtrack_total++;
+            return 1;
+        }
+    }
     t->ag_n = snap_n;                                  /* ① 退回分支起点 */
     int pushed = think_goal_push(t, TG_REL, g->a, g->b, g->rid,
                                  want_neg0 ? 0 : 1, g->depth + 1);

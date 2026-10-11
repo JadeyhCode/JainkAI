@@ -1119,6 +1119,32 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
     return 0;
 }
 
+/* **同类互推**（"兄弟"里有没有谁也 R B）：A 与 A2 都 属于 同一个 P，而 A2 —R→ B。
+ * 放在 rel.h 是因为它**在 think.h 与 agent.h 之前** —— 思维层与对话层都要用它
+ * （以前只在 agent.h 里有一份，思维层调不到，只能另写；这正是 §6.100 记的分层问题）。
+ * 返回找到的那个"兄弟"（`*sup_out` 给出共同上位），没有就 NULL。扫描有上限（64 个候选）。 */
+static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_t rid,
+                                            const Token *b, const Token **sup_out) {
+    if (sup_out) *sup_out = NULL;
+    if (!ai || !a || !b || rid == 0) return NULL;
+    Token *sup[8];
+    uint8_t sh[8];
+    size_t nsup = rel_next_cands(ai, a, REL_IS_A, 0, sup, sh, 8);
+    for (size_t k = 0; k < nsup; ++k) {
+        const Token *P = sup[k];
+        if (!P || !P->name || P->name[0] == '[' || P == b) continue;
+        size_t scanned = 0;
+        for (size_t i = 0; i < ai->pool->count && scanned < 64; ++i) {
+            const Token *t2 = ai->pool->tokens[i];
+            if (!t2 || t2->is_garbage || t2 == a || !t2->name || t2->name[0] == '[') continue;
+            if (!rel_direct(t2, REL_IS_A, P)) continue;
+            scanned++;
+            if (rel_direct(t2, rid, b)) { if (sup_out) *sup_out = P; return t2; }
+        }
+    }
+    return NULL;
+}
+
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
                              int want_neg, Proof *pf) {
     if (!pf) return;

@@ -1809,6 +1809,37 @@ static void test_tail_blocks(void) {
 /* ② 档：**类比兜底**（§6.90）—— 规则答不出时，用同类（同一上位）互相推，答**大概** */
 /* C③ 第二/三件（§6.97）：修法表按错误文本选规则 + 多轮修正的开关默认关 */
 /* 思维侧第二条（§6.99）：**N1 参与决策** —— 走边没走出好东西时用它想通的结论 */
+/* ③ 换法扩展（§6.101）：退第二次时换**同类互推**（规则层不做的那一类） */
+static void test_redo_alt(void) {
+    printf("== ㊸ ③ 换法扩展：第二个角度是**同类互推**（默认关） ==\n");
+    AI *ai = ai_new();
+    Token *p = T(ai, "类2"), *a = T(ai, "熊甲2"), *b = T(ai, "熊乙2"), *o = T(ai, "冬眠2");
+    (void)token_tag_rel(a, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, o, REL_CAN, REL_BOOST);
+    /* 共用判据本身（rel.h 里"一处放"的那个） */
+    { const Token *sup = NULL;
+      ok(rel_sibling_with(ai, a, REL_CAN, o, &sup) == b && sup == p,
+         "`rel_sibling_with` 找得出同类（熊乙2）与共同上位（类2）"); }
+    Think *t = think_of(ai);
+    ThinkGoal g;
+    memset(&g, 0, sizeof g);
+    g.a = a; g.b = o; g.rid = REL_CAN; g.depth = 0;
+    t->redo_alt = 0; t->redo_on = 1; t->n_backtrack = 1; t->concl = 0; t->guessed = 0;
+    ok(think_redo_after_premise(ai, t, &g, 0, 0) == 0 || t->concl == 0,
+       "关着：不走同类互推（只留原来那条「问反面」的路）");
+    t->redo_alt = 1; t->redo_on = 1; t->n_backtrack = 1; t->concl = 0; t->guessed = 0;
+    int r = think_redo_after_premise(ai, t, &g, 0, 0);
+    ok(r == 1 && t->concl == 1 && t->guessed == 1,
+       "开着：退了，并且给的是**猜出来的**结论（concl=1 + guessed=1）");
+    ok(t->conf < 0.5f, "置信度压低（<0.5，不当成确定的事）");
+    { int found = 0;
+      for (size_t i = 0; i < t->trace_n; ++i)
+          if (strstr(t->trace[i].why, "同类互推") || strstr(t->trace[i].what, "同类互推")) found = 1;
+      ok(found, "痕上写清是**同类互推**（依据是谁也写进去了）"); }
+    ai_free(ai);
+}
+
 static void test_n1_decide(void) {
     printf("== ㊷ N1 参与决策：想通的结论能顶上来（默认关） ==\n");
     AI *ai = ai_new();
@@ -2526,6 +2557,7 @@ int main(void) {
     test_analogy_fallback();
     test_code_fixes();
     test_n1_decide();
+    test_redo_alt();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

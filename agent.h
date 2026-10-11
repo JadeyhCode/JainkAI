@@ -139,32 +139,19 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
     Token *B = pool_find(ai->pool, bw);
     if (!A || !B) return NULL;
     char buf[256];
-    /* 上位（`A 属于 P` 且 `P R B`）本来由**规则层的继承**管；这里只管**同类互推**：
-     * A 和 A2 都属于同一个 P，而 A2 R B ⇒ "A 大概也 R B"（规则层**不做**兄弟互推，这才是真缺口）。
-     * 依据从 `属于` 边读（不是抽象 parent —— 抽象 parent 只有 `::abstract` 跑过才有）。 */
-    Token *sup[8];
-    uint8_t sup_h[8];
-    size_t nsup = rel_next_cands(ai, A, REL_IS_A, 0, sup, sup_h, 8);
-    for (size_t k = 0; k < nsup; ++k) {
-        Token *P = sup[k];
-        if (!P || !P->name || P->name[0] == '[' || P == B) continue;
-        size_t scanned = 0;
-        for (size_t i = 0; i < ai->pool->count && scanned < 64; ++i) {
-            Token *t2 = ai->pool->tokens[i];
-            if (!t2 || t2->is_garbage || t2 == A || !t2->name || t2->name[0] == '[') continue;
-            if (!rel_direct(t2, REL_IS_A, P)) continue;      /* 只算同一上位的"兄弟" */
-            scanned++;
-            if (rel_direct(t2, rid, B)) {
-                snprintf(buf, sizeof buf,
-                         "大概 —— 同类里 %s 也 %s %s（%s 和 %s 都 属于 %s ；**类比**，不是直接知识）",
-                         t2->name, words[1], B->name ? B->name : "?",
-                         A->name ? A->name : "?", t2->name, P->name);
-                if (out_conf) *out_conf = 0.45f;
-                char *r = (char *)malloc(strlen(buf) + 1);
-                if (r) memcpy(r, buf, strlen(buf) + 1);
-                return r;
-            }
-        }
+    /* 判据在 rel.h 的 `rel_sibling_with()`（**一处放**：思维层也用同一个） */
+    const Token *sup = NULL;
+    const Token *sib = rel_sibling_with(ai, A, rid, B, &sup);
+    if (sib) {
+        snprintf(buf, sizeof buf,
+                 "大概 —— 同类里 %s 也 %s %s（%s 和 %s 都 属于 %s ；**类比**，不是直接知识）",
+                 sib->name ? sib->name : "?", words[1], B->name ? B->name : "?",
+                 A->name ? A->name : "?", sib->name ? sib->name : "?",
+                 sup && sup->name ? sup->name : "?");
+        if (out_conf) *out_conf = 0.45f;
+        char *r = (char *)malloc(strlen(buf) + 1);
+        if (r) memcpy(r, buf, strlen(buf) + 1);
+        return r;
     }
     return NULL;
 }
