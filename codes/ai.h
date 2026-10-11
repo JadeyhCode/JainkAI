@@ -1233,8 +1233,13 @@ static inline void ai_switches_init(AI *ai) {
     ai->others_ask = 0;              /* 他者视角进回答路径：默认**关** */
     ai->proc_run = 0;                /* 过程执行（第 9 条 ③）：默认**关** */
     { const char *pr = getenv("AIP_PROCRUN"); if (pr && pr[0] == '1') ai->proc_run = 1; }
-    ai->proc_dry = 0;                /* 干跑（假设世界）：默认**关** */
-    { const char *pd = getenv("AIP_PROCDRY"); if (pd && pd[0] == '1') ai->proc_dry = 1; }
+    /* **翻默认（§6.105）**：过程**干跑**默认开 —— 它在"假设世界"里演练（前提不成立就假定成立、
+     * 记进假设层、跑完 pop 干净），**没有副作用**，是"会做事"最安全的那一半。想回老行为：
+     * `AIP_PROCDRY=0`（显式关）。实跑仍由 `proc_run` 与动作层各自把关。 */
+    ai->proc_dry = 1;                /* 干跑（假设世界）：默认**关** */
+    { const char *pd = getenv("AIP_PROCDRY");
+      if (pd && pd[0] == '1') ai->proc_dry = 1;
+      else if (pd && pd[0] == '0') ai->proc_dry = 0;   /* 显式退回老行为（两个方向都测得动） */ }
     ai->proc_talk = 0;               /* 过程记号接进对话：默认**关** */
     { const char *pt = getenv("AIP_PROCTALK"); if (pt && pt[0] == '1') ai->proc_talk = 1; }
     ai->proc_think = 0;              /* 过程接进思维：默认**关** */

@@ -1469,8 +1469,10 @@ static void test_proc_dry(void) {
     {
         AI *ai = ai_new();
         char note[200];
-        ok(ai->proc_dry == 0 || getenv("AIP_PROCDRY") != NULL,
-           "干跑默认**关**（反向测量 AIP_PROCDRY=1 时按规矩跳过）");
+        /* §6.105 起干跑**默认开**：这里随默认一起翻（显式关那侧由 `AIP_PROCDRY=0` 覆盖）。
+         * ⚠ 同一个 AI 上后面的断言跑的是"自己显式设过 proc_dry"的场景，不受影响。 */
+        ok(ai->proc_dry == 1 || getenv("AIP_PROCDRY") != NULL,
+           "干跑**默认开**（§6.105 翻默认；AIP_PROCDRY=0 那侧按规矩跳过）");
         { char *a[1] = {(char *)"泡茶6"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
         { char *a[3] = {(char *)"泡茶6", (char *)"烧水6", (char *)"1"};
           (void)token_op_run(ai, "加步骤", a, 3, note, sizeof note); }

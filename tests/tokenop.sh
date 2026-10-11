@@ -407,14 +407,14 @@ echo "== ⑪ ④ 干跑（假设世界）：假定前提 + 按步回退 + 跑完
 # 以及"跑完一个字都不漏"（假设层深度回到原样）。
 { printf '::notepad off\n::rel analogy off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
     | ./aip --model model.bin > /dev/null 2>&1 || true
-if [ -z "${AIP_PROCDRY:-}" ]; then
+if [ "${AIP_PROCDRY:-1}" = "0" ]; then
     run '::proc dry\n' o19
-    grep -q '过程\*\*干跑\*\* = 关（默认）' o19 && ok "干跑**默认关**（实跑 = ③ 的语义，一个字不变）" \
+    grep -q '过程\*\*干跑\*\* = 关' o19 && ok "干跑**默认关**（实跑 = ③ 的语义，一个字不变）" \
         || bad "干跑默认" "$(grep -m2 '干跑' o19)"
 else
     run '::proc dry\n' o19
-    grep -q '过程\*\*干跑\*\* = 开' o19 && ok "AIP_PROCDRY=1（反向测量）：env 一开就是干跑" \
-        || bad "干跑反测" "$(grep -m2 '干跑' o19)"
+    grep -q '过程\*\*干跑\*\* = 开' o19 && ok "默认（§6.105 起**翻成开**）就是干跑" \
+        || bad "干跑默认开" "$(grep -m2 '干跑' o19)"
 fi
 { printf '::notepad off\n::rel analogy off\n::proc on\n::proc dry on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o20 2>&1 || true   # 显式开：不受 env 影响
 grep -q '干跑：\*\*过\*\*（假定前提「有热水」成立' o20 \

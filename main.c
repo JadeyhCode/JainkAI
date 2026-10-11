@@ -714,7 +714,7 @@ static const CmdDef CMDS[] = {
       "  「这件事我记过过程」并写进痕；引擎开着时顺手干跑一遍（只读、不执行行为）\n"
       "::proc talk on|off  ② 过程记号**接进对话**（默认关，AIP_PROCTALK=1）：\n"
       "  「记个过程 X」建过程 / 「第 N 步 动作」加一步 / 「跑 X」跑一遍（都走受审通道）\n"
-      "::proc dry on|off   ④ **干跑**（假设世界，默认关，AIP_PROCDRY=1）：前提不成立 → 假定成立\n"
+      "::proc dry on|off   ④ **干跑**（假设世界，**默认开**；AIP_PROCDRY=0 退回关）：前提不成立 → 假定成立\n"
       "  （记进假设层）、行为步骤不执行；跑完 pop 干净 —— 假设层用的是现成的 `Hypo`\n"
       "::proc run <名字>   把一条过程跑一遍：逐步核对（认识吗 / 前提成立吗 / 是不是行为）——\n"
       "  核对只读；哪一步是 Token 行为就走**受审通道**真执行；断点用 `DerGap` 记下来\n"
@@ -1101,7 +1101,7 @@ static void cmd_proc(AI *ai, const char *cmd) {
         if (!strcmp(v, "on"))       ai->proc_dry = 1;
         else if (!strcmp(v, "off")) ai->proc_dry = 0;
         else if (*v) { printf("[用法] ::proc dry on|off\n"); return; }
-        printf("[过程**干跑** = %s]（%s）\n", ai->proc_dry ? "开" : "关（默认）",
+        printf("[过程**干跑** = %s]（%s）\n", ai->proc_dry ? "开（默认）" : "关",
                ai->proc_dry ? "前提不成立 → 假定成立（记进假设层）；行为步骤不执行；跑完 pop 干净"
                             : "实跑：前提不成立就是断点；行为步骤走受审通道真执行");
         printf("  假设层就是现成的 `Hypo`（临时覆盖层）：进一个过程压一层、回退按步撤、出时 pop\n");
