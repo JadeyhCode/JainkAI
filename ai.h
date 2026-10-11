@@ -613,6 +613,9 @@ typedef struct {
      * 打开后把它作为**最后一档**放进顺序里（宁可走不到，也别让缓存喧宾夺主：
      * 缓存可能已经过时，让"想出来的"影响联想会自我强化）。 */
     int    cache_walk;
+    /* **求值层样板**（② 档，默认 0 = 关）：过程条件的数值比较（`[条件:3<5]`）真的算一遍。
+     * 关着时条件照旧走"前提三档"（图内判据），行为与今天逐字节相同。 */
+    int    eval_num;
     /* 0 = 结构化帧允许用关联链证据放行白名单外的槽位取值（默认）。
      * 故意用「反向命名」：这样 calloc 出来的 AI 骨架就是开启状态 ——
      * 这个项目已经被「calloc 骨架漏设默认值导致训练/加载两条路径分叉」坑过一次。 */
@@ -1166,6 +1169,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pl = getenv("AIP_PROCPLAN"); if (pl && pl[0] == '1') ai->proc_plan = 1; }
     ai->cache_walk = 0;              /* 缓存参与自由联想：默认**关** */
     { const char *cw = getenv("AIP_CACHEWALK"); if (cw && cw[0] == '1') ai->cache_walk = 1; }
+    ai->eval_num = 0;                /* 求值层（数值比较样板）：默认**关** */
+    { const char *en = getenv("AIP_EVALNUM"); if (en && en[0] == '1') ai->eval_num = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */
@@ -3634,6 +3639,61 @@ static inline void ai_inner_dialogue(AI *ai) {
         }
     }
     ai->n_inner_dialogues++;
+}
+
+/* ============================ 求值层（样板：数值比较） ============================
+ *
+ * ② 档第一件：**"条件"要有真判据**。语言层现在所有判据都是"图内判据"
+ * （提到过/够得着/有据）—— 数值比较这类**可计算**的东西判不了。
+ * 这一层只做一个样板谓语，配方写清楚，后面加别的谓语照抄：
+ *   ① 认出形状（这里是 `<数字> 算符 <数字>`）② 真算一遍 ③ 算得出来就用它，
+ *   算不出来就**明说判不了**（回退到图内判据，绝不默认成立）。
+ * 默认关（`AIP_EVALNUM=1` / `::proc eval on`）：关着时行为与今天逐字节相同。 */
+static inline int ai_eval_parse_num(const char *s, long *out) {
+    if (!s || !*s || !out) return 0;
+    char buf[32];
+    size_t k = 0;
+    const char *p2 = s;
+    if (*p2 == '-' || *p2 == '+') buf[k++] = *p2++;
+    while (*p2 && k + 1 < sizeof buf) {
+        if (*p2 == ' ') { p2++; continue; }
+        if (*p2 < '0' || *p2 > '9') break;
+        buf[k++] = *p2++;
+    }
+    while (*p2 == ' ') p2++;
+    if (*p2) return 0;                    /* 后面还有别的东西 ⇒ 不是纯数字 */
+    if (k == 0 || (k == 1 && (buf[0] == '-' || buf[0] == '+'))) return 0;
+    buf[k] = 0;
+    char *end = NULL;
+    long v = strtol(buf, &end, 10);
+    if (!end || *end) return 0;
+    *out = v;
+    return 1;
+}
+
+/* 认 `<数字> <算符> <数字>` 并真算一遍。返回 1 = 算出来了（*out 是真值），0 = 判不了。 */
+static inline int ai_eval_cmp(const char *expr, int *out) {
+    if (!expr || !expr[0] || !out) return 0;
+    static const char *const ops[] = { "<=", ">=", "==", "!=", "<", ">", NULL };
+    for (size_t i = 0; ops[i]; ++i) {
+        const char *at = strstr(expr, ops[i]);
+        if (!at) continue;
+        size_t l = (size_t)(at - expr);
+        if (l == 0 || l >= 48) continue;
+        char lhs[48];
+        memcpy(lhs, expr, l); lhs[l] = 0;
+        const char *rhs = at + strlen(ops[i]);
+        long a = 0, b = 0;
+        if (!ai_eval_parse_num(lhs, &a) || !ai_eval_parse_num(rhs, &b)) continue;
+        if (strcmp(ops[i], "<")  == 0) *out = (a <  b);
+        else if (strcmp(ops[i], ">")  == 0) *out = (a >  b);
+        else if (strcmp(ops[i], "<=") == 0) *out = (a <= b);
+        else if (strcmp(ops[i], ">=") == 0) *out = (a >= b);
+        else if (strcmp(ops[i], "==") == 0) *out = (a == b);
+        else                                *out = (a != b);
+        return 1;
+    }
+    return 0;                             /* 认不出形状 ⇒ 判不了（绝不默认成立） */
 }
 
 /* ============================ 漂移 ============================ */

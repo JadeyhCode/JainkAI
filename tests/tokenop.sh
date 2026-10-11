@@ -619,8 +619,23 @@ run '::op 建过程 试跑\n::op 加执行 试跑 echo|x\n' o53
 grep -aq '白名单\|命令名' o53 && ok "带管道的动作词当场拒（别把 shell 语法塞进图里）" \
     || bad "拒 shell 语法" "$(grep -m2 '没跑成\|加执行' o53)"
 
+echo "== ⑲ ② 求值层样板：条件里的数值比较真算一遍 =="
+# 显式 `::proc eval off`：这一条测的是"默认关时的行为"，反向测量（AIP_EVALNUM=1）下也要关
+run '::proc on\n::proc dry off\n::proc eval off\n::op 建过程 比\n::op 加条件 比 3<5 走这支\n::op 加否则 比 走那支\n::proc run 比\n' o54
+grep -aq '图里没有这个词 ⇒ \*\*判不了\*\*' o54 && ok "默认关：数值条件照旧**判不了**（回退图内判据，行为不变）" \
+    || bad "默认关" "$(grep -m2 '条件' o54)"
+run '::proc on\n::proc dry off\n::proc eval on\n::op 建过程 比\n::op 加条件 比 3<5 走这支\n::op 加否则 比 走那支\n::proc run 比\n' o55
+grep -aq '\*\*求值层算了一遍\*\*（数值比较）⇒ 成立' o55 && grep -aq '条件分支 走这支' o55 \
+    && ok "开着：`3<5` **真算一遍** ⇒ 成立 ⇒ 走条件那一支" || bad "真算成立" "$(grep -m3 '条件\|分支' o55)"
+run '::proc on\n::proc dry off\n::proc eval on\n::op 建过程 比\n::op 加条件 比 5<3 走这支\n::op 加否则 比 走那支\n::proc run 比\n' o56
+grep -aq '⇒ 不成立' o56 && grep -aq '否则分支 走那支' o56 \
+    && ok "`5<3` ⇒ 不成立 ⇒ 走否则支（真值说了算，不是"词在就成立"）" || bad "真算不成立" "$(grep -m3 '条件\|分支' o56)"
+run '::proc on\n::proc dry off\n::proc eval on\n::op 建过程 比\n::op 加条件 比 三<五 走这支\n::op 加否则 比 走那支\n::proc run 比\n' o57
+grep -aq '判不了' o57 && ok "认不出形状（`三<五`）⇒ **判不了**，绝不默认成立" \
+    || bad "判不了" "$(grep -m2 '条件' o57)"
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍 + 动作执行槽，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍 + 动作执行槽 + 求值层样板，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1

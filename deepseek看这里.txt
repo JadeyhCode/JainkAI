@@ -259,9 +259,12 @@
        `action_run`（白名单+超时+账）；干跑只核过、执行层关着就是**断点**（不许假装做过）。
        optest ㉝ 9 项（371 全过）、tokenop ⑱ 5 项（135 全过）；整包全绿。
        **⇒ ① 档 13 条全部结清**（11 条已做、1 条核对后不成立、1 条早先结案）。
-     · ⬜ **② 档开工**：先做**求值层样板**（一个可计算谓语：数值比较），
-       其余 6 条（触发接求解 / 分词最长匹配 / 闸门分层判据 / 类比兜底 / 多层分支栈+换法 /
-       他者上位降权+指代消解）依次。
+     · ✅ **② 档第一件：求值层样板**（**§6.83**）：`ai_eval_cmp()` 认 `<数> <算符> <数>`
+       （`< <= > >= == !=`）真算一遍，**排在图内判据前面**，认不出就明说"判不了"（绝不默认成立）；
+       `::proc eval on|off` / `AIP_EVALNUM=1` **默认关**。optest ㉞ 14 项（383 全过）、
+       tokenop ⑲ 4 项（139 全过）；整包双跑法全绿。配方写在 audit §6.83（加谓语照抄）。
+     · ⬜ **② 档剩 6 条**：触发接求解 / 分词最长匹配 / 闸门分层判据 / 类比兜底 /
+       多层分支栈+换法 / 他者上位降权+指代消解。
      · ⬜ **下一件（候选，待用户点）**：① 过程**接进日常**（"想泡茶"这类非问句也认；或让 N2 草稿引用过程）；
        ② 局限总表里其它登记项（老写入者、闸门判别力窄、`叙事` 没显形、`ai_analogy` 从没被调用…）；
      · 方案（讨论定稿）：**"过程边 vs 共现边"用 role 标记** —— `uint8_t role` 现在只用 0~5
@@ -283,14 +286,14 @@
   · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
     ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
     ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
-  · 看护数（**都是实测**）：optest **371** / tokenop **135** / delibtest **155** / microtest **71** /
+  · 看护数（**都是实测**）：optest **383** / tokenop **139** / delibtest **155** / microtest **71** /
     biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
     cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
     **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
   · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
   · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
     `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`
-    `AIP_PROCTALK` `AIP_PROCTHINK` `AIP_PROCPLAN` `AIP_CACHEWALK`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_PROCTALK` `AIP_PROCTHINK` `AIP_PROCPLAN` `AIP_CACHEWALK` `AIP_EVALNUM`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
     `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
   · 常用命令新增：`::proc [<名字>|on|off|dry on|off|talk on|off|think on|off|plan on|off|run <名字>]`、
     `::op 加条件/加否则/加异常/加断言`（`加回边` 多一个可选条件词）、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、

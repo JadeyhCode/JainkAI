@@ -1797,6 +1797,39 @@ static void test_tail_blocks(void) {
 }
 
 /* ① 档最后两条（§6.82）：**动作 token**（`[执行:…]`）+ **过程的执行槽**（步骤真的调动作） */
+/* ② 档第一件（§6.83）：求值层样板 —— 条件里的**数值比较**真算一遍 */
+static void test_eval_num(void) {
+    printf("== ㉞ 求值层样板：`[条件:3<5]` 真算一遍（算不出就明说判不了） ==\n");
+    struct { const char *e; int want, val; } cs[] = {
+        { "3<5",    1, 1 }, { "5<3",    1, 0 }, { "3<=3",   1, 1 }, { "4!=4",   1, 0 },
+        { "12 >= 9",1, 1 }, { "-2<0",   1, 1 }, { "abc<5",  0, 0 }, { "3<",     0, 0 },
+        { "3 + 5",  0, 0 }, { "1e3<2e3",0, 0 },
+    };
+    for (size_t i = 0; i < sizeof cs / sizeof cs[0]; ++i) {
+        int v = -1, got = ai_eval_cmp(cs[i].e, &v);
+        char m[96];
+        snprintf(m, sizeof m, "`%s` ⇒ %s", cs[i].e,
+                 got ? (v ? "真" : "假") : "判不了");
+        ok(got == cs[i].want && (!got || v == cs[i].val), m);
+    }
+    /* 过程层：条件成立走那一支 / 不成立走否则；关着时照旧"判不了" */
+    AI *ai = ai_new();
+    char note[200];
+    { char *a[1] = {(char *)"比大小"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+    { char *a[3] = {(char *)"比大小", (char *)"3<5", (char *)"走这支"};
+      (void)token_op_run(ai, "加条件", a, 3, note, sizeof note); }
+    { char *a[2] = {(char *)"比大小", (char *)"走那支"};
+      (void)token_op_run(ai, "加否则", a, 2, note, sizeof note); }
+    ai->proc_run = 1; ai->proc_dry = 0;
+    ai->eval_num = 0;
+    { ProcRun pr; (void)proc_run(ai, "比大小", &pr);
+      ok(pr.n_skip == 0 && pr.n_gap == 0, "关着：照旧走图内判据（条件词不在图里 ⇒ 判不了 ⇒ 走否则）"); }
+    ai->eval_num = 1;
+    { ProcRun pr; (void)proc_run(ai, "比大小", &pr);
+      ok(pr.n_ok >= 1, "开着：**数值判据说了算**（3<5 成立 ⇒ 走条件那一支）"); }
+    ai_free(ai);
+}
+
 static void test_exec_step(void) {
     printf("== ㉝ 动作 token + 过程执行槽：步骤会**真的调动作**（白名单+超时+账） ==\n");
     AI *ai = ai_new();
@@ -2251,6 +2284,7 @@ int main(void) {
     test_dyn_neg();
     test_cache_walk();
     test_exec_step();
+    test_eval_num();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

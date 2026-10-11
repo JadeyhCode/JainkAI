@@ -1080,8 +1080,12 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
         char cb[64];
         (void)proc_mark_bare(conds[i]->action ? conds[i]->action->name : NULL,
                              PROC_COND_PREFIX, cb, sizeof cb);
-        Token *x = cb[0] ? pool_find(ai->pool, cb) : NULL;
-        if (!x) {
+        /* ② **求值层样板先试**（默认关）：条件写成可计算的形式（`3<5`）时，词当然不在图里 ——
+         * 所以要**排在图内判据前面**（第一版放在后面 ⇒ 永远走到"图里没有这个词"那条路）。 */
+        int evaluated = 0, ev = 0;
+        if (ai->eval_num && ai_eval_cmp(cb, &ev)) evaluated = 1;
+        Token *x = evaluated ? NULL : (cb[0] ? pool_find(ai->pool, cb) : NULL);
+        if (!evaluated && !x) {
             /* 条件词**图里根本没这个词** ⇒ 不是"没提到"，是"判不了"。照实说，并按不成立走
              * （不然一个拼错的条件会静默变成"成立"，那是最坏的一种骗人）。 */
             printf("    条件「%s」：图里没有这个词 ⇒ **判不了**（按不成立处理）\n", cb);
@@ -1096,7 +1100,11 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
             }
             continue;
         }
-        int holds = ai_premise_holds(ai, x);
+        /* 求值层算出来了就用它的真值；否则走图内判据（提到过/够得着/有据） */
+        if (evaluated)
+            printf("    条件「%s」：**求值层算了一遍**（数值比较）⇒ %s\n", cb,
+                   ev ? "成立" : "不成立");
+        int holds = evaluated ? ev : ai_premise_holds(ai, x);
         if (holds) {
             printf("    条件「%s」**成立** → 走它那一支 %s\n", cb,
                    conds[i]->main && conds[i]->main->name ? conds[i]->main->name : "?");

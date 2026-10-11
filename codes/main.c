@@ -702,6 +702,8 @@ static const CmdDef CMDS[] = {
       "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
       "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来\n"
       "::proc on|off       过程**执行引擎**（第 9 条 ③；默认关，AIP_PROCRUN=1）\n"
+      "::proc eval on|off  ② **求值层样板**（默认关，AIP_EVALNUM=1）：条件里的**数值比较**\n"
+      "  （`[条件:3<5]`）真算一遍；算不出就明说判不了（回退「前提三档」）\n"
       "::proc plan on|off  ② 过程**接进决策**（默认关，AIP_PROCPLAN=1）：问「怎么 X」又记过\n"
       "  「过程 X」时**直接用计划回答**（步骤/条件/否则/异常/调用；引擎开着附干跑结论）\n"
       "::proc think on|off ② 过程**接进思维**（默认关，AIP_PROCTHINK=1）：思考收尾时认出\n"
@@ -1022,6 +1024,18 @@ static void cmd_proc(AI *ai, const char *cmd) {
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && !strncmp(arg, "eval", 4) && (arg[4] == 0 || arg[4] == ' ')) {
+        /* ② 求值层样板：条件里的数值比较（`[条件:3<5]`）真算一遍 */
+        const char *v = arg + 4;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       ai->eval_num = 1;
+        else if (!strcmp(v, "off")) ai->eval_num = 0;
+        else if (*v) { printf("[用法] ::proc eval on|off\n"); return; }
+        printf("[求值层（数值比较样板）= %s]（%s）\n", ai->eval_num ? "开" : "关（默认）",
+               ai->eval_num ? "条件写成 `[条件:3<5]` 时**真算一遍**（算不出就明说判不了，回退图内判据）"
+                            : "条件照旧走「提到过/够得着/有据」三档");
+        return;
+    }
     if (arg && !strncmp(arg, "plan", 4) && (arg[4] == 0 || arg[4] == ' ')) {
         const char *v = arg + 4;
         while (*v == ' ') v++;
