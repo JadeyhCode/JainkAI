@@ -2229,6 +2229,32 @@ static inline void think_settle(AI *ai) {
             in.target = f->a; in.main = f->b;
             snprintf(in.source, sizeof in.source, "思维:撤销缓存");
             if (mod_propose(q, &in)) {
+                /* **撤销留痕**：再提一条"建标记节点"的意图（同一条受审通道）——
+                 * 撤掉的东西图里没痕迹，`n_retracted` 重载后就数不回来（推论档偏乐观）。
+                 * 标记名里写上"撤的是哪条"，重载时 `ai_recount_evidence` 数它。 */
+                ModIntent mk;
+                memset(&mk, 0, sizeof mk);
+                mk.type = MOD_ADD_TOKEN;
+                {   /* 90 字节的名字缓冲：有界拼接（截断是故意的） */
+                    size_t off = 0;
+                    const char *head = MICRO_REVOKE_TOKEN_PREFIX;
+                    for (const char *q2 = head; *q2 && off + 2 < sizeof mk.name; ++q2) mk.name[off++] = *q2;
+                    for (const char *q2 = f->a && f->a->name ? f->a->name : "?"; *q2 && off + 2 < sizeof mk.name; ++q2)
+                        mk.name[off++] = *q2;
+                    if (off + 2 < sizeof mk.name) mk.name[off++] = '|';
+                    for (const char *q2 = f->neg ? "不" : ""; *q2 && off + 2 < sizeof mk.name; ++q2)
+                        mk.name[off++] = *q2;
+                    for (const char *q2 = rel_name_of(ai, f->rid) ? rel_name_of(ai, f->rid) : "?"; *q2 && off + 2 < sizeof mk.name; ++q2)
+                        mk.name[off++] = *q2;
+                    if (off + 2 < sizeof mk.name) mk.name[off++] = '|';
+                    for (const char *q2 = f->b && f->b->name ? f->b->name : "?"; *q2 && off + 2 < sizeof mk.name; ++q2)
+                        mk.name[off++] = *q2;
+                    if (off + 1 < sizeof mk.name) mk.name[off++] = ']';
+                    mk.name[off] = 0;
+                }
+                mk.target = ai->self;
+                snprintf(mk.source, sizeof mk.source, "思维:撤销留痕");
+                (void)mod_propose(q, &mk);
                 char note[THINK_WHY];
                 snprintf(note, sizeof note, "撤销过时的缓存：%s %s%s %s",
                          f->a->name ? f->a->name : "?", f->neg ? "不 " : "",

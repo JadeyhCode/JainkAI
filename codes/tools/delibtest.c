@@ -725,6 +725,18 @@ static void test_cache_retract(void) {
     ok(!micro_has_edge(cat, fur) || !token_edge_is_derived(cat, fur),
        "缓存真的被撤销了（安全内核允许删「推出来的」）");
     ok(ai->n_retracted == 1, "撤销计数在走");
+    /* §6.78 **撤销留痕**：撤掉的东西图里本来没痕迹 ⇒ 重载后数不回来（推论档偏乐观）。
+     * 现在撤销时会在图上留一条 `[撤销:A|R|B]` 标记节点，`ai_recount_evidence` 从图里数回来。 */
+    {
+        size_t marks = 0;
+        const size_t vl = strlen(MICRO_REVOKE_TOKEN_PREFIX);
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *tk = ai->pool->tokens[i];
+            if (tk && tk->name && strncmp(tk->name, MICRO_REVOKE_TOKEN_PREFIX, vl) == 0) marks++;
+        }
+        ok(marks >= 1, "撤销时在图上留了 `[撤销:…]` 标记（名字里写着撤的是哪条）"
+                       " —— 「重载后数回来」那条在 optest ㉙ 钉（那边有 model_io）");
+    }
 
     /* 反过来：**观测到的**关系边依旧不许删（硬底线没被这次改动松动） */
     Token *bird = T(ai, "鸟"), *fly = T(ai, "飞");

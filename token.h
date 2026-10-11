@@ -407,6 +407,45 @@ static inline int token_order_between(const Token *a, const Token *b,
             }
         }
     }
+    /* ①b **顺序图上的 BFS**（§6.78）：`next_in_time` 只能表达"一条线"，
+     * 但图上还有 `[关系:之后]` **标记边**（`X —[关系:之后]→ Y` 的意思是 "X 在 Y 之后"）
+     * —— 多条这样的边合起来是个**偏序**。这里从 b 出发沿"谁在谁之后"走一遍（上限 64 个词），
+     * 走得到 a 就说明 a 在 b 之后（⇒ b 先）。零格式改动，只是把图里已有的东西读全。 */
+    {
+        const Token *queue[64];
+        size_t qn = 0, qh = 0;
+        const Token *seen[64];
+        size_t sn = 0;
+        queue[qn++] = b; seen[sn++] = b;
+        while (qh < qn) {
+            const Token *cur = queue[qh++];
+            if (cur == a) {
+                /* 走到 a ⇒ **a 在 b 之前** ⇒ a 先（返回 +1）。
+                 * ⚠ 这里第一版写成 -1（方向反了），被 optest 的老断言当场拦下 —— 别凭直觉写符号。 */
+                if (why && whycap)
+                    token_order_text(why, whycap, "顺序图（「[关系:之后]」边）：", an, " 在前");
+                return +1;
+            }
+            /* 从 cur 出发：cur 挂着"之后"标记时，它连到的那些词都在 cur **之前** */
+            int cur_after = 0;
+            for (size_t i = 0; i < cur->count; ++i) {
+                const Token *m = cur->assocs[i].main;
+                if (m && m->name && strcmp(m->name, TOKEN_ORDER_MARK_AFTER) == 0) { cur_after = 1; break; }
+            }
+            if (!cur_after) continue;
+            for (size_t i = 0; i < cur->count && qn < 64; ++i) {
+                const Token *nx = cur->assocs[i].main;
+                if (!nx || nx == cur) continue;
+                if (nx->name && (strcmp(nx->name, TOKEN_ORDER_MARK_AFTER) == 0 ||
+                                 strcmp(nx->name, TOKEN_ORDER_MARK_BEFORE) == 0)) continue;
+                int dup = 0;
+                for (size_t k = 0; k < sn; ++k) if (seen[k] == nx) { dup = 1; break; }
+                if (dup) continue;
+                seen[sn++] = nx;
+                queue[qn++] = nx;
+            }
+        }
+    }
     /* ② `[关系:之后]/[关系:之前]` 标记边：X 上同时挂着标记和另一个词，就说明这两个的先后 */
     {
         const char *marks[2] = { TOKEN_ORDER_MARK_AFTER, TOKEN_ORDER_MARK_BEFORE };

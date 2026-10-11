@@ -424,16 +424,19 @@ static inline Token *mio_tok(const TokenPool *p, uint32_t id) {
  *   · 改口次数           = `[修正:…]` 标记节点的个数（改口时经安全内核落下的）；
  *   · 现在还挂着的缓存   = `role == ASSOC_ROLE_DERIVED` 的边数。
  * 和 emb/idf/槽类一样：**是从最终的图现算的**，不是另存一份。
- * 局限（照实说）：被撤销的缓存数（n_retracted）恢复不了 —— 撤掉的东西图里没有痕迹，
- * 所以推论档的后验在重载后会略偏乐观（文档里写明）。 */
+ * ~~局限：被撤销的缓存数（n_retracted）恢复不了~~ **已修（§6.78）**：撤销时会在图上留一条
+ * `[撤销:A|R|B]` 标记节点（受审通道写），这里把它**数回来** —— 于是重载后推论档的后验不再偏乐观。
+ * 旧档（没有标记的那些）仍然恢复不了：那是历史，写清楚就行。 */
 static inline void ai_recount_evidence(AI *ai) {
     if (!ai || !ai->pool) return;
-    size_t rel_learned = 0, revised = 0, cached = 0;
+    size_t rel_learned = 0, revised = 0, cached = 0, revoked = 0;
     const size_t plen = strlen(MICRO_REVISE_TOKEN_PREFIX);
+    const size_t vlen = strlen(MICRO_REVOKE_TOKEN_PREFIX);
     for (size_t i = 0; i < ai->pool->count; ++i) {
         Token *t = ai->pool->tokens[i];
         if (!t || t->is_garbage) continue;
         if (t->name && strncmp(t->name, MICRO_REVISE_TOKEN_PREFIX, plen) == 0) revised++;
+        if (t->name && strncmp(t->name, MICRO_REVOKE_TOKEN_PREFIX, vlen) == 0) revoked++;
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
             if (!e->main) continue;
@@ -448,6 +451,7 @@ static inline void ai_recount_evidence(AI *ai) {
     ai->n_rel_learned = rel_learned;
     ai->n_revised = revised;
     ai->n_cached = cached;
+    ai->n_retracted = revoked;      /* 从图里数回来（§6.78） */
 }
 
 static inline AI *ai_load_file(const char *path) {

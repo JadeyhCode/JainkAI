@@ -216,6 +216,10 @@ static inline int micro_token_reserved(const Token *t) {
 /* **修正的记忆（来源监控）**：改口时留的一个标记节点，名如
  * `[修正:猫_不_有_毛]`。它是**留痕**，不是知识：不进关系表、不参与走边。 */
 #define MICRO_REVISE_TOKEN_PREFIX "[修正:"
+/* **撤销留痕**（§6.78）：缓存被撤销时写一条 `[撤销:A|R|B]` 标记节点 ——
+ * 撤掉的东西图里本来没有痕迹，于是 `n_retracted` 重载后恢复不了（推论档后验偏乐观）。
+ * 有了标记，`ai_recount_evidence` 就能从图里把数**数回来**（零格式改动）。 */
+#define MICRO_REVOKE_TOKEN_PREFIX "[撤销:"
 /* **草稿持久化**用的标记：`[草稿:<文本>]`（普通 token，随图存盘）。
  * 草稿区本身是瞬态的，靠它恢复 —— 和未解问题用 `[自问:…]` 同一个路子，**不改格式**。 */
 #define MICRO_DRAFT_TOKEN_PREFIX "[草稿:"
@@ -234,7 +238,8 @@ static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
-                                      MICRO_CODE_TOKEN_PREFIX, MICRO_TOKEN_PROC_PREFIX, NULL };
+                                      MICRO_CODE_TOKEN_PREFIX, MICRO_TOKEN_PROC_PREFIX,
+                                      MICRO_REVOKE_TOKEN_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
      * 它是精确名字，不是前缀命名空间。 */

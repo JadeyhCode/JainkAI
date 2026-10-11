@@ -1714,6 +1714,19 @@ static void test_proc_claim(void) {
  * 缺口（§B.2）：**想象**、**内部对话**这些"它自己想出来的"写入一直是直写，只有账。
  * 这一轮把它们改走 `ai_write_assoc`：`route_writes` 打开时和别的自撰一样**提意图受审**；
  * 关着时行为与今天**逐字节相同**（默认关）。 */
+static void test_revoke_marker(void) {
+    printf("== ㉙ 撤销留痕：`[撤销:…]` 里数回来（重载后推论档不再偏乐观） ==\n");
+    AI *ai = ai_new();
+    /* 模拟一条历史留痕（真撤销走 think.h 的受审通道写它） */
+    Token *mk = pool_token_intern(ai->pool, MICRO_REVOKE_TOKEN_PREFIX "猫|属于|动物]");
+    ok(mk != NULL, "`[撤销:…]` 标记是内部命名空间的普通节点");
+    ai->n_retracted = 0;                       /* 假装"刚重载、计数清零" */
+    ai_recount_evidence(ai);
+    ok(ai->n_retracted >= 1, "`ai_recount_evidence` **从图里数回来**（重载后不再偏乐观）");
+    ok(ai->n_retracted == 1, "只数标记，不多不少");
+    ai_free(ai);
+}
+
 static void test_selfwrite_route(void) {
     printf("== ㉘ 自撰写入（想象/内部对话）走统一通道 ==\n");
     AI *ai = ai_new();
@@ -2108,6 +2121,7 @@ int main(void) {
     test_proc_branch();
     test_proc_claim();
     test_selfwrite_route();
+    test_revoke_marker();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
