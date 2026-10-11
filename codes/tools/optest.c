@@ -651,6 +651,12 @@ static void test_notepad_patch(void) {
        "没挂补丁：调用它的操作返回 -1（不崩）");
 
     ok(patch_mount_builtin(ai, "记事本") == 0, "::patch mount 记事本");
+    { char repA[64]; char *avA[1] = {(char *)"auto"};
+      (void)patch_op_call_by_name(ai, "记事本", "模式", avA, 1, repA, sizeof repA); }
+    /* §6.109 起补丁默认 **manual**（流水线文本先落草稿）；这几条测的是 **auto** 语义
+     * ⇒ 显式钉成 auto（测试自己钉开关，不靠默认值）。 */
+    { char rep2[64]; char *av[1] = {(char *)"auto"};
+      (void)patch_op_call_by_name(ai, "记事本", "模式", av, 1, rep2, sizeof rep2); }
     /* auto 模式：逐字节回放（挂上它不改行为） */
     patch_stage_all(ai, "猫 看 来 跑");
     snprintf(out, sizeof out, "%s", "x");
@@ -740,6 +746,8 @@ static void test_notepad_patch(void) {
         ok(mark != NULL, "图里出现了 [草稿:…] 标记（普通 token → 随图存盘）");
         (void)patch_unmount_by_name(ai, "记事本");
         ok(patch_mount_builtin(ai, "记事本") == 0, "重新挂载");
+    { char repA[64]; char *avA[1] = {(char *)"auto"};
+      (void)patch_op_call_by_name(ai, "记事本", "模式", avA, 1, repA, sizeof repA); }
         (void)patch_op_call_by_name(ai, "记事本", "读", NULL, 0, rep2, sizeof rep2);
         ok(strstr(rep2, "小猫") != NULL, "草稿**被扫回来了**（重启/重挂都在）");
     }
@@ -899,6 +907,8 @@ static void test_ai_notepad(void) {
 
     /* ② on：有结论 → 写草稿 + 发送 → 发出来的是**它自己写的那句** */
     ok(patch_mount_builtin(ai, "记事本") == 0, "挂上记事本");
+    { char repA[64]; char *avA[1] = {(char *)"auto"};
+      (void)patch_op_call_by_name(ai, "记事本", "模式", avA, 1, repA, sizeof repA); }
     t->concl = 1;
     snprintf(t->concl_text, sizeof t->concl_text, "%s", "猫 不 会 唱歌");
     t->trace_n = 1;
@@ -1849,6 +1859,8 @@ static void test_draft_keep(void) {
     printf("== ㊺ 草稿留痕：发送后核心层另存一条 `[草稿:…]`（默认关） ==\n");
     AI *ai = ai_new();
     ok(patch_mount_builtin(ai, "记事本") == 0, "挂上「记事本」补丁");
+    { char repA[64]; char *avA[1] = {(char *)"auto"};
+      (void)patch_op_call_by_name(ai, "记事本", "模式", avA, 1, repA, sizeof repA); }
     /* ⚠ 反向测量（`AIP_DRAFTKEEP=1`）时启动就是开着的 ⇒ "关着"那半边按规矩跳过 */
     int env_on = getenv("AIP_DRAFTKEEP") != NULL;
     ai->draft_keep = 0;

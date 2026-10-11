@@ -4480,3 +4480,15 @@ C 级 `tools/optest.c` ㉉ 八项（动态登记 / 打否定边 / `edge_dyn_neg`
 - 随默认翻的断言：`tests/tokenop.sh` 三处 fork 改成"看显式关那侧"（`AIP_PROC*=0`）。
 - 证据：**默认档**与 **`AIP_PROCTALK=0 AIP_PROCTHINK=0 AIP_PROCPLAN=0`** 档各跑一次，
   都是 `全部回归通过` ✓（按 §6.107 的规矩：**分开跑、看那行字**，不拿"没输出"当通过）。
+
+### 6.109 ③ 档「翻默认」收官：记事本补丁默认 **manual**（写了要显式发送）
+
+- `patch_note_init()`：不带 cfg 挂载时默认 **manual** —— 流水线文本先落草稿，要**显式发送**才出口
+  （比 auto 稳）。两个方向都测得动：`::patch op 记事本 模式 auto` 或 `AIP_NOTEAUTO=1` 回 auto，
+  `AIP_NOTEMANUAL=1` 强钉 manual。
+- 随默认翻的断言：`tests/selfmod.sh` 每处 `::patch mount 记事本` 后面补 `::patch op 记事本 模式 auto`
+  （那一套测的是 **auto** 语义）；`tools/optest.c` 4 处 mount 后同样显式钉 auto。
+  **测试自己钉开关、不靠默认值** —— 这是这一轮翻默认总结出来的规矩。
+- 证据：默认档（manual）与 `AIP_NOTEAUTO=1`（auto）各跑一次，都是 `全部回归通过`；optest **441 项**。
+- **③ 档「翻默认」到此全部完成**：`AIP_ROUTE` §6.92、`AIP_PROCDRY` §6.105、`AIP_PROCRUN` §6.106、
+  过程三开关 §6.108、notepad manual §6.109。剩下的是 **E 动存档**（三件）。

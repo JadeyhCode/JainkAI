@@ -139,7 +139,7 @@ echo "== 7. 输出侧补丁「记事本」：可编辑的答复 + 草稿区 + �
 # ① 挂上它**不改行为**：没编辑时输出与不挂时逐字节相同
 run '猫\n' o20
 a_note=$(grep -o 'AI > .*' o20 | head -1)
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n猫\n' o21
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n猫\n' o21
 a_patch=$(grep -o 'AI > .*' o21 | head -1)
 if [ -n "$a_note" ] && [ "$a_note" = "$a_patch" ]; then
     ok "挂上「记事本」（auto 模式）：回答与不挂时**逐字节相同**"
@@ -147,24 +147,24 @@ else
     bad "auto 模式不该改行为" "无补丁=[$a_note] 有补丁=[$a_patch]"
 fi
 # ② 草稿区：写 → 读 → 提交（草稿不许影响发言）
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 写 猫\n::patch op 记事本 插入 1 会 跑\n::patch op 记事本 读\n::patch op 记事本 改 会 在\n::patch op 记事本 删 1 1\n::patch op 记事本 读\n::patch op 记事本 提交\n::patch op 记事本 读\n' o22
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 写 猫\n::patch op 记事本 插入 1 会 跑\n::patch op 记事本 读\n::patch op 记事本 改 会 在\n::patch op 记事本 删 1 1\n::patch op 记事本 读\n::patch op 记事本 提交\n::patch op 记事本 读\n' o22
 grep -q '草稿\[10字节\]=猫会 跑' o22 && ok "草稿区：写 + 按字符位置插入" || bad "草稿写/插" "$(grep '草稿\[' o22 | head -3)"
 grep -q '草稿\[7字节\]=猫 跑' o22 && ok "草稿区：改 + 按字符位置删（不劈开汉字）" || bad "草稿改/删" "$(grep '草稿\[' o22 | head -3)"
 grep -q '待发送\[7字节\]=猫 跑' o22 && ok "提交：草稿进待发送区" || bad "提交" "$(grep '待发送' o22 | head -3)"
 # ③ 手动模式：AI 控制什么时候发送（不发送 = 这一轮不说话）
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n猫\n' o23
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 模式 manual\n猫\n' o23
 grep -qE '你 > AI > *$' o23 && ok "manual：没发送 → 这一轮**不说话**（流水线那句被扣在待发送区）" \
     || bad "manual 该沉默" "$(grep 'AI >' o23 | tail -2)"
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n猫\n::patch op 记事本 改发言 看 跑\n::patch op 记事本 发送\n猫 有 毛 吗\n' o24
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 模式 manual\n猫\n::patch op 记事本 改发言 看 跑\n::patch op 记事本 发送\n猫 有 毛 吗\n' o24
 grep -qE 'AI > 猫 跑 来 跑' o24 && ok "编辑 + 发送：说出去的是**它自己改过的那句**（猫 看 来 跑 → 猫 跑 来 跑）" \
     || bad "编辑后的文本没发出来" "$(grep 'AI >' o24 | tail -3)"
 # ④ 受审通道：AI 自己（或 CLI）调用补丁操作同样过安全内核
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::op 调用补丁 记事本 写 你好\n::mod\n::patch op 记事本 读\n' o25
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::op 调用补丁 记事本 写 你好\n::mod\n::patch op 记事本 读\n' o25
 grep -q '应用 [1-9]' o25 && ok "「调用补丁」走审查→记账→应用→审计（和自修改同一条路）" \
     || bad "受审通道" "$(grep -E '行为|应用' o25 | head -3)"
 grep -q '草稿\[6字节\]=你好' o25 && ok "补丁的草稿真的被写了（外设只能碰自己的缓冲）" || bad "草稿" "$(grep '草稿' o25 | head -2)"
 # ⑤ 故障隔离：不认的操作连错 3 次 → 补丁自己停用，内核照跑
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 没有这个操作\n::patch op 记事本 没有这个操作\n::patch op 记事本 没有这个操作\n::patch\n你好\n' o26
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 没有这个操作\n::patch op 记事本 没有这个操作\n::patch op 记事本 没有这个操作\n::patch\n你好\n' o26
 grep -q '不认这个操作' o26 && ok "不认的操作：说清楚（不崩）" || bad "坏操作" "$(grep '补丁' o26 | head -3)"
 grep -q '已停用' o26 && ok "连续 3 次出错 → 补丁自己停用" || bad "故障隔离" "$(grep '记事本' o26 | head -3)"
 grep -q 'AI >' o26 && ok "补丁停用后内核照跑（照常回答）" || bad "内核" "$(grep 'AI >' o26 | tail -1)"
@@ -173,7 +173,7 @@ echo "== 9.5 N2 轮中草稿（默认关）：一边想一边把中间步写进�
 # 默认关那一侧：草稿一个字都不写（与今天逐字节相同）。
 # ⚠ 开关反向测量（AIP_DRAFTMID=1，见 tests/switches_ab.sh）时这几条**自动跳过**。
 if [ -z "${AIP_DRAFTMID:-}" ]; then
-    run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n猫 会 跳舞 吗\n::patch op 记事本 读\n::notepad\n' o34
+    run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 模式 manual\n猫 会 跳舞 吗\n::patch op 记事本 读\n::notepad\n' o34
     grep -qa '草稿\[0字节\]=(空)' o34 && ok "默认关：跑完一轮草稿还是空的（一个字都不写）" \
         || bad "默认关的草稿" "$(grep -a '草稿\[' o34 | head -2)"
     grep -q '轮中打草稿 = 关（默认）' o34 && ok "::notepad 自报「轮中打草稿 = 关（默认）」" \
@@ -189,7 +189,7 @@ fi
 # 开着那一侧：**受审通道**（MOD_PATCH_CALL）+ 一轮最多 3 行 + 中间步进草稿
 # 用 **manual 模式**看草稿：auto 模式下这一轮的发送会把草稿用掉并清空（既有行为，没改），
 # manual 模式正好是用户设想的"AI 自己决定什么时候发送"，草稿留着。
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 manual\n::notepad mid on\n猫 会 跳舞 吗\n::patch op 记事本 读\n::delib\n::mod\n' o35
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 模式 manual\n::notepad mid on\n猫 会 跳舞 吗\n::patch op 记事本 读\n::delib\n::mod\n' o35
 grep -q '轮中打草稿 = 开' o35 && ok "::notepad mid on 打开了" || bad "mid on" "$(grep -m2 '轮中打草稿' o35)"
 grep -qa '\[想\] 要弄清：猫 会 跳舞 吗' o35 && ok "草稿里有**目标**那一行（[想] 要弄清：…）" \
     || bad "目标行" "$(grep -a -m2 '草稿\[' o35)"
@@ -209,7 +209,7 @@ grep -q '调用补丁 记事本.写.*思维:轮中草稿' o35 \
 # **不能把轮末那一手挤掉**：安全内核每步只批 4 次补丁操作，
 # `::notepad on|hold` 要留 2 格给"写结论 + 发送/不发"（实测踩过：不预留 → 发送被预算拒，
 # 回答退回流水线；而且当时审计的拒绝理由还是 `(null)`，因为理由表缺两条）。
-run '::patch mount 记事本\n::notepad on\n::notepad mid on\n猫 会 唱歌 吗\n::safe\n' o37
+run '::patch mount 记事本\n::patch op 记事本 模式 auto\n::notepad on\n::notepad mid on\n猫 会 唱歌 吗\n::safe\n' o37
 grep -qE '判定：允许 [1-9] 拒绝 0' o37 && ok "mid + on 同时开：补丁调用一次都没被拒（预算留够了）" \
     || bad "补丁预算被挤爆" "$(grep -aE '判定：|超预算|(null)' o37 | head -4)"
 grep -qa '(null)' o37 && bad "审计里打出了 (null)" "$(grep -a -m1 '(null)' o37)" \
@@ -245,7 +245,7 @@ grep -q '没有前提' o29 && ok "一半轮次没有「水」→ 比例不够 �
 
 echo "== 8.5 草稿持久化：存成 [草稿:…] 标记节点（不改存档格式） =="
 # 存草稿 → 下一轮的安全点落地（提议只在安全点应用）→ 卸载重挂，草稿被扫回来
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 写 小猫\n::patch op 记事本 存草稿\n你好\n::mod\n::patch unmount 记事本\n::patch mount 记事本\n::patch op 记事本 读\n' o34
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 写 小猫\n::patch op 记事本 存草稿\n你好\n::mod\n::patch unmount 记事本\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::patch op 记事本 读\n' o34
 grep -q '草稿:小猫' o34 && ok "草稿经安全内核落成 **[草稿:小猫]** 标记节点（普通 token → 随图存盘）" \
     || bad "草稿标记" "$(grep -E '草稿|应用 |加Token' o34 | head -4)"
 grep -q '草稿\[6字节\]=小猫' o34 && ok "重新挂载后草稿**被扫回来**（重启也同理，格式没动）" \
@@ -262,7 +262,7 @@ fi
 # 有结论 + on：说出来的是**它自己写的那句**（不是流水线那句，链式渲染不见了）
 # ⚠ `AIP_DRAFTMID=1`（N2 轮中草稿）时草稿里还有"过程"那几行 ⇒ 发出去的是「过程 + 结论」，
 #   这是 N2 的直接效果（opt-in），所以那一种跑法换一条断言（见下）。
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::notepad on\n猫 会 唱歌 吗\n' o31
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::notepad on\n猫 会 唱歌 吗\n' o31
 if [ -z "${AIP_DRAFTMID:-}" ]; then
     grep -q 'AI > 猫 不 会 唱歌' o31 && ok "on：AI 把结论写进草稿并发送 → 说的是它自己写的那句" \
         || bad "on 模式" "$(grep 'AI >' o31 | tail -2)"
@@ -276,13 +276,13 @@ grep -q '依据：' o31 && ok "on：**依据（链）也带回来了**（规则�
 grep -q -- '-\[会' o31 && ok "链上看得见走的是哪条规则" \
     || bad "规则名" "$(grep 'AI >' o31 | tail -2)"
 # 没结论 + hold：按住不说（"控制什么时候发送"）
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::notepad hold\n猫 会 跳舞 吗\n::delib\n' o32
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::notepad hold\n猫 会 跳舞 吗\n::delib\n' o32
 grep -qE '你 > AI > *$' o32 && ok "hold：没想清楚就**不说话**（宁可不说，也不硬答）" \
     || bad "hold 该沉默" "$(grep 'AI >' o32 | tail -2)"
 grep -q '按住不说' o32 && ok "::delib 里看得见这一步（痕上有「按住不说」）" \
     || bad "hold 的痕" "$(grep -E '按住|登记' o32 | head -3)"
 # 关掉：回到流水线（照常说）
-run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::notepad off\n::rel analogy off\n猫 会 跳舞 吗\n' o33
+run '::notepad off\n::rel analogy off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::notepad off\n::rel analogy off\n猫 会 跳舞 吗\n' o33
 grep -q 'AI > 猫' o33 && ok "off：回到流水线（照常回答，一个字不插手）" \
     || bad "off 该照常" "$(grep 'AI >' o33 | tail -2)"
 

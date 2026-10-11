@@ -1465,7 +1465,16 @@ static inline int patch_note_init(Patch *p, TokenPool *pool, void *cfg) {
     void *saved_ai = st->ai;                 /* 挂载时设过：init 不能把它清掉 */
     memset(st, 0, sizeof *st);
     st->ai = saved_ai;
+    /* **§6.109 翻默认**：不带 cfg 挂载时默认 **manual**（流水线文本先落草稿，要**显式发送**
+     * 才出口 —— 比 auto 稳）。想回 auto：`::patch op 记事本 模式 auto` 或 `AIP_NOTEAUTO=1`。 */
     if (cfg) st->manual = (*(const int *)cfg != 0);
+    else {
+        st->manual = 1;
+        const char *na = getenv("AIP_NOTEAUTO");
+        if (na && na[0] == '1') st->manual = 0;
+        const char *nm = getenv("AIP_NOTEMANUAL");
+        if (nm && nm[0] == '1') st->manual = 1;
+    }
     patch_note_restore(st, pool);            /* 草稿持久化：扫 [草稿:…] 拿回来 */
     return 0;
 }
