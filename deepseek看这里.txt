@@ -224,7 +224,11 @@
        "这件事我记过过程「X」（N 步）"；引擎开着时顺手**干跑一遍**（只读）把结果写进同一条痕。
        开关 `::proc think on|off` / `AIP_PROCTHINK=1`，**默认关**；**只读**（不动图，
        所以开着关着**回答一样**，差别只在痕）。看护 tokenop ⑮ 5 项（120 项全过）；整包两种跑法全绿。
-     · ⬜ **下一件（候选，待用户点）**：① 过程**接进决策**（不只提一句，而是"要不要按过程做"的判断）；
+     · ~~**过程接进决策**~~ ✅（**audit §6.76**）：`dialog_try_proc_plan()` —— 问「怎么/如何/怎样 X」
+       又记过过程 X ⇒ **计划就是回答**（步骤/条件/否则/异常/调用一并列出；引擎开着附干跑结论，
+       关着明说"只给计划"）。开关 `::proc plan on|off` / `AIP_PROCPLAN=1`，**默认关**、**只读**、
+       命不中不硬扯。看护 tokenop ⑯ 7 项（127 项全过）；整包两种跑法全绿。
+     · ⬜ **下一件（候选，待用户点）**：① 过程**接进日常**（"想泡茶"这类非问句也认；或让 N2 草稿引用过程）；
        ② 局限总表里其它登记项（老写入者、闸门判别力窄、`叙事` 没显形、`ai_analogy` 从没被调用…）；
      · 方案（讨论定稿）：**"过程边 vs 共现边"用 role 标记** —— `uint8_t role` 现在只用 0~5
        （共现/输入/回复/造词/推论/基准），**还剩 250 个空位**，加 `ASSOC_ROLE_PROCESS` 是一行枚举
@@ -245,16 +249,16 @@
   · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
     ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
     ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
-  · 看护数（**都是实测**）：optest **339** / tokenop **120** / delibtest **155** / microtest **71** /
+  · 看护数（**都是实测**）：optest **339** / tokenop **127** / delibtest **155** / microtest **71** /
     biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
     cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
     **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
   · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
   · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
     `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`
-    `AIP_PROCTALK` `AIP_PROCTHINK`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_PROCTALK` `AIP_PROCTHINK` `AIP_PROCPLAN`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
     `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
-  · 常用命令新增：`::proc [<名字>|on|off|dry on|off|talk on|off|think on|off|run <名字>]`、
+  · 常用命令新增：`::proc [<名字>|on|off|dry on|off|talk on|off|think on|off|plan on|off|run <名字>]`、
     `::op 加条件/加否则/加异常/加断言`（`加回边` 多一个可选条件词）、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
     `::asm check`、`::lex`、`::ascii`
   · `codes/` 镜像 **100 文件逐字节一致**；工作区干净；存档格式仍 **v10**（没动过）

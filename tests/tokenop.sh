@@ -561,8 +561,33 @@ n=$(grep -ac '这我记过过程' o42 || true)
     || bad "别的事也硬扯" "$(grep -m1 '记过过程' o42)"
 
 
+echo "== ⑯ ② 过程接进决策（默认关）：问「怎么做 X」直接用计划回答 =="
+if [ -z "${AIP_PROCPLAN:-}" ]; then
+    run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做\n' o43
+    n=$(printf '%s\n' "$(cat o43)" | grep -ac '我 记过 过程' || true)
+    [ "$n" -eq 0 ] && ok "默认关：照旧走流水线（不拿计划当回答）" || bad "默认关" "$(grep -m1 '记过 过程' o43)"
+    run '::proc plan\n' o44
+    grep -q '过程接进决策 = 关（默认）' o44 && ok "::proc plan 自报默认关" || bad "plan 默认" "$(head -2 o44)"
+else
+    ok "AIP_PROCPLAN=1（反向测量）：默认值断言按规矩跳过"
+fi
+run '::proc plan on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 泡茶叶\n::op 建过程 洗杯子\n::op 加步骤 洗杯子 冲水\n::op 加调用 泡茶 洗杯子\n泡茶 怎么 做\n' o45
+grep -q '我 记过 过程 「 泡茶 」 ： 第 1 步 烧水' o45 && grep -q '第 2 步 泡茶叶' o45 \
+    && ok "开着：**计划就是回答**（步骤按号列出来）" || bad "计划回答" "$(grep -m2 'AI >' o45)"
+grep -q '调用 \[过程:洗杯子\]' o45 && ok "调用/条件/异常这些也一并列出来" \
+    || bad "其它记号" "$(grep -m1 'AI >' o45)"
+grep -q '执行 引擎 关着 ， 只 给 计划' o45 && ok "引擎关着时**明说只给计划**（不假装跑过）" \
+    || bad "引擎关着" "$(grep -m1 'AI >' o45)"
+run '::proc plan on\n::proc on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做\n' o46
+grep -q '干跑 一遍 ： 每 一步 都 过 得 去' o46 \
+    && ok "引擎开着时附**干跑结论**（只读；结论进回答、过程不执行）" || bad "干跑结论" "$(grep -m1 'AI >' o46)"
+run '::proc plan on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n猫 怎么 做\n' o47
+n=$(printf '%s\n' "$(cat o47)" | grep -ac '我 记过 过程' || true)
+[ "$n" -eq 0 ] && ok "没记过那个过程（猫）→ **不硬扯**计划" || bad "硬扯" "$(grep -m1 '记过 过程' o47)"
+
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1

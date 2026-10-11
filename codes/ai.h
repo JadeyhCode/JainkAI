@@ -690,6 +690,9 @@ typedef struct {
      * "这件事我记过过程 X（N 步）"，引擎开着时再**干跑一遍**（只读）把结果并进痕。
      * 关着时一个字都不加。 */
     int     proc_think;
+    /* **过程接进决策**（第 9 条 ② 的下一步，默认 0 = 关）：问"怎么做 X"而我又记过过程 X 时，
+     * **直接用计划回答**（第 1 步…→ 第 2 步…），而不是走流水线那句。引擎开着时附上干跑结论。 */
+    int     proc_plan;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1154,6 +1157,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pt = getenv("AIP_PROCTALK"); if (pt && pt[0] == '1') ai->proc_talk = 1; }
     ai->proc_think = 0;              /* 过程接进思维：默认**关** */
     { const char *pk = getenv("AIP_PROCTHINK"); if (pk && pk[0] == '1') ai->proc_think = 1; }
+    ai->proc_plan = 0;               /* 过程接进决策（用计划回答）：默认**关** */
+    { const char *pl = getenv("AIP_PROCPLAN"); if (pl && pl[0] == '1') ai->proc_plan = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

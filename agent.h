@@ -1303,6 +1303,79 @@ static inline void think_note_process(AI *ai, char *const *words, size_t n) {
     }
 }
 
+/* ============ ② 过程接进**决策**：这类问题直接用计划回答（默认关） ============
+ *
+ * 上一版（§6.75）只在**痕**里提一句"这件事我记过过程"，回答照旧走流水线。这一版让它**做决定**：
+ * 问"怎么/如何/怎样 <过程名>"时，直接把过程**列出来**当回答（计划就是答案本身）。
+ * 认法窄到"疑问词 + 命中一个我记过的过程"；引擎开着再附一句干跑结论（只读）。 */
+static inline int dialog_try_proc_plan(AI *ai, char *const *words, size_t n,
+                                      char *out, size_t out_cap) {
+    if (!ai || !ai->proc_plan || !words || !n || !out || out_cap == 0) return 0;
+    out[0] = 0;
+    /* ① 这一句得是个"怎么做"的问法 */
+    int howto = 0;
+    for (size_t i = 0; i < n; ++i)
+        if (words[i] && (strcmp(words[i], "怎么") == 0 || strcmp(words[i], "如何") == 0 ||
+                         strcmp(words[i], "怎样") == 0 || strcmp(words[i], "咋") == 0)) howto = 1;
+    if (!howto) return 0;
+    /* ② 命中一个我记过的过程（名字或名字前缀出现在话里） */
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *r = ai->pool->tokens[i];
+        if (!r || !r->name || r->is_garbage) continue;
+        if (strncmp(r->name, PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) != 0) continue;
+        char bare[64];
+        size_t k = 0;
+        for (const char *q = r->name + strlen(PROC_TOKEN_PREFIX); *q && *q != ']' && k + 1 < sizeof bare; ++q)
+            bare[k++] = *q;
+        bare[k] = 0;
+        if (!bare[0]) continue;
+        size_t lw = strlen(bare);
+        int hit = 0;
+        for (size_t w = 0; w < n && !hit; ++w) {
+            if (!words[w] || !words[w][0]) continue;
+            if (strcmp(words[w], bare) == 0) { hit = 1; break; }
+            size_t l = strlen(words[w]);
+            if (l >= 3 && l < lw && strncmp(bare, words[w], l) == 0) hit = 1;
+        }
+        if (!hit) continue;
+        /* ③ 把计划列出来（步骤 / 条件 / 否则 / 异常 / 调用 / 回边） */
+        size_t off = 0;
+        off += (size_t)snprintf(out + off, out_cap > off ? out_cap - off : 0,
+                                "我 记过 过程 「 %s 」 ：", bare);
+        size_t nstep = 0;
+        for (size_t e = 0; e < r->count && off + 24 < out_cap; ++e) {
+            const AssocEntry *ed = &r->assocs[e];
+            const char *nm = ed->main && ed->main->name ? ed->main->name : "?";
+            if (edge_step_index(ed) > 0) {
+                off += (size_t)snprintf(out + off, out_cap - off, " 第 %d 步 %s ；",
+                                        edge_step_index(ed), nm);
+                nstep++;
+            } else if (edge_is_cond(ed)) {
+                char cb[48]; (void)proc_mark_bare(ed->action ? ed->action->name : NULL,
+                                                  PROC_COND_PREFIX, cb, sizeof cb);
+                off += (size_t)snprintf(out + off, out_cap - off, " （%s 成立 才 %s）", cb, nm);
+            } else if (edge_is_else(ed)) {
+                off += (size_t)snprintf(out + off, out_cap - off, " 否则 %s ；", nm);
+            } else if (edge_is_exc(ed)) {
+                off += (size_t)snprintf(out + off, out_cap - off, " 出错 就 %s ；", nm);
+            } else if (edge_is_call(ed)) {
+                off += (size_t)snprintf(out + off, out_cap - off, " 调用 %s ；", nm);
+            }
+        }
+        if (!nstep)
+            off += (size_t)snprintf(out + off, out_cap - off, " （还 没 记 步骤）");
+        if (ai->proc_run) {
+            size_t gaps = proc_run(ai, bare, NULL);      /* 干跑：只读（结论进痕，不进回答） */
+            off += (size_t)snprintf(out + off, out_cap - off, " ｜ 干跑 一遍 ： %s",
+                                    gaps ? "有 断点" : "每 一步 都 过 得 去");
+        } else {
+            off += (size_t)snprintf(out + off, out_cap - off, " ｜ （执行 引擎 关着 ， 只 给 计划）");
+        }
+        return 1;
+    }
+    return 0;
+}
+
 /* ============================ ② 过程记号接进**对话**（默认关） ============================
  *
  * 用户 2026-10-10：三个候选都要。这一条是"AI 能靠说话把一件事记成过程、并跑它"：
@@ -2117,7 +2190,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         char tobuf[256];
         /* ③ 他者视角（复数主语"大家/他们/别人"）先试：**默认关**，关着时这一行什么都不做 */
-        if (dialog_try_proc(ai, words, n, tobuf, sizeof tobuf) ||
+        if (dialog_try_proc_plan(ai, words, n, tobuf, sizeof tobuf) ||
+            dialog_try_proc(ai, words, n, tobuf, sizeof tobuf) ||
             dialog_trigger_try_others(ai, words, n, tobuf, sizeof tobuf) ||
             dialog_trigger_try(ai, words, n, tobuf, sizeof tobuf)) {
             snprintf(out, out_cap, "%s", tobuf);

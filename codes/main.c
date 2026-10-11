@@ -677,6 +677,8 @@ static const CmdDef CMDS[] = {
       "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
       "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来\n"
       "::proc on|off       过程**执行引擎**（第 9 条 ③；默认关，AIP_PROCRUN=1）\n"
+      "::proc plan on|off  ② 过程**接进决策**（默认关，AIP_PROCPLAN=1）：问「怎么 X」又记过\n"
+      "  「过程 X」时**直接用计划回答**（步骤/条件/否则/异常/调用；引擎开着附干跑结论）\n"
       "::proc think on|off ② 过程**接进思维**（默认关，AIP_PROCTHINK=1）：思考收尾时认出\n"
       "  「这件事我记过过程」并写进痕；引擎开着时顺手干跑一遍（只读、不执行行为）\n"
       "::proc talk on|off  ② 过程记号**接进对话**（默认关，AIP_PROCTALK=1）：\n"
@@ -995,6 +997,17 @@ static void cmd_proc(AI *ai, const char *cmd) {
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && !strncmp(arg, "plan", 4) && (arg[4] == 0 || arg[4] == ' ')) {
+        const char *v = arg + 4;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       ai->proc_plan = 1;
+        else if (!strcmp(v, "off")) ai->proc_plan = 0;
+        else if (*v) { printf("[用法] ::proc plan on|off\n"); return; }
+        printf("[过程接进决策 = %s]（%s）\n", ai->proc_plan ? "开" : "关（默认）",
+               ai->proc_plan ? "问「怎么 X」而我又记过过程 X ⇒ **直接用计划回答**（引擎开着附干跑结论）"
+                             : "照旧走流水线（痕里那条「这我记过过程」还留着）");
+        return;
+    }
     if (arg && !strncmp(arg, "think", 5) && (arg[5] == 0 || arg[5] == ' ')) {
         /* ② 过程接进**思维**（默认关、只读）：思考收尾时自己认"这件事我记过过程" */
         const char *v = arg + 5;
