@@ -3021,6 +3021,7 @@ int main(int argc, char **argv) {
                 }
                 AI *b = a->brain;
                 const Token *cand[64]; size_t hit[64], nc = 0;
+                uint64_t strength[64];       /* 边**强度**之和（`ai_edge_weight`，不是简单计数） */
                 size_t found = 0;
                 for (size_t i = 0; i < nf; ++i) {
                     Token *f = pool_find(b->pool, fw[i]);
@@ -3041,21 +3042,34 @@ int main(int argc, char **argv) {
                             points = 1; break;
                         }
                         if (!points) continue;
+                        uint64_t wsum = 0;
+                        for (size_t e = 0; e < T2->count; ++e) {
+                            const AssocEntry *ed2 = &T2->assocs[e];
+                            if (ed2->main != f) continue;
+                            if (!ed2->rel && !ed2->nrel && !ed2->dyn) continue;
+                            wsum += ai_edge_weight(b, ed2);
+                        }
                         size_t k = 0;
                         for (; k < nc; ++k) if (cand[k] == T2) break;
-                        if (k == nc) { if (nc >= 64) continue; cand[nc] = T2; hit[nc] = 1; nc++; }
-                        else hit[k]++;
+                        if (k == nc) { if (nc >= 64) continue; cand[nc] = T2; hit[nc] = 1;
+                                       strength[nc] = wsum; nc++; }
+                        else { hit[k]++; strength[k] += wsum; }
                     }
                 }
                 if (!found) { printf("  （没有一个特征词在图上 ⇒ 联想不起来）\n"); continue; }
                 /* 按命中数排前 4（小数组，直接选） */
                 printf("[像是什么]（命中特征数 / 共 %zu 个特征词）：\n", found);
                 for (int rank = 0; rank < 4 && nc > 0; ++rank) {
+                    /* **按边强度排**（`ai_edge_weight` 现算：来源档/hits/关系位都算进去），
+                     * 命中数只当并列时的次序 —— 以前是纯计数，等于把"基准知识"和"偶发共现"当一样重。 */
                     size_t best = 0;
-                    for (size_t k = 1; k < nc; ++k) if (hit[k] > hit[best]) best = k;
-                    if (hit[best] == 0) break;
-                    printf("  %s   命中 %zu/%zu\n", cand[best]->name ? cand[best]->name : "?", hit[best], found);
-                    hit[best] = 0;
+                    for (size_t k = 1; k < nc; ++k)
+                        if (strength[k] > strength[best] ||
+                            (strength[k] == strength[best] && hit[k] > hit[best])) best = k;
+                    if (strength[best] == 0) break;
+                    printf("  %s   命中 %zu/%zu   强度 %llu\n", cand[best]->name ? cand[best]->name : "?",
+                           hit[best], found, (unsigned long long)strength[best]);
+                    strength[best] = 0; hit[best] = 0;
                 }
                 printf("  （这是**联想**：按「谁指向这些特征」投票；不是判定，命中少就是不像）\n");
                 continue;
