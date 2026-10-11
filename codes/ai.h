@@ -637,6 +637,7 @@ typedef struct {
     /* **N1 参与决策**（思维侧第二条，默认 0 = 关）：思维对象定稿时把它抄到这里
      * （ai.h 在 think.h **之前**，调不到 think_of ⇒ 用一层 AI 级缓存转手），
      * 走边没走出好东西时（best_score 低于阈值）就用**它想通的结论**当结果。 */
+    int    draft_keep;               /* 草稿留痕（§6.103，默认关）：发送后另存一条 `[草稿:…]` */
     int    n1_decide;
     char   n1_concl[96];
     int    n1_gaps;
@@ -1258,6 +1259,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *cm = getenv("AIP_CODEMULTI"); if (cm && cm[0] == '1') ai->code_multi = 1; }
     ai->n1_decide = 0;               /* N1 参与决策：默认**关** */
     { const char *nd = getenv("AIP_N1DECIDE"); if (nd && nd[0] == '1') ai->n1_decide = 1; }
+    ai->draft_keep = 0;
+    { const char *dk = getenv("AIP_DRAFTKEEP"); if (dk && dk[0] == '1') ai->draft_keep = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */

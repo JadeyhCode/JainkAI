@@ -1631,6 +1631,23 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_NOTEPAD: {
+                {   /* §6.103 草稿留痕：发送后另存一条 [草稿:…]（默认关） */
+                    /* ⚠ `cmd` 不含 `::`："notepad draftkeep on" 里 cmd[7] 才是空格
+                     * （第一版写成 cmd[8]/cmd+9 ⇒ 永远拿不到参数、只打用法）。 */
+                    const char *aa = (cmd[7] == ' ') ? cmd + 8 : NULL;
+                    while (aa && *aa == ' ') aa++;
+                    if (aa && strncmp(aa, "draftkeep", 9) == 0) {
+                        const char *v = aa + 9;
+                        while (*v == ' ') v++;
+                        if (!strcmp(v, "on"))       a->brain->draft_keep = 1;
+                        else if (!strcmp(v, "off")) a->brain->draft_keep = 0;
+                        else if (*v) { printf("[用法] ::notepad draftkeep on|off\n"); continue; }
+                        printf("[草稿留痕 = %s]（%s）\n", a->brain->draft_keep ? "开" : "关（默认）",
+                               a->brain->draft_keep ? "发送后把刚发的那句另存成 `[草稿:…]` 节点（持久可查）"
+                                                    : "草稿区发送后就没了（今天的行为）");
+                        continue;
+                    }
+                }
                 /* 注意：`cmd` 已经剥掉 `::`（见主循环），所以下标按 "notepad"=7 算 */
                 const char *arg = (cmd[7] == ' ') ? cmd + 8 : NULL;
                 while (arg && *arg == ' ') arg++;

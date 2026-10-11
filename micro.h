@@ -1326,7 +1326,10 @@ static inline int patch_note_op(Patch *p, const char *op, char *const *args, siz
         st->decided = 1;                          /* 明确表态：这一轮的话由我说了算 */
         st->send_flag = 1;
         st->n_sent++;
-        if (out && cap) snprintf(out, cap, "这一轮发送（%zu 字节）", strlen(st->outbox));
+        /* 把**正文**也带出来（有界）：核心层（`MOD_PATCH_CALL` 的 applier）要靠它
+         * 存 `[草稿:…]` 标记节点 —— §6.94 定位出的正确落点（补丁层交文本、核心层存节点）。 */
+        if (out && cap) snprintf(out, cap, "这一轮发送（%zu 字节）：%.*s",
+                                 strlen(st->outbox), 60, st->outbox);
         return 0;
     }
     if (!strcmp(op, "不发")) {
@@ -1969,6 +1972,27 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         int rc = patch_op_call_by_name(ai, m->patch, m->name,
                                        argv, m->n_args, rep, sizeof rep);
         if (rc < 0) return -1;
+        /* **草稿留痕**（§6.103，默认关）：`::notepad on` 发送会把草稿区清掉 —— 发送成功之后
+         * 由**核心层**（这里有 `ai` 和队列）把刚发出去的那句话另存成一条 `[草稿:…]` 标记节点。
+         * 判据只用"补丁=记事本、操作=发送、回复里带正文"这三条（正文由补丁层交出来）。 */
+        if (ai->draft_keep && strcmp(m->patch, "记事本") == 0 && strcmp(m->name, "发送") == 0) {
+            const char *colon = strstr(rep, "）：");
+            if (colon) {
+                ModIntent dk;
+                memset(&dk, 0, sizeof dk);
+                dk.type = MOD_ADD_TOKEN;
+                size_t off = 0;
+                const char *hp = MICRO_DRAFT_TOKEN_PREFIX;
+                for (const char *q = hp; *q && off + 2 < sizeof dk.name; ++q) dk.name[off++] = *q;
+                for (const char *q = colon + strlen("）："); *q && off + 2 < sizeof dk.name && off < 70; ++q)
+                    dk.name[off++] = *q;
+                if (off + 1 < sizeof dk.name) dk.name[off++] = ']';
+                dk.name[off] = 0;
+                dk.target = ai->self;
+                snprintf(dk.source, sizeof dk.source, "输出:草稿留痕");
+                (void)mod_propose(&micro_of(ai)->queue, &dk);
+            }
+        }
         if (note) {
             /* 手动拼而不是 snprintf：patch(24)+name(48)+rep(160) 一起格式化会被
              * -Werror=format-truncation 拦下（note 只有 192）。截断是**故意**的。 */

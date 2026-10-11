@@ -1841,6 +1841,41 @@ static void test_redo_alt(void) {
 }
 
 /* ③ 多层快照栈（§6.102）：第二次回退要**退到更外一层**，不是退回同一个起点 */
+/* §6.103 草稿留痕：**在核心里**（MOD_PATCH_CALL 的 applier）证正例 ——
+ * CLI 的 `::patch op` 绕过内核（实测"允许 1 拒绝 0"），所以只能直接调核心。 */
+static void test_draft_keep(void) {
+    printf("== ㊺ 草稿留痕：发送后核心层另存一条 `[草稿:…]`（默认关） ==\n");
+    AI *ai = ai_new();
+    ok(patch_mount_builtin(ai, "记事本") == 0, "挂上「记事本」补丁");
+    /* ⚠ 反向测量（`AIP_DRAFTKEEP=1`）时启动就是开着的 ⇒ "关着"那半边按规矩跳过 */
+    int env_on = getenv("AIP_DRAFTKEEP") != NULL;
+    ai->draft_keep = 0;
+    size_t q0 = micro_of(ai)->queue.n;
+    ModIntent wr;
+    memset(&wr, 0, sizeof wr);
+    wr.type = MOD_PATCH_CALL;
+    snprintf(wr.patch, sizeof wr.patch, "记事本");
+    snprintf(wr.name, sizeof wr.name, "写");
+    snprintf(wr.args[0], sizeof wr.args[0], "试验草稿");
+    wr.n_args = 1;
+    (void)micro_apply_one(ai, &wr, NULL, 0);
+    ModIntent sd = wr;
+    snprintf(sd.name, sizeof sd.name, "发送");
+    sd.n_args = 0;
+    (void)micro_apply_one(ai, &sd, NULL, 0);
+    if (env_on) ok(1, "AIP_DRAFTKEEP=1（反向测量）：关着那半边的断言按规矩跳过");
+    else ok(micro_of(ai)->queue.n == q0, "关着：发送之后不多出任何意图");
+    /* 开着：发送之后队列里多一条 [草稿:…] */
+    ai->draft_keep = 1;
+    (void)micro_apply_one(ai, &wr, NULL, 0);
+    (void)micro_apply_one(ai, &sd, NULL, 0);
+    int found = 0;
+    for (size_t i = 0; i < micro_of(ai)->queue.n; ++i)
+        if (strncmp(micro_of(ai)->queue.items[i].name, "[草稿:", 6) == 0) found = 1;
+    ok(found, "开着：发送之后队列里多一条 `[草稿:试验草稿]`（核心层存的）");
+    ai_free(ai);
+}
+
 static void test_redo_stack(void) {
     printf("== ㊹ ③ 多层快照栈：退到更外一层（默认关） ==\n");
     AI *ai = ai_new();
@@ -2599,6 +2634,7 @@ int main(void) {
     test_code_fixes();
     test_n1_decide();
     test_redo_stack();
+    test_draft_keep();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();
