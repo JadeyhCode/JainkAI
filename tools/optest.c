@@ -1857,6 +1857,41 @@ static void test_redo_alt(void) {
  * CLI 的 `::patch op` 绕过内核（实测"允许 1 拒绝 0"），所以只能直接调核心。 */
 /* §6.110 v11：**N1 思考对象持久化**（存摘要：结论/缺口/复没复核） */
 /* §6.111 E2：边存**时刻集合**（互不相同的 tick，≤4）+ v12 往返 */
+/* §6.112 E3 v13：他者的**改口历史**（真改了才记；重复说同一句不记） */
+static void test_other_hist(void) {
+    printf("== ㊽ E3 v13：他者改口历史（total / 最近三次 / 存盘读回） ==\n");
+    AI *ai = ai_new();
+    OtherModel *om = other_intern(ai, T(ai, "他者甲"));
+    Token *a = T(ai, "甲说"), *b = T(ai, "乙事");
+    ok(om != NULL, "造一个「他者甲」");
+    if (om) {
+        ai->pool->current_tick = 3;
+        (void)other_belief_learn(ai, om, a, b, REL_IS_A, 0);      /* 先说「认」 */
+        ok(om->hist[0].total == 0, "第一次说：不是改口（total 还是 0）");
+        ai->pool->current_tick = 7;
+        (void)other_belief_learn(ai, om, a, b, REL_IS_A, 1);      /* 改口成「不认」 */
+        ok(om->hist[0].total == 1 && om->hist[0].n == 1 && om->hist[0].old_neg[0] == 0,
+           "改口：记下「改之前是认」+ tick=7（total=1）");
+        (void)other_belief_learn(ai, om, a, b, REL_IS_A, 1);      /* 重复同一句 */
+        ok(om->hist[0].total == 1, "**重复说同一句不算改口**（total 不涨）");
+    }
+    size_t sz = ai_save_file(ai, "ohist.bin");
+    ok(sz > 0, "存盘（v13）");
+    AI *c = ai_load_file("ohist.bin");
+    if (c) {
+        const OtherModel *o2 = NULL;
+        for (size_t i = 0; i < c->others_n; ++i)
+            if (c->others[i].who && c->others[i].who->name &&
+                strcmp(c->others[i].who->name, "他者甲") == 0) o2 = &c->others[i];
+        ok(o2 && o2->hist[0].total == 1 && o2->hist[0].n == 1 &&
+           o2->hist[0].old_neg[0] == 0 && o2->hist[0].tick[0] == 7,
+           "读回来：改口历史逐值还在（v13 往返）");
+        ai_free(c);
+    } else ok(0, "读回来失败（v13 那段读写不一致）");
+    remove("ohist.bin");
+    ai_free(ai);
+}
+
 static void test_edge_tset(void) {
     printf("== ㊼ E2：边上的时刻集合（互不相同；满了滚最新） ==\n");
     AI *ai = ai_new();
@@ -2709,6 +2744,7 @@ int main(void) {
     test_draft_keep();
     test_n1_persist();
     test_edge_tset();
+    test_other_hist();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

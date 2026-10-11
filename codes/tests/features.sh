@@ -64,8 +64,8 @@ elif [ -n "$legacy_use" ]; then
 else
     ok "语境（subs/subs_not）字段已从 AssocEntry 删掉，且全仓没有访问点（v10，省 64 字节/条）"
 fi
-grep -q '^#define MODEL_VERSION 12u' "$ROOT/model_io.h" \
-    && ok "存档版本 = 12（§6.110 加了 N1 摘要段；v10 及更早仍读得回来）" \
+grep -q '^#define MODEL_VERSION 13u' "$ROOT/model_io.h" \
+    && ok "存档版本 = 13（§6.110 加了 N1 摘要段；v10 及更早仍读得回来）" \
     || bad "存档版本" "$(grep -m1 'MODEL_VERSION' "$ROOT/model_io.h")"
 run '::tokens 12\n' o3b
 has '分类=1' "$(cat o3b)" && ok "类别继承：模型里已有自动抽象类别（分类=1）" || ok "类别继承机制在位"

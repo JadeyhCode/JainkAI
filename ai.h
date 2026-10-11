@@ -256,12 +256,24 @@ typedef struct {
  * 现在这里多了一张**他的信念表**：他说过的事实存在他名下（写进模型文件 v8），
  * 问「他 觉得 … 吗」查的是它，而我自己的知识一点都不受影响 ——
  * 他信什么是他的事，**我的视角永远不会因此改变**。 */
+/* **他者的改口历史**（§6.112，v13 存盘）：`bel[]` 是**覆盖语义**（只说最新那条），
+ * 这里补上"他改过几次、最近三次改成什么、什么时候改的"。与 `bel[]` **同下标**
+ * （信念只追加、不删除 ⇒ 下标稳定 ✓）。 */
+#define AI_MAX_BELIEF_REV 3
+typedef struct {
+    uint8_t  old_neg[AI_MAX_BELIEF_REV];   /* 那一次改口**之前**是什么（0=认 / 1=不认） */
+    uint32_t tick[AI_MAX_BELIEF_REV];
+    uint8_t  n;                            /* 记了几条（≤3，满了滚最新） */
+    uint32_t total;                        /* 一共改过几次（单调计数，用来回答"改口几次"） */
+} BelHist;
+
 typedef struct {
     Token *who;
     Token *belief_of_self;
     float  trust;
     size_t n_interactions;
     HypoFact bel[AI_MAX_BELIEF];   /* 他相信的事实（不一定真） */
+    BelHist  hist[AI_MAX_BELIEF];  /* 与 bel[] 同下标的改口历史（§6.112） */
     size_t   n_bel;
     size_t   n_bel_learned;        /* 累计听他说过多少条 */
 } OtherModel;
@@ -3577,13 +3589,29 @@ static inline int other_belief_learn(AI *ai, OtherModel *om,
     if (om->who) ai->last_who = om->who;
     for (size_t i = 0; i < om->n_bel; ++i) {
         if (om->bel[i].a == a && om->bel[i].b == b && om->bel[i].rid == rid) {
-            om->bel[i].neg = (uint8_t)(neg ? 1 : 0);
+            uint8_t nv = (uint8_t)(neg ? 1 : 0);
+            /* **真改了**才记一笔（同一句话重复说 = 没改口 ⇒ 历史不该长） */
+            if (om->bel[i].neg != nv) {
+                BelHist *h = &om->hist[i];
+                if (h->n < AI_MAX_BELIEF_REV) {
+                    h->old_neg[h->n] = om->bel[i].neg;
+                    h->tick[h->n] = (uint32_t)(ai->pool ? ai->pool->current_tick : 0);
+                    h->n++;
+                } else {                        /* 满了：滚最新（最初 2 次 + 最近 1 次） */
+                    h->old_neg[AI_MAX_BELIEF_REV - 1] = om->bel[i].neg;
+                    h->tick[AI_MAX_BELIEF_REV - 1] = (uint32_t)(ai->pool ? ai->pool->current_tick : 0);
+                }
+                h->total++;
+            }
+            om->bel[i].neg = nv;
             return 1;
         }
     }
     if (om->n_bel >= AI_MAX_BELIEF) return 0;
-    HypoFact *f = &om->bel[om->n_bel++];
+    HypoFact *f = &om->bel[om->n_bel];
     f->a = a; f->b = b; f->rid = rid; f->neg = (uint8_t)(neg ? 1 : 0);
+    memset(&om->hist[om->n_bel], 0, sizeof om->hist[om->n_bel]);   /* 新信念：历史清零 */
+    om->n_bel++;
     om->n_bel_learned++;
     return 1;
 }

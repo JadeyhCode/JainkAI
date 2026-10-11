@@ -40,7 +40,7 @@
  *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
  *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
  *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
-#define MODEL_VERSION 12u  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+#define MODEL_VERSION 13u  /* v13: 他者**改口历史**（BelHist，§6.112） */  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -309,6 +309,17 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
             mw_u32(&w, f->b ? f->b->id : TOKEN_ID_NONE);
             mw_u8(&w, f->rid);
             mw_u8(&w, f->neg);
+            /* v13：这条信念的**改口历史**（**定长** 20 字节 = total 4 + n 1 + 3×1 + 3×4） */
+            {
+                const BelHist *h = &ai->others[i].hist[k];
+                uint8_t hn = (h->n <= AI_MAX_BELIEF_REV) ? h->n : 0;
+                mw_u32(&w, h->total);
+                mw_u8 (&w, hn);
+                for (uint8_t q = 0; q < AI_MAX_BELIEF_REV; ++q)
+                    mw_u8(&w, q < hn ? h->old_neg[q] : 0);
+                for (uint8_t q = 0; q < AI_MAX_BELIEF_REV; ++q)
+                    mw_u32(&w, q < hn ? h->tick[q] : 0);
+            }
         }
     }
 
@@ -885,8 +896,26 @@ static inline AI *ai_load_file(const char *path) {
                 uint8_t bneg = mr_u8(&r);
                 if (r.err) goto fail_ai;
                 if (!ba || !bb) goto fail_ai;
-                HypoFact *f = &ai->others[i].bel[ai->others[i].n_bel++];
+                HypoFact *f = &ai->others[i].bel[ai->others[i].n_bel];
                 f->a = ba; f->b = bb; f->rid = brid; f->neg = bneg;
+                memset(&ai->others[i].hist[ai->others[i].n_bel], 0,
+                       sizeof ai->others[i].hist[ai->others[i].n_bel]);
+                ai->others[i].n_bel++;
+                if (mver >= 13u) {                 /* v13：改口历史（旧档没有 ⇒ 空历史） */
+                    BelHist *h = &ai->others[i].hist[ai->others[i].n_bel - 1];
+                    h->total = mr_u32(&r);
+                    h->n = mr_u8(&r);
+                    if (r.err || h->n > AI_MAX_BELIEF_REV) goto fail_ai;
+                    for (uint8_t q = 0; q < AI_MAX_BELIEF_REV; ++q) {
+                        uint8_t ov = mr_u8(&r);
+                        if (q < h->n) h->old_neg[q] = ov;
+                    }
+                    for (uint8_t q = 0; q < AI_MAX_BELIEF_REV; ++q) {
+                        uint32_t tv = mr_u32(&r);
+                        if (q < h->n) h->tick[q] = tv;
+                    }
+                    if (r.err) goto fail_ai;
+                }
             }
         }
     }

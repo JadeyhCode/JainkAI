@@ -2288,11 +2288,22 @@ int main(int argc, char **argv) {
                     for (size_t k = 0; k < om->n_bel; ++k) {
                         const HypoFact *f = &om->bel[k];
                         const RelDef *rd = rel_by_id(f->rid);
-                        printf("    %s %s %s %s\n",
+                        printf("    %s %s %s %s",
                                f->a && f->a->name ? f->a->name : "?",
                                f->neg ? "不" : "",
                                rd && rd->name ? rd->name : "?",
                                f->b && f->b->name ? f->b->name : "?");
+                        /* §6.112：他**改口过几次** + 最近一次改成什么（历史里只留最近 3 条） */
+                        if (om->hist[k].total) {
+                            const BelHist *h = &om->hist[k];
+                            uint8_t last = h->n ? (uint8_t)(h->n - 1) : 0;
+                            printf("   **改口 %u 次**（最近：%s→%s @%u）",
+                                   h->total,
+                                   h->n ? (h->old_neg[last] ? "不认" : "认") : "?",
+                                   f->neg ? "不认" : "认",
+                                   h->n ? h->tick[last] : 0u);
+                        }
+                        printf("\n");
                     }
                 }
                 continue;
