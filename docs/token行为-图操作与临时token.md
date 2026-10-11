@@ -1,5 +1,9 @@
 # Token 的行为（图操作）+ 临时 Token + 修正的记忆
 
+> **给三天后的人（一句话）**：`::op` 那张表的来历：加前提、中间插词、回收临时草稿… 以及"临时 token 不存盘"的判据（名字前缀）。
+> **代码**：`micro.h` 的 `TOKEN_OPS[]`；**看护**：`tests/tokenop.sh`、`tools/optest.c`。
+
+
 > 用户三条要求（原话）：
 >
 > > 「应该给 token 加上行为，比如：给带 token 连接 token，给带指定 token 的连接另一个 token，
