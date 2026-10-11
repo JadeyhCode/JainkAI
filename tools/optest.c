@@ -1359,10 +1359,10 @@ static void test_process_marks(void) {
  * 是不是 Token 行为），核对只读、真执行走受审通道、断点用 `DerGap`。这一节钉：
  * 默认关、断点判据（前提不成立 / 要参数）、真执行计数、以及**过程边不许被拆**（结构）。 */
 static void test_proc_run(void) {
-    printf("== ㉔ 过程执行引擎：跑得起来、也停得下来（默认关） ==\n");
+    printf("== ㉔ 过程执行引擎：跑得起来、也停得下来（§6.106 起默认**开**） ==\n");
     AI *ai = ai_new();
-    ok(ai->proc_run == 0 || getenv("AIP_PROCRUN") != NULL,
-       "引擎默认**关**（反向测量 AIP_PROCRUN=1 时按规矩跳过）");
+    ok(ai->proc_run == 1 || getenv("AIP_PROCRUN") != NULL,
+       "引擎**默认开**（§6.106 翻默认；AIP_PROCRUN=0 那侧按规矩跳过）");
     char note[200];
     { char *a[1] = {(char *)"泡茶3"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
     { char *a[3] = {(char *)"泡茶3", (char *)"烧水3", (char *)"1"};

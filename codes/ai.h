@@ -1232,7 +1232,13 @@ static inline void ai_switches_init(AI *ai) {
     { const char *lx = getenv("AIP_ASCII");    if (lx && lx[0] == '1') ai->lex_ascii = 1; }
     ai->others_ask = 0;              /* 他者视角进回答路径：默认**关** */
     ai->proc_run = 0;                /* 过程执行（第 9 条 ③）：默认**关** */
-    { const char *pr = getenv("AIP_PROCRUN"); if (pr && pr[0] == '1') ai->proc_run = 1; }
+    /* **翻默认（§6.106）**：过程执行引擎默认开 —— 配合 §6.105 的干跑默认开，
+     * 默认行为是"**在假设世界里演练**"（有痕、无副作用）；真要动的动作仍由动作层把关
+     * （`::act on`，默认关）。想回老行为：`AIP_PROCRUN=0`（显式关）。 */
+    ai->proc_run = 1;
+    { const char *pr = getenv("AIP_PROCRUN");
+      if (pr && pr[0] == '1') ai->proc_run = 1;
+      else if (pr && pr[0] == '0') ai->proc_run = 0; }
     /* **翻默认（§6.105）**：过程**干跑**默认开 —— 它在"假设世界"里演练（前提不成立就假定成立、
      * 记进假设层、跑完 pop 干净），**没有副作用**，是"会做事"最安全的那一半。想回老行为：
      * `AIP_PROCDRY=0`（显式关）。实跑仍由 `proc_run` 与动作层各自把关。 */

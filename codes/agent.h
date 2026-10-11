@@ -1394,7 +1394,7 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     /* **开关在引擎自己的入口上**（不只在外面的命令里）：关着一律不发车 ——
      * 免得换个调用方（C 层/别的命令）就绕过了"默认关"。 */
     if (!ai || !ai->proc_run) {
-        printf("[过程执行引擎关着（默认）—— ::proc on 打开；关着时这条路一个字都不动]\n");
+        printf("[过程执行引擎关着（AIP_PROCRUN=0 / ::proc off）—— 关着时这条路一个字都不动]\n");
         if (out) *out = pr;
         return 0;
     }

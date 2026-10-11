@@ -355,14 +355,14 @@ echo "== ⑩ 过程执行引擎（第 9 条 ③，默认关）：逐步核对 + 
 # 用户拍板 role 方案后 ①+② 落地（§6.70）；这一节钉 ③：**跑得起来、也停得下来**。
 # ⚠ 反向测量（AIP_PROCRUN=1）时"默认关"这条断言的**方向反过来**（按规矩分叉）：
 # 那时它本来就是开的，要钉的是"env 一开、不用 ::proc on 就能跑"。
-if [ -z "${AIP_PROCRUN:-}" ]; then
+if [ "${AIP_PROCRUN:-1}" = "0" ]; then
     run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::proc run 泡茶\n' o13
-    grep -q '过程执行引擎关着' o13 && ok "引擎**默认关**：run 只回一句「关着」（既有行为一个字不动）" \
+    grep -q '过程执行引擎关着' o13 && ok "显式关（AIP_PROCRUN=0）：run 只回一句「关着」（既有行为一个字不动）" \
         || bad "引擎默认关" "$(grep -m2 'proc\|过程' o13)"
 else
     run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::proc run 泡茶\n' o13
-    grep -q '跑过程' o13 && ok "AIP_PROCRUN=1（反向测量）：env 一开就能跑（无需 ::proc on）" \
-        || bad "反向测量" "$(grep -m2 'proc\|过程' o13)"
+    grep -q '跑过程' o13 && ok "默认（§6.106 起**翻成开**）：不用 ::proc on 就能跑" \
+        || bad "引擎默认开" "$(grep -m2 'proc\|过程' o13)"
 fi
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::proc run 泡茶\n' o14
 grep -q '第 1 步 烧水' o14 && grep -q '词在 + 前提成立' o14 \
