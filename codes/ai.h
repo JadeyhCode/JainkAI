@@ -616,6 +616,12 @@ typedef struct {
     /* **求值层样板**（② 档，默认 0 = 关）：过程条件的数值比较（`[条件:3<5]`）真的算一遍。
      * 关着时条件照旧走"前提三档"（图内判据），行为与今天逐字节相同。 */
     int    eval_num;
+    /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
+     * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
+     * `lexicon.txt`（当前目录，一行一个词，`#` 注释）里的词按整词切。没有这个文件时行为不变。 */
+    char **lex_extra;
+    size_t lex_n;
+    int    lex_loaded;      /* 词表扩展只读一次（懒加载：两条构造路都覆盖） */
     /* 0 = 结构化帧允许用关联链证据放行白名单外的槽位取值（默认）。
      * 故意用「反向命名」：这样 calloc 出来的 AI 骨架就是开启状态 ——
      * 这个项目已经被「calloc 骨架漏设默认值导致训练/加载两条路径分叉」坑过一次。 */
@@ -1185,6 +1191,10 @@ static inline void ai_switches_init(AI *ai) {
       else if (ph && !strcmp(ph, "verified")) ai->prem_hold_activate = 2; }
 }
 
+/* 前向声明：词表扩展定义在后面（分词那一带），`ai_new`/懒加载要用它 */
+static inline void ai_lexicon_load(AI *ai, const char *path);
+static inline void ai_lexicon_ensure(AI *ai);
+
 static inline AI *ai_new(void) {
     AI *ai = (AI *)calloc(1, sizeof *ai);
     if (!ai) return NULL;
@@ -1192,6 +1202,7 @@ static inline AI *ai_new(void) {
     if (!ai->pool) { free(ai); return NULL; }
 
     ai_switches_init(ai);
+    ai_lexicon_load(ai, "lexicon.txt");       /* 有就加词；没有就算了（行为不变） */
     ai->rng = 0x9E3779B9u;
     ai->gc_rng = 0x85EBCA6Bu;
     ai->energy = 1.0f; ai->decay = 0.7f; ai->cutoff = 0.05f;
@@ -1269,6 +1280,9 @@ static inline AI *ai_new(void) {
 
 static inline void ai_free(AI *ai) {
     if (!ai) return;
+    for (size_t i = 0; i < ai->lex_n; ++i) free(ai->lex_extra[i]);
+    free(ai->lex_extra);
+    ai->lex_extra = NULL; ai->lex_n = 0;
     pool_free(ai->pool);
     free(ai->trace);
     free(ai->last_output);
@@ -1371,6 +1385,49 @@ static inline int ai_in_lexicon(const char *w) {
     return 0;
 }
 
+/* 扩展词表（`lexicon.txt`）里有没有这个词 —— 一行一个，`#` 开头是注释 */
+/* 懒加载（⚠ `ai_load_file` **不走 `ai_new()`** —— 它自己铺一遍常量默认值，
+ * 所以装载只写在 `ai_new` 里的话，读盘路径永远读不到词表文件。§6.84 实测踩到）。
+ * `ai_match_word` 拿的是 const 指针，这里去掉 const 只是为了复用同一个入口（与 §6.30 同例）。 */
+static inline void ai_lexicon_ensure(AI *ai) {
+    if (!ai || ai->lex_loaded) return;
+    ai->lex_loaded = 1;
+    ai_lexicon_load(ai, "lexicon.txt");
+}
+
+static inline int ai_lex_extra_has(const AI *ai, const char *w) {
+    if (!ai || !ai->lex_extra || !w) return 0;
+    for (size_t i = 0; i < ai->lex_n; ++i)
+        if (ai->lex_extra[i] && strcmp(ai->lex_extra[i], w) == 0) return 1;
+    return 0;
+}
+
+/* 读 `lexicon.txt`（没有就当空；一行一个词，允许前后空白与 `#` 注释）。
+ * **为什么是文件而不是硬编码**：词表是**数据**（跟 frames.txt / relations.txt 一样）——
+ * 加词不用改代码、不用动存档格式；文件不在时行为与今天逐字节相同。 */
+static inline void ai_lexicon_load(AI *ai, const char *path) {
+    if (!ai || !path) return;
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof line, f)) {
+        char *q = line;
+        while (*q == ' ' || *q == '\t') q++;
+        char *e = q + strlen(q);
+        while (e > q && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+        if (!*q || *q == '#') continue;
+        if (strlen(q) < 4) continue;                  /* 单字/两字节的没意义 */
+        char **nw = (char **)realloc(ai->lex_extra, (ai->lex_n + 1) * sizeof *nw);
+        if (!nw) break;
+        ai->lex_extra = nw;
+        ai->lex_extra[ai->lex_n] = (char *)malloc(strlen(q) + 1);
+        if (!ai->lex_extra[ai->lex_n]) break;
+        memcpy(ai->lex_extra[ai->lex_n], q, strlen(q) + 1);
+        ai->lex_n++;
+    }
+    fclose(f);
+}
+
 /* 一个 UTF-8 字符占几个字节（只认合法起始字节） */
 static inline size_t cjk_char_len(const unsigned char *p) {
     if ((*p & 0xE0) == 0xC0) return 2;
@@ -1387,6 +1444,7 @@ static inline size_t cjk_char_len(const unsigned char *p) {
  * 所以这里做「最长优先」的词汇匹配：先试 4/3/2 字，池里没有就退回单字。 */
 static inline size_t ai_match_word(const AI *ai, const unsigned char *p, size_t remain) {
     if (!ai || !ai->pool) return 0;
+    ai_lexicon_ensure((AI *)ai);          /* 词表扩展：第一次分词时才读（两条构造路都覆盖） */
     size_t best = 0;
     size_t off = 0, maxc = 0;
     while (off < remain && maxc < 8) { off += cjk_char_len(p + off); maxc++; }
@@ -1406,7 +1464,9 @@ static inline size_t ai_match_word(const AI *ai, const unsigned char *p, size_t 
         char buf[32];
         if (l >= sizeof buf) continue;
         memcpy(buf, p, l); buf[l] = 0;
-        if (ai_in_lexicon(buf) || pool_find(ai->pool, buf)) { best = l; break; }
+        if (ai_in_lexicon(buf) || pool_find(ai->pool, buf) || ai_lex_extra_has(ai, buf)) {
+            best = l; break;
+        }
     }
     if (best == 0) best = cjk_char_len(p);      /* 兜底：单字 */
     if (best > remain) best = remain;

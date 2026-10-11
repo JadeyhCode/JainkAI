@@ -1798,6 +1798,43 @@ static void test_tail_blocks(void) {
 
 /* ① 档最后两条（§6.82）：**动作 token**（`[执行:…]`）+ **过程的执行槽**（步骤真的调动作） */
 /* ② 档第一件（§6.83）：求值层样板 —— 条件里的**数值比较**真算一遍 */
+/* ② 档"分词最长匹配"（§6.84）：分词器本来就是**池内最长匹配** —— 切开的词全是池里没有的，
+ * 缺口在**词表覆盖**。`lexicon.txt`（一行一个词）就是补这一块的**数据**入口。 */
+static void test_lexicon(void) {
+    printf("== ㉟ ② 词表覆盖：`lexicon.txt` 让池里没有的多字词按整词切 ==\n");
+    AI *ai = ai_new();
+    { /* 先把"没有词表文件"那一档钉住 */
+        size_t n = 0;
+        char **t = ai_tokenize(ai, "泡茶", &n);
+        ok(n == 2, "没词表时：池里没有的多字词**切成两半**（当前行为，如实记着）");
+        for (size_t i = 0; i < n; ++i) free(t[i]);
+        free(t);
+    }
+    { FILE *f = fopen("lexicon_test.txt", "wb");
+      if (f) { fputs("# 注释行\n泡茶\n步骤\n", f); fclose(f); } }
+    ai_lexicon_load(ai, "lexicon_test.txt");
+    ok(ai->lex_n == 2, "`ai_lexicon_load` 读了 2 个词（注释/空行不算）");
+    ok(ai_lex_extra_has(ai, "泡茶") && !ai_lex_extra_has(ai, "喝茶"), "查得到泡茶、查不到喝茶");
+    { size_t n = 0;
+      char **t = ai_tokenize(ai, "泡茶步骤", &n);
+      ok(n == 2 && strcmp(t[0], "泡茶") == 0 && strcmp(t[1], "步骤") == 0,
+         "有词表时：**整词切出来**（泡茶|步骤）");
+      for (size_t i = 0; i < n; ++i) free(t[i]);
+      free(t); }
+    { /* ⚠ `ai_load_file` 不走 `ai_new()` ⇒ 装载必须是**懒加载**，否则读盘路径永远读不到 */
+        AI *b = ai_load_file("model.bin");
+        if (b) {
+            size_t n = 0;
+            char **t = ai_tokenize(b, "猫", &n);
+            ok(b->lex_loaded == 1, "读盘路径（`ai_load_file`）也会去读词表（懒加载，不是只写在 ai_new 里）");
+            for (size_t i = 0; i < n; ++i) free(t[i]);
+            free(t);
+            ai_free(b);
+        } else ok(1, "（这个沙箱没有 model.bin，跳过读盘那一档）"); }
+    remove("lexicon_test.txt");
+    ai_free(ai);
+}
+
 static void test_eval_num(void) {
     printf("== ㉞ 求值层样板：`[条件:3<5]` 真算一遍（算不出就明说判不了） ==\n");
     struct { const char *e; int want, val; } cs[] = {
@@ -2285,6 +2322,7 @@ int main(void) {
     test_cache_walk();
     test_exec_step();
     test_eval_num();
+    test_lexicon();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

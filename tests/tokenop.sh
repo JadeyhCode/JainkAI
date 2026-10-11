@@ -634,8 +634,19 @@ run '::proc on\n::proc dry off\n::proc eval on\n::op 建过程 比\n::op 加条�
 grep -aq '判不了' o57 && ok "认不出形状（`三<五`）⇒ **判不了**，绝不默认成立" \
     || bad "判不了" "$(grep -m2 '条件' o57)"
 
+echo "== ⑳ ② 词表覆盖：lexicon.txt 让池里没有的多字词按整词切 =="
+rm -f lexicon.txt
+# ⚠ "切开 vs 整词"的**机械判据在 C 级**（optest ㉟：ai_tokenize 数 token）——
+#    这里原想用"学不学得成"当判据，实测**两种切法都学得成**（断言前提是错的），所以只留正向那条。
+printf '泡茶\n' > lexicon.txt
+run '猫 属于 泡茶\n' o59
+grep -aq '记下 了 ： 猫 属于 泡茶' o59 \
+    && ok "有词表时：**整词切** ⇒ 同一句话学得成（数据驱动，不动算法）" \
+    || bad "整词切" "$(grep -m2 "AI >" o59)"
+rm -f lexicon.txt
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍 + 动作执行槽 + 求值层样板，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍 + 动作执行槽 + 求值层样板 + 词表覆盖，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1
