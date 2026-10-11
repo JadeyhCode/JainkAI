@@ -158,7 +158,8 @@ printf '%s\n' "$out" | grep -aq '同类' && chk "上位链蕴含所问 → 标�
     || chk "同类蕴含（实得：$(printf '%s\n' "$out" | grep '甲：' | head -1)）" 0
 printf '%s\n' "$out" | grep -aq '都说认' && chk "并进滑动窗之后判成「都说认」" 1 || chk "同类后的判定" 0
 # 反过来（他说的更泛）不能当依据：他说「猫 属于 生物」，问「猫 属于 动物」
-out=$(run "甲 以为 猫 属于 生物" "::others 猫 属于 动物")
+# `::others refine off`：这两条钉的是**默认语义**（上位只当相关）—— 反向测量下也要关
+out=$(run "::others refine off" "甲 以为 猫 属于 生物" "::others 猫 属于 动物")
 printf '%s\n' "$out" | grep -aq '不蕴含' \
     && chk "上位说法标成「相关但不蕴含」，**不算依据**" 1 \
     || chk "上位说法（实得：$(printf '%s\n' "$out" | grep '甲：' | head -1)）" 0
@@ -221,5 +222,21 @@ printf '%s\n' "$out" | reps | tail -1 | grep -aq '不 对' \
 
 
 echo
+echo "⑩ ② 他者上位降权（默认关）：更宽的说法算半票参考"
+# 「他说的比你问的更宽」（他说 喜欢 动物、你问 喜欢 猫）在默认档只算"相关"；打开后进弱票。
+# ⚠ 开关反向测量（AIP_OTHERWEAK=1）时，"默认关"那一侧按规矩跳过
+if [ -z "${AIP_OTHERWEAK:-}" ]; then
+    out=$(run "甲 以为 狗 喜欢 动物" "::others 狗 喜欢 猫")
+    printf '%s\n' "$out" | grep -aq '上位' && printf '%s\n' "$out" | grep -aq '不算依据（要纳入就 ::others refine on）' \
+        && chk "默认关：上位说法**只当相关**（并告诉你开关在哪）" 1 \
+        || chk "默认关（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+else
+    chk "AIP_OTHERWEAK=1（反向测量）：默认值断言按规矩跳过" 1
+fi
+out=$(run "::others refine on" "甲 以为 狗 喜欢 动物" "::others 狗 喜欢 猫")
+printf '%s\n' "$out" | grep -aq '半票参考' && printf '%s\n' "$out" | grep -aq '合并判定：\*\*都说认\*\*' \
+    && chk "开着：上位说法进**弱票** ⇒ 只有弱票时给倾向（都说认）" 1 \
+    || chk "开着（实得：$(printf '%s\n' "$out" | reps | tail -1)）" 0
+
 [ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 可信度跨重启 + 他者视角多层合并/四态 + 复数主语进回答路径）" \
                   || { echo "FAIL belief"; exit 1; }

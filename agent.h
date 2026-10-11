@@ -665,6 +665,7 @@ typedef struct {
     OtherBeliefObs     obs[AI_MAX_OTHERS * 4];
     size_t             n;
     size_t             n_yes, n_no, n_related;   /* n_related = 相关但不蕴含 */
+    size_t             n_weak_yes, n_weak_no;    /* ② 上位降权：他说的更宽 ⇒ 只当**半票参考** */
     size_t             n_who;                    /* 涉及到几个人 */
     OtherBeliefVerdict verdict;
 } OtherBeliefView;
@@ -716,7 +717,14 @@ static inline void other_belief_view(AI *ai, const Token *a, uint8_t rid, const 
             if (!related) continue;
             OtherBeliefObs *o = &v->obs[v->n++];
             o->who = om->who; o->fact = f; o->entail = entail;
-            if (!entail) { v->n_related++; continue; }
+            if (!entail) {
+                v->n_related++;
+                /* ② **上位降权**（默认关）：他说的比你问的**更宽**（"我 喜欢 动物" 对 "我 喜欢 猫"）——
+                 * 以前只是"相关"，完全不参与判定；开关打开时算**半票**（放在弱票格里，
+                 * 只在**没有强票**时才决定倾向，而且措辞里明说是"参考"）。 */
+                if (ai->other_weak_up) { if (f->neg) v->n_weak_no++; else v->n_weak_yes++; }
+                continue;
+            }
             if (f->neg) v->n_no++; else v->n_yes++;
         }
     }
@@ -731,6 +739,9 @@ static inline void other_belief_view(AI *ai, const Token *a, uint8_t rid, const 
     if (v->n_yes && v->n_no)     v->verdict = OBV_DEFER;
     else if (v->n_yes)           v->verdict = OBV_YES;
     else if (v->n_no)            v->verdict = OBV_NO;
+    else if (ai->other_weak_up && v->n_weak_yes && v->n_weak_no) v->verdict = OBV_DEFER;
+    else if (ai->other_weak_up && v->n_weak_yes) v->verdict = OBV_YES;   /* 只有上位票 ⇒ 倾向"认" */
+    else if (ai->other_weak_up && v->n_weak_no)  v->verdict = OBV_NO;
     else                         v->verdict = OBV_NONE;
 }
 
@@ -743,6 +754,10 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
     printf("[他者视角：%s %s %s —— %zu 个人表过态]\n",
            a && a->name ? a->name : "?", rn ? rn : "?",
            b && b->name ? b->name : "?", v.n_who);
+    if (v.n_related)
+        printf("  （另有 %zu 条是**上位**：他说的比你问的更宽 —— %s）\n", v.n_related,
+               ai->other_weak_up ? "当**半票参考**（只在没有确定表态时才决定倾向）"
+                                 : "只当相关，不参与判定（要纳入就 ::others refine on）");
     for (size_t i = 0; i < v.n; ++i) {
         const OtherBeliefObs *o = &v.obs[i];
         const HypoFact *f = o->fact;
@@ -750,7 +765,10 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
                f->a && f->a->name ? f->a->name : "?",
                f->neg ? "不 " : "", rn ? rn : "?",
                f->b && f->b->name ? f->b->name : "?");
-        if (!o->entail) printf("   ← 相关，但**不蕴含**所问（上位说法），不算依据");
+        if (!o->entail)
+            printf("   ← 相关，但**不蕴含**所问（上位说法）：%s",
+                   ai->other_weak_up ? "当**半票参考**（没有确定表态时才决定倾向）"
+                                     : "不算依据（要纳入就 ::others refine on）");
         else if (f->b != b) printf("   ← **同类**（%s ⊂ %s），算依据",
                                    f->b && f->b->name ? f->b->name : "?",
                                    b && b->name ? b->name : "?");

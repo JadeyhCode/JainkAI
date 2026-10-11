@@ -2060,7 +2060,19 @@ int main(int argc, char **argv) {
                 while (arg && *arg == ' ') arg++;
                 /* `::others <A> <关系> <B>`：**多层合并 + 四态判定**（§6.45）——
                  * 把所有人名下"同类"的说法并进一个窗，冲突交四态（待验 ≠ 否定）。 */
-                if (arg && !strncmp(arg, "ask", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+                if (arg && !strncmp(arg, "refine", 6) && (arg[6] == 0 || arg[6] == ' ')) {
+        /* ② 他者视角精化：上位降权（他说的比你问的更宽 ⇒ 半票参考） */
+        const char *v = arg + 6;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       a->brain->other_weak_up = 1;
+        else if (!strcmp(v, "off")) a->brain->other_weak_up = 0;
+        else if (*v) { printf("[用法] ::others refine on|off\n"); continue; }
+        printf("[他者上位降权 = %s]（%s）\n", a->brain->other_weak_up ? "开" : "关（默认）",
+               a->brain->other_weak_up ? "他说的更宽（他说「喜欢 动物」、你问「喜欢 猫」）⇒ **半票参考**"
+                                       : "只当相关，不参与判定");
+        continue;
+    }
+    if (arg && !strncmp(arg, "ask", 3) && (arg[3] == 0 || arg[3] == ' ')) {
                     /* ③ 他者视角**进回答路径**（默认关）：复数主语（大家/他们/别人）问出来时，
                      * 用四态判定回答。开关单独一个，先 A/B 再谈翻默认。 */
                     const char *v = arg + 3;

@@ -616,6 +616,9 @@ typedef struct {
     /* **求值层样板**（② 档，默认 0 = 关）：过程条件的数值比较（`[条件:3<5]`）真的算一遍。
      * 关着时条件照旧走"前提三档"（图内判据），行为与今天逐字节相同。 */
     int    eval_num;
+    /* **他者上位降权**（② 档，默认 0 = 关）：他说的比你问的**更宽**时，算**半票参考**
+     * （只在没有"确定表态"时才决定倾向）。关着时它只是"相关"、不参与判定（今天的行为）。 */
+    int    other_weak_up;
     /* **词表扩展**（② 档"分词最长匹配"那一件的正解，§6.84）：分词器本来就是"池内最长匹配"，
      * 切开的词**全是池里没有的**。所以缺口在**词表覆盖**，不在算法 ——
      * `lexicon.txt`（当前目录，一行一个词，`#` 注释）里的词按整词切。没有这个文件时行为不变。 */
@@ -1177,6 +1180,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *cw = getenv("AIP_CACHEWALK"); if (cw && cw[0] == '1') ai->cache_walk = 1; }
     ai->eval_num = 0;                /* 求值层（数值比较样板）：默认**关** */
     { const char *en = getenv("AIP_EVALNUM"); if (en && en[0] == '1') ai->eval_num = 1; }
+    ai->other_weak_up = 0;           /* 他者上位降权：默认**关** */
+    { const char *ow = getenv("AIP_OTHERWEAK"); if (ow && ow[0] == '1') ai->other_weak_up = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

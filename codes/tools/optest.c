@@ -1800,6 +1800,39 @@ static void test_tail_blocks(void) {
 /* ② 档第一件（§6.83）：求值层样板 —— 条件里的**数值比较**真算一遍 */
 /* ② 档"分词最长匹配"（§6.84）：分词器本来就是**池内最长匹配** —— 切开的词全是池里没有的，
  * 缺口在**词表覆盖**。`lexicon.txt`（一行一个词）就是补这一块的**数据**入口。 */
+/* ② 档：**他者上位降权**（§6.85）—— 他说的比你问的**更宽**时，默认只当"相关"；
+ * 开关打开 ⇒ 算**半票参考**（只在没有确定表态时才决定倾向）。 */
+static void test_other_weak(void) {
+    printf("== ㊱ ② 他者上位降权：更宽的说法算半票参考（默认只当相关） ==\n");
+    AI *ai = ai_new();
+    Token *dog = T(ai, "上位狗"), *cat = T(ai, "上位猫"), *animal = T(ai, "上位动物");
+    (void)token_tag_rel(cat, animal, REL_IS_A, REL_BOOST);      /* 猫 属于 动物（下位关系） */
+    OtherModel *om = &ai->others[0];
+    ai->others_n = 1;
+    om->who = T(ai, "上位甲");
+    om->n_bel = 1;
+    om->bel[0].a = dog; om->bel[0].rid = REL_LIKE; om->bel[0].b = animal; om->bel[0].neg = 0;
+    OtherBeliefView v;
+    ai->other_weak_up = 0;
+    other_belief_view(ai, dog, REL_LIKE, cat, &v);
+    ok(v.n_related == 1 && v.n_weak_yes == 0 && v.verdict == OBV_NONE,
+       "关着：上位说法只算**相关**（不进判定 ⇒ 没人表过态）");
+    ai->other_weak_up = 1;
+    other_belief_view(ai, dog, REL_LIKE, cat, &v);
+    ok(v.n_related == 1 && v.n_weak_yes == 1, "开着：上位说法进**弱票**格（半票参考）");
+    ok(v.verdict == OBV_YES, "只有弱票时：给**倾向**（都说认），而不是「没人说过」");
+    /* 有确定表态时弱票不参与：另一个人说"狗 不 喜欢 猫" ⇒ 仍然是"不认" */
+    ai->others_n = 2;
+    ai->others[1].who = T(ai, "上位乙");
+    ai->others[1].n_bel = 1;
+    ai->others[1].bel[0].a = dog; ai->others[1].bel[0].rid = REL_LIKE;
+    ai->others[1].bel[0].b = cat; ai->others[1].bel[0].neg = 1;
+    other_belief_view(ai, dog, REL_LIKE, cat, &v);
+    ok(v.verdict == OBV_NO && v.n_weak_yes == 1,
+       "有确定表态（乙说不喜欢）⇒ **强票说了算**，弱票不翻盘");
+    ai_free(ai);
+}
+
 static void test_lexicon(void) {
     printf("== ㉟ ② 词表覆盖：`lexicon.txt` 让池里没有的多字词按整词切 ==\n");
     AI *ai = ai_new();
@@ -2323,6 +2356,7 @@ int main(void) {
     test_exec_step();
     test_eval_num();
     test_lexicon();
+    test_other_weak();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();
