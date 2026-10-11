@@ -571,7 +571,7 @@ if [ -z "${AIP_PROCPLAN:-}" ]; then
 else
     ok "AIP_PROCPLAN=1（反向测量）：默认值断言按规矩跳过"
 fi
-run '::proc plan on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 泡茶叶\n::op 建过程 洗杯子\n::op 加步骤 洗杯子 冲水\n::op 加调用 泡茶 洗杯子\n泡茶 怎么 做\n' o45
+run '::proc plan on\n::proc off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 泡茶叶\n::op 建过程 洗杯子\n::op 加步骤 洗杯子 冲水\n::op 加调用 泡茶 洗杯子\n泡茶 怎么 做\n' o45
 grep -q '我 记过 过程 「 泡茶 」 ： 第 1 步 烧水' o45 && grep -q '第 2 步 泡茶叶' o45 \
     && ok "开着：**计划就是回答**（步骤按号列出来）" || bad "计划回答" "$(grep -m2 'AI >' o45)"
 grep -q '调用 \[过程:洗杯子\]' o45 && ok "调用/条件/异常这些也一并列出来" \
