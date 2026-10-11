@@ -629,6 +629,8 @@ typedef struct {
      * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
      * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
     int    wgate_tier;
+    /* **生成的原语程序要不要真跑**（C③，默认 0 = 只生成 + 校验）：打开才走 `token_run_names_ctx`。 */
+    int    gen_exec;
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
@@ -1240,6 +1242,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
+    ai->gen_exec = 0;                /* 生成的原语程序真跑：默认**关**（只生成 + 校验） */
+    { const char *ge = getenv("AIP_GENEXEC"); if (ge && ge[0] == '1') ai->gen_exec = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */

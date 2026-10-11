@@ -1022,12 +1022,30 @@ static void proc_print_one(const Token *root) {
     }
 }
 
+static void proc_gen(AI *ai, const char *bare);   /* 定义在下面（生成原语程序，C③） */
+
 static void cmd_proc(AI *ai, const char *cmd) {
     if (!ai) return;
     /* 注意：`cmd` 指向的是**去掉 "::" 之后**的命令行（"proc 泡茶"）——
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && !strncmp(arg, "gen", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+        const char *v = arg + 3;
+        while (*v == ' ') v++;
+        if (!strncmp(v, "genexec", 7)) {
+            const char *w = v + 7;
+            while (*w == ' ') w++;
+            if (!strcmp(w, "on"))       ai->gen_exec = 1;
+            else if (!strcmp(w, "off")) ai->gen_exec = 0;
+            else if (*w) { printf("[用法] ::proc genexec on|off\n"); return; }
+            printf("[生成的原语程序真跑 = %s]\n", ai->gen_exec ? "开" : "关（默认：只生成 + 校验）");
+            return;
+        }
+        if (!*v) { printf("[用法] ::proc gen <过程名>｜::proc genexec on|off\n"); return; }
+        proc_gen(ai, v);
+        return;
+    }
     if (arg && !strncmp(arg, "eval", 4) && (arg[4] == 0 || arg[4] == ' ')) {
         /* ② 求值层样板：条件里的数值比较（`[条件:3<5]`）真算一遍 */
         const char *v = arg + 4;
@@ -1231,6 +1249,87 @@ static size_t asm_split(const char *src, char *buf, size_t cap, const char **nam
 /* 语言层直接执行一串原语名（与语料同一路径）。
  * `ai->asm_check_on` 开着时先**干跑校验**（token_check_program）：没过就不执行 ——
  * 这是"语法约束/校验"落到 CLI 的那一步（线 A ④）。默认关 = 与今天逐字节相同。 */
+/* ============ C③ **生成原语程序**（§6.96）：把过程翻译成原语序列 ============
+ *
+ * 这是"会写代码"这一线缺的那一节：以前只会**读外面写好的**程序（`code.h` 明说不生成代码）。
+ * 现在拿一个**过程**（`[过程:X]` 的步骤/条件/否则）当意图，翻译成**原语程序文本**，
+ * 先过 `token_check_program` 干跑校验，再（可选）走受审通道真执行。
+ *
+ * 为什么是原语语言而不是 C：原语层是这个项目**自己能读懂、能校验、能审计**的语言；
+ * 生成 C 需要"意图↔C"的对照语料（属于语料类，用户明确不碰）。
+ *
+ * 形状（都按 `PRIMS[]` 里声明的栈效应来，保证**过校验**）：
+ *   步骤        → `[原语:对象] <动作词>`（动作词是 `[执行:…]` 时再补一个 `[原语:执行]`）
+ *   条件/否则   → `[原语:对象] <条件词> [原语:如果] [原语:对象] <条件动作> [原语:否则] [原语:对象] <否则动作> [原语:结束]`
+ *   回边/循环   → **不翻译**（原语层没有循环操作）—— 照实说，不假装。
+ * 生成的东西**不直接进图**：它是文本，走校验 + （可选）执行，跟 `::asm` 同一条路。 */
+static void proc_gen(AI *ai, const char *bare) {
+    Token *root = proc_root_of(ai, bare);
+    if (!root) { printf("[生成] 没有这个过程：%s\n", bare); return; }
+    /* 步骤：按步号排（小数组，选择排序足够） */
+    const Token *step_tok[32];
+    int step_idx[32];
+    size_t ns = 0;
+    for (size_t i = 0; i < root->count && ns < 32; ++i) {
+        int k = edge_step_index(&root->assocs[i]);
+        if (k > 0 && root->assocs[i].main) { step_tok[ns] = root->assocs[i].main; step_idx[ns] = k; ns++; }
+    }
+    for (size_t i = 0; i + 1 < ns; ++i)
+        for (size_t j = i + 1; j < ns; ++j)
+            if (step_idx[j] < step_idx[i]) {
+                const Token *tt = step_tok[i]; step_tok[i] = step_tok[j]; step_tok[j] = tt;
+                int kk = step_idx[i]; step_idx[i] = step_idx[j]; step_idx[j] = kk;
+            }
+    char prog[2048];
+    size_t off = 0;
+    #define PG_ADD(str_) do { const char *q_ = (str_); \
+        while (*q_ && off + 1 < sizeof prog) prog[off++] = *q_++; } while (0)
+    for (size_t i = 0; i < ns; ++i) {
+        PG_ADD("[原语:对象] "); PG_ADD(step_tok[i]->name ? step_tok[i]->name : "?"); PG_ADD(" ");
+        if (step_tok[i]->name && strncmp(step_tok[i]->name, MICRO_EXEC_TOKEN_PREFIX,
+                                         strlen(MICRO_EXEC_TOKEN_PREFIX)) == 0)
+            PG_ADD("[原语:执行] ");
+    }
+    for (size_t i = 0; i < root->count; ++i) {
+        const AssocEntry *e = &root->assocs[i];
+        if (!edge_is_cond(e)) continue;
+        char cb[64];
+        (void)proc_mark_bare(e->action ? e->action->name : NULL, PROC_COND_PREFIX, cb, sizeof cb);
+        PG_ADD("[原语:对象] "); PG_ADD(cb); PG_ADD(" [原语:如果] [原语:对象] ");
+        PG_ADD(e->main && e->main->name ? e->main->name : "?");
+        PG_ADD(" ");
+        for (size_t k = 0; k < root->count; ++k)        /* 否则支（只取第一条） */
+            if (edge_is_else(&root->assocs[k])) {
+                PG_ADD("[原语:否则] [原语:对象] ");
+                PG_ADD(root->assocs[k].main && root->assocs[k].main->name
+                       ? root->assocs[k].main->name : "?");
+                PG_ADD(" ");
+                break;
+            }
+        PG_ADD("[原语:结束] ");
+    }
+    prog[off] = 0;
+    #undef PG_ADD
+    printf("[生成] 过程「%s」⇒ 原语程序（%zu 字节）：\n  %s\n", bare, off, prog);
+    /* 拆词 → 干跑校验（和 `::asm` 同一条判据）→（可选）受审执行 */
+    {
+        char sbuf[2048];
+        const char *names[256];
+        size_t n = asm_split(prog, sbuf, sizeof sbuf, names, 256);
+        TokenCheck ck;
+        token_check_program(names, n, &ck);
+        printf("[生成] 干跑校验：%s（%d 条问题 / %zu 个词）\n",
+               ck.n_err ? "**没过**" : "通过", ck.n_err, n);
+        if (ck.n_err) { token_check_print(&ck); return; }
+        if (ai->gen_exec) {
+            token_run_names_ctx(ai->pool, names, n, interp_op_host, ai);
+            printf("[生成] 已走受审通道执行（%zu 个词）\n", n);
+        } else {
+            printf("[生成] 校验通过；要真跑：`::proc genexec on`\n");
+        }
+    }
+}
+
 static void cmd_asm(AI *ai, const char *src) {
     if (!src || !*src) { printf("[用法] ::asm <原语序列>｜::asm check on|off\n"); return; }
     char buf[4096];
