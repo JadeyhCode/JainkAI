@@ -7,6 +7,8 @@ _t/
 _backup/
 # CMake/CLion 构建目录（里面有 CMakeCache.txt，带**本机绝对路径** —— 不许进公开仓库）
 cmake-build*/
+# 交接文档（内部笔记：会话纪律/待办/内部数字）—— 本地保留，不进版本库（用户 2026-10-11 要求）
+deepseek看这里.txt
 # 编辑器/系统杂物
 .idea/
 *.swp
