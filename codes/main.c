@@ -548,7 +548,8 @@ typedef enum {
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
     CMD_ACT,                /* 受审的外部执行 + 写文件（默认关） */
     CMD_CODE,               /* 写-跑-看错-改 的机械闭环（降级版） */
-    CMD_ORDER,              /* 时间顺序：谁先出现 */
+    CMD_ORDER,
+    CMD_FEAT,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
     CMD_TOKENS,
@@ -660,6 +661,9 @@ static const CmdDef CMDS[] = {
       "受审的外部执行 + 写文件（默认关）：::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>", CMD_ACT },
     { "code", NULL, 1, "基本",
       "写-跑-看错-改 的机械闭环（降级版）：::code try <相对路径>｜::code 看痕。修法只有两类，最多改一次", CMD_CODE },
+    { "feat", "<特征词> [特征词…]", 2, "基本",
+      "**特征集合 → 概念**：把每个特征词的**入边来源**当一票，看哪个词被命中最多次\n"
+      "  （只读；答的是「像什么」=联想，不是「是什么」=判定）", CMD_FEAT },
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**。先读**图里写着的顺序结构**（`next_in_time` 链 /\n"
       "`[关系:之后]` 标记边 —— `[原语:时间链]` 建的那套），图里没说才退回 tick 比较；\n"
@@ -2838,6 +2842,65 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 code_print();
+                continue;
+            }
+            case CMD_FEAT: {
+                /* **特征集合 → 概念**（§6.91）：把每个特征词的**入边来源**当一票，
+                 * 看哪个词被命中最多次。**只读**（不写图、不改知识），措辞明说是"联想"不是"判定"。
+                 * ⚠ 参数下标：`cmd` 不含 `::` ⇒ "feat 毛" 里 cmd[4]=' '、cmd+5 是参数
+                 *   （第一版写成 cmd[5]/cmd+6，于是永远拿不到参数、只会打用法 —— 实测踩到）。 */
+                const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (!arg || !*arg) { printf("[用法] ::feat <特征词> [特征词…]（如 ::feat 红 透亮 上下凹）\n"); continue; }
+                char tmp[256];
+                snprintf(tmp, sizeof tmp, "%s", arg);
+                char *fw[8]; size_t nf = 0;
+                for (char *q = tmp; *q && nf < 8; ) {
+                    while (*q == ' ' || *q == '\t') q++;
+                    if (!*q) break;
+                    fw[nf++] = q;
+                    while (*q && *q != ' ' && *q != '\t') q++;
+                    if (*q) *q++ = 0;
+                }
+                AI *b = a->brain;
+                const Token *cand[64]; size_t hit[64], nc = 0;
+                size_t found = 0;
+                for (size_t i = 0; i < nf; ++i) {
+                    Token *f = pool_find(b->pool, fw[i]);
+                    printf("  [%s] %s\n", fw[i], f ? "在图上" : "不在图上");
+                    if (!f) continue;
+                    found++;
+                    for (size_t t = 0; t < b->pool->count; ++t) {
+                        Token *T2 = b->pool->tokens[t];
+                        if (!T2 || T2->is_garbage || T2 == f || !T2->name || T2->name[0] == '[') continue;
+                        /* 只投**关系边**（`rel`/`nrel` 有位的那些），不算共现边 ——
+                         * 第一版把共现存边也投了，于是「都/有」这种虚词排第一（实测：
+                         * `::feat 毛` 答"动物/有/都"，而不是"猫"）⇒ 收窄之后才对。 */
+                        int points = 0;
+                        for (size_t e = 0; e < T2->count; ++e) {
+                            const AssocEntry *ed = &T2->assocs[e];
+                            if (ed->main != f) continue;
+                            if (!ed->rel && !ed->nrel && !ed->dyn) continue;
+                            points = 1; break;
+                        }
+                        if (!points) continue;
+                        size_t k = 0;
+                        for (; k < nc; ++k) if (cand[k] == T2) break;
+                        if (k == nc) { if (nc >= 64) continue; cand[nc] = T2; hit[nc] = 1; nc++; }
+                        else hit[k]++;
+                    }
+                }
+                if (!found) { printf("  （没有一个特征词在图上 ⇒ 联想不起来）\n"); continue; }
+                /* 按命中数排前 4（小数组，直接选） */
+                printf("[像是什么]（命中特征数 / 共 %zu 个特征词）：\n", found);
+                for (int rank = 0; rank < 4 && nc > 0; ++rank) {
+                    size_t best = 0;
+                    for (size_t k = 1; k < nc; ++k) if (hit[k] > hit[best]) best = k;
+                    if (hit[best] == 0) break;
+                    printf("  %s   命中 %zu/%zu\n", cand[best]->name ? cand[best]->name : "?", hit[best], found);
+                    hit[best] = 0;
+                }
+                printf("  （这是**联想**：按「谁指向这些特征」投票；不是判定，命中少就是不像）\n");
                 continue;
             }
             case CMD_ORDER: {
