@@ -292,6 +292,11 @@ typedef struct {
     /* **换法扩展**（§6.101，默认 0）：退第二次时不只"问反面"，还试**同类互推**
      * （`甲熊/乙熊 属于 熊类` + `乙熊 会 冬眠` ⇒ 甲熊**大概**会冬眠）—— 这是规则层不做的那一类。 */
     int       redo_alt;
+    /* **多层快照栈**（§6.102，默认 0）：现在只有 `snap_n` 一个快照 ⇒ 退来退去都退回**同一个**
+     * 分支起点。开着时把"这一支的起点"存进小栈，第二次回退**退到更外一层**（真正的多层回退）。 */
+    int       redo_stack;
+    size_t    redo_snap[THINK_REDO_MAX];
+    int       redo_sp;
     size_t    n_backtrack;              /* 这一轮退了几次（每轮清零） */
     size_t    n_backtrack_total;        /* 累计退了几次（给人看） */
 
@@ -407,6 +412,8 @@ static inline Think *think_of(AI *ai) {
         { const char *rd = getenv("AIP_THINKREDO"); if (rd && rd[0] == '1') t->redo_on = 1; }
         t->redo_alt = 0;
         { const char *ra = getenv("AIP_REDOALT"); if (ra && ra[0] == '1') t->redo_alt = 1; }
+        t->redo_stack = 0; t->redo_sp = 0;
+        { const char *rsx = getenv("AIP_REDOSTACK"); if (rsx && rsx[0] == '1') t->redo_stack = 1; }
         { const char *tb = getenv("AIP_TRUST"); if (tb && tb[0] == '1') t->trust_on = 1; }
         {
             const char *ab = getenv("AIP_NOTEPAD");
@@ -1690,6 +1697,23 @@ static inline int think_redo_after_premise(AI *ai, Think *t, const ThinkGoal *g,
             t->n_backtrack_total++;
             return 1;
         }
+    }
+    /* **多层快照栈**（默认关）：第一次退把"这一支的起点"存起来；第二次退**退到更外一层**
+     * （不再退回同一个起点）—— 这就是"多层回退"的最小形态。 */
+    if (t->redo_stack) {
+        if (t->redo_sp > 0) {
+            int outer = --t->redo_sp;
+            t->ag_n = t->redo_snap[outer];
+            char why3[THINK_WHY];
+            snprintf(why3, sizeof why3,
+                     "这一支（含它的反面）都走不通 —— **退到更外一层**（多层回退，栈里还剩 %d 层）",
+                     t->redo_sp);
+            think_step(t, TH_REFLECT, 1, 45, "回退：退到更外一层", why3);
+            t->n_backtrack++;
+            t->n_backtrack_total++;
+            return 1;
+        }
+        if (t->redo_sp < (int)THINK_REDO_MAX) t->redo_snap[t->redo_sp++] = snap_n;
     }
     t->ag_n = snap_n;                                  /* ① 退回分支起点 */
     int pushed = think_goal_push(t, TG_REL, g->a, g->b, g->rid,

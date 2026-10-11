@@ -1840,6 +1840,47 @@ static void test_redo_alt(void) {
     ai_free(ai);
 }
 
+/* ③ 多层快照栈（§6.102）：第二次回退要**退到更外一层**，不是退回同一个起点 */
+static void test_redo_stack(void) {
+    printf("== ㊹ ③ 多层快照栈：退到更外一层（默认关） ==\n");
+    AI *ai = ai_new();
+    Token *p = T(ai, "类3"), *a = T(ai, "熊甲3"), *b = T(ai, "熊乙3"), *o = T(ai, "冬眠3");
+    (void)token_tag_rel(a, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, o, REL_CAN, REL_BOOST);
+    Think *t = think_of(ai);
+    ThinkGoal g;
+    memset(&g, 0, sizeof g);
+    g.a = a; g.b = o; g.rid = REL_CAN;
+    /* 关着：两次都退回**同一个**起点（今天的行为）。
+     * ⚠ 每一对调用前都要把 `n_backtrack` 清零：`THINK_REDO_MAX = 2` ⇒ 累计到 2 次以后
+     *   函数会**直接返回 0**（预算挡住），断言就会假红（实测踩到）。 */
+    t->redo_on = 1; t->redo_stack = 0; t->redo_alt = 0; t->n_backtrack = 0; t->ag_n = 0;
+    /* ⚠ 退回起点之后还会**把反问题压回议程**（`ag_n` 因此 +1）—— 断言按真实语义写：
+     * snap_n=5 的第一次退 ⇒ ag_n == 6（5 + 那一条反问题）。 */
+    (void)think_redo_after_premise(ai, t, &g, 0, 5);
+    t->n_backtrack = 0;                      /* 预算清零（见上） */
+    (void)think_redo_after_premise(ai, t, &g, 0, 3);
+    /* ⚠ 不去断言 `ag_n` 的**具体数字**：退回起点之后还会"把反问题压回议程"，
+     * 而反问题可能因**去重**压不进去（实测过一次算 6、一次算 5）—— 那种断言是脆的。
+     * 这里只断言**栈的机制**（这轮实现的东西）：关着时栈永远是空、痕里也不该有"更外一层"。 */
+    { int found = 0;
+      for (size_t i = 0; i < t->trace_n; ++i)
+          if (strstr(t->trace[i].what, "更外一层") || strstr(t->trace[i].why, "更外一层")) found = 1;
+      ok(t->redo_sp == 0 && !found, "关着：不进栈、也不退到更外一层（今天的行为）"); }
+    /* 开着：第二次退到更外一层 */
+    t->redo_stack = 1; t->redo_sp = 0; t->n_backtrack = 0; t->redo_alt = 0;
+    (void)think_redo_after_premise(ai, t, &g, 0, 5);
+    ok(t->redo_sp == 1 && t->redo_snap[0] == 5, "开着：第一次退把起点 5 存进栈（栈深 1）");
+    (void)think_redo_after_premise(ai, t, &g, 0, 3);
+    ok(t->ag_n == 5 && t->redo_sp == 0, "开着：第二次**退到更外一层**（回到 5，而且不再压反问题）");
+    { int found = 0;
+      for (size_t i = 0; i < t->trace_n; ++i)
+          if (strstr(t->trace[i].what, "更外一层") || strstr(t->trace[i].why, "更外一层")) found = 1;
+      ok(found, "痕上写清「退到更外一层」（多层回退有据可查）"); }
+    ai_free(ai);
+}
+
 static void test_n1_decide(void) {
     printf("== ㊷ N1 参与决策：想通的结论能顶上来（默认关） ==\n");
     AI *ai = ai_new();
@@ -2557,6 +2598,7 @@ int main(void) {
     test_analogy_fallback();
     test_code_fixes();
     test_n1_decide();
+    test_redo_stack();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();
