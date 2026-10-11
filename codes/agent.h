@@ -768,6 +768,245 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
     return v.verdict;
 }
 
+/* ============================ 过程执行（第 9 条 ③ 写引擎，默认关） ============================
+ *
+ * ①+② 让过程**记得下**（role 标记 + `[步骤:N]`/`[调用]`/`[回边]`，§6.70）；这一节做 §6.56 第 3 条：
+ * 让 `[过程:名字]` **真的跑一遍**。原话是"**执行轨迹复用 `Derivation`，一步一步可复核，
+ * 断点用 `DerGap`**" —— v1 照这个来，但把话说清楚：v1 的**步骤是扁平的动作词**（没有对象/条件），
+ * 所以"拿 `der_verify` 独立重推每一步"那条留给 ⑤（那时步骤才是可复核的关系目标）；
+ * v1 的每一步写明**用了哪条现成判据**，断点写明**缺什么**。
+ *
+ * 三条判据（**都是现成的**，没有新语义）：
+ *   ① **认识吗**：动作词在图上有没有连结（孤立词做不了）；
+ *   ② **前提成立吗**：过程根与这一步之间的**前提 token**（`token_premises`）用
+ *      `ai_premise_cond_ok` 判（就是"提到过 / 够得着 / 有据"那三档）—— 不成立 ⇒ 断点；
+ *   ③ **是 Token 行为吗**：是就走 `token_op_run`（**受审通道**）真执行；要参数的 v1 只记一条断点
+ *      （**不猜参数** —— 猜出来的执行比不执行更坏）。
+ * 控制流：`[调用]` → 递归跑子过程（深度 ≤ 3）；`[回边]` → 跳回第 N 步（每步迭代 ≤ 2，防死循环）。
+ * **只读 + 受审**：核对不动图；真执行某一步行为时走的是老那条通道（有审查、有预算、有账）。
+ * 慢是设计（§6.56 原话"明说会慢"）：每步都要查图 + 判前提 + 可能跑一次行为。 */
+#define PROC_RUN_DEPTH_MAX 3
+#define PROC_RUN_LOOP_MAX  2
+#define PROC_RUN_STEP_MAX  64
+
+typedef struct {
+    size_t n_step;      /* 记了几步（含调用展开） */
+    size_t n_ok;        /* 放行的步数 */
+    size_t n_gap;       /* 断点数 */
+    size_t n_ran;       /* 真执行过的 Token 行为数 */
+    size_t n_call;      /* 进过几次子过程 */
+    Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
+} ProcRun;
+
+static inline Token *proc_root_of(AI *ai, const char *bare) {
+    if (!ai || !bare || !bare[0]) return NULL;
+    char full[96];
+    int n = snprintf(full, sizeof full, "%s%s]", PROC_TOKEN_PREFIX, bare);
+    if (n <= 0 || (size_t)n >= sizeof full) return NULL;
+    return pool_find(ai->pool, full);
+}
+
+static int proc_step_ptr_cmp(const void *x, const void *y) {
+    const AssocEntry *a = *(const AssocEntry *const *)x;
+    const AssocEntry *b = *(const AssocEntry *const *)y;
+    return edge_step_index(a) - edge_step_index(b);
+}
+
+/* 跑**一步**（判据只写这一处：主循环与回边重跑都调它 —— 两处各写一套的话会当场不一致，
+ * 实测踩过：主循环放行的步，回边重跑时按老判据判成断点）。返回 0 = 断点 / 1 = 过。 */
+static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int idx,
+                                ProcRun *pr, const char *tag) {
+    const Token *act = se ? se->main : NULL;
+    if (!act || act->is_garbage) {
+        printf("    %s第 %-2d 步 （动作词没了）\n", tag, idx);
+        der_gap(&pr->trace, "动作词没了");
+        pr->n_gap++;
+        return 0;
+    }
+    /* ② 前提成立吗（根与这一步之间的前提 token；三档判据都是现成的） */
+    {
+        const Token *ps[8];
+        int pol[8];
+        size_t np = token_premises(root, act, ps, pol, 8);
+        for (size_t k = 0; k < np; ++k) {
+            if (ai_premise_cond_ok(ai, ps[k], pol[k])) continue;
+            printf("    %s第 %-2d 步 %-12s ✗ 断点：前提「%s」没成立（%s）\n", tag, idx,
+                   act->name ? act->name : "?", ps[k]->name ? ps[k]->name : "?",
+                   pol[k] < 0 ? "要求它不在注意窗口里，可它在" : "提到过没有，这次没有");
+            der_gap(&pr->trace, "前提没成立");
+            pr->n_gap++;
+            return 0;
+        }
+    }
+    /* ③ 是 Token 行为吗 → 真的走受审通道执行；要参数的 v1 不猜 */
+    {
+        const TokenOp *op = token_op_by_name(act->name);
+        if (op) {
+            if (op->min_args > 0) {
+                printf("    %s第 %-2d 步 %-12s ⚠ 断点：这是行为「%s」，要参数（v1 不支持，不猜）\n",
+                       tag, idx, act->name, op->name);
+                der_gap(&pr->trace, "行为要参数（v1 不支持）");
+                pr->n_gap++;
+                return 0;
+            }
+            char note2[192];
+            int got = token_op_run(ai, op->name, NULL, 0, note2, sizeof note2);
+            if (got >= 0) {
+                printf("    %s第 %-2d 步 %-12s ✓ 执行了行为「%s」（受审通道）：%s\n",
+                       tag, idx, act->name, op->name, note2);
+                DerStep *ds = der_add(&pr->trace, DER_FACT);
+                if (ds) { ds->subj = (Token *)act; ds->truth = +1;
+                          cot_copy(ds->note, sizeof ds->note, "执行了行为"); }
+                pr->n_ok++; pr->n_ran++;
+                return 1;
+            }
+            printf("    %s第 %-2d 步 %-12s ✗ 断点：行为「%s」没跑成：%s\n",
+                   tag, idx, act->name, op->name, note2);
+            der_gap(&pr->trace, "行为没跑成");
+            pr->n_gap++;
+            return 0;
+        }
+    }
+    /* 普通动作词：v1 **只核"词在 + 前提成立"**，做不做得了**不判**（照实说） */
+    {
+        size_t hits = 0;
+        for (size_t k = 0; k < act->count; ++k)
+            if (act->assocs[k].hits > 0) hits++;
+        printf("    %s第 %-2d 步 %-12s ✓ 过（词在 + 前提成立；它自己有 %zu 条连边、%zu 条有命中"
+               " —— **做不做得了 v1 不判**）\n",
+               tag, idx, act->name ? act->name : "?", act->count, hits);
+        DerStep *ds = der_add(&pr->trace, DER_FACT);
+        if (ds) { ds->subj = (Token *)act; ds->truth = +1;
+                  cot_copy(ds->note, sizeof ds->note, "词在 + 前提成立"); }
+        pr->n_ok++;
+        return 1;
+    }
+}
+
+/* 跑一条过程（递归跑子过程）。返回"断点数"（0 = 每一步都过）。 */
+static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr) {
+    if (!ai || !pr) return 0;
+    if (depth > PROC_RUN_DEPTH_MAX) {
+        printf("    （调用太深，停在第 %d 层）\n", depth);
+        return 0;
+    }
+    Token *root = proc_root_of(ai, bare);
+    if (!root) { printf("  [找不到过程：%s]\n", bare ? bare : "?"); return 0; }
+    const AssocEntry *steps[PROC_SHOW_MAX], *calls[PROC_SHOW_MAX], *backs[PROC_SHOW_MAX];
+    size_t ns = 0, nc = 0, nb = 0;
+    for (size_t i = 0; i < root->count; ++i) {
+        const AssocEntry *e = &root->assocs[i];
+        if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
+        else if (edge_is_call(e))        { if (nc < PROC_SHOW_MAX) calls[nc++] = e; }
+        else if (edge_is_back(e))        { if (nb < PROC_SHOW_MAX) backs[nb++] = e; }
+    }
+    if (ns > 1) qsort(steps, ns, sizeof steps[0], proc_step_ptr_cmp);
+    printf("  [跑过程] %s（%zu 步 + %zu 调用 + %zu 回边）\n",
+           root->name ? root->name : "?", ns, nc, nb);
+    size_t gaps_before = pr->n_gap;
+    /* ---- 按步号逐步跑 ---- */
+    for (size_t i = 0; i < ns; ++i) {
+        if (pr->n_step >= PROC_RUN_STEP_MAX) {
+            printf("    第 %d 步 …（到一次跑的步数上限 %d，停）\n",
+                   edge_step_index(steps[i]), PROC_RUN_STEP_MAX);
+            der_gap(&pr->trace, "到步数上限");
+            pr->n_gap++;
+            break;
+        }
+        pr->n_step++;
+        (void)proc_step_run(ai, root, steps[i], edge_step_index(steps[i]), pr, "");
+    }
+    /* ---- 调用：递归跑子过程 ---- */
+    for (size_t i = 0; i < nc; ++i) {
+        const Token *tgt = calls[i]->main;
+        if (!tgt || !tgt->name) continue;
+        pr->n_call++;
+        printf("    调用 %s：\n", tgt->name);
+        /* 目标可能是 `[过程:名字]`（子过程），也可能是普通动作词 */
+        if (strncmp(tgt->name, PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) == 0) {
+            const char *bare = tgt->name + strlen(PROC_TOKEN_PREFIX);
+            char sub[80];
+            size_t k = 0;
+            for (const char *q = bare; *q && *q != ']' && k + 1 < sizeof sub; ++q) sub[k++] = *q;
+            sub[k] = 0;
+            (void)proc_exec(ai, sub, depth + 1, pr);
+        } else {
+            printf("      （这一条指向普通词 %s —— v1 只跑 `[过程:…]` 子过程）\n", tgt->name);
+            der_gap(&pr->trace, "调用目标不是过程");
+            pr->n_gap++;
+        }
+    }
+    /* ---- 回边：跳回第 N 步，迭代有上限（防死循环） ---- */
+    for (size_t i = 0; i < nb; ++i) {
+        const Token *tgt = backs[i]->main;
+        int back_to = 0;
+        if (tgt && tgt->name) {
+            if (strncmp(tgt->name, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) == 0)
+                back_to = (int)strtol(tgt->name + strlen(PROC_STEP_PREFIX), NULL, 10);
+        }
+        if (back_to <= 0) {
+            printf("    回边 → %s：（不是 `[步骤:N]` 端点 ⇒ 回不到某一步，v1 只记一条）\n",
+                   tgt && tgt->name ? tgt->name : "?");
+            der_gap(&pr->trace, "回边端点不是步号");
+            pr->n_gap++;
+            continue;
+        }
+        /* 找到那一步，**再跑一遍**（按上限）；跑过几遍记在次数里 */
+        int done = 0;
+        for (size_t k = 0; k < ns; ++k)
+            if (edge_step_index(steps[k]) == back_to) { done = 1; break; }
+        if (!done) {
+            printf("    回边 → 第 %d 步：（没有这一步）\n", back_to);
+            der_gap(&pr->trace, "回边指向不存在的步");
+            pr->n_gap++;
+            continue;
+        }
+        printf("    回边 → 第 %d 步（按上限 %d 次重跑）\n", back_to, PROC_RUN_LOOP_MAX);
+        for (int round = 0; round < PROC_RUN_LOOP_MAX; ++round) {
+            if (pr->n_step >= PROC_RUN_STEP_MAX) break;
+            const AssocEntry *se = NULL;
+            for (size_t k = 0; k < ns; ++k)
+                if (edge_step_index(steps[k]) == back_to) { se = steps[k]; break; }
+            pr->n_step++;
+            /* **同一处判据**（`proc_step_run`）：重跑不过就停（别把同一件事判两遍） */
+            if (!proc_step_run(ai, root, se, back_to, pr, "（重跑）")) break;
+        }
+    }
+    return pr->n_gap - gaps_before;
+}
+
+/* 跑一条过程并打总结 + 轨迹（`::proc run <名字>` 用；返回断点数）。 */
+static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
+    ProcRun pr;
+    memset(&pr, 0, sizeof pr);
+    der_reset(&pr.trace);
+    /* **开关在引擎自己的入口上**（不只在外面的命令里）：关着一律不发车 ——
+     * 免得换个调用方（C 层/别的命令）就绕过了"默认关"。 */
+    if (!ai || !ai->proc_run) {
+        printf("[过程执行引擎关着（默认）—— ::proc on 打开；关着时这条路一个字都不动]\n");
+        if (out) *out = pr;
+        return 0;
+    }
+    Token *root = proc_root_of(ai, bare);
+    if (!root) { printf("[没有这个过程：%s]\n", bare ? bare : "?"); if (out) *out = pr; return 0; }
+    der_goal(&pr.trace, root, 0, NULL);
+    (void)proc_exec(ai, bare, 0, &pr);
+    /* 轨迹自己也要"知道"有几个断点（`der_gap` 只加一步、不动计数 —— 那是 `der_verify`
+     * 的活儿；这里把数补上，免得读轨迹的人以为"gaps=0 就是全过"） */
+    pr.trace.gaps = pr.n_gap;
+    der_conclude(&pr.trace, pr.n_gap ? 0 : +1, pr.n_gap ? 20 : 70);
+    printf("  汇总：%zu 步（含调用展开）—— %zu 步过 / **%zu 个断点** / 真执行 %zu 个行为 / 进 %zu 次子过程\n",
+           pr.n_step, pr.n_ok, pr.n_gap, pr.n_ran, pr.n_call);
+    printf("  轨迹（复用 Derivation）：goal + %zu 步 + conclude —— %s\n",
+           pr.trace.n > 0 ? pr.trace.n - 1 : 0,
+           pr.n_gap ? "有断点 ⇒ **不许说跑通了**（断点在哪就停在哪）"
+                    : "没有断点 ⇒ 每一步**现在都过得去**（v1 的判据只有：词在 + 前提成立 + "
+                      "行为跑得成 —— **不等于「做完了」**）");
+    printf("  只读 + 受审：核对没动图；真执行的那几步走的是老那条通道（有审查/预算/账）\n");
+    if (out) *out = pr;
+    return pr.n_gap;
+}
+
 /* ============================ ③ 他者视角进回答路径（默认关） ============================
  *
  * 用户 2026-10-07 那条尾巴：「他者视角」的四态判定（§6.45：都说认 / 都说不认 /

@@ -675,7 +675,11 @@ static const CmdDef CMDS[] = {
     { "proc", "[<名字>]", CARG_OPT, "思维",
       "看**过程记号**：一个「过程」= 根 `[过程:名字]` + 从它出去的过程边（role=过程），\n"
       "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
-      "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来", CMD_PROC },
+      "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来\n"
+      "::proc on|off       过程**执行引擎**（第 9 条 ③；默认关，AIP_PROCRUN=1）\n"
+      "::proc run <名字>   把一条过程跑一遍：逐步核对（认识吗 / 前提成立吗 / 是不是行为）——\n"
+      "  核对只读；哪一步是 Token 行为就走**受审通道**真执行；断点用 `DerGap` 记下来\n"
+      "  控制流：`[调用]` 递归跑子过程（深度≤3）、`[回边]` 跳回第 N 步（迭代≤2）", CMD_PROC },
     { "prims", NULL, 0, "基本",
       "列出所有原语 + 各自的**栈效应**（要/拿/放 + 名字与真实行为不一致的地方）——\n"
       "干跑校验器（::asm check）判的就是这张表", CMD_PRIMS },
@@ -907,7 +911,6 @@ static void cmd_edges(const AI *ai, const char *word) {
  * 过程 = 根 Token `[过程:名字]` + 从它出去的**过程边**（role=过程，动作槽上挂着
  * `[步骤:N]` / `[调用]` / `[回边]`）。这个命令把两者一起打出来，并且**明确分开**：
  * 哪些边是过程的一部分、哪些只是普通共现 —— 这正是用户拍板要 role 标记解决的那个问题。 */
-#define PROC_SHOW_MAX 256
 static int proc_step_cmp(const void *x, const void *y) {
     const AssocEntry *a = *(const AssocEntry *const *)x;
     const AssocEntry *b = *(const AssocEntry *const *)y;
@@ -958,6 +961,28 @@ static void cmd_proc(AI *ai, const char *cmd) {
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && (!strncmp(arg, "on", 2) || !strncmp(arg, "off", 3)) &&
+        (arg[2] == 0 || arg[2] == ' ' || arg[3] == 0 || arg[3] == ' ')) {
+        /* 过程**执行引擎**（第 9 条 ③，默认关）：只开关这一件事，别的行为一个字不变 */
+        if (arg[0] == 'o' && arg[1] == 'n')  ai->proc_run = 1;
+        else                                 ai->proc_run = 0;
+        printf("[过程执行引擎 = %s]（%s）\n", ai->proc_run ? "开" : "关（默认）",
+               ai->proc_run ? "`::proc run <名字>` 会真的跑一遍：逐步核对 + 受审执行"
+                            : "`::proc run` 只回一句「关着」，既有行为逐字节不变");
+        printf("  三条判据都是现成的：① 动作词在图上有没有连结 ② 根与这一步之间的前提成立吗\n"
+               "  ③ 是 Token 行为吗（是就走受审通道真执行；要参数的 v1 不猜，只记断点）\n");
+        return;
+    }
+    if (arg && !strncmp(arg, "run", 3) && (arg[3] == 0 || arg[3] == ' ')) {
+        const char *w = arg + 3;
+        while (*w == ' ') w++;
+        if (!*w) { printf("[用法] ::proc run <名字>（先 `::proc on` 打开执行引擎）\n"); return; }
+        /* 开关判在引擎入口里（一处），这里只管转过去 */
+        char nm[64] = {0};
+        if (sscanf(w, "%63s", nm) != 1) return;
+        (void)proc_run(ai, nm, NULL);
+        return;
+    }
     if (arg && *arg) {
         char w[64] = {0};
         if (sscanf(arg, "%63s", w) != 1) return;

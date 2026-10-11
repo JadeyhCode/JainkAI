@@ -1352,6 +1352,91 @@ static void test_process_marks(void) {
     ai_free(ai);
 }
 
+/* ==================== ㉔ 过程执行引擎（第 9 条 ③，默认关） ====================
+ *
+ * ①+② 让过程记得下（§6.70），③ 让它**跑得起来也停得下来**：逐步核对（词在 / 前提成立 /
+ * 是不是 Token 行为），核对只读、真执行走受审通道、断点用 `DerGap`。这一节钉：
+ * 默认关、断点判据（前提不成立 / 要参数）、真执行计数、以及**过程边不许被拆**（结构）。 */
+static void test_proc_run(void) {
+    printf("== ㉔ 过程执行引擎：跑得起来、也停得下来（默认关） ==\n");
+    AI *ai = ai_new();
+    ok(ai->proc_run == 0 || getenv("AIP_PROCRUN") != NULL,
+       "引擎默认**关**（反向测量 AIP_PROCRUN=1 时按规矩跳过）");
+    char note[200];
+    { char *a[1] = {(char *)"泡茶3"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+    { char *a[3] = {(char *)"泡茶3", (char *)"烧水3", (char *)"1"};
+      (void)token_op_run(ai, "加步骤", a, 3, note, sizeof note); }
+    { char *a[2] = {(char *)"泡茶3", (char *)"回收临时"};
+      (void)token_op_run(ai, "加步骤", a, 2, note, sizeof note); }
+    Token *root = proc_root_of(ai, "泡茶3");
+    ok(root != NULL, "过程根找得到（`proc_root_of`）");
+    /* 过程边是**结构**：不许被"拆直连"那一类动作拆掉 */
+    if (root) {
+        long i = micro_edge_index(root, pool_find(ai->pool, "烧水3"));
+        ok(i >= 0 && !micro_edge_removable(&root->assocs[i]),
+           "过程边**不可拆**（插词/加前提不许把第 N 步从过程里删掉）");
+        Token *plain = T(ai, "普通词3");
+        (void)token_add_assoc_unique(root, plain);
+        long j = micro_edge_index(root, plain);
+        ok(j >= 0 && micro_edge_removable(&root->assocs[j]) == 1,
+           "普通共现边照旧可拆（这条保护只给过程边，不是把整张图锁死）");
+    }
+    /* 引擎关着时：run 不发车（返回 0 且不记录步数） */
+    {
+        ProcRun pr;
+        ai->proc_run = 0;
+        size_t g0 = proc_run(ai, "泡茶3", &pr);
+        ok(g0 == 0 && pr.n_step == 0, "引擎关着时 `proc_run` 不跑（步数 0）—— 调用方自己判开关");
+    }
+    /* 开着：普通步骤过、行为步骤真执行 */
+    {
+        ProcRun pr;
+        ai->proc_run = 1;                    /* 这一节测的是"开着时"的行为：C 级测试自己钉开关 */
+        size_t g = proc_run(ai, "泡茶3", &pr);
+        ok(g == 0 && pr.n_step == 2, "两步都过（0 断点）");
+        ok(pr.n_ran == 1, "其中「回收临时」那一步**真的执行了**（受审通道，计数 +1）");
+        ok(pr.trace.n >= 3, "执行轨迹记下来了（复用 Derivation：goal + 步 + conclude）");
+    }
+    /* 前提不成立 ⇒ 断点（前提不在注意窗口里；这是现成判据） */
+    {
+        AI *b = ai_new();
+        char note2[200];
+        { char *a[1] = {(char *)"泡茶4"}; (void)token_op_run(b, "建过程", a, 1, note2, sizeof note2); }
+        { char *a[3] = {(char *)"泡茶4", (char *)"烧水4", (char *)"1"};
+          (void)token_op_run(b, "加步骤", a, 3, note2, sizeof note2); }
+        /* 前提挂在根与这一步之间：`加前提 <过程根> <动作> <前提名>` */
+        { char *a[3] = {(char *)"[过程:泡茶4]", (char *)"烧水4", (char *)"有热水4"};
+          (void)token_op_run(b, "加前提", a, 3, note2, sizeof note2); }
+        ProcRun pr;
+        b->proc_run = 1;
+        size_t g = proc_run(b, "泡茶4", &pr);
+        ok(g == 1 && pr.n_gap == 1, "前提没成立 ⇒ **1 个断点**（不是「照跑不误」）");
+        {   /* 断点要**既进轨迹**（有 DER_GAP 步）**又上计数**（`trace.gaps`）——
+             * `der_gap()` 只加一步、不动计数，所以这一条是引擎自己补的（实测踩过） */
+            int gap_steps = 0;
+            for (size_t i = 0; i < pr.trace.n; ++i)
+                if (pr.trace.step[i].kind == DER_GAP) gap_steps++;
+            ok(gap_steps >= 1 && (size_t)pr.trace.gaps == pr.n_gap,
+               "断点既进轨迹（有 DerGap 步）又上计数（trace.gaps == n_gap）");
+        }
+        ai_free(b);
+    }
+    /* 要参数的行为 ⇒ 断点（不猜参数） */
+    {
+        AI *c = ai_new();
+        char n3[200];
+        { char *a[1] = {(char *)"泡茶5"}; (void)token_op_run(c, "建过程", a, 1, n3, sizeof n3); }
+        { char *a[2] = {(char *)"泡茶5", (char *)"加步骤"};
+          (void)token_op_run(c, "加步骤", a, 2, n3, sizeof n3); }
+        ProcRun pr;
+        c->proc_run = 1;
+        size_t g = proc_run(c, "泡茶5", &pr);
+        ok(g == 1 && pr.n_ran == 0, "行为要参数时**不猜参数**：记断点、不执行");
+        ai_free(c);
+    }
+    ai_free(ai);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -1703,6 +1788,7 @@ int main(void) {
     test_order_query();
     test_merged_neg();
     test_process_marks();
+    test_proc_run();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
