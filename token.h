@@ -110,6 +110,7 @@ static inline const char *assoc_role_name(uint8_t role) {
 #define PROC_TOKEN_PREFIX  "[过程:"
 #define PROC_STEP_PREFIX   "[步骤:"
 #define PROC_CALL_MARK     "[调用]"
+#define PROC_SHOW_MAX      256     /* 一次最多列/跑多少条过程边（有界） */
 #define PROC_BACK_MARK     "[回边]"
 
 /* 话题 id：语料里显式标注（`[话题:N]` 那一行属于第 N 个话题）。

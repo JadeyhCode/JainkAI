@@ -36,10 +36,20 @@ PAR=$ROOT/_t/par
 # 被紧接着启动的整包挤掉，两边都用 _t/par/w1）。撞上就**立刻**退出，别浪费一次整包。
 mkdir -p "$PAR"
 if ! mkdir "$PAR/.lock" 2>/dev/null; then
-    echo "另有一个 tests/all.sh 在跑（$PAR/.lock 还在）：等它跑完再启动。"
-    echo "确认没在跑：rm -rf \"$PAR/.lock\" 之后重试（或整个 rm -rf _t/par）。"
-    exit 3
+    # **死锁要能自己认出来**：锁里记着拿锁那个 shell 的 pid —— 进程没了就是死锁。
+    # 为什么非要有这一条：被 kill/回收的跑法（比如 `... &` 起的后台任务随命令退出被收走）
+    # 会把锁留在那儿，于是**后面每一次**整包都被挡在门外，而提示是"另有一个在跑"（骗人）。
+    old_pid=$(cat "$PAR/.lock/pid" 2>/dev/null || true)
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+        echo "另有一个 tests/all.sh 在跑（pid $old_pid，锁 $PAR/.lock）：等它跑完再启动。"
+        echo "确认没在跑：rm -rf \"$PAR/.lock\" 之后重试（或整个 rm -rf _t/par）。"
+        exit 3
+    fi
+    echo "（发现死锁：$PAR/.lock 记的 pid ${old_pid:-未知（旧版没写 pid）} 已经不在 —— 自动清掉继续）"
+    rm -rf "$PAR/.lock"
+    mkdir "$PAR/.lock" 2>/dev/null || { echo "锁清不掉，先手工处理：rm -rf \"$PAR/.lock\""; exit 3; }
 fi
+echo $$ > "$PAR/.lock/pid"     # 记 pid：死锁判据（见上）
 trap 'rm -rf "$PAR/.lock"' EXIT INT TERM
 
 # —— 先把任务清单组好（SUITES 写错了要立刻报错，别让人白等第 0 步的编译+探针）——

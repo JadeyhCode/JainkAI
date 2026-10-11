@@ -351,8 +351,59 @@ grep -q '没有这个过程：泡茶' o12 && ok "过程**不跨会话**（没建
     || bad "::proc 空会话" "$(head -2 o12)"
 
 
+echo "== ⑩ 过程执行引擎（第 9 条 ③，默认关）：逐步核对 + 受审执行 + 断点 =="
+# 用户拍板 role 方案后 ①+② 落地（§6.70）；这一节钉 ③：**跑得起来、也停得下来**。
+# ⚠ 反向测量（AIP_PROCRUN=1）时"默认关"这条断言的**方向反过来**（按规矩分叉）：
+# 那时它本来就是开的，要钉的是"env 一开、不用 ::proc on 就能跑"。
+if [ -z "${AIP_PROCRUN:-}" ]; then
+    run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::proc run 泡茶\n' o13
+    grep -q '过程执行引擎关着' o13 && ok "引擎**默认关**：run 只回一句「关着」（既有行为一个字不动）" \
+        || bad "引擎默认关" "$(grep -m2 'proc\|过程' o13)"
+else
+    run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::proc run 泡茶\n' o13
+    grep -q '跑过程' o13 && ok "AIP_PROCRUN=1（反向测量）：env 一开就能跑（无需 ::proc on）" \
+        || bad "反向测量" "$(grep -m2 'proc\|过程' o13)"
+fi
+run '::proc on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::proc run 泡茶\n' o14
+grep -q '第 1  步 烧水' o14 && grep -q '词在 + 前提成立' o14 \
+    && ok "普通步骤：核到"词在 + 前提成立"就过（做不做得了**明说不判**）" \
+    || bad "普通步骤" "$(grep -m3 '步 ' o14)"
+grep -q '执行了行为「回收临时」（受审通道）' o14 \
+    && ok "是 Token 行为的步骤：走**受审通道真执行**（有审查/预算/账）" \
+    || bad "受审执行" "$(grep -m2 '回收临时' o14)"
+grep -q '汇总：2 步' o14 && grep -q '轨迹（复用 Derivation）' o14 \
+    && ok "打汇总 + 轨迹（复用 Derivation：goal + 每步 + conclude）" \
+    || bad "汇总/轨迹" "$(grep -m2 '汇总\|轨迹' o14)"
+# 要参数的行为：**不猜参数**，记断点
+run '::proc on\n::op 建过程 泡茶\n::op 加步骤 泡茶 加步骤\n::proc run 泡茶\n' o15
+grep -q '要参数（v1 不支持，不猜）' o15 && ok "要参数的行为步骤：记断点**不猜参数**" \
+    || bad "不猜参数" "$(grep -m2 '加步骤' o15)"
+# 前提不成立 = 断点（跨会话：前提不在注意窗口里）
+{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加前提 [过程:泡茶] 烧水 有热水\n::save proc.bin\n::quit\n'; } \
+    | ./aip --model model.bin > /dev/null 2>&1 || true
+{ printf '::notepad off\n::proc on\n::proc run 泡茶\n::quit\n'; } | ./aip --model proc.bin > o16 2>&1 || true
+grep -q '断点：前提「有热水」没成立' o16 \
+    && ok "前提没成立 ⇒ **断点**（用现成的三档判据，不是新拍的）" \
+    || bad "前提断点" "$(grep -m3 '步 \|前提' o16)"
+grep -q '不许说跑通了' o16 && ok "有断点时**明说"不许说跑通了"**（断点在哪停在哪）" \
+    || bad "断点措辞" "$(grep -m1 '轨迹' o16)"
+# 过程边是**结构**：加前提不许把它拆掉（拆了过程就少一步）
+{ printf '::notepad off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 回收临时\n::op 加前提 [过程:泡茶] 烧水 有热水\n::proc 泡茶\n::quit\n'; } \
+    | ./aip --model model.bin > o17 2>&1 || true
+grep -q '2 步 + 0 调用 + 0 回边' o17 \
+    && ok "给一步挂前提之后，**步骤还是 2 步**（过程边是结构，插词/加前提不许拆）" \
+    || bad "过程边被拆" "$(grep -m2 '过程:泡茶' o17)"
+# 调用 + 回边：递归跑子过程、回边按上限重跑
+run '::proc on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 建过程 洗杯子\n::op 加步骤 洗杯子 冲水\n::op 加调用 泡茶 洗杯子\n::op 加回边 泡茶 1\n::proc run 泡茶\n' o18
+grep -q '调用 \[过程:洗杯子\]' o18 && ok "「调用」→ **递归跑子过程**（子过程自己一份步数）" \
+    || bad "调用" "$(grep -m3 '调用' o18)"
+n_back=$(grep -ac '（重跑）' o18 || true)
+[ "$n_back" -eq 2 ] && ok "「回边」跳回第 1 步并按**上限 2 次**重跑（实测 $n_back 次）" \
+    || bad "回边上限" "重跑 $n_back 次"
+
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1

@@ -657,6 +657,10 @@ typedef struct {
      * 用 §6.45 的四态判定回答（都说认 / 都说不认 / 有分歧（待验）/ 没人说过）。
      * 只读（他者信念只在**他的**名下，判定现算不落库）；关着时整条路不跑（与今天逐字节相同）。 */
     int     others_ask;
+    /* **过程执行**（第 9 条 ③ 写引擎，默认 0 = 关）：`::proc run <名字>` 把一条过程跑一遍 ——
+     * 逐步核对（认识吗 / 前提成立吗 / 是不是 Token 行为），核对本身只读；真的执行某一步行为
+     * 时走的是老那条受审通道。关着时那个命令只说"关着"，一个字的既有行为都不变。 */
+    int     proc_run;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1113,6 +1117,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ck = getenv("AIP_ASMCHECK"); if (ck && ck[0] == '1') ai->asm_check_on = 1; }
     { const char *lx = getenv("AIP_ASCII");    if (lx && lx[0] == '1') ai->lex_ascii = 1; }
     ai->others_ask = 0;              /* 他者视角进回答路径：默认**关** */
+    ai->proc_run = 0;                /* 过程执行（第 9 条 ③）：默认**关** */
+    { const char *pr = getenv("AIP_PROCRUN"); if (pr && pr[0] == '1') ai->proc_run = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

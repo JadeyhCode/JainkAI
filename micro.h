@@ -451,6 +451,10 @@ typedef struct {
  * 知识不是共现：观测到的关系边（rel/nrel/dyn）不许剪；推出来沉淀的缓存例外。 */
 static inline int micro_edge_removable(const AssocEntry *e) {
     if (!e) return 0;
+    /* **过程边是结构，不是共现**（第 9 条 ③）：插词/加前提那些"拆直连"的动作不许拆它 ——
+     * 拆了就等于把"第 N 步"从过程里删掉（实测：给一步挂前提时，`加前提` 顺手把步骤边拆了，
+     * 过程当场少一步）。和"直连是知识时不拆"同一个道理。 */
+    if (edge_is_process(e)) return 0;
     if (e->rel || e->nrel || e->dyn) return e->role == ASSOC_ROLE_DERIVED;
     return 1;
 }
@@ -2138,7 +2142,19 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
         for (const char *q = args[1]; *q; ++q) if (*q < '0' || *q > '9') { alldig = 0; break; }
         if (alldig) snprintf(backnum, sizeof backnum, "%s%s]", PROC_STEP_PREFIX, args[1]);
     }
-    Token *act = pool_find(ai->pool, backnum[0] ? backnum : args[1]);   /* 可能还没有：走名字端点 */
+    /* `加调用 <过程> <子过程名>`：名字没带 `[过程:` 前缀、但**确实有个同名过程**时，
+     * 自动补上前缀（省得让人手打方括号）—— 认不出就当普通动作词。 */
+    char callref[96];
+    callref[0] = 0;
+    if (mark && strcmp(mark, PROC_CALL_MARK) == 0 && args[1] && args[1][0] &&
+        strncmp(args[1], PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) != 0) {
+        char probe[96];
+        int pn = snprintf(probe, sizeof probe, "%s%s]", PROC_TOKEN_PREFIX, args[1]);
+        if (pn > 0 && (size_t)pn < sizeof probe && pool_find(ai->pool, probe))
+            snprintf(callref, sizeof callref, "%s", probe);
+    }
+    const char *refname = callref[0] ? callref : (backnum[0] ? backnum : args[1]);
+    Token *act = pool_find(ai->pool, refname);   /* 可能还没有：走名字端点（内核会建） */
     (void)act;                                 /* 名字端点由内核在**这一步里**解析/intern */
     int idx = 0;
     uint8_t pflag = MOD_FLAG_PROC_CALL;
@@ -2161,7 +2177,7 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
     m.type = MOD_ADD_ASSOC;
     m.target = root;
     m.main = act;                              /* 池里有就直接指；没有就让 name 说话 */
-    snprintf(m.name, sizeof m.name, "%s", backnum[0] ? backnum : args[1]);  /* 名字端点 */
+    snprintf(m.name, sizeof m.name, "%s", refname);  /* 名字端点（内核按它解析/记账） */
     m.rel_id = (uint8_t)idx;
     m.flags = (uint8_t)(MOD_FLAG_PROCESS | pflag);
     m.bump = 1;
@@ -2172,7 +2188,7 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
         if (pflag == MOD_FLAG_PROC_BACK)      snprintf(mk, sizeof mk, "%s", PROC_BACK_MARK);
         else if (pflag == MOD_FLAG_PROC_CALL) snprintf(mk, sizeof mk, "%s", PROC_CALL_MARK);
         else                                  snprintf(mk, sizeof mk, "%s%d]", PROC_STEP_PREFIX, idx);
-        snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, args[1],
+        snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, refname,
                  ok ? "已提出" : "与队列重复");
     }
     return ok ? 1 : 0;
@@ -2373,13 +2389,19 @@ static inline size_t token_op_count(void) {
 
 /* 跑一条行为：展开 → 逐条走「审查 → 记账 → 应用 → 审计」（和自修改同一条路）。
  * 返回应用成功的条数；-1 = 没有这个行为 / 参数不对 / 前提不成立。 */
+/* 按名字找一条 Token 行为（`::op` 与过程执行那一层共用；判据只写这一处）。 */
+static inline const TokenOp *token_op_by_name(const char *name) {
+    if (!name) return NULL;
+    for (size_t i = 0; TOKEN_OPS[i].name; ++i)
+        if (strcmp(TOKEN_OPS[i].name, name) == 0) return &TOKEN_OPS[i];
+    return NULL;
+}
+
 static inline int token_op_run(AI *ai, const char *name, char *const *args, size_t n,
                                char *note, size_t cap) {
     if (ai && note && cap) note[0] = 0;
     if (!ai || !name) return -1;
-    const TokenOp *op = NULL;
-    for (size_t i = 0; TOKEN_OPS[i].name; ++i)
-        if (strcmp(TOKEN_OPS[i].name, name) == 0) { op = &TOKEN_OPS[i]; break; }
+    const TokenOp *op = token_op_by_name(name);
     if (!op) { snprintf(note, cap, "没有这个行为：%s（::op 看清单）", name); return -1; }
     if (n < op->min_args || n > op->max_args) {
         snprintf(note, cap, "参数不对：%s %s", op->name, op->shape);
