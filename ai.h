@@ -1197,12 +1197,16 @@ static inline void ai_switches_init(AI *ai) {
     ai->wgate_ev = 1;                /* 候选证据项默认**开**（A/B 三种跑法全绿后才翻的） */
     ai->last_write_imp = -1.0;       /* -1 = 还没写过任何关系事实 */
     ai->last_write_hops = ai->last_write_cred = ai->last_write_ev = -1;
-    ai->route_writes = 0;
+    /* **翻默认（§6.92）**：自撰写入**默认走受审通道**（"所有自撰都受审"是铁律的形状）。
+     * 想回到"只有关系事实受审"的老行为：`AIP_ROUTE=0`（显式关）—— 两个方向都能测。 */
+    ai->route_writes = 1;
     ai->drive_on = 0;
     ai->act_on = 0;                  /* 外部执行 + 写文件：默认**关**（action.h 层） */
     ai->asm_check_on = 0;            /* 原语程序干跑校验：默认**关**（token_lang.h） */
     ai->lex_ascii = 0;               /* ASCII 代码词法接进代码通道：默认**关**（lex.h） */
-    { const char *rt = getenv("AIP_ROUTE");  if (rt && rt[0] == '1') ai->route_writes = 1; }
+    { const char *rt = getenv("AIP_ROUTE");
+      if (rt && rt[0] == '1') ai->route_writes = 1;
+      else if (rt && rt[0] == '0') ai->route_writes = 0;   /* 显式关：留一条回到老行为的退路 */ }
     { const char *af = getenv("AIP_DRIVE"); if (af && af[0] == '1') ai->drive_on = 1; }
     { const char *ac = getenv("AIP_ACT");   if (ac && ac[0] == '1') ai->act_on = 1; }
     { const char *ck = getenv("AIP_ASMCHECK"); if (ck && ck[0] == '1') ai->asm_check_on = 1; }
