@@ -147,7 +147,8 @@ for pat in "/home/[A-Za-z0-9._-]*/" "/Users/[A-Za-z0-9._-]*/" "ghp_[A-Za-z0-9]\{
     out=$(printf '%s\n' "$files" | while IFS= read -r f; do
               [ -f "$f" ] || continue
               grep -nE -- "$pat" "$f" 2>/dev/null | sed "s|^|$f:|"
-          done | grep -v '^tests/selfcheck.sh:' | head -6)
+          done | grep -v '/\?selfcheck\.sh:' | head -6)   # 检查自己的文件里当然有那些"模式串"
+
     if [ -n "$out" ]; then
         say FAIL "对外文件里命中「$pat」："
         printf '%s\n' "$out" | head -6
