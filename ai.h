@@ -1246,12 +1246,19 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pd = getenv("AIP_PROCDRY");
       if (pd && pd[0] == '1') ai->proc_dry = 1;
       else if (pd && pd[0] == '0') ai->proc_dry = 0;   /* 显式退回老行为（两个方向都测得动） */ }
-    ai->proc_talk = 0;               /* 过程记号接进对话：默认**关** */
-    { const char *pt = getenv("AIP_PROCTALK"); if (pt && pt[0] == '1') ai->proc_talk = 1; }
-    ai->proc_think = 0;              /* 过程接进思维：默认**关** */
-    { const char *pk = getenv("AIP_PROCTHINK"); if (pk && pk[0] == '1') ai->proc_think = 1; }
-    ai->proc_plan = 0;               /* 过程接进决策（用计划回答）：默认**关** */
-    { const char *pl = getenv("AIP_PROCPLAN"); if (pl && pl[0] == '1') ai->proc_plan = 1; }
+    /* **翻默认（§6.108）**：过程记号接进对话（`::proc talk`）默认开；`AIP_PROCTALK=0` 退回。 */
+    ai->proc_talk = 1;               /* 过程记号接进对话：默认**关** */
+    { const char *pt = getenv("AIP_PROCTALK");
+      if (pt && pt[0] == '1') ai->proc_talk = 1;
+      else if (pt && pt[0] == '0') ai->proc_talk = 0; }
+    ai->proc_think = 1;              /* §6.108 翻默认；`AIP_PROCTHINK=0` 退回 */              /* 过程接进思维：默认**关** */
+    { const char *pk = getenv("AIP_PROCTHINK");
+      if (pk && pk[0] == '1') ai->proc_think = 1;
+      else if (pk && pk[0] == '0') ai->proc_think = 0; }
+    ai->proc_plan = 1;               /* §6.108 翻默认；`AIP_PROCPLAN=0` 退回 */               /* 过程接进决策（用计划回答）：默认**关** */
+    { const char *pl = getenv("AIP_PROCPLAN");
+      if (pl && pl[0] == '1') ai->proc_plan = 1;
+      else if (pl && pl[0] == '0') ai->proc_plan = 0; }
     ai->cache_walk = 0;              /* 缓存参与自由联想：默认**关** */
     { const char *cw = getenv("AIP_CACHEWALK"); if (cw && cw[0] == '1') ai->cache_walk = 1; }
     ai->eval_num = 0;                /* 求值层（数值比较样板）：默认**关** */

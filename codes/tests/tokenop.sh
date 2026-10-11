@@ -510,14 +510,14 @@ grep -q '参数不对' o32 || grep -q '没有这个过程' o32 \
 
 
 echo "== ⑭ ② 过程记号接进对话（默认关）：说话就能建/加/跑 =="
-if [ -z "${AIP_PROCTALK:-}" ]; then
+if [ "${AIP_PROCTALK:-1}" = "0" ]; then
     run '记个过程 泡茶\n' o33
     grep -aq '记下 了 （ \[过程:泡茶\] ' o33 && bad "默认关不该认" "$(grep -m1 'AI >' o33)" \
         || ok "默认关：这些话照走流水线（一句都不认）"
     run '::proc talk\n' o34
     grep -q '过程记号接进对话 = 关（默认）' o34 && ok "::proc talk 自报默认关" || bad "talk 默认" "$(head -2 o34)"
 else
-    ok "AIP_PROCTALK=1（反向测量）：默认值断言按规矩跳过"
+    ok "显式关（AIP_PROCTALK=0）：这一侧断言"关""
 fi
 run '::proc talk on\n记个过程 泡茶\n第 1 步 烧水\n第 2 步 泡茶叶\n::proc 泡茶\n' o35
 grep -aq '过程 「 泡茶 」 记下 了' o35 && ok "「记个过程 X」→ 建过程（名字拼回去：分词器把「泡茶」切开了）" \
@@ -538,14 +538,14 @@ grep -aq "应用 1 条" o37 && ok "对话入口走的还是**受审通道**（�
 
 
 echo "== ⑮ ② 过程接进思维（默认关、只读）：思考收尾自己认「这事我记过过程」 =="
-if [ -z "${AIP_PROCTHINK:-}" ]; then
+if [ "${AIP_PROCTHINK:-1}" = "0" ]; then
     run '::proc think off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做 呢\n::delib\n' o38
     n=$(grep -ac '这我记过过程' o38 || true)
     [ "$n" -eq 0 ] && ok "默认关：思考里**一个字都不加**" || bad "默认关" "$(grep -m1 '记过过程' o38)"
     run '::proc think\n' o39
     grep -q '过程接进思维 = 关（默认）' o39 && ok "::proc think 自报默认关" || bad "think 默认" "$(head -2 o39)"
 else
-    ok "AIP_PROCTHINK=1（反向测量）：默认值断言按规矩跳过"
+    ok "显式关（AIP_PROCTHINK=0）：这一侧断言"关""
 fi
 run '::proc think on\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做 呢\n::delib\n' o40
 grep -q '这我记过过程' o40 && grep -q '这件事我记过过程「泡茶」（1 步）' o40 \
@@ -562,14 +562,14 @@ n=$(grep -ac '这我记过过程' o42 || true)
 
 
 echo "== ⑯ ② 过程接进决策（默认关）：问「怎么做 X」直接用计划回答 =="
-if [ -z "${AIP_PROCPLAN:-}" ]; then
+if [ "${AIP_PROCPLAN:-1}" = "0" ]; then
     run '::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n泡茶 怎么 做\n' o43
     n=$(printf '%s\n' "$(cat o43)" | grep -ac '我 记过 过程' || true)
     [ "$n" -eq 0 ] && ok "默认关：照旧走流水线（不拿计划当回答）" || bad "默认关" "$(grep -m1 '记过 过程' o43)"
     run '::proc plan\n' o44
     grep -q '过程接进决策 = 关（默认）' o44 && ok "::proc plan 自报默认关" || bad "plan 默认" "$(head -2 o44)"
 else
-    ok "AIP_PROCPLAN=1（反向测量）：默认值断言按规矩跳过"
+    ok "显式关（AIP_PROCPLAN=0）：这一侧断言"关""
 fi
 run '::proc plan on\n::proc off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加步骤 泡茶 泡茶叶\n::op 建过程 洗杯子\n::op 加步骤 洗杯子 冲水\n::op 加调用 泡茶 洗杯子\n泡茶 怎么 做\n' o45
 grep -q '我 记过 过程 「 泡茶 」 ： 第 1 步 烧水' o45 && grep -q '第 2 步 泡茶叶' o45 \
