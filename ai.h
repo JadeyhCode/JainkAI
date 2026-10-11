@@ -3496,6 +3496,10 @@ static inline Token *ai_when_did_i(AI *ai, Token *what) {
 
 /* ============================ 想象 ============================ */
 
+/* 前向声明：`ai_write_assoc` 定义在后面（它要 `micro_of` → 必须等 micro.h 进来）——
+ * 但"想象/内部对话"这些**自撰写入**要用它。风格同 think.h 里那些前向声明。 */
+static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s);
+
 static inline void ai_imagine(AI *ai) {
     if (!ai || ai->focus_n < 2) return;
     float ec = ai_comfort_error(ai), ea = ai_arousal_error(ai);
@@ -3517,11 +3521,14 @@ static inline void ai_imagine(AI *ai) {
     Token *r = pool_token(ai->pool, NULL, NULL);
     if (!r || !r->hv) return;
     vsa_bind(a->hv, b->hv, r->hv);
-    token_add_assoc_unique(r, a);
-    token_add_assoc_unique(r, b);
+    /* **自撰写入走统一通道**（第 6 条尾巴 / §B.2 那条"老写入者绕过安全内核"）：
+     * 想象出来的东西是**它自己想出来的**，`route_writes` 打开时该和别的自撰一样受审。
+     * 注意 `pool_token` 只是**造节点**（结构），这里路由的是**边**。 */
+    (void)ai_write_assoc(ai, r, a, AI_WSRC_IMAGINE);
+    (void)ai_write_assoc(ai, r, b, AI_WSRC_IMAGINE);
     Token *marker = pool_token_intern(ai->pool, "[想象]");
-    token_add_assoc_unique(r, marker);
-    token_add_assoc_unique(ai->self, r);
+    (void)ai_write_assoc(ai, r, marker, AI_WSRC_IMAGINE);
+    (void)ai_write_assoc(ai, ai->self, r, AI_WSRC_IMAGINE);
     ai->n_imaginations++;
     if (ai->inner.comfort > 0.8f && ai->inner.arousal < 0.3f)
         r->mem_state = MEM_FADING;
@@ -3631,7 +3638,7 @@ static inline void ai_drift_sample(AI *ai) {
             char name[64];
             snprintf(name, sizeof name, "[漂移:%s]", t->name ? t->name : "?");
             Token *d = pool_token_intern(ai->pool, name);
-            if (d) token_add_assoc_unique(ai->self, d);
+            if (d) (void)ai_write_assoc(ai, ai->self, d, AI_WSRC_INNER);   /* 自撰写入：走统一通道 */
             ai->n_drifts_detected++;
         }
         memcpy(t->hv_prev, t->hv, VSA_DIM);

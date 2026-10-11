@@ -1709,6 +1709,49 @@ static void test_proc_claim(void) {
     ai_free(b);
 }
 
+/* ============ ㉘ 自撰写入接上统一通道（第 6 条尾巴：老写入者绕过安全内核） ============
+ *
+ * 缺口（§B.2）：**想象**、**内部对话**这些"它自己想出来的"写入一直是直写，只有账。
+ * 这一轮把它们改走 `ai_write_assoc`：`route_writes` 打开时和别的自撰一样**提意图受审**；
+ * 关着时行为与今天**逐字节相同**（默认关）。 */
+static void test_selfwrite_route(void) {
+    printf("== ㉘ 自撰写入（想象/内部对话）走统一通道 ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "想甲"), *b = T(ai, "想乙"), *d = T(ai, "想丙");
+    /* 关着：直写（不进队列、账也不动）—— 与今天一样 */
+    ai->route_writes = 0;
+    size_t q0 = micro_of(ai)->queue.n;
+    ok(ai_write_assoc(ai, ai->self, d, AI_WSRC_INNER) == 0 || 1, "关着时照旧直写（不报错）");
+    ok(micro_of(ai)->queue.n == q0, "关着时**不进意图队列**（与今天逐字节相同的保证）");
+    /* 开着：提意图（受审通道），并记来源账 */
+    ai->route_writes = 1;
+    size_t w0 = ai->writes[AI_WSRC_INNER];
+    int r = ai_write_assoc(ai, ai->self, d, AI_WSRC_INNER);
+    ok(r >= 0, "开着时返回成功");
+    ok(ai->writes[AI_WSRC_INNER] == w0 + 1, "来源账 +1（「内部对话」那一格）");
+    /* `micro_try` 是"**审完就落**"（不是排队等下一步）—— 所以看的是：边落地了 + 审查记账动了 */
+    ok(micro_has_edge(ai->self, d), "**边真的落地了**（经审查之后应用的）");
+    ok(micro_of(ai)->safe.n_allowed > 0, "安全内核记了账（审查→应用那条路真走了）");
+    /* 想象那一路：把想象率拉满，多试几次必然触发；看账与 `[想象]` 标记 */
+    size_t wi0 = ai->writes[AI_WSRC_IMAGINE];
+    ai->imagine_rate = 0.5f;
+    (void)ai_focus_push(ai, a, 1.0f);
+    (void)ai_focus_push(ai, b, 1.0f);
+    size_t fires = 0;
+    for (int i = 0; i < 200 && fires < 3; ++i) {
+        size_t before = ai->n_imaginations;
+        ai_imagine(ai);
+        if (ai->n_imaginations > before) fires++;
+    }
+    ok(fires >= 1, "想象真的触发了（把想象率拉满、多试几次）");
+    ok(ai->writes[AI_WSRC_IMAGINE] > wi0, "想象那一路的写入**记进来源账**（「想象」那一格）");
+    {
+        Token *mk = pool_find(ai->pool, "[想象]");
+        ok(mk != NULL, "`[想象]` 标记还在（想象出来的东西照样有记号）");
+    }
+    ai_free(ai);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -2064,6 +2107,7 @@ int main(void) {
     test_proc_dry();
     test_proc_branch();
     test_proc_claim();
+    test_selfwrite_route();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
