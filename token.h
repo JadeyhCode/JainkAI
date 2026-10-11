@@ -1056,6 +1056,11 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     return 0;
 }
 
+/* **动态关系的否定**（§6.80）：核心关系用 `nrel` 的 0~8 位，9~14 位空着、**15 位**拿来当
+ * "这条动态关系是否定"的旗子 —— 这样零格式改动（`nrel` 本来就序列化），也不用动边布局。
+ * 为什么不再开一个字段：存档格式是铁律（v10），空位就藏在现成的字节里。 */
+#define REL_NEG_DYN_BIT 0x8000u
+
 /* 给 a→b 打上**动态关系**（清单外的谓语，id 从 8 起） */
 static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bump) {
     if (!a || !b || a == b || dyn_id == 0) return -1;
@@ -1073,6 +1078,23 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
     e->dyn = dyn_id;
     e->hits = bump;
     return 0;
+}
+
+/* 动态关系 + 否定：`dyn` 记关系 id，`nrel` 的 15 位记"是否定"（见 REL_NEG_DYN_BIT） */
+static inline int token_tag_dyn_neg(Token *a, Token *b, uint8_t dyn_id, int neg, uint32_t bump) {
+    int rc = token_tag_dyn(a, b, dyn_id, bump);
+    if (rc != 0) return rc;
+    for (size_t i = 0; i < a->count; ++i) {
+        AssocEntry *e = &a->assocs[i];
+        if (e->main != b || e->dyn != dyn_id) continue;
+        if (neg) e->nrel |= (uint16_t)REL_NEG_DYN_BIT;
+        else     e->nrel &= (uint16_t)~REL_NEG_DYN_BIT;
+        return 0;
+    }
+    return -1;
+}
+static inline int edge_dyn_neg(const AssocEntry *e) {
+    return e && (e->nrel & (uint16_t)REL_NEG_DYN_BIT) != 0;
 }
 
 static inline int token_tag_role_topic(Token *a, Token *b, uint8_t role,

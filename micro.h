@@ -547,7 +547,9 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
         return SAFE_OK;
     }
     case MOD_TAG_REL:
-        if (!m->main || m->rel_id == 0 || m->rel_id >= REL_DYN_BASE) return SAFE_DENY_TYPE;
+        /* 动态关系（清单外谓语）也走这条意图（§6.80）：以前这里直接拒掉 `rel_id >= REL_DYN_BASE`
+         * ⇒ `route_writes` 打开时"现场学新谓语"整条被拒（默认关时看不出来）。 */
+        if (!m->main || m->rel_id == 0) return SAFE_DENY_TYPE;
         if (m->target == m->main) return SAFE_DENY_SELF;
         if (micro_endpoint_reserved(m->target) || micro_endpoint_reserved(m->main))
             return SAFE_DENY_RESERVED;
@@ -1840,10 +1842,14 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         /* ⚠ **否定也要走同一条路**：以前这里恒调 token_tag_rel（正向），
          *   于是"路由过去的否定观测"会被写成肯定 → 改口语义当场失效
          *   （实测被 `AIP_ROUTE=1` 的 revision/consolidate 两套抓住）。 */
-        int rc = m->neg ? token_tag_nrel(m->target, m->main, m->rel_id,
+        int rc = (m->rel_id >= REL_DYN_BASE)
+                     ? token_tag_dyn_neg(m->target, m->main,
+                                         (uint8_t)(m->rel_id - REL_DYN_BASE + 1),
+                                         m->neg ? 1 : 0, m->bump)
+                     : (m->neg ? token_tag_nrel(m->target, m->main, m->rel_id,
                                          m->bump ? m->bump : REL_BOOST)
                         : token_tag_rel(m->target, m->main, m->rel_id,
-                                        m->bump ? m->bump : REL_BOOST);
+                                        m->bump ? m->bump : REL_BOOST));
         if (rc != 0) return -1;
         if (note) snprintf(note, note_cap, "%s-[rel%u]->%s",
                            m->target->name ? m->target->name : "?",

@@ -68,14 +68,12 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
 
-    /* 动态关系（清单外的谓语）：只支持肯定 */
+    /* 动态关系（清单外的谓语）：**否定也支持了**（§6.80：否定旗子在 `nrel` 第 15 位）——
+     * 以前这里 `if (is_neg) return NULL`，于是「猫 不 喵 狗」整句掉降级答复。 */
     char resp0[192];
     if (rid >= REL_DYN_BASE) {          /* 边界是 REL_DYN_BASE：核心关系现在有 9 个 */
-        if (is_neg) return NULL;
-        ai_write_count(ai, AI_WSRC_RELATION);       /* 记录：这条是我现场学的 */
-        if (token_tag_dyn(A, B, (uint8_t)(rid - REL_DYN_BASE + 1), REL_BOOST) != 0)
-            return NULL;
-        snprintf(resp0, sizeof resp0, "记下 了 ： %s %s %s", aw, rw, bw);
+        if (ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION) != 0) return NULL;
+        snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s", aw, is_neg ? "不 " : "", rw, bw);
         ai->n_rel_learned++;
         cot_push(ai, COT_LEARN, 1, 90, "现场学一条关系事实（新谓语）", resp0);
         ai->n_cot++;

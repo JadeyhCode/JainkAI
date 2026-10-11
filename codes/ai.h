@@ -3941,6 +3941,11 @@ static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
         char note[96];
         return micro_try(ai, &m, note, sizeof note) == SAFE_OK ? 0 : -1;
     }
+    /* **动态关系**（清单外的谓语）：核心关系走 rel/nrel 位，动态关系走 `dyn` + `nrel` 第 15 位
+     * （§6.80）—— 以前这里直接落到 `token_tag_nrel()`，而它只认 `rid < REL_DYN_BASE`
+     * ⇒ 对话里说「A 不 <动态谓语> B」整句掉降级答复（实测）。 */
+    if (rid >= REL_DYN_BASE)
+        return token_tag_dyn_neg(a, b, (uint8_t)(rid - REL_DYN_BASE + 1), neg, REL_BOOST);
     return neg ? token_tag_nrel(a, b, rid, REL_BOOST) : token_tag_rel(a, b, rid, REL_BOOST);
 }
 

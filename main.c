@@ -149,6 +149,8 @@ static int interp_op_host(void *user, InterpOpKind op, char *const *args, size_t
  *
  * 整行交给 ai_tokenize：它把 [原语:…] 当整体、正文按「池里认识的词」最长匹配。
  * 这样语料里的词和用户输入切出来的词**必然是同一个 Token**，不会错位。 */
+static size_t g_corpus_check_bad = 0;   /* 语料行校验拦下几行（§6.80，只统计 + 只报前 5 条） */
+
 static void learn_primitive_line(AI *ai, const char *line) {
     if (!ai || !line) return;
 
@@ -168,6 +170,29 @@ static void learn_primitive_line(AI *ai, const char *line) {
          *     记成边。解释器只会「执行」原语，不会记录它，缺了这步收句标记就没有入边。
          *  ② token_run_names —— 让原语真正生效（建 猫→动物 这种直接边）。 */
         token_observe_names(ai->pool, names, m, 5);   /* 窗口 5：让「回复内部词序」有更多可学/可打角色的转移 */
+        /* **语料行的原语校验**（§6.80）：`::asm check on`（默认关）时，语料里的原语行
+         * 也先干跑校验一遍 —— 认「未知原语名 / 括号不配对 / 操作数不够 / 如果-结束不配对」，
+         * 没过就**这一行不执行**（但观察遍已经走过：词还是学到的）。
+         * 为什么要有：语料是"写一次、跑很多遍"的东西，坏行会静默地什么都不做。 */
+        if (ai->asm_check_on) {
+            TokenCheck ck;
+            token_check_program((const char *const *)names, m, &ck);
+            if (ck.n_err) {
+                g_corpus_check_bad++;
+                if (g_corpus_check_bad <= 5) {
+                    printf("[语料校验] 第 %zu 行有 %d 个问题，这一行**不执行**：",
+                           ai->pool->current_tick + 1, ck.n_err);
+                    for (size_t q = 0; q < ck.n_show && q < 2; ++q)
+                        printf(" 「%s」：%s；", ck.err[q].at ? ck.err[q].at : "?",
+                               ck.err[q].msg);
+                    printf("\n");
+                }
+                ai->n_learned += m;
+                ai->pool->current_tick++;
+                ai_free_words(words, n);
+                return;
+            }
+        }
         token_run_names_ctx(ai->pool, names, m, interp_op_host, ai);
         ai->n_learned += m;
         ai->pool->current_tick++;       /* 让 birth_tick 随语料推进 */
@@ -1209,8 +1234,12 @@ static void cmd_asm(AI *ai, const char *src) {
         token_check_print(&ck);
         if (ck.n_err) return;                         /* 没过就不执行：图一个字都不动 */
     }
+    /* **观察遍**（和语料那条路一致，§6.80）：语料行一直是"先观察 n-gram、再跑原语"两步，
+     * 但 `::asm` 以前只跑原语 ⇒ 同一串东西在语料里学得到、在 `::asm` 里学不到
+     * （实测 `甲 乙 丙 连接` 只建 乙→丙，甲→乙 那条共现边没有）。补上这一步。 */
+    token_observe_names(ai->pool, (const char *const *)names, n, 5);
     token_run_names_ctx(ai->pool, names, n, interp_op_host, ai);
-    printf("[执行了 %zu 个 token]\n", n);
+    printf("[执行了 %zu 个 token]（另：观察遍也走了一遍 —— 和语料行同一条路）\n", n);
 }
 
 /* `::asm check [on|off]`：看/切干跑校验（默认关，`AIP_ASMCHECK=1`） */

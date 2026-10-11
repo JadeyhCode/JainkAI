@@ -1765,6 +1765,33 @@ static void test_selfwrite_route(void) {
     ai_free(ai);
 }
 
+/* ========== ㉚ 动态关系的**否定**（§6.80：旗子借 `nrel` 第 15 位，零格式改动） ==========
+ *
+ * 原来「动态关系只支持肯定」：核心关系有 `rel/nrel` 位，清单外的谓语只有 `dyn`，
+ * 于是对话里说「A 不 <动态谓语> B」整句掉降级答复。现在否定旗子藏在 `nrel` 第 15 位
+ * （9~14 位空着没用），`rel_direct_as/rel_direct_neg_as` 的动态分支也认它。 */
+static void test_dyn_neg(void) {
+    printf("== ㉚ 动态关系的否定（旗子借 nrel 第 15 位） ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "喵甲"), *b = T(ai, "喵乙"), *c = T(ai, "喵丙");
+    uint8_t rid = rel_id_of(ai, "喵谓", 1);          /* allow_new=1 ⇒ 登记成动态谓语 */
+    ok(rid >= REL_DYN_BASE, "「喵谓」登记成**动态关系**（清单外的谓语）");
+    uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
+    ok(token_tag_dyn_neg(a, b, d, 1, REL_BOOST) == 0, "打一条**否定**的动态关系边");
+    {
+        const AssocEntry *e = NULL;
+        for (size_t i = 0; i < a->count; ++i) if (a->assocs[i].main == b) e = &a->assocs[i];
+        ok(e && e->dyn == d, "边上的 `dyn` 记着关系 id");
+        ok(e && edge_dyn_neg(e) == 1, "`edge_dyn_neg` 认出否定旗子（nrel 第 15 位）");
+    }
+    ok(rel_direct_as(a, rid, b, NULL) == 0, "**肯定**直查查不到它（否定边不当肯定事实）");
+    ok(rel_direct_neg_as(a, rid, b, NULL) == 1, "**否定**直查查得到（这就是新能力）");
+    ok(token_tag_dyn_neg(a, c, d, 0, REL_BOOST) == 0, "同一条动态关系也可以打**肯定**边");
+    ok(rel_direct_as(a, rid, c, NULL) == 1 && rel_direct_neg_as(a, rid, c, NULL) == 0,
+       "肯定/否定两条边**互不串**（同一谓语两档并存）");
+    ai_free(ai);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -2122,6 +2149,7 @@ int main(void) {
     test_proc_claim();
     test_selfwrite_route();
     test_revoke_marker();
+    test_dyn_neg();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();

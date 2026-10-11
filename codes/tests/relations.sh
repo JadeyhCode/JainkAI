@@ -166,6 +166,14 @@ d_modal=$(run "猫 不能 飞 吗" "::stats" | grep -a '动态关系' | head -1)
     || chk "动态谓语多了（普通=$d_plain / 情态=$d_modal）" 0
 
 
+
+echo "== ⑧ 动态关系的否定（清单外的谓语也认「不」） =="
+out=$(run "猫 喵 鱼" "猫 不 喵 狗")
+printf '%s\n' "$out" | grep -aq '记下 了 ： 猫 喵 鱼' && chk "动态谓语（清单外）：肯定照样现场学" 1 || chk "动态肯定" 0
+printf '%s\n' "$out" | grep -aq '记下 了 ： 猫 不 喵 狗' \
+    && chk "动态谓语 + 否定：**现在也学得进**（以前整句掉降级）" 1 \
+    || chk "动态否定（实得：$(printf '%s\n' "$out" | reps | nth 3)）" 0
+
 rm -rf "$TMP"
-[ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法）" \
+[ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定）" \
                   || { echo "FAIL relations"; exit 1; }

@@ -331,8 +331,8 @@ static inline size_t relations_load(AI *ai, const char *path) {
         Token *a = pool_token_intern(ai->pool, sub);
         Token *b = pool_token_intern(ai->pool, obj);
         if (!a || !b) continue;
-        if (rid >= REL_DYN_BASE) {                   /* 动态关系：只支持肯定 */
-            if (!neg && token_tag_dyn(a, b, (uint8_t)(rid - REL_DYN_BASE + 1),
+        if (rid >= REL_DYN_BASE) {                   /* 动态关系：否定走 `nrel` 第 15 位（§6.80） */
+            if (token_tag_dyn_neg(a, b, (uint8_t)(rid - REL_DYN_BASE + 1), neg,
                                       REL_BOOST) == 0) learned++;
             continue;
         }
@@ -535,6 +535,17 @@ static inline int rel_direct_neg_h(const AI *ai, const Token *a, uint8_t rid, co
 static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int *derived) {
     if (derived) *derived = 0;
     if (!a || !b || rid == 0) return 0;
+    if (rid >= REL_DYN_BASE) {            /* 动态关系走自己的那套（§6.80：否定旗子在 nrel 15 位） */
+        uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
+        for (size_t i = 0; i < a->count; ++i) {
+            const AssocEntry *e = &a->assocs[i];
+            if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
+            if (edge_dyn_neg(e)) continue;         /* 要的是**肯定**那条 */
+            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            return 1;
+        }
+        return 0;
+    }
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
@@ -549,6 +560,17 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
 static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b, int *derived) {
     if (derived) *derived = 0;
     if (!a || !b || rid == 0) return 0;
+    if (rid >= REL_DYN_BASE) {            /* 同上：动态关系的否定看 15 位 */
+        uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
+        for (size_t i = 0; i < a->count; ++i) {
+            const AssocEntry *e = &a->assocs[i];
+            if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
+            if (!edge_dyn_neg(e)) continue;        /* 要的是**否定**那条 */
+            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            return 1;
+        }
+        return 0;
+    }
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
         const AssocEntry *e = &a->assocs[i];
@@ -618,6 +640,7 @@ static inline size_t rel_next_cands(const AI *ai, const Token *a, uint8_t rid,
         for (size_t i = 0; i < a->count && n < cap; ++i) {
             const AssocEntry *e = &a->assocs[i];
             if (!e->main || e->main == a || e->dyn != d) continue;
+            if (neg_want ? !edge_dyn_neg(e) : edge_dyn_neg(e)) continue;   /* §6.80：否定也算一档 */
             out[n++] = e->main;
         }
     }

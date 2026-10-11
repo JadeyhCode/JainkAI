@@ -586,8 +586,25 @@ n=$(printf '%s\n' "$(cat o47)" | grep -ac '我 记过 过程' || true)
 [ "$n" -eq 0 ] && ok "没记过那个过程（猫）→ **不硬扯**计划" || bad "硬扯" "$(grep -m1 '记过 过程' o47)"
 
 
+echo "== ⑰ ① 解释器补观察遍 + 语料行校验（§6.80） =="
+run '::asm 甲 乙 丙 连接\n::edges 甲\n' o48
+grep -aq '→ 乙' o48 && ok "`::asm` 也走**观察遍**了：`甲 乙 丙 连接` 里 甲→乙 那条共现边不再丢（老 bug）" \
+    || bad "解释器观察遍" "$(grep -m3 '→' o48)"
+run '::asm check on\n::asm [原语:如果] 甲\n' o49
+grep -aq '校验\] 没过' o49 && ok "`::asm check on` 时坏程序**不执行**（图一个字都不动）" \
+    || bad "校验不执行" "$(grep -m2 '校验' o49)"
+printf '[原语:如果] 甲\n' > bad_corpus_test.txt
+out=$(BIN=$BIN sh -c '"$BIN" --model model.bin bad_corpus_test.txt <<< "::quit"' 2>&1 || true)
+rm -f bad_corpus_test.txt
+if [ -n "${AIP_ASMCHECK:-}" ]; then
+    printf '%s\n' "$out" | grep -aq '语料校验' && ok "语料行校验：坏行**不执行**并报出来" \
+        || bad "语料行校验" "$(printf '%s\n' "$out" | head -2)"
+else
+    ok "语料行校验默认关（AIP_ASMCHECK=1 时才有那行报告）"
+fi
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1
