@@ -802,6 +802,8 @@ typedef struct {
     size_t n_rollback;    /* 回退（撤掉某一步的假设）次数 */
     size_t n_skip;        /* ⑤ 条件不成立又没有否则支 / 循环条件不成立 —— 跳过的次数 */
     size_t n_exc_handled; /* ⑤ 出错之后处理步跑通了几次 */
+    size_t n_verified;    /* ① 带"要核的事"的步骤：`der_verify` **独立复核通过**的次数 */
+    size_t n_verify_fail; /* ① 复核不过（缺口/推不出来）的次数 */
     size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
     size_t hypo_peak;     /* 跑的时候到过的最大深度 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
@@ -919,6 +921,51 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             return 0;
         }
     }
+        /* ① **步骤带对象**：记号里有"要核的事"（`[步骤:N@要:S/R/B]`）⇒ 走
+         * `rel_solve` 推一遍 + `der_verify` **独立复核**（不信任构造时写下的东西）。
+         * 这是 §6.56 五步走里唯一没接的那条，这一轮接上。 */
+        {
+            int cidx = 0, cneg = 0;
+            char cs[64], cr[64], cb2[64];
+            if (proc_step_claim(se, &cidx, cs, sizeof cs, cr, sizeof cr, cb2, sizeof cb2, &cneg)) {
+                Token *csb = pool_find(ai->pool, cs);
+                Token *cob = pool_find(ai->pool, cb2);
+                uint8_t crid = rel_id_of(ai, cr, 0);
+                if (!csb || !cob || crid == 0) {
+                    printf("    %s %-12s ⚠ 断点：要核的「%s %s %s」认不全（主语/关系/宾语得是图里的）\n",
+                           label, act->name ? act->name : "?", cs, cr, cb2);
+                    der_gap(&pr->trace, "复核目标认不全");
+                    pr->n_gap++; pr->n_verify_fail++;
+                    proc_step_rollback(ai, act, added, n_added, pr);
+                    return 0;
+                }
+                Proof pf;
+                memset(&pf, 0, sizeof pf);
+                rel_solve(ai, csb, crid, cob, cneg, &pf);   /* 求解器：void，结果在 pf.status */
+                int st = pf.status;
+                Derivation d;
+                der_from_proof(ai, &d, csb, crid, cob, &pf);
+                der_conclude(&d, st, 40);
+                int vg = der_verify(ai, &d);
+                for (size_t k = 0; k < d.n && pr->trace.n < DER_MAX_STEP; ++k)
+                    pr->trace.step[pr->trace.n++] = d.step[k];   /* 复核过的链并进整轮轨迹 */
+                if (vg == 0 && st != 0) {
+                    printf("    %s %-12s ✓ **独立复核过**（要核「%s%s %s %s」，链 %zu 步、缺口 0）\n",
+                           label, act->name ? act->name : "?", cneg ? "不 " : "", cs, cr, cb2,
+                           d.n > 0 ? d.n - 1 : 0);
+                    pr->n_ok++; pr->n_verified++;
+                    return 1;
+                }
+                printf("    %s %-12s ✗ 断点：**复核不过**（要核「%s%s %s %s」：%s，缺口 %d）\n",
+                       label, act->name ? act->name : "?", cneg ? "不 " : "", cs, cr, cb2,
+                       st == 0 ? "推不出来" : "验证器不认", vg);
+                der_gap(&pr->trace, "独立复核不过");
+                pr->n_gap++; pr->n_verify_fail++;
+                proc_step_rollback(ai, act, added, n_added, pr);
+                return 0;
+            }
+            (void)cidx;
+        }
     /* 普通动作词：v1 **只核"词在 + 前提成立"**，做不做得了**不判**（照实说） */
     {
         size_t hits = 0;
@@ -1175,6 +1222,9 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     der_conclude(&pr.trace, pr.n_gap ? 0 : +1, pr.n_gap ? 20 : 70);
     printf("  汇总：%zu 步（含调用展开）—— %zu 步过 / **%zu 个断点** / 真执行 %zu 个行为 / 进 %zu 次子过程\n",
            pr.n_step, pr.n_ok, pr.n_gap, pr.n_ran, pr.n_call);
+    if (pr.n_verified || pr.n_verify_fail)
+        printf("  ① 步骤带对象：`der_verify` **独立复核通过 %zu 个 / 不过 %zu 个**"
+               "（复核过的链并进了上面那条轨迹）\n", pr.n_verified, pr.n_verify_fail);
     if (pr.n_skip || pr.n_exc_handled)
         printf("  ⑤ 分支/异常：跳过 %zu 次（条件不成立且没否则支 / 循环条件不成立）；"
                "异常处理步跑通 %zu 次\n", pr.n_skip, pr.n_exc_handled);
@@ -1201,6 +1251,108 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
                : "真执行的那几步走的是老那条通道（有审查/预算/账）");
     if (out) *out = pr;
     return pr.n_gap;
+}
+
+/* ============================ ② 过程记号接进**对话**（默认关） ============================
+ *
+ * 用户 2026-10-10：三个候选都要。这一条是"AI 能靠说话把一件事记成过程、并跑它"：
+ *   「记个过程 泡茶」      → `建过程 泡茶`
+ *   「第 1 步 烧水」       → `加步骤 泡茶 烧水 1`（过程名从**当前唯一的那个过程**推）
+ *   「跑 泡茶」/「跑过程」 → `::proc run`
+ * 认法**窄**到三种（宁可漏，不可误触发）：不认识就整条不触发，走流水线。动作照样走
+ * `token_op_run`（受审通道）—— 对话只是入口，不是特权。 */
+/* 把 from 起剩下的词**拼成一个词**（分词器会把「泡茶」切成 泡+茶 —— §C 那条老坑：
+ * 触发这一层拿到的是 token，不是原句；用户说的确实是「泡茶」，拼回去才是他说的那个词）。 */
+static inline size_t dialog_join_words(char *const *words, size_t n, size_t from,
+                                       char *buf, size_t cap) {
+    size_t k = 0;
+    if (buf && cap) buf[0] = 0;
+    for (size_t i = from; i < n && i < from + 4; ++i) {
+        if (!words[i] || !words[i][0]) continue;
+        for (const char *q = words[i]; *q && k + 1 < cap; ++q) buf[k++] = *q;
+    }
+    if (buf && cap) buf[k] = 0;
+    return k;
+}
+
+static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *out, size_t out_cap) {
+    if (!ai || !ai->proc_talk || !words || n < 2 || !out || out_cap == 0) return 0;
+    out[0] = 0;
+    /* ① 记个过程 <名字> / 建过程 <名字> */
+    if (dialog_others_in_list((const char *const[]){"记", "建", "记个", "建个", NULL}, words[0])) {
+        size_t j = 1;
+        while (j < n && (strcmp(words[j], "个") == 0 || strcmp(words[j], "一个") == 0 ||
+                         strcmp(words[j], "过程") == 0)) j++;
+        char nm[64];
+        if (j < n && dialog_join_words(words, n, j, nm, sizeof nm) > 0 && words[n - 1][0] != '?') {
+            char note[160];
+            char *a[1] = { nm };
+            if (token_op_run(ai, "建过程", a, 1, note, sizeof note) >= 0) {
+                snprintf(out, out_cap, "好 ， 过程 「 %s 」 记下 了 （ %s ）", nm, note);
+                return 1;
+            }
+        }
+        return 0;
+    }
+    /* ② 第 N 步 <动作>（N 认不出就自动排号） */
+    if (strcmp(words[0], "第") == 0 || strncmp(words[0], "第", strlen("第")) == 0) {
+        size_t j = 1;
+        int idx = 0;
+        if (j < n && strcmp(words[j], "步") != 0) { idx = atoi(words[j]); j++; }
+        if (j < n && strcmp(words[j], "步") == 0) j++;
+        if (j < n && j < n + 1) {
+            /* 过程名：当前只有一个过程时就用它（多说一句"哪个过程"也可以：`第1步 泡茶 烧水`） */
+            char pname[64] = {0};
+            size_t k = 0, nproc = 0;
+            for (size_t i = 0; i < ai->pool->count; ++i) {
+                Token *t = ai->pool->tokens[i];
+                if (!t || !t->name || t->is_garbage) continue;
+                if (strncmp(t->name, PROC_TOKEN_PREFIX, strlen(PROC_TOKEN_PREFIX)) != 0) continue;
+                nproc++;
+                if (nproc == 1) {
+                    const char *q = t->name + strlen(PROC_TOKEN_PREFIX);
+                    while (*q && *q != ']' && k + 1 < sizeof pname) pname[k++] = *q++;
+                    pname[k] = 0;
+                }
+            }
+            if (nproc != 1) {
+                snprintf(out, out_cap, "我 这儿 有 %zu 个 过程 —— 说 「 记个过程 <名字> 」 先 定 一个", nproc);
+                return 1;
+            }
+            char note[160], act[64];
+            (void)dialog_join_words(words, n, j, act, sizeof act);
+            char *a[3] = { pname, act, NULL };
+            size_t an = 2;
+            char nb[16];
+            if (idx > 0) { snprintf(nb, sizeof nb, "%d", idx); a[2] = nb; an = 3; }
+            if (act[0] && token_op_run(ai, "加步骤", a, an, note, sizeof note) >= 0) {
+                snprintf(out, out_cap, "记下 了 ： 过程 「 %s 」 第 %s 步 是 「 %s 」", pname,
+                         idx > 0 ? nb : "（自动排）", act);
+                return 1;
+            }
+        }
+        return 0;
+    }
+    /* ③ 跑 <过程名> / 跑过程 [<名字>] */
+    if (strcmp(words[0], "跑") == 0 || strcmp(words[0], "跑跑") == 0) {
+        char nm[64];
+        size_t from = (n >= 2 && strcmp(words[1], "过程") == 0) ? 2 : 1;
+        if (dialog_join_words(words, n, from, nm, sizeof nm) == 0) return 0;
+        const char *bare = nm;
+        if (!proc_root_of(ai, bare)) {
+            snprintf(out, out_cap, "没有 「 %s 」 这个 过程", bare);
+            return 1;
+        }
+        if (!ai->proc_run) {
+            snprintf(out, out_cap, "过程 「 %s 」 在 ， 可 执行 引擎 关着 （ ::proc on 打开 ）", bare);
+            return 1;
+        }
+        size_t gaps = proc_run(ai, bare, NULL);
+        snprintf(out, out_cap, "跑 完 了 「 %s 」 ： %s", bare,
+                 gaps ? "有 断点 —— 停 在 断点 上" : "每 一步 都 过 得 去");
+        return 1;
+    }
+    return 0;
 }
 
 /* ============================ ③ 他者视角进回答路径（默认关） ============================
@@ -1915,7 +2067,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         char tobuf[256];
         /* ③ 他者视角（复数主语"大家/他们/别人"）先试：**默认关**，关着时这一行什么都不做 */
-        if (dialog_trigger_try_others(ai, words, n, tobuf, sizeof tobuf) ||
+        if (dialog_try_proc(ai, words, n, tobuf, sizeof tobuf) ||
+            dialog_trigger_try_others(ai, words, n, tobuf, sizeof tobuf) ||
             dialog_trigger_try(ai, words, n, tobuf, sizeof tobuf)) {
             snprintf(out, out_cap, "%s", tobuf);
             cot_push(ai, COT_INFER, 1, 80, "对话触发（Token 行为）", tobuf);

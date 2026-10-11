@@ -2256,6 +2256,59 @@ static inline int token_op_add_back(AI *ai, char *const *args, size_t n, ModQueu
  * `加条件 <过程> <条件词> <动作>`：`[过程:X] —[条件:条件词]→ 动作`（条件成立才走这一步）。
  * `加否则 <过程> <动作>`：条件不成立时走的那一支（和上面那条互斥）。
  * `加异常 <过程> <类型> <动作>`：哪一步失败时跳去做的处理步（类型只作标签，v1 不按类型分派）。 */
+/* `加断言 <过程> <主语> <关系> <宾语> [不] [序号]`：给过程加一个**要核的步骤**
+ * （记号 = `[步骤:N@要:S/R/B]`）—— 跑的时候用 `rel_solve` + `der_verify` 独立复核，
+ * 这就是"步骤带对象"那条（第 9 条 ① 的收口）。 */
+static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                     char *note, size_t cap) {
+    if (n < 4) { snprintf(note, cap, "要 <过程> <主语> <关系> <宾语> [不] [序号]"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    Token *sub = pool_find(ai->pool, args[1]);
+    Token *obj = pool_find(ai->pool, args[3]);
+    /* 关系**只记名字、到跑的时候再解析**：micro.h 在 rel.h 之前（这一层看不见 rel_id_of）。
+     * 关系词表启动时都会进池子，所以这里先按"词在不在"做个粗检查。 */
+    Token *relw = pool_find(ai->pool, args[2]);
+    if (!sub || !obj || !relw) {
+        snprintf(note, cap, "主语/关系/宾语认不全（关系词得是表里的）");
+        return -1;
+    }
+    int neg = 0, idx = 0;
+    for (size_t i = 4; i < n; ++i) {
+        if (!args[i] || !args[i][0]) continue;
+        if (strcmp(args[i], "不") == 0) { neg = 1; continue; }
+        int d = atoi(args[i]);
+        if (d > 0) idx = d;
+    }
+    if (idx <= 0) {
+        for (size_t i = 0; i < root->count; ++i) {
+            int sN = edge_step_index(&root->assocs[i]);
+            if (sN > idx) idx = sN;
+        }
+        idx++;
+    }
+    if (idx > 255) { snprintf(note, cap, "步号太大"); return -1; }
+    char mk[160];
+    snprintf(mk, sizeof mk, "%s%d%s%s/%s/%s%s]", PROC_STEP_PREFIX, idx, PROC_STEP_CLAIM,
+             args[1], args[2], args[3], neg ? "/不" : "");
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = sub;                                  /* 端点 = 主语词 */
+    snprintf(m.name, sizeof m.name, "%s", args[1]);
+    snprintf(m.source, sizeof m.source, "行为:加断言");
+    m.flags = MOD_FLAG_PROCESS;
+    m.rel_id = (uint8_t)idx;
+    m.action = pool_token_intern(ai->pool, mk);
+    if (!m.action) { snprintf(note, cap, "断言记号建不出来"); return -1; }
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk,
+             args[1], ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+
 static inline int token_op_add_cond(AI *ai, char *const *args, size_t n, ModQueue *q,
                                     char *note, size_t cap) {
     if (n < 3) { snprintf(note, cap, "要 <过程> <条件词> <动作>"); return -1; }
@@ -2487,6 +2540,9 @@ static const TokenOp TOKEN_OPS[] = {
       3, 3, token_op_add_cond },
     { "加否则",     "<过程> <动作>", "⑤ 给过程加**另一支**（`[否则]`）：上面那条条件不成立时走它",
       2, 2, token_op_add_else },
+    { "加断言",     "<过程> <主语> <关系> <宾语> [不] [序号]", "① 给过程加一个**要核的步骤**"
+      "（`[步骤:N@要:S/R/B]`）：跑的时候 `rel_solve` + `der_verify` **独立复核**，核不过就是断点",
+      4, 6, token_op_add_claim },
     { "加异常",     "<过程> <类型> <动作>", "⑤ 给过程加**出错时跳的处理步**（`[异常:类型]`）："
       "哪一步失败就跑它（类型只作标签，v1 不按类型分派）", 3, 3, token_op_add_exc },
     { NULL, NULL, NULL, 0, 0, NULL }

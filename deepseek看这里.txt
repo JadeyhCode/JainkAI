@@ -171,9 +171,17 @@
        看护 tokenop ⑫ 10 项（102 项全过）、optest ㉖ 18 项（333 项全过）；整包三跑法全绿。
      · **§6.56 的五步走到此整条收口**（①表示 §6.57 / ②记号 §6.70 / ③引擎 §6.71 /
        ④Hypo 栈 §6.72 / ⑤分支循环异常 §6.73）。
-     · ⬜ **下一件（候选，待用户点）**：① **步骤带对象/条件** ⇒ 逐步 `der_verify` 独立重推
-       （五步走里唯一还没接的那条；要么给步骤加对象槽，要么把 `[思考:N]` 对象化搬过来）；
-       ② 把过程记号接进**对话/思维**（现在只有 `::op`/`::proc` 两个入口）；
+     · ~~**① 步骤带对象 ⇒ `der_verify` 独立复核**~~ ✅（**§6.74①**）：记号
+       `[步骤:N@要:S/R/B]` + `::op 加断言 …`（表尾、受审通道）；跑时 `rel_solve` + `der_verify`
+       独立复核，核不过 ⇒ 断点；**顺带修 CLI 老洞**（`::op` 原来只收 3 个参数 ⇒
+       声明 6 个参数的 `调用补丁` 从 CLI 永远够不着）。
+     · ~~**② 过程记号接进对话**~~ ✅（**§6.74②**）：`::proc talk on|off` / `AIP_PROCTALK=1`（默认关）——
+       「记个过程 X」/「第 N 步 动作」/「跑 X」三种说法（**拼词**：分词器会切开「泡茶」），
+       动作走受审通道；引擎关着时明说关着。
+     · ~~**③ 情态说法归一**~~ ✅（**§6.74③**）：`REL_MODALS[]`（`不能/没法/不会` → 会的否定；
+       `不敢` → 怕的肯定），两种切法都认，**先查表再 allow_new**（顺手修掉"能/法 被登记成动态谓语"）。
+     · ⬜ **下一件（候选，待用户点）**：① 过程**接进思维**（思维循环里自己提议建/跑过程）；
+       ② 局限总表里其它登记项（老写入者、闸门判别力窄、`叙事` 没显形、`ai_analogy` 从没被调用…）；
      · 方案（讨论定稿）：**"过程边 vs 共现边"用 role 标记** —— `uint8_t role` 现在只用 0~5
        （共现/输入/回复/造词/推论/基准），**还剩 250 个空位**，加 `ASSOC_ROLE_PROCESS` 是一行枚举
        + 一行中文名 + 一个判据函数（`edge_is_process()`），**不动存档布局**；
@@ -193,16 +201,17 @@
   · 提交：`067641f`（交接）← `2befdcd`（过程记号 ①+②）← `adca85d`（合写否定）← `dcd0537`（③ 他者视角）
     ← `965bf1f`（② 机制路候选证据）← `4ed5ebe`（① `::order` 接图里的顺序 + ④ tests 扫描/selfcheck）
     ← `913cfb8`（N3）← `5b4c60b`（N2）← `2bba20e`（N4）← `ee4ebea`（K6）← `a1b9ee2`（N1）
-  · 看护数（**都是实测**）：optest **333** / tokenop **102** / delibtest **155** / microtest **71** /
+  · 看护数（**都是实测**）：optest **339** / tokenop **115** / delibtest **155** / microtest **71** /
     biastest 35 / selfmod **80** / thinking **76**（反向 74）/ features **37** / asmcheck 39 /
     cmdtable **74 条命令**（13 项）/ belief **44** / relations **20** / dupcheck 24 /
     **`tests/selfcheck.sh` 4 组**（看护的看护，接在 `all.sh` 第 0 步）
   · 整包：32 套 + 冒烟 + SELFCHECK，**并行 ≈46 s**，默认跑法与各开关跑法都全绿（`_t/*_ab.log`）
   · **默认关**的开关（反向测量都跑过整包）：`AIP_ASMCHECK` `AIP_ASCII` `AIP_THINKOBJ` `AIP_ROUTE`
-    `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
+    `AIP_IDLE` `AIP_DRAFTMID` `AIP_THINKREDO` `AIP_OTHERS` `AIP_PROCRUN` `AIP_PROCDRY`
+    `AIP_PROCTALK`（+ 更早的 `AIP_WGATE` `AIP_ACT` `AIP_CODE`
     `AIP_DRIVE` `AIP_TRIGGER` `AIP_PREMHOLD` `AIP_D4` `AIP_PATCH` `AIP_NOTEPAD` …）
-  · 常用命令新增：`::proc [<名字>|on|off|dry on|off|run <名字>]`、
-    `::op 加条件/加否则/加异常`（`加回边` 多一个可选条件词）、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
+  · 常用命令新增：`::proc [<名字>|on|off|dry on|off|talk on|off|run <名字>]`、
+    `::op 加条件/加否则/加异常/加断言`（`加回边` 多一个可选条件词）、`::others ask`、`::thinkredo`、`::notepad mid`、`::idle`、`::thinkobj`、
     `::asm check`、`::lex`、`::ascii`
   · `codes/` 镜像 **100 文件逐字节一致**；工作区干净；存档格式仍 **v10**（没动过）
   · **局限总表**：`docs/局限总表.md`（现有局限的索引+摘要，含设计取舍/已知缺口/已知陷阱/已修索引；

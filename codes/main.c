@@ -677,6 +677,8 @@ static const CmdDef CMDS[] = {
       "控制流记号挂在动作槽上（`[步骤:N]` / `[调用]` / `[回边]`）。\n"
       "不带参数：列出所有过程；带名字：按步号打印，并把**不是过程边**的边单独标出来\n"
       "::proc on|off       过程**执行引擎**（第 9 条 ③；默认关，AIP_PROCRUN=1）\n"
+      "::proc talk on|off  ② 过程记号**接进对话**（默认关，AIP_PROCTALK=1）：\n"
+      "  「记个过程 X」建过程 / 「第 N 步 动作」加一步 / 「跑 X」跑一遍（都走受审通道）\n"
       "::proc dry on|off   ④ **干跑**（假设世界，默认关，AIP_PROCDRY=1）：前提不成立 → 假定成立\n"
       "  （记进假设层）、行为步骤不执行；跑完 pop 干净 —— 假设层用的是现成的 `Hypo`\n"
       "::proc run <名字>   把一条过程跑一遍：逐步核对（认识吗 / 前提成立吗 / 是不是行为）——\n"
@@ -991,6 +993,18 @@ static void cmd_proc(AI *ai, const char *cmd) {
      * 下标按命令名长度算（"proc" 4 个字母），写成 6 会永远拿不到参数（实测踩过）。 */
     const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
     while (arg && *arg == ' ') arg++;
+    if (arg && !strncmp(arg, "talk", 4) && (arg[4] == 0 || arg[4] == ' ')) {
+        /* ② 过程记号接进**对话**（默认关）：说「记个过程 泡茶」「第 1 步 烧水」「跑 泡茶」 */
+        const char *v = arg + 4;
+        while (*v == ' ') v++;
+        if (!strcmp(v, "on"))       ai->proc_talk = 1;
+        else if (!strcmp(v, "off")) ai->proc_talk = 0;
+        else if (*v) { printf("[用法] ::proc talk on|off\n"); return; }
+        printf("[过程记号接进对话 = %s]（%s）\n", ai->proc_talk ? "开" : "关（默认）",
+               ai->proc_talk ? "「记个过程 X」建 / 「第 N 步 动作」加 / 「跑 X」跑（走受审通道）"
+                             : "这些话照走流水线，一句都不认");
+        return;
+    }
     if (arg && !strncmp(arg, "dry", 3) && (arg[3] == 0 || arg[3] == ' ')) {
         /* 第 9 条 ④ **干跑**（假设世界）：前提不成立改成"假定成立"（记进假设层）、
          * 行为步骤不执行；跑完把假设层 pop 回原样 —— 默认关。 */
@@ -1515,11 +1529,14 @@ int main(int argc, char **argv) {
                     printf("  当前未回收的临时 Token：%zu 个（不存盘；::op 回收临时 清理）\n", ntemp);
                     continue;
                 }
-                char *args[4] = {NULL, NULL, NULL, NULL};
+                /* 9 格 = 操作名 + **8 个参数**（表里 max_args 最大是 6：`加断言`/`调用补丁`）——
+                 * 原来是 `args[4]`（操作名 + 最多 3 个参数），于是"声明 6 个参数"的 `调用补丁`
+                 * 从 CLI **永远够不着**（实测：`::op 加断言 a b c d` 报"参数不对"）。 */
+                char *args[9] = {NULL};
                 size_t nargs = 0;
                 char tmp[256];
                 snprintf(tmp, sizeof tmp, "%s", arg);
-                for (char *q = tmp; *q && nargs < 4; ) {
+                for (char *q = tmp; *q && nargs < 9; ) {
                     while (*q == ' ' || *q == '\t') q++;
                     if (!*q) break;
                     args[nargs++] = q;

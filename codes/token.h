@@ -117,6 +117,9 @@ static inline const char *assoc_role_name(uint8_t role) {
 /* ⑤ 分支/循环/异常：条件挂**这一步**上（`[条件:X]` = 走这一步要先 X 成立）、
  * 互斥的另一支挂 `[否则]`、出错时跳的那一支挂 `[异常:类型]`。
  * 条件判据**不另造**：就是前提那三档（`ai_premise_holds`：注意窗口里 / 图上够得着 / 够得着且有据）。 */
+#define PROC_STEP_CLAIM    "@要:"      /* 步骤记号里带"要核的那件事"：`[步骤:N@要:主语/关系/宾语[/不]]`
+                                          * —— 一条边一个记号，所以"顺序 + 要核什么"写在同一个记号里（不撞车）。
+                                          * 带它的步骤跑的时候走 `rel_solve` + `der_verify` **独立复核**。 */
 #define PROC_COND_PREFIX   "[条件:"
 #define PROC_ELSE_MARK     "[否则]"
 #define PROC_EXC_PREFIX    "[异常:"
@@ -475,6 +478,40 @@ static inline size_t proc_mark_bare(const char *name, const char *prefix,
     while (*q && *q != ']' && k + 1 < cap) out[k++] = *q++;
     if (out && cap) out[k] = 0;
     return k;
+}
+
+/* 步骤记号里有没有"要核的事"：`[步骤:N@要:S/R/B]`（末尾 `/不` = 要它**不**成立）。
+ * 有就交给 `rel_solve` + `der_verify` 独立复核（第 9 条 ① 的收口）。返回 1 = 有。 */
+static inline int proc_step_claim(const AssocEntry *e, int *out_idx,
+                                  char *sb, size_t scap, char *rb, size_t rcap,
+                                  char *bb, size_t bcap, int *out_neg) {
+    if (out_idx) *out_idx = 0;
+    if (out_neg) *out_neg = 0;
+    if (sb && scap) sb[0] = 0;
+    if (rb && rcap) rb[0] = 0;
+    if (bb && bcap) bb[0] = 0;
+    if (!e || !e->action || !e->action->name) return 0;
+    const char *nm = e->action->name;
+    if (strncmp(nm, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) != 0) return 0;
+    if (out_idx) *out_idx = edge_step_index(e);
+    const char *at = strstr(nm, PROC_STEP_CLAIM);
+    if (!at) return 0;
+    at += strlen(PROC_STEP_CLAIM);
+    /* 三段：主语 / 关系 / 宾语（可带结尾 `/不`） */
+    char *dst[3] = { sb, rb, bb };
+    size_t cap[3] = { scap, rcap, bcap };
+    int seg = 0; size_t k = 0;
+    for (const char *q = at; ; ++q) {
+        if (*q == '/' || *q == ']' || *q == 0) {
+            if (seg < 3 && dst[seg] && cap[seg]) dst[seg][k < cap[seg] ? k : cap[seg] - 1] = 0;
+            seg++; k = 0;
+            if (*q != '/') break;
+            if (seg >= 3) { if (out_neg && strcmp(q + 1, "不]") == 0) *out_neg = 1; break; }
+            continue;
+        }
+        if (seg < 3 && dst[seg] && k + 1 < cap[seg]) dst[seg][k++] = *q;
+    }
+    return (seg >= 3 && sb && sb[0] && rb && rb[0] && bb && bb[0]);
 }
 
 /* `[条件:X]` → X（名字里的那一段；不是条件边就返回 NULL）。 */

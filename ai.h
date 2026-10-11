@@ -682,6 +682,9 @@ typedef struct {
     /* **干跑**（第 9 条 ④，默认 0）：过程执行时"前提不成立"改成**假定成立**（记进假设层）、
      * 行为步骤**不执行**（只记"假定能做"）；跑完把假设层 pop 回原样 —— 一个字都不落图。 */
     int     proc_dry;
+    /* **过程记号接进对话**（第 9 条 ②入口，默认 0 = 关）：说「记个过程 泡茶」「第 1 步 烧水」
+     * 「跑 泡茶」就能建/跑过程（走的还是 `::op` 那条受审通道）。关着时一句都不认。 */
+    int     proc_talk;
     float energy, decay, cutoff;
     size_t max_gen;
     size_t consolidate_every;
@@ -1142,6 +1145,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *pr = getenv("AIP_PROCRUN"); if (pr && pr[0] == '1') ai->proc_run = 1; }
     ai->proc_dry = 0;                /* 干跑（假设世界）：默认**关** */
     { const char *pd = getenv("AIP_PROCDRY"); if (pd && pd[0] == '1') ai->proc_dry = 1; }
+    ai->proc_talk = 0;               /* 过程记号接进对话：默认**关** */
+    { const char *pt = getenv("AIP_PROCTALK"); if (pt && pt[0] == '1') ai->proc_talk = 1; }
     { const char *oa = getenv("AIP_OTHERS"); if (oa && oa[0] == '1') ai->others_ask = 1; }
     { const char *wg = getenv("AIP_WGATE");  if (wg && wg[0] == '1') ai->write_gate_off = 0; }
     /* 显式给 0 就关（默认是开，所以要能反向关掉 —— 反向测量靠它） */

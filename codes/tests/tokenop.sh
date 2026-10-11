@@ -32,9 +32,9 @@ run() { cp model.bin m.bin; { printf '::notepad off\n'; printf '%b' "$1"; } | ./
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
-grep -q 'Token 行为（图操作）：13 条' o1 && ok "::op 列出 13 条行为（表生成；过程记号那七条在**表尾**）" \
+grep -q 'Token 行为（图操作）：14 条' o1 && ok "::op 列出 14 条行为（表生成；过程记号那八条在**表尾**）" \
     || bad "行为表" "$(grep -A3 'Token 行为' o1 | head -4)"
-for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常; do
+for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言; do
     grep -q "::op $op" o1 || bad "表里少了行为 $op" "$(grep '::op' o1 | head -5)"
 done
 grep -q '当前未回收的临时 Token：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
@@ -488,8 +488,56 @@ grep -q '跳过 1 次' o28 && ok "⑤ 的账单独报（跳过/异常处理各�
     || bad "⑤ 账" "$(grep -m1 '⑤' o28)"
 
 
+echo "== ⑬ ① 步骤带对象：跑的时候 `rel_solve` + `der_verify` **独立复核** =="
+run '::proc on\n::proc dry off\n::op 建过程 核对\n::op 加断言 核对 猫 属于 动物\n::proc run 核对\n' o29
+grep -q '\*\*独立复核过\*\*（要核「猫 属于 动物」，链 2 步、缺口 0）' o29 \
+    && ok "带对象的步骤：**独立复核过**（求解器推 + 验证器复核，链长也报出来）" \
+    || bad "独立复核" "$(grep -m3 '步 \|复核' o29)"
+grep -q '① 步骤带对象：.*独立复核通过 1 个 / 不过 0 个' o29 && ok "复核结果进汇总（通过/不过各几个）" \
+    || bad "复核账" "$(grep -m1 '①' o29)"
+run '::proc on\n::proc dry off\n::op 建过程 核对\n::op 加断言 核对 猫 属于 鸟\n::proc run 核对\n' o30
+grep -q '\*\*复核不过\*\*（要核「猫 属于 鸟」' o30 && grep -q '1 个断点' o30 \
+    && ok "核不过 ⇒ **断点**（不是"反正词在就放行"）" \
+    || bad "核不过" "$(grep -m3 '步 \|汇总' o30)"
+run '::proc on\n::proc dry off\n::op 建过程 核对\n::op 加断言 核对 猫 属于 动物 不\n::proc run 核对\n' o31
+grep -q '要核「不 猫 属于 动物」' o31 && grep -q '复核不过' o31 \
+    && ok "`不` 那一档也认（要它**不**成立 —— 图上成立所以核不过，正好证明确实按否定核的）" \
+    || bad "否定断言" "$(grep -m2 '步 \|复核' o31)"
+run '::op 加断言 核对 猫 属于 动物\n' o32
+grep -q '参数不对' o32 || grep -q '没有这个过程' o32 \
+    && ok "CLI 参数上限修好了（`加断言` 要 4 个参数，原来 `args[4]` 只给 3 个）" \
+    || bad "参数上限" "$(head -3 o32)"
+
+
+echo "== ⑭ ② 过程记号接进对话（默认关）：说话就能建/加/跑 =="
+if [ -z "${AIP_PROCTALK:-}" ]; then
+    run '记个过程 泡茶\n' o33
+    grep -aq '记下 了 （ \[过程:泡茶\] ' o33 && bad "默认关不该认" "$(grep -m1 'AI >' o33)" \
+        || ok "默认关：这些话照走流水线（一句都不认）"
+    run '::proc talk\n' o34
+    grep -q '过程记号接进对话 = 关（默认）' o34 && ok "::proc talk 自报默认关" || bad "talk 默认" "$(head -2 o34)"
+else
+    ok "AIP_PROCTALK=1（反向测量）：默认值断言按规矩跳过"
+fi
+run '::proc talk on\n记个过程 泡茶\n第 1 步 烧水\n第 2 步 泡茶叶\n::proc 泡茶\n' o35
+grep -aq '过程 「 泡茶 」 记下 了' o35 && ok "「记个过程 X」→ 建过程（名字拼回去：分词器把「泡茶」切开了）" \
+    || bad "记个过程" "$(grep -m2 'AI >' o35)"
+grep -aq '第 1 步 是 「 烧水 」' o35 && grep -aq '第 2 步 是 「 泡茶叶 」' o35 \
+    && ok "「第 N 步 动作」→ 加步骤（步号认得出、动作拼回去）" || bad "第N步" "$(grep -m3 'AI >' o35)"
+grep -q '2 步 + 0 条件' o35 && ok "说出来的过程**真的建起来了**（::proc 看得到 2 步）" \
+    || bad "建起来了" "$(grep -m1 '过程]' o35)"
+run '::proc talk on\n记个过程 泡茶\n第 1 步 烧水\n跑 泡茶\n' o36
+grep -aq '执行 引擎 关着' o36 && ok "引擎关着时：「跑 X」明说关着（不假装跑了）" \
+    || bad "引擎关着" "$(grep -m2 'AI >' o36)"
+run '::proc talk on\n::proc on\n记个过程 泡茶\n第 1 步 烧水\n跑 泡茶\n' o37
+grep -aq '跑 完 了 「 泡茶 」' o37 && ok "引擎开着时：「跑 X」**真的跑一遍**（并说清有没有断点）" \
+    || bad "跑一遍" "$(grep -m2 'AI >' o37)"
+grep -aq "应用 1 条" o37 && ok "对话入口走的还是**受审通道**（报告「应用 N 条」）" \
+    || bad "受审通道" "$(grep -m1 '记下 了' o37)"
+
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1

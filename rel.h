@@ -208,6 +208,27 @@ static inline const char *rel_neg_of(const AI *ai, uint8_t id) {
  * 为什么非修不可（2026-10-10 实测，audit §6.68 三 / §6.69）：修之前
  *   `猫 不会 飞 吗` / `甲 说 猫 不会 游泳` / `我 不喜欢 猫 吗` 全掉进**降级答复**
  *   （"这个我 不 太 懂"），而两词写法「不 会」一切正常 —— 同一个意思两种写法两种待遇。 */
+/* **情态说法的归一**（第 6 条尾巴：合写否定修好之后，`不能/没法` 这类还掉降级答复）。
+ *
+ * `不能` 不是任何关系的"否定形式"，而是**情态写法**（能不能 ≈ 会不会做得到）。
+ * 所以它不走 `rel_merged_neg_id`（那是"同一条声明的两种切法"），走这张**小的说法表**：
+ * 只把最常用的几个情态说法归到 `(关系, 否定)` 上 —— 表是**数据**，加一行就多认一个说法。
+ * ⚠ 归一是"认说法"，不是"新语义"：判据仍然是那条关系边。 */
+typedef struct { const char *w; const char *rel; int neg; } RelModalRow;
+static const RelModalRow REL_MODALS[] = {
+    { "不能",  "会",   1 },
+    { "没法",  "会",   1 },
+    { "不会",  "会",   1 },     /* 合写（rel_merged_neg_id 已经认，这里只是让表自洽） */
+    { "不敢",  "怕",   0 },     /* "不敢"更接近"怕"：先按**肯定**的怕收（宁可弱，不乱否） */
+    { NULL, NULL, 0 }
+};
+static inline const RelModalRow *rel_modal_of(const char *w) {
+    if (!w) return NULL;
+    for (size_t i = 0; REL_MODALS[i].w; ++i)
+        if (strcmp(REL_MODALS[i].w, w) == 0) return &REL_MODALS[i];
+    return NULL;
+}
+
 static inline int rel_merged_neg_id(const char *w, uint8_t *out) {
     if (out) *out = 0;
     if (!w || !w[0]) return 0;
@@ -1275,7 +1296,7 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
 
     size_t ri = 1;                        /* 关系词的位置 */
     int is_neg = 0;
-    if (last >= 4 && strcmp(words[1], "不") == 0) { is_neg = 1; ri = 2; }
+    if (last >= 4 && (strcmp(words[1], "不") == 0 || strcmp(words[1], "没") == 0)) { is_neg = 1; ri = 2; }
     /* 「没有」是「有」的否定形式，而且它是**一个词**：
      *   `猫 没有 声带` = 猫 -[不 有]-> 声带，而不是「猫 没有 X」三个词。
      * 不认它的话，「缺前提」那类事实就没法从对话里说进来（实测）。 */
@@ -1297,6 +1318,22 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
     if (ri >= last) return 0;
     uint8_t id = 0;
     const char *merged_name = NULL;   /* 合写时：那个 token 里**已经含**否定了，别再拼一遍 */
+    /* 「不 X」/「没 X」：先看**拼起来**是不是情态说法（`不能`/`没法`/`不敢` —— 分词器把
+     * 它们切成两个词，所以得拼回去查那张表）；再看 X 是不是关系词。
+     * 顺序要紧：先查表再 `rel_id_of(..., allow_new)`，否则「能」会被当场登记成动态谓语。 */
+    if (is_neg && ri == 2 && words[ri]) {
+        char jw[40];
+        snprintf(jw, sizeof jw, "%s%s", words[1], words[ri]);
+        const RelModalRow *mr = rel_modal_of(jw);
+        if (mr) {
+            uint8_t r2 = rel_id_of(ai, mr->rel, 0);
+            if (r2) {
+                id = r2;
+                is_neg = mr->neg;
+                merged_name = rel_name_of(ai, r2);
+            }
+        }
+    }
     if (!is_neg) {
         /* 合写否定（`不会`/`不喜欢`/`不是`）：**一个 token 就是「否定 + 关系」** ——
          * 与两词写法共用同一份声明（`rel_merged_neg_id` 去空格比）。 */
@@ -1305,10 +1342,18 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
             is_neg = 1;
             id = mid;
             { const RelDef *mrd = rel_by_id(mid); merged_name = mrd ? mrd->name : NULL; }
+        } else if (rel_modal_of(words[1])) {
+            /* 情态写法（`不能`/`没法`/…）：归到那张表上的 (关系, 否定) */
+            const RelModalRow *mr = rel_modal_of(words[1]);
+            uint8_t rid2 = rel_id_of(ai, mr->rel, 0);
+            if (rid2 == 0) return 0;
+            id = rid2;
+            is_neg = mr->neg;
+            merged_name = rel_name_of(ai, rid2);
         } else {
             id = rel_id_of(ai, words[ri], allow_new);
         }
-    } else {
+    } else if (!id) {
         id = rel_id_of(ai, words[ri], allow_new);
     }
     if (!id) return 0;

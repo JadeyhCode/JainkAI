@@ -34,8 +34,8 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 static void test_table(void) {
     printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
-    ok(n == 13, "表里 13 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
-                "后 7 条 = 过程记号 ①②⑤，**必须在表尾** —— 原语层按下标引用这张表）");
+    ok(n == 14, "表里 14 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
+                "后 8 条 = 过程记号 ①②⑤，**必须在表尾** —— 原语层按下标引用这张表）");
     int dup = 0, nofn = 0, noshape = 0;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
         if (!TOKEN_OPS[i].expand) nofn++;
@@ -1665,6 +1665,50 @@ static void test_proc_branch(void) {
     }
 }
 
+/* ============ ㉗ ① 步骤带对象：逐步 `der_verify` 独立复核（第 9 条 ① 的收口） ============ */
+static void test_proc_claim(void) {
+    printf("== ㉗ ① 步骤带对象：`rel_solve` + `der_verify` 独立复核 ==\n");
+    AI *ai = ai_new();
+    /* 主语/关系/宾语都得先在池子里（CLI 那侧是装载模型/分词时进的）—— 这是 `pool_find` 的脾气，
+     * 和 §6.61 那次"加前提"踩的是同一个坑。 */
+    (void)T(ai, "属于"); (void)T(ai, "猫"); (void)T(ai, "动物");
+    (void)token_tag_rel(T(ai, "猫"), T(ai, "动物"), REL_IS_A, REL_BOOST);   /* 图里真有这条 */
+    char note[200];
+    { char *a[1] = {(char *)"核对2"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+    { char *a[4] = {(char *)"核对2", (char *)"猫", (char *)"属于", (char *)"动物"};
+      ok(token_op_run(ai, "加断言", a, 4, note, sizeof note) >= 0,
+         "`加断言`（4 个参数）走受审通道 —— CLI 参数上限也是这一轮修的"); }
+    Token *root = proc_root_of(ai, "核对2");
+    long i = root ? micro_edge_index(root, pool_find(ai->pool, "猫")) : -1;
+    ok(i >= 0, "断言边建出来了（端点 = 主语）");
+    if (i >= 0) {
+        int idx = 0, neg = 0; char sb[64], rb[64], bb[64];
+        ok(proc_step_claim(&root->assocs[i], &idx, sb, sizeof sb, rb, sizeof rb, bb, sizeof bb,
+                           &neg) == 1 && idx == 1 && strcmp(sb, "猫") == 0 &&
+           strcmp(rb, "属于") == 0 && strcmp(bb, "动物") == 0 && neg == 0,
+           "`proc_step_claim` 从记号里解出（步号, 主语, 关系, 宾语, 否定）");
+    }
+    ai->proc_run = 1; ai->proc_dry = 0;
+    ProcRun pr;
+    (void)proc_run(ai, "核对2", &pr);
+    ok(pr.n_verified == 1 && pr.n_verify_fail == 0 && pr.n_gap == 0,
+       "成立的那条：**独立复核通过 1 个**（0 断点）");
+    ok(pr.trace.n >= 3, "复核过的链**并进了整轮轨迹**（不是只报个通过）");
+    ai_free(ai);
+    /* 不成立的那条 ⇒ 断点 */
+    AI *b = ai_new();
+    (void)T(b, "属于"); (void)T(b, "猫"); (void)T(b, "鸟");
+    char n2[200];
+    { char *a[1] = {(char *)"核对3"}; (void)token_op_run(b, "建过程", a, 1, n2, sizeof n2); }
+    { char *a[4] = {(char *)"核对3", (char *)"猫", (char *)"属于", (char *)"鸟"};
+      (void)token_op_run(b, "加断言", a, 4, n2, sizeof n2); }
+    b->proc_run = 1; b->proc_dry = 0;
+    ProcRun q;
+    (void)proc_run(b, "核对3", &q);
+    ok(q.n_verify_fail == 1 && q.n_gap == 1, "核不过的那条 ⇒ **1 个断点**（不是「词在就放行」）");
+    ai_free(b);
+}
+
 /* ============================ ⑲ 逐条可信度：我更信哪一条 ============================
  *
  * 用户要的「逐条可信度权重」。它**不是新字段**（格式没动）：从来源档 + 命中 + 新近
@@ -2019,6 +2063,7 @@ int main(void) {
     test_proc_run();
     test_proc_dry();
     test_proc_branch();
+    test_proc_claim();
     test_credibility();
     test_struct_drive_order();
     test_premise_tiers();
