@@ -16,6 +16,7 @@
 #include "../agent.h"
 #include "../drive.h"
 #include "../model_io.h"
+#include "../code.h"   /* code_rule_for：修法表按错误文本选规则（§6.97） */
 #include "../token_lang.h"
 
 #include <stdio.h>
@@ -1806,6 +1807,26 @@ static void test_tail_blocks(void) {
 /* ② 档：**指代消解最小版**（§6.87）—— 句首 他/她/它 指回最近说话的那个人 */
 /* ② 档：**闸门分层判据**（§6.89）—— 硬门槛 + 三档，替掉"一个阈值切不动"那条 */
 /* ② 档：**类比兜底**（§6.90）—— 规则答不出时，用同类（同一上位）互相推，答**大概** */
+/* C③ 第二/三件（§6.97）：修法表按错误文本选规则 + 多轮修正的开关默认关 */
+static void test_code_fixes(void) {
+    printf("== ㊶ C③：修法表（补分号/补 #include/补声明）+ 多轮修正开关 ==\n");
+    ok(code_rule_for("error: expected ';' before '}' token") != NULL, "缺分号 ⇒ 认得出（规则 0）");
+    ok(code_rule_for("error: implicit declaration of function 'foo'") != NULL, "没声明函数 ⇒ 认得出（规则 1）");
+    ok(code_rule_for("error: 'bar' undeclared (first use in this function)") != NULL,
+       "没声明的名字 ⇒ 认得出（规则 2，**这轮新加的**）");
+    ok(code_rule_for("error: something totally unknown") == NULL, "认不出就不瞎改（返回 NULL）");
+    {
+        char src[128];
+        snprintf(src, sizeof src, "int main(void){\n  x = 1;\n  return 0;\n}\n");
+        int r = code_fix_declare(src, sizeof src, "error: 'x' undeclared", 2);
+        ok(r == 0 && strstr(src, "int x;") != NULL, "补声明真的插进去了（`int x;`）");
+    }
+    { AI *ai = ai_new();
+      if (getenv("AIP_CODEMULTI")) ok(1, "AIP_CODEMULTI=1（反向测量）：默认值断言按规矩跳过");
+      else ok(ai->code_multi == 0, "多轮修正**默认关**（关着时行为与今天逐字节相同）");
+      ai_free(ai); }
+}
+
 static void test_analogy_fallback(void) {
     printf("== ㊵ ② 类比兜底：同类互推，答「大概」（默认关） ==\n");
     AI *ai = ai_new();
@@ -2468,6 +2489,7 @@ int main(void) {
     test_pron_last();
     test_wgate_tier();
     test_analogy_fallback();
+    test_code_fixes();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

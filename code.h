@@ -47,6 +47,9 @@ static const CodeFixRule CODE_FIXES[] = {
       "gcc 说这一行缺 `;` → 在它指的**上一行末尾**补一个（它报的是缺分号之后的第一处）" },
     { "implicit declaration", "补 #include",
       "用了没声明的函数 → 按函数名补对应的头（printf/puts→stdio.h；str*/mem*→string.h；malloc/free/exit→stdlib.h）" },
+    { "' undeclared",         "补声明",
+      "用了没声明的**名字**（不是函数）→ 在出错行前补一句 `int <名字>;`（类型只能猜 int，"
+      "错了它会再来一轮 —— 这就是「机械降级」的代价，照实说）" },
     { NULL, NULL, NULL }
 };
 #define CODE_FIX_N ((sizeof CODE_FIXES / sizeof CODE_FIXES[0]) - 1)
@@ -117,6 +120,47 @@ static inline int code_fix_include(char *src, size_t cap, const char *hdr) {
     snprintf(src, cap, "%s", tmp);
     return 0;
 }
+
+/* **按错误文本选修法**（抽成一处：这样能用假错误串直接单测，不用真跑 gcc） */
+static inline const CodeFixRule *code_rule_for(const char *err) {
+    if (!err || !err[0]) return NULL;
+    /* 规则 0（补分号）要**真的在说分号**，而且不能是"文件到头了"那种 ——
+     * `expected declaration or statement at end of input` 也含 expected/;，
+     * 但补分号救不了它（认错形状就会瞎改，实测踩过）。这条判据以前散在 `code_round` 里，
+     * 现在收进这个 helper：**一处放**，另一处只调它（也就能用假错误串直接单测）。 */
+    if (strstr(err, "expected") && strstr(err, ";") && !strstr(err, "end of input"))
+        return &CODE_FIXES[0];
+    for (size_t i = 1; i < CODE_FIX_N; ++i)
+        if (strstr(err, CODE_FIXES[i].err)) return &CODE_FIXES[i];
+    return NULL;
+}
+
+/* 补声明：在 line 前插一句 `int <name>;`（名字从 `'X' undeclared` 里抠）。
+ * 类型只能猜 int —— 猜错就靠下一轮编译错误再修（这就是降级版的代价，不装懂）。 */
+static inline int code_fix_declare(char *src, size_t cap, const char *err, int line) {
+    if (!src || !err) return -1;
+    const char *q = strchr(err, '\'');
+    if (!q) return -1;
+    q++;
+    const char *e = strchr(q, '\'');
+    if (!e || e <= q) return -1;
+    char name[64];
+    size_t k = 0;
+    while (q < e && k + 1 < sizeof name) name[k++] = *q++;
+    name[k] = 0;
+    if (k == 0 || k >= sizeof name - 8) return -1;
+    char ins[96];
+    snprintf(ins, sizeof ins, "int %s;\n", name);
+    /* 在出错行之前插入（按行数定位；行号越界就插到开头） */
+    size_t off = 0; int ln = 1;
+    while (src[off] && ln < line) { if (src[off] == '\n') ln++; off++; }
+    size_t il = strlen(ins);
+    if (strlen(src) + il + 1 > cap) return -1;
+    memmove(src + off + il, src + off, strlen(src + off) + 1);
+    memcpy(src + off, ins, il);
+    return 0;
+}
+
 
 /* 有界拼字符串：小缓冲别用 `snprintf("%s")` 收长名字/长理由 ——
  * `-Werror=format-truncation` 会拦下来（项目里这个坑踩过好几次）。 */
@@ -236,16 +280,10 @@ static inline int code_round(AI *ai, const char *rel) {
     /* 改：按表认规则。规则①要**真的在说分号**，而且不能是"文件到头了"那种形状
      * （`expected declaration or statement at end of input` 也含 "expected"，
      *  但补分号救不了它 —— 认错形状就会瞎改，实测踩过）。 */
-    const CodeFixRule *rule = NULL;
-    if (cr->err[0] && strstr(cr->err, "expected") && strstr(cr->err, ";") &&
-        !strstr(cr->err, "end of input"))
-        rule = &CODE_FIXES[0];
-    else
-        for (size_t i = 1; i < CODE_FIX_N; ++i)
-            if (cr->err[0] && strstr(cr->err, CODE_FIXES[i].err)) { rule = &CODE_FIXES[i]; break; }
+    const CodeFixRule *rule = code_rule_for(cr->err);   /* 判据在 helper 里（可单测） */
     if (!rule) {
         snprintf(cr->note, sizeof cr->note,
-                 "没有已知的机械修法（降级版只认两类错）—— 停在原地，不猜");
+                 "没有已知的机械修法（降级版只认表里那三类错）—— 停在原地，不猜");
         cr->final_rc = rc;
         (void)code_observe(ai, rc);
         free(src);
@@ -257,6 +295,12 @@ static inline int code_round(AI *ai, const char *rel) {
         /* 「expected … ;」→ 补在报错位置的**上一行**（gcc 报的是缺分号之后的第一处） */
         fixed = code_fix_semicolon(src, CODE_SRC_CAP, line > 1 ? line - 1 : line);
         if (fixed != 0) snprintf(cr->note, sizeof cr->note, "认出了「补分号」但那一行补不进去（第 %d 行）", line > 1 ? line - 1 : line);
+    } else if (cr->rule == 2) {
+        /* §6.97 第三条修法：**补声明**（在出错行前插 `int <名字>;`）—— 与另两条同构：
+         * 只改 `src`，后面统一写回/再编；改不动就把 `fixed` 留成非 0，走"停在这"那条。 */
+        fixed = code_fix_declare(src, CODE_SRC_CAP, cr->err, line > 1 ? line : 1);
+        if (fixed != 0) snprintf(cr->note, sizeof cr->note, "认出了「补声明」但名字抠不出来 —— 停在这");
+        else snprintf(cr->note, sizeof cr->note, "按规则补了声明（类型只能猜 `int`；错了下一轮再修）");
     } else {
         const char *hdr = code_header_for(cr->err);
         if (!hdr) snprintf(cr->note, sizeof cr->note, "认出了「补 #include」但函数名不在表里 —— 不猜");
@@ -286,6 +330,48 @@ static inline int code_round(AI *ai, const char *rel) {
     int rc2 = action_run(ai, cmd);
     cr->attempts = 2;
     cr->final_rc = rc2;
+    /* **C③ 第二件：多轮自我修正**（默认关，`::code multi on` / `AIP_CODEMULTI=1`）：
+     * 第二次还编不过时，**用新的错误再认一遍规则**、再改一处、再编一次（总次数 ≤ 3）。
+     * 老行为 = 只改一次（默认关 ⇒ 逐字节相同）；这里只用多出来的那一轮，不改已有那一轮。 */
+    if (rc2 != 0 && ai->code_multi && cr->attempts < 3) {
+        char where2[CODE_ERR_CAP];
+        int line2 = 0;
+        code_first_error(action_book()->last_out, where2, sizeof where2, cr->err, sizeof cr->err, &line2);
+        const CodeFixRule *r2 = code_rule_for(cr->err);
+        if (r2) {
+            int idx2 = (int)(r2 - CODE_FIXES);
+            char *src2 = (char *)malloc(CODE_SRC_CAP);
+            FILE *f2 = fopen(full, "rb");
+            size_t got2 = 0;
+            if (src2 && f2) { got2 = fread(src2, 1, CODE_SRC_CAP - 1, f2); }
+            if (f2) fclose(f2);
+            if (src2) {
+                src2[got2] = 0;
+                int fx2 = -1;
+                if (idx2 == 0) fx2 = code_fix_semicolon(src2, CODE_SRC_CAP, line2 > 1 ? line2 - 1 : line2);
+                else if (idx2 == 2) fx2 = code_fix_declare(src2, CODE_SRC_CAP, cr->err, line2 > 1 ? line2 : 1);
+                else {
+                    const char *h2 = code_header_for(cr->err);
+                    if (h2) fx2 = code_fix_include(src2, CODE_SRC_CAP, h2);
+                }
+                if (fx2 == 0) {
+                    FILE *w2 = fopen(full, "wb");
+                    if (w2) { (void)fwrite(src2, 1, strlen(src2), w2); fclose(w2); }
+                    cr->rule = idx2;
+                    int rc3 = action_run(ai, cmd);
+                    cr->attempts = 3;
+                    cr->final_rc = rc3;
+                    char keep3[CODE_ERR_CAP];
+                    snprintf(keep3, sizeof keep3, "%s", cr->note);
+                    code_cat(cr->note, sizeof cr->note, keep3,
+                             rc3 == 0 ? " —— **第三轮改过之后编过了**（多轮修正生效）"
+                                      : " —— 第三轮还是没过（够三轮了，停）", NULL);
+                    if (rc3 == 0) (void)code_observe(ai, 0);
+                }
+                free(src2);
+            }
+        }
+    }
     if (rc2 == 0) {
         char keep[CODE_ERR_CAP];
         snprintf(keep, sizeof keep, "%s", cr->note);

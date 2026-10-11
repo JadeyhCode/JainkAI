@@ -631,6 +631,9 @@ typedef struct {
     int    wgate_tier;
     /* **生成的原语程序要不要真跑**（C③，默认 0 = 只生成 + 校验）：打开才走 `token_run_names_ctx`。 */
     int    gen_exec;
+    /* **C③ 第二件：多轮自我修正**（默认 0 = 关）：第二次还编不过时，用**新的错误**再认一遍
+     * 规则、再改一处、再编一次（总次数 ≤ 3）。关着 = 只改一次（与今天逐字节相同）。 */
+    int    code_multi;
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
@@ -1244,6 +1247,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
     ai->gen_exec = 0;                /* 生成的原语程序真跑：默认**关**（只生成 + 校验） */
     { const char *ge = getenv("AIP_GENEXEC"); if (ge && ge[0] == '1') ai->gen_exec = 1; }
+    ai->code_multi = 0;              /* 多轮自我修正：默认**关** */
+    { const char *cm = getenv("AIP_CODEMULTI"); if (cm && cm[0] == '1') ai->code_multi = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */

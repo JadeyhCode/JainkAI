@@ -2944,6 +2944,16 @@ int main(int argc, char **argv) {
                 /* 写-跑-看错-改（降级版）：一次真实闭环，痕留在 code.h 的 CodeRun 里。 */
                 const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
                 while (arg && *arg == ' ') arg++;
+                if (arg && strncmp(arg, "multi", 5) == 0) {
+                    const char *v = arg + 5;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->code_multi = 1;
+                    else if (!strcmp(v, "off")) a->brain->code_multi = 0;
+                    else if (*v) { printf("[用法] ::code multi on|off\n"); continue; }
+                    printf("[多轮自我修正 = %s]（最多改 %s）\n", a->brain->code_multi ? "开" : "关（默认）",
+                           a->brain->code_multi ? "3 次（第二次还编不过就用**新的错误**再认规则再改）" : "1 次");
+                    continue;
+                }
                 if (arg && strncmp(arg, "try", 3) == 0 && (arg[3] == 0 || arg[3] == ' ')) {
                     const char *rel = arg + 3;
                     while (*rel == ' ') rel++;
