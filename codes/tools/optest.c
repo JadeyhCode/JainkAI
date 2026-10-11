@@ -34,8 +34,8 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 static void test_table(void) {
     printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
-    ok(n == 14, "表里 14 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
-                "后 8 条 = 过程记号 ①②⑤，**必须在表尾** —— 原语层按下标引用这张表）");
+    ok(n == 15, "表里 15 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
+                "后 9 条 = 过程记号/执行槽，**必须在表尾** —— 原语层按下标引用这张表）");
     int dup = 0, nofn = 0, noshape = 0;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
         if (!TOKEN_OPS[i].expand) nofn++;
@@ -1796,6 +1796,51 @@ static void test_tail_blocks(void) {
     }
 }
 
+/* ① 档最后两条（§6.82）：**动作 token**（`[执行:…]`）+ **过程的执行槽**（步骤真的调动作） */
+static void test_exec_step(void) {
+    printf("== ㉝ 动作 token + 过程执行槽：步骤会**真的调动作**（白名单+超时+账） ==\n");
+    AI *ai = ai_new();
+    char note[220];
+    { char *a[1] = {(char *)"试跑"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
+    { char *a[3] = {(char *)"试跑", (char *)"echo", (char *)"哟"};
+      ok(token_op_run(ai, "加执行", a, 3, note, sizeof note) >= 0,
+         "`加执行` 走受审通道（动作词限白名单形状，不许带路径/管道）"); }
+    /* 拒 shell 语法的检查放在**另一个过程**上：别往被跑的那个过程里多塞步骤
+     * （第一版把 `rm` 也加进"试跑"⇒ 真执行时它多出一个断点，两条断言假红）。 */
+    { char *r2[1] = {(char *)"试跑2"};
+      (void)token_op_run(ai, "建过程", r2, 1, note, sizeof note); }
+    { char *b[2] = {(char *)"试跑2", (char *)"echo|x"};
+      (void)token_op_run(ai, "加执行", b, 2, note, sizeof note);
+      ok(strstr(note, "白名单") != NULL || strstr(note, "命令名") != NULL,
+         "带管道/路径的动作词**当场拒**（别把 shell 语法塞进图里）"); }
+    Token *mk = pool_find(ai->pool, "[执行:echo 哟]");
+    ok(mk != NULL, "动作 token `[执行:echo 哟]` 真的建在图上（不是虚构的记号）");
+    Token *root = proc_root_of(ai, "试跑");
+    long st = -1;
+    if (root) for (size_t i = 0; i < root->count; ++i)
+        if (root->assocs[i].main == mk) st = (long)i;
+    ok(st >= 0 && edge_step_index(&root->assocs[st]) == 1,
+       "它是**第 1 步**（执行槽 = 步骤位上的端点）");
+    ai->proc_run = 1;
+    /* ① 干跑：不执行（账不动） */
+    ai->proc_dry = 1; ai->act_on = 1;
+    { ProcRun pr; (void)proc_run(ai, "试跑", &pr);
+      ok(pr.n_ran == 0 && pr.n_gap == 0, "干跑：动作**不执行**（真执行计数 0、也没记断点）"); }
+    /* ② 执行层关着：断点（不许假装做过） */
+    ai->proc_dry = 0; ai->act_on = 0;
+    { ProcRun pr; (void)proc_run(ai, "试跑", &pr);
+      char m1[96]; snprintf(m1, sizeof m1, "执行层关着 ⇒ **断点**（假装做过是最坏的）[ran=%zu gap=%zu]",
+                             pr.n_ran, pr.n_gap);
+      ok(pr.n_ran == 0 && pr.n_gap == 1, m1); }
+    /* ③ 真执行：走 action_run（echo 在白名单里，安全） */
+    ai->act_on = 1;
+    { ProcRun pr; (void)proc_run(ai, "试跑", &pr);
+      char m2[96]; snprintf(m2, sizeof m2, "开着 ⇒ **真执行 1 次**[ran=%zu gap=%zu]",
+                             pr.n_ran, pr.n_gap);
+      ok(pr.n_ran == 1 && pr.n_gap == 0, m2); }
+    ai_free(ai);
+}
+
 static void test_cache_walk(void) {
     printf("== ㉛ ①f 缓存参与自由联想（默认关；开着时缓存是**最后一档**） ==\n");
     AI *ai = ai_new();
@@ -2205,6 +2250,7 @@ int main(void) {
     test_revoke_marker();
     test_dyn_neg();
     test_cache_walk();
+    test_exec_step();
     test_tail_blocks();
     test_credibility();
     test_struct_drive_order();

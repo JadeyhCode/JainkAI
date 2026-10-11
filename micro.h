@@ -229,6 +229,10 @@ static inline int micro_token_reserved(const Token *t) {
 #define MICRO_RUN_TOKEN_PREFIX "[运行:"
 /* **写代码闭环的观测标记**：`[代码:<最终rc>]`（普通 token，随图存盘）——
  * `code.h` 走完一轮"写-跑-看错-改"落一个。和 `[运行:…]` 一样是留痕，不是知识。 */
+/* **动作 token**（① 档最后一条，§6.82）：`[执行:动作词 参数…]` —— 图上的一个普通节点，
+ * 也是一个步骤的**目标**。过程跑到这一步时，如果它真出现在步骤位上，就走 `action_run()`
+ * **真的调一次**（白名单 + 超时 + 账，都在 action.h 那层）。干跑时只核过、不动外部世界。 */
+#define MICRO_EXEC_TOKEN_PREFIX "[执行:"
 #define MICRO_CODE_TOKEN_PREFIX "[代码:"
 #define MICRO_TOKEN_PROC_PREFIX PROC_TOKEN_PREFIX   /* 过程根：`[过程:名字]`（第 9 条 ①） */
 
@@ -238,7 +242,8 @@ static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
-                                      MICRO_CODE_TOKEN_PREFIX, MICRO_TOKEN_PROC_PREFIX,
+                                      MICRO_CODE_TOKEN_PREFIX, MICRO_EXEC_TOKEN_PREFIX,
+                                      MICRO_TOKEN_PROC_PREFIX,
                                       MICRO_REVOKE_TOKEN_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
@@ -2270,6 +2275,57 @@ static inline int token_op_add_back(AI *ai, char *const *args, size_t n, ModQueu
 /* `加断言 <过程> <主语> <关系> <宾语> [不] [序号]`：给过程加一个**要核的步骤**
  * （记号 = `[步骤:N@要:S/R/B]`）—— 跑的时候用 `rel_solve` + `der_verify` 独立复核，
  * 这就是"步骤带对象"那条（第 9 条 ① 的收口）。 */
+/* `加执行 <过程> <动作词> [参数…]`：给过程加一个**真的会调动作**的步骤。
+ * 记号端点是 `[执行:动作词 参数…]`（动作 token）；动作词必须是白名单里的（`::act list` 看）。 */
+static inline int token_op_add_exec(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                    char *note, size_t cap) {
+    if (n < 2) { snprintf(note, cap, "要 <过程> <动作词> [参数…]"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    /* 白名单检查在 action.h 那层（这里只做"名字像不像"的粗查：不许带空格/斜杠） */
+    for (const char *q2 = args[1]; *q2; ++q2)
+        if (*q2 == ' ' || *q2 == '/' || *q2 == ';' || *q2 == '|') {
+            snprintf(note, cap, "动作词只能是白名单里的命令名（不带参数/路径）");
+            return -1;
+        }
+    char mk[128];
+    size_t off = 0;
+    for (const char *q2 = MICRO_EXEC_TOKEN_PREFIX; *q2 && off + 2 < sizeof mk; ++q2) mk[off++] = *q2;
+    for (const char *q2 = args[1]; *q2 && off + 2 < sizeof mk; ++q2) mk[off++] = *q2;
+    for (size_t i = 2; i < n && off + 2 < sizeof mk; ++i) {
+        if (!args[i] || !args[i][0]) continue;
+        mk[off++] = ' ';
+        for (const char *q2 = args[i]; *q2 && off + 2 < sizeof mk; ++q2) mk[off++] = *q2;
+    }
+    if (off + 1 < sizeof mk) mk[off++] = ']';
+    mk[off] = 0;
+    /* 步号：接着现有的排 */
+    int idx = 0;
+    for (size_t i = 0; i < root->count; ++i) {
+        int sN = edge_step_index(&root->assocs[i]);
+        if (sN > idx) idx = sN;
+    }
+    idx++;
+    char smk[64];
+    snprintf(smk, sizeof smk, "%s%d]", PROC_STEP_PREFIX, idx);
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = pool_token_intern(ai->pool, mk);
+    if (!m.main) { snprintf(note, cap, "动作 token 建不出来"); return -1; }
+    snprintf(m.name, sizeof m.name, "%s", mk);
+    snprintf(m.source, sizeof m.source, "行为:加执行");
+    m.flags = MOD_FLAG_PROCESS;
+    m.rel_id = (uint8_t)idx;
+    m.action = pool_token_intern(ai->pool, smk);
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s 第 %d 步 = %s（%s）", PROC_TOKEN_PREFIX, args[0], idx, mk,
+             ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+
 static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQueue *q,
                                      char *note, size_t cap) {
     if (n < 4) { snprintf(note, cap, "要 <过程> <主语> <关系> <宾语> [不] [序号]"); return -1; }
@@ -2551,6 +2607,9 @@ static const TokenOp TOKEN_OPS[] = {
       3, 3, token_op_add_cond },
     { "加否则",     "<过程> <动作>", "⑤ 给过程加**另一支**（`[否则]`）：上面那条条件不成立时走它",
       2, 2, token_op_add_else },
+    { "加执行",     "<过程> <动作词> [参数…]", "① 给过程加一个**真的会调动作**的步骤"
+      "（动作 token = `[执行:动作词 参数…]`）；跑的时候走 `action_run`（白名单+超时+账），"
+      "干跑时只核过、不动外部世界", 2, 6, token_op_add_exec },
     { "加断言",     "<过程> <主语> <关系> <宾语> [不] [序号]", "① 给过程加一个**要核的步骤**"
       "（`[步骤:N@要:S/R/B]`）：跑的时候 `rel_solve` + `der_verify` **独立复核**，核不过就是断点",
       4, 6, token_op_add_claim },

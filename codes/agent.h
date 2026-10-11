@@ -919,6 +919,45 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             return 0;
         }
     }
+        /* ① **动作 token**（§6.82）：这一步的目标是 `[执行:动作词 参数…]` ⇒ **真的调一次**
+         * （走 `action_run`：白名单 + 超时 + 账）。干跑时只核过；执行层关着就是**断点**
+         * （不许假装做过了）。 */
+        if (act->name && strncmp(act->name, MICRO_EXEC_TOKEN_PREFIX,
+                                 strlen(MICRO_EXEC_TOKEN_PREFIX)) == 0) {
+            const char *cmdline = act->name + strlen(MICRO_EXEC_TOKEN_PREFIX);
+            char cmd[160];
+            size_t ck = 0;
+            for (const char *q2 = cmdline; *q2 && *q2 != ']' && ck + 1 < sizeof cmd; ++q2)
+                cmd[ck++] = *q2;
+            cmd[ck] = 0;
+            if (dry) {
+                printf("    %s %-12s ✓ 干跑：动作**不执行**（要真做得跑非干跑）｜命令「%s」\n",
+                       label, act->name, cmd);
+                der_gap(&pr->trace, "干跑不执行动作");
+                pr->n_ok++;
+                return 1;
+            }
+            if (!ai->act_on) {
+                printf("    %s %-12s ⚠ 断点：外部执行层**关着**（::act on 打开 / AIP_ACT=1）"
+                       "—— 这一步是要真动外部世界的，不许假装做过\n", label, act->name);
+                der_gap(&pr->trace, "执行层关着，动作没做");
+                pr->n_gap++;
+                return 0;
+            }
+            int arc = action_run(ai, cmd);
+            if (arc == 0) {
+                printf("    %s %-12s ✓ **真执行了**：%s（%s）\n", label, act->name, cmd,
+                       g_act.last_mark[0] ? g_act.last_mark : "rc=0");
+                pr->n_ran++;
+                pr->n_ok++;
+                return 1;
+            }
+            printf("    %s %-12s ✗ 断点：动作执行失败 rc=%d（%s）\n", label, act->name, arc,
+                   g_act.last_reason[0] ? g_act.last_reason : "没理由记下来");
+            der_gap(&pr->trace, "动作执行失败");
+            pr->n_gap++;
+            return 0;
+        }
         /* ① **步骤带对象**：记号里有"要核的事"（`[步骤:N@要:S/R/B]`）⇒ 走
          * `rel_solve` 推一遍 + `der_verify` **独立复核**（不信任构造时写下的东西）。
          * 这是 §6.56 五步走里唯一没接的那条，这一轮接上。 */

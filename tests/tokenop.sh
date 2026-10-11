@@ -32,9 +32,9 @@ run() { cp model.bin m.bin; { printf '::notepad off\n'; printf '%b' "$1"; } | ./
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
-grep -q 'Token 行为（图操作）：14 条' o1 && ok "::op 列出 14 条行为（表生成；过程记号那八条在**表尾**）" \
+grep -q 'Token 行为（图操作）：15 条' o1 && ok "::op 列出 15 条行为（表生成；过程记号+执行槽那九条在**表尾**）" \
     || bad "行为表" "$(grep -A3 'Token 行为' o1 | head -4)"
-for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言; do
+for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行; do
     grep -q "::op $op" o1 || bad "表里少了行为 $op" "$(grep '::op' o1 | head -5)"
 done
 grep -q '当前未回收的临时 Token：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
@@ -603,8 +603,24 @@ else
     ok "语料行校验默认关（AIP_ASMCHECK=1 时才有那行报告）"
 fi
 
+echo "== ⑱ ① 动作 token + 执行槽：步骤会真的调动作（三条路都验） =="
+run '::proc on\n::proc dry on\n::op 建过程 试跑\n::op 加执行 试跑 echo 你好\n::proc run 试跑\n' o50
+grep -aq '干跑：动作\*\*不执行\*\*' o50 && ok "干跑：动作**不执行**（只核过，不动外部世界）" \
+    || bad "干跑不执行" "$(grep -m2 '执行' o50)"
+run '::proc on\n::proc dry off\n::op 建过程 试跑\n::op 加执行 试跑 echo 你好\n::proc run 试跑\n' o51
+grep -aq '外部执行层\*\*关着\*\*' o51 && grep -aq '不许假装做过' o51 \
+    && ok "执行层关着 ⇒ **断点**（"假装做过"是最坏的）" || bad "执行层关着" "$(grep -m2 '执行' o51)"
+run '::act on\n::proc on\n::proc dry off\n::op 建过程 试跑\n::op 加执行 试跑 echo 你好\n::proc run 试跑\n' o52
+grep -aq '\*\*真执行了\*\*：echo 你好' o52 && ok "开着 ⇒ **真执行**（走 action_run：白名单+超时+账）" \
+    || bad "真执行" "$(grep -m3 '执行\|汇总' o52)"
+grep -aq '真执行 1 个行为' o52 && ok "汇总里记着"真执行 1 个行为"" \
+    || bad "执行计数" "$(grep -m1 '汇总' o52)"
+run '::op 建过程 试跑\n::op 加执行 试跑 echo|x\n' o53
+grep -aq '白名单\|命令名' o53 && ok "带管道的动作词当场拒（别把 shell 语法塞进图里）" \
+    || bad "拒 shell 语法" "$(grep -m2 '没跑成\|加执行' o53)"
+
 if [ "$fail" -eq 0 ]; then
-    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍，$pass 项）"
+    echo "PASS tokenop（Token 行为：接线/插词/中转 + 临时 Token 不存盘 + 修正的记忆 + 原语组合 + 前提闸门/极性/进答复/对话触发 + 过程记号 + 过程执行引擎 + 干跑（假设世界）+ 分支/循环/异常 + 步骤带对象 + 对话入口 + 接进思维 + 接进决策 + 解释器观察遍 + 动作执行槽，$pass 项）"
 else
     echo "FAIL tokenop（$fail 项失败，$pass 项通过）"
     exit 1
