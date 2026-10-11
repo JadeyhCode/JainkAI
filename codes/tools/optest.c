@@ -1856,6 +1856,44 @@ static void test_redo_alt(void) {
 /* §6.103 草稿留痕：**在核心里**（MOD_PATCH_CALL 的 applier）证正例 ——
  * CLI 的 `::patch op` 绕过内核（实测"允许 1 拒绝 0"），所以只能直接调核心。 */
 /* §6.110 v11：**N1 思考对象持久化**（存摘要：结论/缺口/复没复核） */
+/* §6.111 E2：边存**时刻集合**（互不相同的 tick，≤4）+ v12 往返 */
+static void test_edge_tset(void) {
+    printf("== ㊼ E2：边上的时刻集合（互不相同；满了滚最新） ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "时刻甲"), *b = T(ai, "时刻乙");
+    (void)token_tag_rel(a, b, REL_IS_A, REL_BOOST);      /* 造一条边 */
+    AssocEntry *e = NULL;
+    for (size_t i = 0; i < a->count; ++i) if (a->assocs[i].main == b) { e = &a->assocs[i]; break; }
+    ok(e != NULL, "造出一条 a→b 的边");
+    if (e) {
+        ai->pool->current_tick = 5;  token_touch_entry(a, e);
+        ai->pool->current_tick = 5;  token_touch_entry(a, e);   /* 同一 tick 只记一次 */
+        ai->pool->current_tick = 9;  token_touch_entry(a, e);
+        ok(e->n_tset == 2 && e->tset[0] == 5 && e->tset[1] == 9,
+           "两个**不同** tick ⇒ 集合 = {5, 9}（同一个 tick 不重复记）");
+        ai->pool->current_tick = 11; token_touch_entry(a, e);
+        ai->pool->current_tick = 13; token_touch_entry(a, e);
+        ai->pool->current_tick = 17; token_touch_entry(a, e);   /* 第 5 个不同 tick */
+        ok(e->n_tset == 4 && e->tset[3] == 17,
+           "满了（4）之后**滚最新** ⇒ 最初 3 次 + 最近 1 次（照实说，不是无限集合）");
+    }
+    size_t sz = ai_save_file(ai, "tset_test.bin");
+    ok(sz > 0, "存盘（v12）");
+    AI *c = ai_load_file("tset_test.bin");
+    if (c) {
+        Token *a2 = pool_find(c->pool, "时刻甲");
+        const AssocEntry *e2 = NULL;
+        if (a2) for (size_t i = 0; i < a2->count; ++i)
+            if (a2->assocs[i].main && a2->assocs[i].main->name &&
+                strcmp(a2->assocs[i].main->name, "时刻乙") == 0) { e2 = &a2->assocs[i]; break; }
+        ok(e2 && e2->n_tset == 4 && e2->tset[0] == 5 && e2->tset[3] == 17,
+           "读回来：时刻集合逐值还在（v12 往返）");
+        ai_free(c);
+    } else ok(0, "读回来失败（v12 那段读写不一致）");
+    remove("tset_test.bin");
+    ai_free(ai);
+}
+
 static void test_n1_persist(void) {
     printf("== ㊻ v11：N1 思考对象持久化（存盘→读回） ==\n");
     AI *ai = ai_new();
@@ -2670,6 +2708,7 @@ int main(void) {
     test_redo_stack();
     test_draft_keep();
     test_n1_persist();
+    test_edge_tset();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

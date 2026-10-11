@@ -40,7 +40,7 @@
  *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
  *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
  *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
-#define MODEL_VERSION 11u  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+#define MODEL_VERSION 12u  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -196,6 +196,10 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
             mw_u16(&w, e->rel);      /* v9：2 字节（bit8 = 需要） */
             mw_u16(&w, e->nrel);
             mw_u8 (&w, e->dyn);
+            /* v12：边上的**时刻集合**（互不相同的 tick，≤4） */
+            uint8_t nt_ok = (e->n_tset <= 4) ? e->n_tset : 0;   /* 同上：垃圾值当空集合 */
+            mw_u8 (&w, nt_ok);
+            for (uint8_t k = 0; k < 4; ++k) mw_u32(&w, k < nt_ok ? e->tset[k] : 0u);
         }
         if (w.err) return 0;
     }
@@ -595,7 +599,8 @@ static inline AI *ai_load_file(const char *path) {
                               + (has_role ? 1u : 0u) + (has_topic ? 1u : 0u)
                               + (has_pattern ? 1u : 0u)
                               + (has_rel  ? (has_wide_rel ? 2u : 1u) : 0u)
-                              + (has_nrel ? (has_wide_rel ? 3u : 2u) : 0u)) != 0)
+                              + (has_nrel ? (has_wide_rel ? 3u : 2u) : 0u)
+                              + (mver >= 12u ? 17u : 0u)) != 0)   /* v12：n_tset(1) + 4 个 tick(16)，**定长** */
                 goto fail;
         }
     }
@@ -657,6 +662,15 @@ static inline AI *ai_load_file(const char *path) {
                     e->nrel = has_wide_rel ? mr_u16(&rr) : mr_u8(&rr);
                     e->dyn = mr_u8(&rr);
                 } else { e->nrel = 0; e->dyn = 0; }
+                if (mver >= 12u) {         /* v12：时刻集合（旧档没有 ⇒ 保持 0 = 空集合） */
+                    e->n_tset = mr_u8(&rr);
+                    if (rr.err || e->n_tset > 4) goto fail_ai;
+                    for (uint8_t k = 0; k < 4; ++k) {       /* **定长**：恒读 4 个槽 */
+                        uint32_t tv = mr_u32(&rr);
+                        if (k < e->n_tset) e->tset[k] = tv;
+                    }
+                    if (rr.err) goto fail_ai;
+                }
                 if (rr.err) goto fail;
                 if (main_id != TOKEN_ID_NONE) {
                     if (main_id >= np->count) goto fail;
@@ -987,6 +1001,7 @@ static inline AI *ai_load_file(const char *path) {
             ai->dynrel_name[ai->dynrel_n++] = nm;
         }
     }
+    np->loading = 1;                      /* §6.111：下面这段重建里的 touch 不算"观测" */
     rel_names_intern(ai);                 /* 关系词先进词池，否则会被切碎 */
     relations_load(ai, "relations.txt");  /* 静态关系知识（像 frames.txt 一样现读） */
     rel_excl_build(ai);                   /* 「独占」由数据量出来（声明值只当种子） */
@@ -1035,6 +1050,7 @@ static inline AI *ai_load_file(const char *path) {
      * 放在最后：rel_parse 需要关系表与词池都已经就位。 */
     (void)think_restore_pending(ai);
 
+    np->loading = 0;                      /* §6.111：重建结束，之后的 touch 才算观测 */
     free(buf);
     return ai;
 

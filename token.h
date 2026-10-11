@@ -187,6 +187,12 @@ struct AssocEntry {
     Token    *action;
     uint32_t  hits, seq;
     uint64_t  birth_tick, last_touch_tick;
+    /* **时刻集合**（§6.111，v12 起存盘）：这条边**在哪些 tick 上被观察到**。
+     * 以前只有"首次/最近"两个点（区间）⇒ 判不了"同时/先后不明"；
+     * 现在留 4 个**互不相同**的 tick（满了之后只滚最后一个 = 最初 3 次 + 最近 1 次，
+     * 这一点在总表里照实写明：不是无限集合）。 */
+    uint32_t  tset[4];
+    uint8_t   n_tset;
     uint8_t   mem_state;
     uint8_t   role;         /* AssocRole：见上 */
     uint8_t   topic;        /* 话题 id，见 ASSOC_TOPIC_NONE */
@@ -594,6 +600,9 @@ struct TokenPool {
     NameEntry **buckets;
     size_t      n_buckets, n_entries;
     uint64_t    current_tick;
+    /* **装载期**（§6.111）：`ai_load_file` 读完之后会重建关系/帧/emb（那里会 touch 一堆边）。
+     * 那些 touch **不是观测**（跟"只有观测进图"一个口径）⇒ 不记进边的**时刻集合**。 */
+    int         loading;
 
     PerspectiveNode  *perspective_root;
     PerspectiveNode  *perspective_cur;
@@ -840,6 +849,19 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
     if (!t || !e) return;
     e->hits++;
     uint64_t now = t->owner ? t->owner->current_tick : 0;
+    /* **时刻集合**：同一个 tick 只记一次；满了（4）只滚最后一个槽（见结构里的说明）。
+     * ⚠ `n_tset` 是**新字段**：不是每条边都被零初始化过（老路径/手工造的边可能是垃圾值）
+     * ⇒ 用之前必须钳一次，否则下面的循环会**越界写**（实测：训练时直接 SIGSEGV）。 */
+    if (e->n_tset > 4) e->n_tset = 0;
+    if (now > 0 && !(t->owner && t->owner->loading)) {
+        uint32_t tn = (uint32_t)now;
+        int seen = 0;
+        for (uint8_t k = 0; k < e->n_tset; ++k) if (e->tset[k] == tn) { seen = 1; break; }
+        if (!seen) {
+            if (e->n_tset < 4) e->tset[e->n_tset++] = tn;
+            else               e->tset[3] = tn;      /* 满了：滚最新（最初 3 次 + 最近 1 次） */
+        }
+    }
     e->last_touch_tick = now;
     e->mem_state = MEM_ACTIVE;
 }

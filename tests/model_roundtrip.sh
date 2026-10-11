@@ -93,10 +93,13 @@ grep -q 'split=[0-9]' st_load.txt || fail "装载后 [原语:分割] 指针没�
 
 echo "[4/6] 加载 slot0 + 对话 vs 训练 + 对话"
 cat chat.txt > in4.txt
-printf '::save slot2\n::quit\n' >> in4.txt
+# §6.111：边的**时刻集合**是"历史记录"（训练期在哪些 tick 被观测过）——装载态**无法重放**那段历史，
+# 所以比"装载态 == 原地训练"之前先把这份记录清掉（**只清它**）；它的持久化另立幂等看护：
+# 见本脚本 ⑤ 之后那条「slot2 存→读→再存，逐字节一致」。
+printf '::tset clear\n::save slot2\n::quit\n' >> in4.txt
 ./aip --model slot0 < in4.txt > run3.log 2>&1 || fail "run3 退出非 0"
 cat chat.txt > in5.txt
-printf '::save slot3\n::quit\n' >> in5.txt
+printf '::tset clear\n::save slot3\n::quit\n' >> in5.txt
 ./aip "$CORPUS" < in5.txt > run4.log 2>&1 || fail "run4 退出非 0"
 
 grep -o 'AI > .*' run4.log > r3.resp || true
@@ -131,7 +134,7 @@ grep -q '边=25' run6.log \
 # 另存出来必须真的是**当前版本**（版本号 = magic 之后的第二个 u32）。
 # §6.110 起当前版本是 **11**（多了一段 N1 摘要）—— 旧 v9/v10 样本照旧读得回来。
 curver=$(od -An -tu4 -j4 -N4 v10slot | tr -d ' ')
-[ "$curver" = "11" ] || fail "另存文件的版本号是 $curver（应当是 11）"
+[ "$curver" = "12" ] || fail "另存文件的版本号是 $curver（应当是 12）"
 # 关键等价：v9 直接读进来的内存态 与 把它存成 v10 再读回来，**指纹逐位一致**
 fp_v9=$(grep -o '\[指纹\] [0-9a-f]*' run6.log | head -1)
 printf '::load v10slot\n::fp\n::quit\n' > in7.txt

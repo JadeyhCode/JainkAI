@@ -549,7 +549,8 @@ typedef enum {
     CMD_ACT,                /* 受审的外部执行 + 写文件（默认关） */
     CMD_CODE,               /* 写-跑-看错-改 的机械闭环（降级版） */
     CMD_ORDER,
-    CMD_FEAT,              /* 时间顺序：谁先出现 */
+    CMD_FEAT,
+    CMD_TSET,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
     CMD_TOKENS,
@@ -664,6 +665,8 @@ static const CmdDef CMDS[] = {
     { "feat", "<特征词> [特征词…]", 2, "基本",
       "**特征集合 → 概念**：把每个特征词的**入边来源**当一票，看哪个词被命中最多次\n"
       "  （只读；答的是「像什么」=联想，不是「是什么」=判定）", CMD_FEAT },
+    { "tset", "clear|<词>", 2, "基本",
+      "边上的**时刻集合**（§6.111）：`clear` 全清（看护归一化用）；给个词就列它的边各自在哪些 tick 被观测过", CMD_TSET },
     { "order", "<A> <B>", 2, "基本",
       "时间顺序：这两个词**谁先出现**。先读**图里写着的顺序结构**（`next_in_time` 链 /\n"
       "`[关系:之后]` 标记边 —— `[原语:时间链]` 建的那套），图里没说才退回 tick 比较；\n"
@@ -932,6 +935,11 @@ static void cmd_edges(const AI *ai, const char *word) {
         printf("  → %-16s hits=%-4u seq=%-4u 角色=%u 状态=%u",
                e->main && e->main->name ? e->main->name : "(无名)",
                e->hits, e->seq, (unsigned)e->role, (unsigned)e->mem_state);
+        if (e->n_tset > 0) {
+            printf("  时刻{");
+            for (uint8_t k = 0; k < e->n_tset && k < 4; ++k) printf("%s%u", k ? "," : "", e->tset[k]);
+            printf("}");
+        }
         if (edge_is_premise_link(e))
             printf("  **前提**（%s 是这两个词之间的前提 token）",
                    e->main && e->main->name ? e->main->name : "?");
@@ -3072,6 +3080,34 @@ int main(int argc, char **argv) {
                     strength[best] = 0; hit[best] = 0;
                 }
                 printf("  （这是**联想**：按「谁指向这些特征」投票；不是判定，命中少就是不像）\n");
+                continue;
+            }
+            case CMD_TSET: {
+                const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (!arg || !*arg) { printf("[用法] ::tset clear｜::tset <词>\n"); continue; }
+                if (!strcmp(arg, "clear")) {
+                    size_t n = 0;
+                    for (size_t i = 0; i < a->brain->pool->count; ++i) {
+                        Token *t = a->brain->pool->tokens[i];
+                        if (!t || t->is_garbage) continue;
+                        for (size_t e = 0; e < t->count; ++e) {
+                            if (t->assocs[e].n_tset) { t->assocs[e].n_tset = 0; n++; }
+                        }
+                    }
+                    printf("[时刻集合] 清了 %zu 条边（**只清这份历史记录**，不动 birth/last 两个时刻）\n", n);
+                    continue;
+                }
+                Token *t = pool_find(a->brain->pool, arg);
+                if (!t) { printf("[时刻集合] 图上没有 %s\n", arg); continue; }
+                printf("[%s] 的边各自被观测过的 tick：\n", arg);
+                for (size_t e = 0; e < t->count; ++e) {
+                    const AssocEntry *ed = &t->assocs[e];
+                    if (!ed->n_tset) continue;
+                    printf("  → %-16s {", ed->main && ed->main->name ? ed->main->name : "?");
+                    for (uint8_t k = 0; k < ed->n_tset && k < 4; ++k) printf("%s%u", k ? "," : "", ed->tset[k]);
+                    printf("}\n");
+                }
                 continue;
             }
             case CMD_ORDER: {
