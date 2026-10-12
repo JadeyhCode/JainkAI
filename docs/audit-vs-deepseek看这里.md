@@ -4555,3 +4555,26 @@ C 级 `tools/optest.c` ㉉ 八项（动态登记 / 打否定边 / `edge_dyn_neg`
 - 版本字面量断言照例同步：`features.sh` 12u→13u、`model_roundtrip.sh` 12→13 ✓。
 - 附记：整包第一次跑又撞上"删 prebuilt 后的并发构建竞态"（`cc1: all warnings being treated as errors`），
   再跑一次即 `全部回归通过` ✓ —— 这个竞态值得单独修（不是本轮范围）。
+
+### 6.113 B 组：**结构类比接进求解器**（`rel_analogy_solver`，默认关）+ 诚实边界
+
+- 动机：§6.90 的同类互推只挂在**对话层**，思维/决策这些不走对话层的调用方拿不到。
+  这一件把它做到**求解器内部**：`rel_solve()` 里规则走不通（`pf->status == 0`）时，
+  用**同一份判据**（`rel_sibling_with()` ✓）给一个**标了 `guessed` 的**结论，并把
+  "同类是谁 / 共同上位是谁"压进**证明链**（留痕）。
+- 实现要点：兜底抽成 `rel_solve_analogy_fallback()` **一处** —— 求解器有**两个入口**
+  （`rel_solve` 与 `rel_solve_ignoring_caches`），只挂一个的话对话那条路照样答不出 ✓；
+  开关 `::rel analogy solver on|off` / `AIP_RELANALOGYSOLVER=1`，默认关。
+- **诚实边界（用看护证出来的）**：把这条 guessed 证明交给推导层，`der_verify` **报 1 个缺口**
+  ⇒ 答复层因此**不肯直接说「对」**（仍然说"不确定"）。也就是说：
+  **求解器层已经能给出类比结论，但"答复层的验证器"还不接受"类比链"** ——
+  要让对话里也说"大概…"，下一步得让验证器承认 `guessed` 的类比链（另一件活，别在这里含糊）。
+- 证据：optest ㊾ **6 项**（关着只走规则 / 开着给 guessed / 留痕 / 问反面 / **推导层仍报缺口** /
+  有真答案时不许盖过）⇒ optest **466 项全过**；整包**默认档**与 **`AIP_RELANALOGYSOLVER=1`**
+  各跑一次都是 `全部回归通过` ✓（反向测量跑出来的 6 套红，全部用"套件自己钉住开关"处理完：
+  `::rel analogy solver off` 进了 13 个套件的 run()，`thinking`/`derivation` 两套的 run() 形态不同，单独补）。
+- 踩坑（两个）：
+  ① CLI 接线**插错位置**：`::rel analogy solver on` 只打用法（`v` 那时还是 "analogy"）⇒ 必须先切出子参数；
+  ② 又一次"锚点没匹配上、python 静默不改"（`grep -c` 数出来是 0 才发现）——**改完必须回读计数**。
+- 附记：那个"删了 prebuilt 之后的偶发 `cc1: … -Werror`"本轮又遇到 **3 次**（重跑即过），
+  仍未定位；它不是本轮范围，但值得单独查（症状是整包第一跑失败、第二跑全绿）。

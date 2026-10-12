@@ -36,7 +36,7 @@ pass=0; fail=0
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # 每条断言都从**干净的 model.bin** 起跑，免得前一句学到的知识污染后一句
-run() { cp model.bin m.bin; printf '%b' "$1" | ./aip --model m.bin > "$2" 2>&1 || true; }
+run() { cp model.bin m.bin; { printf '::rel analogy off\n::rel analogy solver off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }   # 钉住两个类比开关（测的是默认档语义）
 
 echo "== 1. 每轮都在想：::delib 有目标/分步/依据/停止原因 =="
 run '猫 有 毛 吗\n::delib\n::stats\n' o1

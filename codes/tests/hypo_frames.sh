@@ -23,7 +23,7 @@ fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi; }
 
 run() {
-    { printf '::load %s\n::notepad off\n::rel analogy off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
+    { printf '::load %s\n::notepad off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
       printf '::cot\n::quit\n'; } | "$BIN" 2>&1
 }
 reps() { sed -n 's/.*AI > //p'; }

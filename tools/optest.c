@@ -1858,6 +1858,45 @@ static void test_redo_alt(void) {
 /* §6.110 v11：**N1 思考对象持久化**（存摘要：结论/缺口/复没复核） */
 /* §6.111 E2：边存**时刻集合**（互不相同的 tick，≤4）+ v12 往返 */
 /* §6.112 E3 v13：他者的**改口历史**（真改了才记；重复说同一句不记） */
+/* §6.113 B 组：**结构类比接进求解器**（规则走不通时给标了 guessed 的结论） */
+static void test_solver_analogy(void) {
+    printf("== ㊾ 结构类比接进求解器（默认关；猜出来的必须带 guessed） ==\n");
+    AI *ai = ai_new();
+    Token *p = T(ai, "类4"), *a = T(ai, "熊甲4"), *b = T(ai, "熊乙4"), *o = T(ai, "冬眠4");
+    (void)token_tag_rel(a, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, o, REL_CAN, REL_BOOST);
+    Proof pf;
+    ai->rel_analogy_solver = 0;
+    rel_solve(ai, a, REL_CAN, o, 0, &pf);
+    ok(pf.status == 0, "关着：求解器只走规则（同类那条它不管）");
+    ai->rel_analogy_solver = 1;
+    rel_solve(ai, a, REL_CAN, o, 0, &pf);
+    ok(pf.status == 1 && pf.guessed == 1, "开着：规则走不通 ⇒ 给**标了 guessed** 的结论（真）");
+    ok(pf.n >= 3, "猜出来的东西**留痕**（链上写了同类与共同上位）");
+    rel_solve(ai, a, REL_CAN, o, 1, &pf);
+    ok(pf.status == -1 && pf.guessed == 1, "问反面：同一个类比给出「不成立」，也标 guessed");
+    /* **往下走一步**：把这条 guessed 证明交给推导层看 —— 看护顺手把"答复层为什么还不敢说"
+     * 证出来（§6.113 的诚实边界就在这儿）。 */
+    {
+        Derivation d;
+        der_reset(&d);
+        der_from_proof(ai, &d, a, REL_CAN, o, &pf);
+        d.has_claim = 1;
+        der_conclude(&d, 1, 85);
+        int gaps = der_verify(ai, &d);
+        char m[160];
+        snprintf(m, sizeof m,
+                 "推导层对**类比链**仍报缺口（%d 个）⇒ 答复层因此不肯直接说「对」（§6.113 的诚实边界）",
+                 gaps);
+        ok(gaps > 0, m);
+    }
+    (void)token_tag_rel(a, o, REL_CAN, REL_BOOST);        /* 现在有**直接**知识了 */
+    rel_solve(ai, a, REL_CAN, o, 0, &pf);
+    ok(pf.status == 1 && pf.guessed == 0, "有规则答案时**不标 guessed**（类比不许盖过真答案）");
+    ai_free(ai);
+}
+
 static void test_other_hist(void) {
     printf("== ㊽ E3 v13：他者改口历史（total / 最近三次 / 存盘读回） ==\n");
     AI *ai = ai_new();
@@ -2745,6 +2784,7 @@ int main(void) {
     test_n1_persist();
     test_edge_tset();
     test_other_hist();
+    test_solver_analogy();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

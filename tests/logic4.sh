@@ -17,7 +17,7 @@ MODEL=${MODEL:-model.bin}
 fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi; }
 run() {
-    { printf '::load %s\n::rel analogy off\n::notepad off\n::rel analogy off\n' "$MODEL"
+    { printf '::load %s\n::rel analogy off\n::rel analogy solver off\n::notepad off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'
     } | "$BIN" 2>&1
@@ -93,7 +93,7 @@ case "$r" in *"在 假设 下"*) chk "嵌套两层时推理仍然生效" 1 ;;
 # 嵌套也不能漏进图：存盘 → 重新加载 → 假设必须没了
 TMP=./_logic4_tmp
 rm -rf "$TMP"; mkdir -p "$TMP"
-{ printf '::load %s\n::rel analogy off\n如果 他 以为 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n::rel analogy off\n猫 会 飞 吗\n::quit\n' \
+{ printf '::load %s\n::rel analogy off\n::rel analogy solver off\n如果 他 以为 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n::rel analogy off\n::rel analogy solver off\n猫 会 飞 吗\n::quit\n' \
       "$MODEL" "$TMP" "$TMP"; } | "$BIN" 2>&1 | sed -n 's/.*AI > //p' > "$TMP/p.txt"
 r=$(tail -1 "$TMP/p.txt")
 rm -rf "$TMP"

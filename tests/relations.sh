@@ -26,7 +26,7 @@ fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi }
 
 run() {   # <输入...>  → 打印回复行
-    { printf '::load %s\n::notepad off\n::rel analogy off\n' "$MODEL"
+    { printf '::load %s\n::notepad off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'
     } | "$BIN" 2>&1

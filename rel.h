@@ -1145,12 +1145,33 @@ static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_
     return NULL;
 }
 
+/* **求解器层的结构类比兜底**（§6.113）：规则走不通（status 0）时用"同类互推"，
+ * 给一个**标了 guessed 的**结论且**留痕**。抽成一处是因为求解器有**两个入口**
+ * （`rel_solve` 与 `rel_solve_ignoring_caches`）—— 只挂在一个上，对话那条路照样答不出
+ * （实测：开关开着、`::rel analogy solver on` 也打了，回答还是"不确定"）。 */
+static inline void rel_solve_analogy_fallback(AI *ai, const Token *a, uint8_t rid,
+                                             const Token *b, int want_neg, Proof *pf) {
+    if (!ai || !pf || pf->status != 0 || !ai->rel_analogy_solver) return;
+    const Token *sup = NULL;
+    const Token *sib = rel_sibling_with(ai, a, rid, b, &sup);
+    if (!sib) return;
+    proof_push(pf, (Token *)sib, rid, (uint8_t)(want_neg ? 0 : 1), 0, 0);
+    proof_push(pf, (Token *)sib, REL_IS_A, 0, 0, 0);
+    if (sup) proof_push(pf, (Token *)sup, REL_IS_A, 0, 0, 0);
+    pf->status = want_neg ? -1 : 1;
+    pf->guessed = 1;                 /* 关键：标成"猜的"，别让调用方当成确定知识 */
+}
+
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
                              int want_neg, Proof *pf) {
     if (!pf) return;
     pf->n = 0; pf->status = 0; pf->guessed = 0;
     if (!ai || !a || !b) return;
     rel_solve_go(ai, a, rid, b, want_neg, pf, 0, NULL, 0);
+    /* **结构类比兜底**（§6.113，默认关）：规则走不通（status 0）时，用"同类互推"给一个
+     * **标了 guessed 的**结论 —— 判据与对话层共用 `rel_sibling_with()`（一处放）。
+     * 猜出来的东西必须**留痕**：链上写清"依据是同类里的谁、共同上位是谁"。 */
+    rel_solve_analogy_fallback(ai, a, rid, b, want_neg, pf);
 }
 
 /* 把缓存（推出来沉淀的边）当成不存在，再推一遍 —— 这是「缓存跟着前提走」的复核手段。

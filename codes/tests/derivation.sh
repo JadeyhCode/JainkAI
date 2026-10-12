@@ -20,6 +20,8 @@ chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1;
 
 run() {
     { printf '::load %s\n' "$MODEL"
+      # 钉住两个类比开关：这一套测的是**默认档**语义（反向测量时不能被 env 掀掉）
+      printf '::rel analogy off\n::rel analogy solver off\n'
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'
     } | "$BIN" 2>&1

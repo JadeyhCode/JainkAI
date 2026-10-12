@@ -2348,6 +2348,20 @@ int main(int argc, char **argv) {
                 if (arg && strncmp(arg, "analogy", 7) == 0) {
                     const char *v = arg + 7;
                     while (*v == ' ') v++;
+                    /* §6.113：把类比**接进求解器**（不只对话层）—— `::rel analogy solver on|off` */
+                    if (!strncmp(v, "solver", 6)) {
+                        const char *w2 = v + 6;
+                        while (*w2 == ' ') w2++;
+                        if (!strcmp(w2, "on"))       a->brain->rel_analogy_solver = 1;
+                        else if (!strcmp(w2, "off")) a->brain->rel_analogy_solver = 0;
+                        else if (*w2) { printf("[用法] ::rel analogy solver on|off\n"); continue; }
+                        printf("[结构类比（求解器内）= %s]（%s）\n",
+                               a->brain->rel_analogy_solver ? "开" : "关（默认）",
+                               a->brain->rel_analogy_solver
+                                   ? "规则走不通时，求解器自己给**标了 guessed 的**同类结论"
+                                   : "求解器只走规则（类比只在对话层，§6.90）");
+                        continue;
+                    }
                     if (!strcmp(v, "on"))       a->brain->rel_analogy = 1;
                     else if (!strcmp(v, "off")) a->brain->rel_analogy = 0;
                     else if (*v) { printf("[用法] ::rel analogy on|off\n"); continue; }
