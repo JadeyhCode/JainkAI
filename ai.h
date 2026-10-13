@@ -652,6 +652,10 @@ typedef struct {
      * 栈一撤前提就不成立（缓存自动失效 ✓）。升格（撤回后能无条件推出 ⇒ 前提不再需要）另做。 */
     int    hypo_cache;
     size_t n_hypo_cache;             /* 沉淀过几条条件缓存（给人看） */
+    /* **条件缓存的登记表**（§6.119 升格用）：造过哪些"假设下结论"，供撤回后复查。
+     * 有界（16 条），满了就丢最老的（登记表只影响"能不能升格"，不影响缓存本身的正确性）。 */
+    struct { Token *A, *B, *P; uint8_t rid, neg; } hc[16];
+    size_t n_hc;
     /* **N1 参与决策**（思维侧第二条，默认 0 = 关）：思维对象定稿时把它抄到这里
      * （ai.h 在 think.h **之前**，调不到 think_of ⇒ 用一层 AI 级缓存转手），
      * 走边没走出好东西时（best_score 低于阈值）就用**它想通的结论**当结果。 */
@@ -1295,6 +1299,7 @@ static inline void ai_switches_init(AI *ai) {
     ai->hypo_cache = 0;              /* 假设结论沉淀成条件缓存：默认**关** */
     { const char *hc = getenv("AIP_HYPOCACHE"); if (hc && hc[0] == '1') ai->hypo_cache = 1; }
     ai->n_hypo_cache = 0;
+    ai->n_hc = 0;
     { const char *cm = getenv("AIP_CODEMULTI"); if (cm && cm[0] == '1') ai->code_multi = 1; }
     ai->n1_decide = 0;               /* N1 参与决策：默认**关** */
     { const char *nd = getenv("AIP_N1DECIDE"); if (nd && nd[0] == '1') ai->n1_decide = 1; }

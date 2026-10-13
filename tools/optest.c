@@ -1867,6 +1867,7 @@ static void test_hypo_cache(void) {
     printf("== ㊿ 假设结论沉淀：条件缓存 + 整栈指纹（默认关） ==\n");
     AI *ai = ai_new();
     Token *a = T(ai, "假甲"), *b = T(ai, "假乙"), *h = T(ai, "假丙");
+    char out[128];
     if (getenv("AIP_HYPOCACHE")) ok(1, "AIP_HYPOCACHE=1（反向测量）：默认值断言按规矩跳过");
     else ok(ai->hypo_cache == 0, "默认关（不动今天的行为）");
     ai->hypo_cache = 1;
@@ -1889,7 +1890,30 @@ static void test_hypo_cache(void) {
     ok(ai_premise_holds(ai, P) == 1, "弹掉内层 ⇒ 指纹回到外层 ⇒ 缓存又可用（整栈算才对）");
     (void)hypo_pop(&ai->hypo);
     ok(ai_premise_holds(ai, P) == 0, "栈全撤 ⇒ 前提不成立");
-    ok(rel_direct(a, REL_IS_A, b) == 1, "结论边**留在图上**（没被当垃圾丢 —— 条件缓存的意义）");
+    /* ⚠ `加前提` 是**提议**（进 mod 队列）⇒ 测试里必须把队列跑掉，链接才会落地
+     * （和 §6.94 那次"CLI 的补丁操作绕过内核"是同一类机制问题）。 */
+    out[0] = 0;
+    (void)micro_step(ai, NULL, 0, out);
+    ok(token_premise_link(a, P) != NULL,
+       "跑掉队列后：`A —[前提]→ P` 真的落地了（条件缓存的形状）");
+    ai_hypo_cache_sweep(ai);
+    ok(token_premise_link(a, P) != NULL, "无条件推不出来时：**不升格**（条件缓存留着，等条件回来）");
+    /* "用户后来直接教了它" = 图上出现一条**非推论**的边（真实写入会带自己的 role） */
+    (void)token_tag_rel(a, b, REL_IS_A, REL_BOOST);
+    for (size_t k = 0; k < a->count; ++k)
+        if (a->assocs[k].main == b && (a->assocs[k].rel & REL_BIT(REL_IS_A)))
+            a->assocs[k].role = ASSOC_ROLE_INPUT;
+    int uncond = rel_solve_ignoring_caches(ai, a, REL_IS_A, b, 0);
+    ai_hypo_cache_sweep(ai);
+    { char m3[200];
+      const AssocEntry *eab = NULL;
+      for (size_t k = 0; k < a->count; ++k)
+          if (a->assocs[k].main == b) eab = &a->assocs[k];
+      snprintf(m3, sizeof m3,
+               "教了之后（无条件推得出=%d，边role=%d）⇒ **升格：前提摘掉**",
+               uncond, eab ? (int)eab->role : -1);
+      ok(token_premise_link(a, P) == NULL, m3); }
+    ok(rel_direct(a, REL_IS_A, b) == 1, "升格后这条结论变成普通推论（边还在）");
     ai_free(ai);
 }
 

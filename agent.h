@@ -547,6 +547,35 @@ static inline int agent_set_perspective(AI *ai, char *const *words, size_t n,
  *   未知 → 先试类比推测（标注为推测）；推不出来就返回 NULL，
  *          交给检索/帧/降级去说「不确定」，**绝不靠闭合世界假设硬答「不对」**。
  * 语言只出现在最后一步（der_say），换 ::style 就能换种说法说同一件事。 */
+/* **升格**（§6.119，用户设计最后一条）：假设撤掉之后，如果那条结论**从无条件的图里**也能推出来
+ * （或用户后来直接教了它 ⇒ 图上有了非推论的边），就把**前提摘掉** —— 条件缓存升格成普通推论。
+ * 判据用 `rel_solve_ignoring_caches()`：它**忽略 role=推论 的沉淀边** ✓，所以"能不能升格"
+ * 问的是"没有这条缓存，图里还推得出来吗"，不会被缓存自己蒙混过去 ✓。 */
+static inline void ai_hypo_cache_sweep(AI *ai) {
+    if (!ai || !ai->hypo_cache || ai->n_hc == 0) return;
+    for (size_t i = 0; i < ai->n_hc; ) {
+        Token *A = ai->hc[i].A, *B = ai->hc[i].B, *P = ai->hc[i].P;
+        uint8_t rid = ai->hc[i].rid;
+        int neg = ai->hc[i].neg;
+        if (!A || !B || !P || ai_premise_holds(ai, P)) { ++i; continue; }   /* 条件还活着：不动 */
+        if (!rel_solve_ignoring_caches(ai, A, rid, B, neg)) { ++i; continue; }  /* 还推不出：留着 */
+        /* 升格：摘掉前提（把 A→P 那条前提链接的 action 清掉 ⇒ 它不再是前提链接） */
+        for (size_t k = 0; k < A->count; ++k) {
+            AssocEntry *e = &A->assocs[k];
+            if (e->main == P && edge_is_premise_link(e)) { e->action = NULL; break; }
+        }
+        char note[160];
+        snprintf(note, sizeof note,
+                 "升格：假设撤了、**无条件也推得出来** ⇒ 摘掉前提（%s %s%s %s）",
+                 A->name ? A->name : "?", neg ? "不 " : "",
+                 rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?", B->name ? B->name : "?");
+        cot_push(ai, COT_HYP, 1, 55, "条件缓存升格", note);
+        ai->n_cot++;
+        /* 从登记表里换出（尾元素补位） */
+        ai->hc[i] = ai->hc[--ai->n_hc];
+    }
+}
+
 /* **假设下的结论 → 条件缓存**（§6.118）：假设不进图（铁律），但结论别丢：
  * 写成**有条件成立**的形状 —— `A —[前提]→ P → B`，其中 P = **整条假设栈的指纹**。
  * 前提的成立条件就是"这层假设还活着"（`ai_premise_holds` 里按指纹判 ✓）。
@@ -560,15 +589,31 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
     if (!fp[0]) return;
     Token *P = pool_token_intern(ai->pool, fp);
     if (!P) return;
-    /* 结论边先落地（极性照结论），再挂前提 —— 这样链是 `A —[前提]→ P` 加上 `A -[R]-> B` */
+    /* 结论边先落地（极性照结论），**标成「推论」**（= 沉淀缓存 ⇒ `rel_solve_ignoring_caches`
+     * 会忽略它，"升格"判据才问得出"没有这条缓存还推得出来吗"），再挂前提。 */
     if (neg) (void)token_tag_nrel(A, B, rid, REL_BOOST);
     else     (void)token_tag_rel(A, B, rid, REL_BOOST);
-    char an[96], bn[96], pn[96], note[160];
+    for (size_t k = 0; k < A->count; ++k) {
+        AssocEntry *e = &A->assocs[k];
+        if (e->main == B && ((neg && (e->nrel & REL_BIT(rid))) || (!neg && (e->rel & REL_BIT(rid))))) {
+            e->role = ASSOC_ROLE_DERIVED;
+            break;
+        }
+    }
+    char an[96], bn[96];
     snprintf(an, sizeof an, "%s", A->name ? A->name : "");
     snprintf(bn, sizeof bn, "%s", B->name ? B->name : "");
-    snprintf(pn, sizeof pn, "%s", fp);
-    char *args[3] = { an, bn, pn };
-    if (token_op_run(ai, "加前提", args, 3, note, sizeof note) >= 0) {
+    /* **直接建前提链接**（`A —[前提]→ P`）：不走 `加前提` 那个 op —— 它是给**共现直连**用的
+     * "拆直连"，而这里 A—R→B 是**知识/推论**（拆直连的规矩本来就拒绝拆知识 ✗ 实测队列跑完
+     * 也没落地）。直接建成边 + `action=[前提]` 就是这个项目认的前提形状（判据只有一处：
+     * `edge_premise_polarity` ✓）。 */
+    Token *pm = pool_token_intern(ai->pool, AI_PREMISE_MARK);
+    int made = 0;
+    if (pm) {
+        if (!token_premise_link(A, P)) (void)token_add_assoc_ex(A, P, pm);
+        made = (token_premise_link(A, P) != NULL);   /* **以"真的建成"为准**，不看返回值 */
+    }
+    if (made) {
         ai->n_hypo_cache++;
         char why[THINK_WHY];
         {   /* 有界拼（三处来源都可能很长；截断是故意的，别让 -Wformat-truncation 拦下） */
@@ -584,6 +629,12 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
         }
         cot_push(ai, COT_HYP, 1, 40, "条件缓存（假设下推出）", why);
         ai->n_cot++;
+        /* 登记（有界）：撤回后靠它复查能不能升格（§6.119） */
+        if (ai->n_hc < sizeof ai->hc / sizeof ai->hc[0]) {
+            ai->hc[ai->n_hc].A = A; ai->hc[ai->n_hc].B = B; ai->hc[ai->n_hc].P = P;
+            ai->hc[ai->n_hc].rid = rid; ai->hc[ai->n_hc].neg = (uint8_t)(neg ? 1 : 0);
+            ai->n_hc++;
+        }
     }
 }
 
@@ -1893,6 +1944,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     AI *ai = a->brain;
     ai->pool->current_tick++;
     a->cycle++;
+    /* §6.119：每轮开头复查一遍条件缓存 —— 假设撤了、而无条件也推得出来的，就**升格**（摘前提）。 */
+    ai_hypo_cache_sweep(ai);
     /* 驱动参与决策（默认关）：先把驱动量折算成这一轮的参数修正，再走后面的流程。 */
     drive_policy_step(ai);            /* 驱动层（内核之外）折算预算修正 */
     if (ai->drive_d_gen) {
