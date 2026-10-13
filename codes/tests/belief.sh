@@ -25,7 +25,7 @@ TMP=./_t/belief
 rm -rf "$TMP"; mkdir -p "$TMP"
 
 run() {  # run <输入行...>：全部输出
-    { printf '::load %s\n::notepad off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
+    { printf '::load %s\n::hypo cache off\n::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'; } | "$BIN" 2>&1
 }
 reps() { sed -n 's/.*AI > //p'; }
@@ -81,7 +81,7 @@ case "$r" in *"说 过"*"猫 会 跳舞"*"不 知道 实情"*) chk "引用了他
 esac
 
 echo "⑥ 他的信念是持久状态：存盘 → 重载 → 还在"
-{ printf '::load %s\n::notepad off\n::rel analogy off\n::rel analogy solver off\n他 以为 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n他 觉得 猫 会 飞 吗\n::others\n::quit\n' \
+{ printf '::load %s\n::hypo cache off\n::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n他 以为 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n::hypo cache off\n他 觉得 猫 会 飞 吗\n::others\n::quit\n' \
       "$MODEL" "$TMP" "$TMP"; } | "$BIN" 2>&1 > "$TMP/out.txt" || true
 r=$(reps < "$TMP/out.txt" | tail -1)
 case "$r" in *"在 他 看来"*"对"*) chk "重载后他仍然相信（$r）" 1 ;;
@@ -125,7 +125,7 @@ printf '%s
 echo "⑨ 「学出来的可信度」的证据要从**图里重新数**（计数器不进存档）"
 # 现场学两条关系 → 存档 → 重载：证据（现场学到 N 条）与后验都要还在
 run "甲 属于 家具" "乙 属于 家具" "::save $TMP/ev.bin" > "$TMP/ev1.txt" 2>&1 || true
-out=$( { printf '::load %s/ev.bin\n::stats\n::quit\n' "$TMP"; } | "$BIN" 2>&1 )
+out=$( { printf '::load %s/ev.bin\n::hypo cache off\n::stats\n::quit\n' "$TMP"; } | "$BIN" 2>&1 )
 printf '%s\n' "$out" | grep -aq '现场学到 [2-9]' \
     && chk "重载后「现场学到 N 条」还在（证据是从图里数出来的）" 1 \
     || chk "重载后证据还在（实得：$(printf '%s\n' "$out" | grep '现场学到' | head -1)）" 0
@@ -170,7 +170,7 @@ out=$(run "甲 以为 猫 会 飞" "::others 猫 有 毛")
 printf '%s\n' "$out" | grep -aq '没人说过' && chk "没人提过 → 没人说过" 1 || chk "没人说过" 0
 # 判定是**现算**的：存盘重载后同一个问题给同一个答案（信念表是持久的）
 run "甲 以为 猫 属于 动物" "乙 说 猫 不属于 动物" "::save $TMP/ov.bin" > "$TMP/ov1.txt" 2>&1 || true
-out=$( { printf '::load %s/ov.bin\n::notepad off\n::rel analogy off\n::rel analogy solver off\n::others 猫 属于 动物\n::quit\n' "$TMP"; } | "$BIN" 2>&1 )
+out=$( { printf '::load %s/ov.bin\n::hypo cache off\n::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::others 猫 属于 动物\n::quit\n' "$TMP"; } | "$BIN" 2>&1 )
 printf '%s\n' "$out" | grep -aq '有分歧（待验，不是否定）' \
     && chk "重载后同一个问题给同一个判定（现算，不落库也不丢）" 1 \
     || chk "重载后的判定（实得：$(printf '%s\n' "$out" | grep '合并判定' | head -1)）" 0

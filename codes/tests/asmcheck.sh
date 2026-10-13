@@ -37,7 +37,7 @@ pass=0; fail=0
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # 会话：`::notepad off` 钉住流水线模式（环境变量强开草稿时也不影响本套的断言）
-run() { { printf '::notepad off\n::rel analogy off\n::rel analogy solver off\n'; cat "$1"; } | ./aip --model model.bin > "$2" 2>&1 || true; }
+run() { { printf '::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; cat "$1"; } | ./aip --model model.bin > "$2" 2>&1 || true; }
 # 日志里按顺序取第 n 个 `Token=N`（第 1 个是启动时的 [统计]，最后一个在退出时）
 ntok() { sed -n 's/^\[统计\] Token=\([0-9]*\).*/\1/p' "$1" | sed -n "${2}p"; }
 
@@ -181,7 +181,7 @@ cat > env_in.txt <<'EOF'
 ::asm check
 ::quit
 EOF
-{ printf '::notepad off\n::rel analogy off\n::rel analogy solver off\n'; cat env_in.txt; } | AIP_ASMCHECK=1 ./aip --model model.bin > env.log 2>&1 || true
+{ printf '::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; cat env_in.txt; } | AIP_ASMCHECK=1 ./aip --model model.bin > env.log 2>&1 || true
 grep -qF '未知原语名：`[原语:连结]`' env.log \
     && ok "AIP_ASMCHECK=1 启动即开（第一个程序就被拦）" \
     || bad "AIP_ASMCHECK" "$(grep -m2 '校验\|执行了' env.log)"

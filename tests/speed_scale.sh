@@ -53,7 +53,7 @@ fi
 # ---- ② 同一批问题，各跑一遍（200 问，装载只算一次） ----
 # 问题故意只用**两边都有的知识**（属于/会），这样量的是"跑起来"而不是"知不知道"。
 {
-    printf '::notepad off\n'
+    printf '::notepad off\n::hypo cache off\n'
     i=0
     while [ $i -lt 20 ]; do
         printf '猫 会 呼吸 吗\n狗 属于 动物 吗\n'

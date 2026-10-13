@@ -547,6 +547,46 @@ static inline int agent_set_perspective(AI *ai, char *const *words, size_t n,
  *   未知 → 先试类比推测（标注为推测）；推不出来就返回 NULL，
  *          交给检索/帧/降级去说「不确定」，**绝不靠闭合世界假设硬答「不对」**。
  * 语言只出现在最后一步（der_say），换 ::style 就能换种说法说同一件事。 */
+/* **假设下的结论 → 条件缓存**（§6.118）：假设不进图（铁律），但结论别丢：
+ * 写成**有条件成立**的形状 —— `A —[前提]→ P → B`，其中 P = **整条假设栈的指纹**。
+ * 前提的成立条件就是"这层假设还活着"（`ai_premise_holds` 里按指纹判 ✓）。
+ * 栈一撤 / 换成别的假设 ⇒ 指纹不匹配 ⇒ 缓存自动失效（不需要去删它）。
+ * ⚠ 默认关（`::hypo cache on` / `AIP_HYPOCACHE=1`）。 */
+static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int neg, int truth) {
+    if (!ai || !ai->hypo_cache || !A || !B || rid == 0 || truth == 0) return;
+    if (ai->hypo.depth == 0) return;                 /* 没有假设就没有"条件" */
+    char fp[32];
+    ai_hypo_fingerprint(ai, fp, sizeof fp);
+    if (!fp[0]) return;
+    Token *P = pool_token_intern(ai->pool, fp);
+    if (!P) return;
+    /* 结论边先落地（极性照结论），再挂前提 —— 这样链是 `A —[前提]→ P` 加上 `A -[R]-> B` */
+    if (neg) (void)token_tag_nrel(A, B, rid, REL_BOOST);
+    else     (void)token_tag_rel(A, B, rid, REL_BOOST);
+    char an[96], bn[96], pn[96], note[160];
+    snprintf(an, sizeof an, "%s", A->name ? A->name : "");
+    snprintf(bn, sizeof bn, "%s", B->name ? B->name : "");
+    snprintf(pn, sizeof pn, "%s", fp);
+    char *args[3] = { an, bn, pn };
+    if (token_op_run(ai, "加前提", args, 3, note, sizeof note) >= 0) {
+        ai->n_hypo_cache++;
+        char why[THINK_WHY];
+        {   /* 有界拼（三处来源都可能很长；截断是故意的，别让 -Wformat-truncation 拦下） */
+            size_t off = 0;
+            #define HYC_ADD(str_) do { const char *q_ = (str_); \
+                while (*q_ && off + 1 < sizeof why) why[off++] = *q_++; } while (0)
+            HYC_ADD("假设下的结论沉淀成**条件缓存**：");
+            HYC_ADD(an); HYC_ADD(neg ? " 不 " : " ");
+            HYC_ADD(rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?"); HYC_ADD(" ");
+            HYC_ADD(bn); HYC_ADD("（前提 = 整条假设栈 "); HYC_ADD(fp); HYC_ADD("）");
+            why[off] = 0;
+            #undef HYC_ADD
+        }
+        cot_push(ai, COT_HYP, 1, 40, "条件缓存（假设下推出）", why);
+        ai->n_cot++;
+    }
+}
+
 static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size_t n,
                                                float *out_conf, int as_other) {
     if (!ai || ai->rel_off || !words || n < 4 || n > 7) return NULL;
@@ -596,6 +636,8 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                  pf.n > 2 ? "逻辑链（多跳，已验证）" : "逻辑链（直接事实，已验证）", line);
         ai->n_cot++;
         der_say(ai, d, ai->der_style, resp0, sizeof resp0);
+        /* §6.118：这一轮如果**在假设下**，把结论沉淀成条件缓存（假设本身不进图 ✓） */
+        agent_hypo_cache(ai, A, rid, B, is_neg ? 1 : 0, d->truth);
         if (agree) ai->n_rel_yes++;
         else       ai->n_rel_no++;
         if (pf.n > 2) ai->n_rel_deep++;
@@ -626,6 +668,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                      "类比推测（知识库里没有，借最像的那个词；已验证推测合法）", line);
             ai->n_cot++;
             der_say(ai, d, ai->der_style, resp0, sizeof resp0);
+            agent_hypo_cache(ai, A, rid, B, is_neg ? 1 : 0, d->truth);   /* §6.118 同上 */
             ai->n_rel_guess++;
             if (out_conf) *out_conf = 0.45f;
             char *r = (char *)malloc(strlen(resp0) + 1);

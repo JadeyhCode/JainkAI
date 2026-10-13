@@ -43,7 +43,7 @@ for q in \
   '猫 会 动 吗' '狗 会 动 吗' '老鼠 会 动 吗' '鱼 会 动 吗' '鸟 会 动 吗' \
   '猫 有 心 吗' '狗 有 眼睛 吗' '鱼 有 毛 吗' ; do
     ( cd "$WORK" && cp model.bin m.bin )
-    out=$(cd "$WORK" && printf '::notepad off\n::rel analogy off\n::rel analogy solver off\n::wgate on\n%s\n::wgate\n::quit\n' "$q" \
+    out=$(cd "$WORK" && printf '::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::wgate on\n%s\n::wgate\n::quit\n' "$q" \
           | ./aip --model m.bin 2>&1)
     imp=$(printf '%s\n' "$out" | sed -n 's/.*最近一次关系写入的重要度：\([0-9.]*\).*/\1/p' | tail -1)
     ev=$(printf '%s\n' "$out" | sed -n 's/.*那条候选自己的证据：链 \([0-9]*\) 跳 \/ 链底 \([0-9]*\) 分.*/\1| \2/p' | tail -1)

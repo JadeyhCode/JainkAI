@@ -646,6 +646,12 @@ typedef struct {
     /* **C③ 第二件：多轮自我修正**（默认 0 = 关）：第二次还编不过时，用**新的错误**再认一遍
      * 规则、再改一处、再编一次（总次数 ≤ 3）。关着 = 只改一次（与今天逐字节相同）。 */
     int    code_multi;
+    /* **假设下的结论沉淀成条件缓存**（§6.118，默认 0 = 关）：假设不进图（铁律 ✓），
+     * 但"假设下的结论"不该被当垃圾丢掉 —— 把它写成**有条件成立**的形状
+     * （`A —[前提]→ P → B`，P = **整条假设栈的指纹**），前提活着缓存就用得上，
+     * 栈一撤前提就不成立（缓存自动失效 ✓）。升格（撤回后能无条件推出 ⇒ 前提不再需要）另做。 */
+    int    hypo_cache;
+    size_t n_hypo_cache;             /* 沉淀过几条条件缓存（给人看） */
     /* **N1 参与决策**（思维侧第二条，默认 0 = 关）：思维对象定稿时把它抄到这里
      * （ai.h 在 think.h **之前**，调不到 think_of ⇒ 用一层 AI 级缓存转手），
      * 走边没走出好东西时（best_score 低于阈值）就用**它想通的结论**当结果。 */
@@ -1286,6 +1292,9 @@ static inline void ai_switches_init(AI *ai) {
     ai->gen_exec = 0;                /* 生成的原语程序真跑：默认**关**（只生成 + 校验） */
     { const char *ge = getenv("AIP_GENEXEC"); if (ge && ge[0] == '1') ai->gen_exec = 1; }
     ai->code_multi = 0;              /* 多轮自我修正：默认**关** */
+    ai->hypo_cache = 0;              /* 假设结论沉淀成条件缓存：默认**关** */
+    { const char *hc = getenv("AIP_HYPOCACHE"); if (hc && hc[0] == '1') ai->hypo_cache = 1; }
+    ai->n_hypo_cache = 0;
     { const char *cm = getenv("AIP_CODEMULTI"); if (cm && cm[0] == '1') ai->code_multi = 1; }
     ai->n1_decide = 0;               /* N1 参与决策：默认**关** */
     { const char *nd = getenv("AIP_N1DECIDE"); if (nd && nd[0] == '1') ai->n1_decide = 1; }
@@ -1785,8 +1794,43 @@ static inline int ai_premise_reachable(const AI *aic, const Token *p) {
 /* 前向声明：求值层在文件后半（定义处有注释），前提判据要先用它 */
 static inline int ai_eval_cmp(const char *expr, int *out);
 
+#define AI_HYPO_PREFIX "[假设栈:"
+/* **整条假设栈的指纹**（§6.118）：按**层序**把每一层的每条事实（a/b/rid/neg）都喂进 FNV-1a。
+ * ⚠ 必须用**整栈**，不能用最深那层 —— 多层嵌套时"最深一样、外层的假设不同"会算出同一个指纹，
+ * 于是缓存会被错误地留着（用户 2026-10-11 明确点名这一点）。栈空时给全 0 指纹（不进任何缓存）。 */
+static inline void ai_hypo_fingerprint(const AI *ai, char *out, size_t cap) {
+    if (!out || cap < 12) { if (out && cap) out[0] = 0; return; }
+    uint32_t h = 2166136261u;
+    if (ai) {
+        uint32_t dep = (uint32_t)ai->hypo.depth;
+        for (uint32_t k = 0; k < 4; ++k) { h ^= (dep >> (8 * k)) & 0xFFu; h *= 16777619u; }
+        for (size_t i = 0; i < ai->hypo.depth; ++i) {
+            const HypoFrame *f = &ai->hypo.fr[i];
+            uint32_t nn = (uint32_t)f->n;
+            for (uint32_t k = 0; k < 4; ++k) { h ^= (nn >> (8 * k)) & 0xFFu; h *= 16777619u; }
+            for (size_t j = 0; j < f->n; ++j) {
+                const HypoFact *fa = &f->f[j];
+                uint32_t vals[4] = { fa->a ? fa->a->id : 0u, fa->b ? fa->b->id : 0u,
+                                     (uint32_t)fa->rid, (uint32_t)fa->neg };
+                for (int q = 0; q < 4; ++q)
+                    for (uint32_t k = 0; k < 4; ++k) { h ^= (vals[q] >> (8 * k)) & 0xFFu; h *= 16777619u; }
+            }
+        }
+    }
+    snprintf(out, cap, AI_HYPO_PREFIX "%08x]", (unsigned)h);
+}
+
 static inline int ai_premise_holds(const AI *ai, const Token *p) {
     if (!ai || !p) return 0;
+    /* **§6.118 假设栈指纹型前提**：P = `[假设栈:xxxxxxxx]` ⇒ 它成立当且仅当
+     * **当前整条假设栈**的指纹正好是这个 —— 栈一撤（或换成别的假设）立刻不成立，
+     * 于是那条条件缓存自动失效（不用去删它 ✓）。栈空时一律不成立。 */
+    if (p->name && strncmp(p->name, AI_HYPO_PREFIX, strlen(AI_HYPO_PREFIX)) == 0) {
+        if (!ai->hypo.depth) return 0;
+        char fp[32];
+        ai_hypo_fingerprint(ai, fp, sizeof fp);
+        return strcmp(fp, p->name) == 0;
+    }
     /* **§6.98 求值层也管前提**（② 档那条的延伸）：前提的名字本身是**可计算的**
      * （`3<5` 这种）时，先真算一遍 —— 图内三档（提到过/够得着/有据）对"算式"永远说不清。
      * 只在 `eval_num` 打开时生效（默认关 ⇒ 与今天逐字节相同）；算不出来就照旧走图内判据。 */

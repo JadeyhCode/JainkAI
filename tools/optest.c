@@ -1862,6 +1862,37 @@ static void test_redo_alt(void) {
  * （`rel_guess` → `der_default` → `der_verify`），而不是另造一条求解器兜底。
  * 旧的"求解器兜底"（§6.113）已撤：它会让验证器自查"知识库里有吗"时得到"有"，
  * 于是类比链永远被判缺口（实测：`der_verify` 报 1 个缺口）。 */
+/* §6.118 **假设下的结论沉淀成条件缓存**：前提 = **整条假设栈的指纹**（不是最深那层） */
+static void test_hypo_cache(void) {
+    printf("== ㊿ 假设结论沉淀：条件缓存 + 整栈指纹（默认关） ==\n");
+    AI *ai = ai_new();
+    Token *a = T(ai, "假甲"), *b = T(ai, "假乙"), *h = T(ai, "假丙");
+    if (getenv("AIP_HYPOCACHE")) ok(1, "AIP_HYPOCACHE=1（反向测量）：默认值断言按规矩跳过");
+    else ok(ai->hypo_cache == 0, "默认关（不动今天的行为）");
+    ai->hypo_cache = 1;
+    agent_hypo_cache(ai, a, REL_IS_A, b, 0, 1);
+    ok(ai->n_hypo_cache == 0, "没有假设时**不沉淀**（没有「条件」可言）");
+    ok(hypo_push(&ai->hypo, h) == 1 && hypo_add(&ai->hypo, a, b, REL_IS_A, 0) == 1, "进一层假设");
+    char fp1[32];
+    ai_hypo_fingerprint(ai, fp1, sizeof fp1);
+    agent_hypo_cache(ai, a, REL_IS_A, b, 0, 1);
+    ok(ai->n_hypo_cache == 1, "假设下推出 ⇒ 沉淀一条**条件缓存**");
+    Token *P = pool_find(ai->pool, fp1);
+    ok(P && strncmp(P->name, "[假设栈:", 9) == 0, "前提 token = **整栈指纹**（[假设栈:xxxxxxxx]）");
+    ok(ai_premise_holds(ai, P) == 1, "栈还活着 ⇒ 前提成立 ⇒ 缓存可用");
+    ok(hypo_push(&ai->hypo, h) == 1 && hypo_add(&ai->hypo, b, a, REL_IS_A, 0) == 1, "再进一层（嵌套）");
+    char fp2[32];
+    ai_hypo_fingerprint(ai, fp2, sizeof fp2);
+    ok(strcmp(fp1, fp2) != 0, "**嵌套后指纹不同**（这就是「不能用最深那层」的意思）");
+    ok(ai_premise_holds(ai, P) == 0, "旧缓存的前提不再成立 ⇒ 自动失效（不用去删它）");
+    (void)hypo_pop(&ai->hypo);
+    ok(ai_premise_holds(ai, P) == 1, "弹掉内层 ⇒ 指纹回到外层 ⇒ 缓存又可用（整栈算才对）");
+    (void)hypo_pop(&ai->hypo);
+    ok(ai_premise_holds(ai, P) == 0, "栈全撤 ⇒ 前提不成立");
+    ok(rel_direct(a, REL_IS_A, b) == 1, "结论边**留在图上**（没被当垃圾丢 —— 条件缓存的意义）");
+    ai_free(ai);
+}
+
 static void test_guess_sibling(void) {
     printf("== ㊾ ① 联想能用：同上位兄弟 ⇒ rel_guess 给出**可验证**的推测 ==\n");
     AI *ai = ai_new();
@@ -2787,6 +2818,7 @@ int main(void) {
     test_edge_tset();
     test_other_hist();
     test_guess_sibling();
+    test_hypo_cache();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

@@ -23,7 +23,7 @@ rm -rf "$TMP"; mkdir -p "$TMP"
 fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi; }
 run() {
-    { printf '::load %s\n::rel analogy off\n::rel analogy solver off\n::notepad off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
+    { printf '::load %s\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'
     } | "$BIN" 2>&1
@@ -64,7 +64,7 @@ r=$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | tail -1)
 echo "     撤回后 → $r"
 case "$r" in *"不 对"*"猫 -[不 会]-> 飞"*) chk "撤回后回到原本的知识" 1 ;;
              *) chk "撤回后回到原本的知识（实得「$r」）" 0 ;; esac
-{ printf '::load %s\n::rel analogy off\n::rel analogy solver off\n如果 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n::rel analogy off\n::rel analogy solver off\n猫 会 飞 吗\n::quit\n' \
+{ printf '::load %s\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n如果 猫 会 飞\n::save %s/m.bin\n::load %s/m.bin\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n猫 会 飞 吗\n::quit\n' \
       "$MODEL" "$TMP" "$TMP"; } | "$BIN" 2>&1 | sed -n 's/.*AI > //p' > "$TMP/persist.txt"
 last=$(tail -1 "$TMP/persist.txt")
 echo "     存盘重载后 → $last"
