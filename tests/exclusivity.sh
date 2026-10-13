@@ -38,7 +38,7 @@ EOF
 run() {
     printf '%s\n' "$1" > relations.txt
     printf '::save m0\n::quit\n' | "$BIN" corpus.txt > train.log 2>&1
-    { printf '::load m0\n::excl\n::stats\n%s\n::quit\n' "$2"; } | "$BIN" > run.log 2>&1
+    { printf '::load m0\n::char off\n::excl\n::stats\n%s\n::quit\n' "$2"; } | "$BIN" > run.log 2>&1
 }
 row()   { grep -a "  $1 " run.log | head -1; }          # ::excl 里的那一行
 reps()  { sed -n 's/.*AI > //p' run.log | head -1; }     # 最后一句回复

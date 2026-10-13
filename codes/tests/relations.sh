@@ -26,7 +26,7 @@ fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi }
 
 run() {   # <输入...>  → 打印回复行
-    { printf '::load %s\n::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
+    { printf '::load %s\n::char off\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'
     } | "$BIN" 2>&1
@@ -75,7 +75,7 @@ case "$r1" in "记下 了 ： 猫 属于 宠物") chk "陈述句被当场学下�
 case "$r2" in "对 ， 猫 -[属于]-> 宠物"*) chk "刚学的知识立刻能用来回答（$r2）" 1 ;;
              *) chk "刚学的知识立刻能用来回答（实得「$r2」）" 0 ;; esac
 # 存盘 → 重载 → 还在吗？（rel 位掩码写进模型 v6）
-{ printf '::load %s\n猫 属于 宠物\n::save %s/m.bin\n::load %s/m.bin\n猫 属于 宠物 吗\n::quit\n' \
+{ printf '::load %s\n::char off\n猫 属于 宠物\n::save %s/m.bin\n::load %s/m.bin\n::char off\n猫 属于 宠物 吗\n::quit\n' \
       "$MODEL" "$TMP" "$TMP"; } | "$BIN" 2>&1 | sed -n 's/.*AI > //p' > "$TMP/persist.txt"
 last=$(tail -1 "$TMP/persist.txt")
 case "$last" in "对 ， 猫 -[属于]-> 宠物"*) chk "存盘重载后动态知识还在（$last）" 1 ;;

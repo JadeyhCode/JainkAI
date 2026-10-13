@@ -127,7 +127,7 @@ V9="$ROOT/tests/v9_sample.bin"
 # 先复核样本身份：文件头声明的 n_tok / n_assoc（magic + version + VSA_DIM 之后两个 u32）
 declared=$(od -An -tu4 -j12 -N8 "$V9" | tr -s ' ' | sed 's/^ //;s/ $//')
 [ "$declared" = "38 25" ] || fail "v9 样本头里 n_tok/n_assoc = 「$declared」（应当是 38 25：样本被换了？）"
-printf '::load %s\n::stats\n::fp\n::save v10slot\n::quit\n' "$V9" > in6.txt
+printf '::load %s\n::char off\n::stats\n::fp\n::save v10slot\n::quit\n' "$V9" > in6.txt
 ./aip < in6.txt > run6.log 2>&1 || fail "读 v9 样本退出非 0"
 grep -q '边=25' run6.log \
     || fail "v9 样本读进来边数 ≠ 文件头声明的 25：$(grep -m1 '统计' run6.log)"
@@ -137,7 +137,7 @@ curver=$(od -An -tu4 -j4 -N4 v10slot | tr -d ' ')
 [ "$curver" = "13" ] || fail "另存文件的版本号是 $curver（应当是 13）"
 # 关键等价：v9 直接读进来的内存态 与 把它存成 v10 再读回来，**指纹逐位一致**
 fp_v9=$(grep -o '\[指纹\] [0-9a-f]*' run6.log | head -1)
-printf '::load v10slot\n::fp\n::quit\n' > in7.txt
+printf '::load v10slot\n::char off\n::fp\n::quit\n' > in7.txt
 ./aip < in7.txt > run7.log 2>&1 || fail "读 v10slot 退出非 0"
 fp_v10=$(grep -o '\[指纹\] [0-9a-f]*' run7.log | head -1)
 [ -n "$fp_v9" ] || fail "v9 装载态没打出指纹"
@@ -146,7 +146,7 @@ echo "  OK 边=25（与文件头一致）、另存版本=10、指纹 $fp_v9 前�
 # 顺带钉住"语境字段真的没了"：新代码 ::edges 里不许再出现「语境[」。
 # （同一份样本在旧代码上会打出 `语境[水里]` / `语境[水里,岸上] 非[岸上]` —— 实测的 A/B，
 #  见 §6.50；所以这条断言不是看格式，是看"旧字段确实被丢掉了"。）
-printf '::load %s\n::edges 猫\n::quit\n' "$V9" > in8.txt
+printf '::load %s\n::char off\n::edges 猫\n::quit\n' "$V9" > in8.txt
 ./aip < in8.txt > run8.log 2>&1 || fail "读样本看边退出非 0"
 grep -q '语境\[' run8.log && fail "v10 的 ::edges 还在打语境字段（字段应当已删）"
 grep -q '→ 鱼' run8.log || fail "样本里的边（猫→鱼）没读出来"

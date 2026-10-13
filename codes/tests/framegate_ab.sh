@@ -25,7 +25,7 @@ rm -rf "$TMP"; mkdir -p "$TMP"
 
 # 跑一条探针，输出「输入<TAB>放行次数<TAB>回复」
 one() {   # $1 = on|off   $2 = 输入
-    { printf '::load %s\n::framegate %s\n' "$MODEL" "$1"
+    { printf '::load %s\n::char off\n::framegate %s\n' "$MODEL" "$1"
       printf '%s\n' "$2"
       printf '::framegate\n::quit\n'
     } | "$BIN" 2>&1 > "$TMP/last.txt" || true

@@ -651,6 +651,14 @@ typedef struct {
      * （`A —[前提]→ P → B`，P = **整条假设栈的指纹**），前提活着缓存就用得上，
      * 栈一撤前提就不成立（缓存自动失效 ✓）。升格（撤回后能无条件推出 ⇒ 前提不再需要）另做。 */
     int    hypo_cache;
+    /* **逐字接地队列**（§6.120，用户 2026-10-11 提的方向，默认关）：
+     * 输入先**按顺序**把 UTF-8 字符接进队列（"先接地，待会要用"），
+     * 开着 `char_stream` 时**不分词**，直接把这些字符当成"词"按顺序交给思维/对话。
+     * ⚠ **分词器保留**（右边那条 `ai_tokenize` 的路一个字都不动）——这一步只是多一条可选旁路，
+     * 将来要撤分词器也得先从这里长期跑通（用户明确要求：现在千万不要撤）。 */
+    int    char_stream;
+    char   cq[512];                  /* 顺序接地的字符（UTF-8 原文，按到达顺序） */
+    size_t cq_n;
     size_t n_hypo_cache;             /* 沉淀过几条条件缓存（给人看） */
     /* **条件缓存的登记表**（§6.119 升格用）：造过哪些"假设下结论"，供撤回后复查。
      * 有界（16 条），满了就丢最老的（登记表只影响"能不能升格"，不影响缓存本身的正确性）。 */
@@ -1297,6 +1305,9 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ge = getenv("AIP_GENEXEC"); if (ge && ge[0] == '1') ai->gen_exec = 1; }
     ai->code_multi = 0;              /* 多轮自我修正：默认**关** */
     ai->hypo_cache = 0;              /* 假设结论沉淀成条件缓存：默认**关** */
+    ai->char_stream = 0;             /* 逐字模式：默认**关**（走分词器，行为不变） */
+    ai->cq_n = 0;
+    { const char *cs = getenv("AIP_CHARSTREAM"); if (cs && cs[0] == '1') ai->char_stream = 1; }
     { const char *hc = getenv("AIP_HYPOCACHE"); if (hc && hc[0] == '1') ai->hypo_cache = 1; }
     ai->n_hypo_cache = 0;
     ai->n_hc = 0;
@@ -1823,6 +1834,70 @@ static inline void ai_hypo_fingerprint(const AI *ai, char *out, size_t cap) {
         }
     }
     snprintf(out, cap, AI_HYPO_PREFIX "%08x]", (unsigned)h);
+}
+
+/* **顺序接地**（§6.120）：把一段 UTF-8 文本按**字符**（不是字节）依次接进队列。
+ * 队列满就丢**最老**的（滚动窗口 —— 顺序不乱，这是"接地"的关键）。 */
+static inline size_t ai_utf8_len(unsigned char c) {
+    if (c < 0x80) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+static inline void ai_char_ground(AI *ai, const char *text) {
+    if (!ai || !text) return;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        size_t l = ai_utf8_len(*p);
+        for (size_t k = 0; k < l; ++k) if (!p[k]) { l = k; break; }
+        if (ai->cq_n + l > sizeof ai->cq) {           /* 满了：丢最老的一个字符 */
+            size_t drop = ai_utf8_len((unsigned char)ai->cq[0]);
+            if (drop > ai->cq_n) drop = ai->cq_n;
+            memmove(ai->cq, ai->cq + drop, ai->cq_n - drop);
+            ai->cq_n -= drop;
+            continue;
+        }
+        for (size_t k = 0; k < l; ++k) ai->cq[ai->cq_n++] = (char)p[k];
+        p += l;
+    }
+}
+/* 把队列里的字符按顺序切成"词"（每个 UTF-8 字符一个词）—— 返回条数。
+ * `buf` 用来存每段的终止符（调用方给 n 个 ' ' 的空间）。 */
+static inline size_t ai_char_words(const AI *ai, const char **w, char *buf, size_t n) {
+    if (!ai || !w || !buf) return 0;
+    size_t i = 0, k = 0, cnt = 0;
+    while (i < ai->cq_n && cnt < n) {
+        size_t l = ai_utf8_len((unsigned char)ai->cq[i]);
+        if (i + l > ai->cq_n) l = ai->cq_n - i;
+        memcpy(buf + k, ai->cq + i, l);
+        buf[k + l] = 0;
+        w[cnt++] = buf + k;
+        k += l + 1;
+        i += l;
+    }
+    return cnt;
+}
+
+/* **逐字"分词"**（§6.120）：先顺序接地，再把每个 UTF-8 字符当成一个"词"。
+ * 返回形状与 `ai_tokenize` 一致（`char**` + 每项单独 malloc）⇒ 调用方的释放路径一个字都不用改 ✓。 */
+static inline char **ai_char_tokenize(AI *ai, const char *input, size_t *out_n) {
+    if (out_n) *out_n = 0;
+    if (!ai || !input) return NULL;
+    ai_char_ground(ai, input);                      /* ① 顺序接地（待会要用） */
+    const char *w[512];
+    char buf[512 * 5];                 /* ⚠ 最坏 = 512 个 4 字节 UTF-8 字 + 每段一个终止符 */
+    size_t n = ai_char_words(ai, w, buf, 512);
+    if (!n) return NULL;
+    char **arr = (char **)calloc(n, sizeof *arr);
+    if (!arr) return NULL;
+    for (size_t i = 0; i < n; ++i) {
+        arr[i] = (char *)malloc(strlen(w[i]) + 1);
+        if (!arr[i]) { ai_free_words(arr, i); return NULL; }
+        memcpy(arr[i], w[i], strlen(w[i]) + 1);
+    }
+    if (out_n) *out_n = n;
+    return arr;
 }
 
 static inline int ai_premise_holds(const AI *ai, const Token *p) {

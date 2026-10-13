@@ -35,7 +35,7 @@ ok=0; bad=0
 while IFS='	' read -r want phrase wantname; do
     case $want in ''|'#'*) continue ;; esac
     ( cd "$WORK" && cp model.bin m.bin )
-    out=$(cd "$WORK" && printf '::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::premhold mention\n%s\n::quit\n' "$phrase" \
+    out=$(cd "$WORK" && printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::premhold mention\n%s\n::quit\n' "$phrase" \
           | ./aip --model m.bin 2>&1)
     got=none
     # 只看**触发那一句回复**（整段输出里有 `::premhold mention` 的状态行，它也带"前提"两个字，

@@ -25,7 +25,7 @@ chk() {  # $1=说明 $2=0/1
 # run <开关行> <输入...>  →  完整输出（含 ::cot）
 run() {
     opt=$1; shift
-    { printf '::load %s\n' "$MODEL"
+    { printf '::load %s\n::char off\n' "$MODEL"
       [ -n "$opt" ] && printf '%s\n' "$opt"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::cot\n::quit\n'

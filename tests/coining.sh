@@ -39,7 +39,7 @@ chk() {  # $1=说明 $2=0/1
 }
 
 echo "① 基本：造出「火锅」"
-out=$(printf '::load %s\n你吃火锅了吗\n::think 火锅\n::stats\n::quit\n' "$MODEL" | run)
+out=$(printf '::load %s\n::char off\n你吃火锅了吗\n::think 火锅\n::stats\n::quit\n' "$MODEL" | run)
 r=$(printf '%s\n' "$out" | reply)
 [ "$r" = "我 吃 了 火锅" ] && chk "回复是「我 吃 了 火锅」（实得「$r」）" 1 \
                           || chk "回复是「我 吃 了 火锅」（实得「$r」）" 0
@@ -51,7 +51,7 @@ printf '%s\n' "$out" | stat_line | grep -q '现场造词1' \
     && chk "统计里 现场造词=1" 1 || chk "统计里 现场造词=1" 0
 
 echo "② 重复三次：只许造一次"
-out=$(printf '::load %s\n你吃火锅了吗\n你吃火锅了吗\n你吃火锅了吗\n::stats\n::quit\n' "$MODEL" | run)
+out=$(printf '::load %s\n::char off\n你吃火锅了吗\n你吃火锅了吗\n你吃火锅了吗\n::stats\n::quit\n' "$MODEL" | run)
 s=$(printf '%s\n' "$out" | stat_line)
 printf '%s\n' "$s" | grep -q '现场造词1' && chk "现场造词仍为 1（$s）" 1 \
                                          || chk "现场造词仍为 1（$s）" 0
@@ -59,7 +59,7 @@ n=$(printf '%s\n' "$out" | grep -c '我 吃 了 火锅' || true)
 [ "$n" -eq 3 ] && chk "三次都答「我 吃 了 火锅」" 1 || chk "三次都答「我 吃 了 火锅」（实得 $n 次）" 0
 
 echo "③ 存档重载后仍认得出"
-out=$(printf '::load %s\n你吃火锅了吗\n::save %s/m.bin\n::load %s/m.bin\n你吃火锅了吗\n::stats\n::quit\n' \
+out=$(printf '::load %s\n::char off\n你吃火锅了吗\n::save %s/m.bin\n::load %s/m.bin\n::char off\n你吃火锅了吗\n::stats\n::quit\n' \
         "$MODEL" "$TMP" "$TMP" | run)
 r=$(printf '%s\n' "$out" | reply)
 [ "$r" = "我 吃 了 火锅" ] && chk "重载后仍答「我 吃 了 火锅」（实得「$r」）" 1 \
@@ -69,7 +69,7 @@ printf '%s\n' "$s" | grep -q '现场造词0' && chk "重载后不再造词（$s�
                                         || chk "重载后不再造词（$s）" 0
 
 echo "④ ::coin off 时不造词"
-out=$(printf '::load %s\n::coin off\n你吃火锅了吗\n::stats\n::quit\n' "$MODEL" | run)
+out=$(printf '::load %s\n::char off\n::coin off\n你吃火锅了吗\n::stats\n::quit\n' "$MODEL" | run)
 r=$(printf '%s\n' "$out" | reply)
 [ "$r" = "我 吃 了 火 锅" ] && chk "关掉后按字答「我 吃 了 火 锅」（实得「$r」）" 1 \
                            || chk "关掉后按字答「我 吃 了 火 锅」（实得「$r」）" 0
@@ -79,7 +79,7 @@ printf '%s\n' "$out" | stat_line | grep -q '现场造词0' \
 echo "⑤ 反面：非切词产物 / 无证据都不许造"
 for case in "你怕危险吗:怕危险" "你知道天气吗:知道天气" "你喜欢北京吗:北京" ; do
     q=${case%%:*}; bad=${case##*:}
-    out=$(printf '::load %s\n%s\n::stats\n::quit\n' "$MODEL" "$q" | run)
+    out=$(printf '::load %s\n::char off\n%s\n::stats\n::quit\n' "$MODEL" "$q" | run)
     if printf '%s\n' "$out" | grep -q "$bad"; then
         chk "$q 不许造出「$bad」" 0
     else
@@ -87,7 +87,7 @@ for case in "你怕危险吗:怕危险" "你知道天气吗:知道天气" "你�
     fi
 done
 # 北京 的部件 北/京 在图里一条边都没有 → 无从关联 → 也不该造
-out=$(printf '::load %s\n你喜欢北京吗\n::stats\n::quit\n' "$MODEL" | run)
+out=$(printf '::load %s\n::char off\n你喜欢北京吗\n::stats\n::quit\n' "$MODEL" | run)
 printf '%s\n' "$out" | stat_line | grep -q '现场造词0' \
     && chk "「北京」部件无图证据，不造词" 1 || chk "「北京」部件无图证据，不造词" 0
 

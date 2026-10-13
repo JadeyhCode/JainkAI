@@ -550,7 +550,8 @@ typedef enum {
     CMD_CODE,               /* 写-跑-看错-改 的机械闭环（降级版） */
     CMD_ORDER,
     CMD_FEAT,
-    CMD_TSET,              /* 时间顺序：谁先出现 */
+    CMD_TSET,
+    CMD_CHAR,              /* 时间顺序：谁先出现 */
     CMD_NEAR,
     CMD_ANALOGY,
     CMD_TOKENS,
@@ -665,6 +666,9 @@ static const CmdDef CMDS[] = {
     { "feat", "<特征词> [特征词…]", 2, "基本",
       "**特征集合 → 概念**：把每个特征词的**入边来源**当一票，看哪个词被命中最多次\n"
       "  （只读；答的是「像什么」=联想，不是「是什么」=判定）", CMD_FEAT },
+    { "char", "on|off|queue|<文本>", 2, "基本",
+      "**逐字接地**（§6.120）：`on/off` 切逐字模式（默认关，关着走分词器）；`queue` 看接地的字符队列；"
+      "给文本就**按顺序接地**进队列（待会要用）", CMD_CHAR },
     { "tset", "clear|<词>", 2, "基本",
       "边上的**时刻集合**（§6.111）：`clear` 全清（看护归一化用）；给个词就列它的边各自在哪些 tick 被观测过", CMD_TSET },
     { "order", "<A> <B>", 2, "基本",
@@ -3118,6 +3122,26 @@ int main(int argc, char **argv) {
                     strength[best] = 0; hit[best] = 0;
                 }
                 printf("  （这是**联想**：按「谁指向这些特征」投票；不是判定，命中少就是不像）\n");
+                continue;
+            }
+            case CMD_CHAR: {
+                const char *arg = (cmd[4] == ' ') ? cmd + 5 : NULL;   /* ⚠ cmd 不含 :: ⇒ 下标从 4 起 */
+                while (arg && *arg == ' ') arg++;
+                if (!arg || !*arg) { printf("[用法] ::char on|off|queue|<文本>\n"); continue; }
+                if (!strcmp(arg, "on"))  { a->brain->char_stream = 1;
+                    printf("[逐字接地 = 开]（输入先**按顺序**接地；不分词，字符按顺序当「词」进思维。"
+                           "分词器仍在，`::char off` 就回去）\n"); continue; }
+                if (!strcmp(arg, "off")) { a->brain->char_stream = 0;
+                    printf("[逐字接地 = 关（默认）]（走分词器 `ai_tokenize`，行为与一直以来的样子一致）\n");
+                    continue; }
+                if (!strcmp(arg, "queue")) {
+                    printf("[字符队列] %zu 字节：%s\n", a->brain->cq_n,
+                           a->brain->cq_n ? a->brain->cq : "（空）");
+                    continue;
+                }
+                ai_char_ground(a->brain, arg);
+                printf("[顺序接地] 接进 %zu 字节；队列现有 %zu 字节\n",
+                       strlen(arg), a->brain->cq_n);
                 continue;
             }
             case CMD_TSET: {

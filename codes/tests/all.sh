@@ -177,13 +177,13 @@ echo "=== 收官：交互冒烟（读盘后各派生层是否都在 + 混合模�
 # 曾经因为一次字符串替换把 ai_embed_build + frames_load 删掉，
 # 症状只是「帧库空了」→ 帧层与思维链步骤静默消失，而 roundtrip 照样 PASS
 # （它只比状态转储，不看这些层）。所以这里补一道硬门。
-smoke=$(printf '::load model.bin\n::frames\n::rel 猫\n::quit\n' | ./build_aip 2>&1)
+smoke=$(printf '::load model.bin\n::char off\n::frames\n::rel 猫\n::quit\n' | ./build_aip 2>&1)
 sfail=0
 printf '%s\n' "$smoke" | grep -q '没有帧库' && { echo "  ^^^ 加载后帧库是空的（frames_load 没被调用？）"; sfail=1; }
 printf '%s\n' "$smoke" | grep -q -- '--\[属于\]-->' || { echo "  ^^^ 加载后关系知识是空的（relations_load 没被调用？）"; sfail=1; }
 [ "$sfail" -eq 0 ] || fail=1
 
-printf '::load model.bin\n你好呀\n::free\n::framegate\n::coin\n::seg\n::relay\n::fall\n::near 猫\n::rel 猫\n::der\n::hypo\n::world\n::walk\n你想学画画吗\n::quit\n' \
+printf '::load model.bin\n::char off\n你好呀\n::free\n::framegate\n::coin\n::seg\n::relay\n::fall\n::near 猫\n::rel 猫\n::der\n::hypo\n::world\n::walk\n你想学画画吗\n::quit\n' \
     | ./build_aip 2>&1 | grep -E 'AI >|内部联想|帧读关联链|现场造词|换切分|中转词|降级答复|联想直接输出' \
     || { echo "FAIL 交互冒烟"; fail=1; }
 

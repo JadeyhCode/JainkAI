@@ -35,7 +35,7 @@ bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # 每次从干净模型起跑（改口会写图，前一段不能污染后一段）
 # `::notepad off`：**钉住"流水线模式"** —— 这样环境变量强制打开"AI 自己写草稿"时
 # （`AIP_PATCH=记事本 AIP_NOTEPAD=on`），这套看护的断言依然测的是它要测的东西。
-run() { cp model.bin m.bin; { printf '::notepad off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
+run() { cp model.bin m.bin; { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
 
 echo "== ① 默认（开）：后说的替换先说的，并如实说「改过来了」 =="
 run '猫 有 毛\n猫 没有 毛\n猫 有 毛 吗\n::rel 猫\n' o1

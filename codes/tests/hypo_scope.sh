@@ -22,7 +22,7 @@ fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi; }
 
 run() {
-    { printf '::load %s\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
+    { printf '::load %s\n::char off\n' "$MODEL"; for q in "$@"; do printf '%s\n' "$q"; done
       printf '::quit\n'; } | "$BIN" 2>&1
 }
 # ::hypo 那一段的输出（第几层、每层写了什么、算在谁头上）

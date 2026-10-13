@@ -28,7 +28,7 @@ chk() {  # $1=说明 $2=0/1
 # run <开关行> <输入行...>  →  打印所有 AI 回复
 run() {
     opt=$1; shift
-    { printf '::load %s\n' "$MODEL"
+    { printf '::load %s\n::char off\n' "$MODEL"
       [ -n "$opt" ] && printf '%s\n' "$opt"
       for q in "$@"; do printf '%s\n' "$q"; done
       printf '::stats\n::quit\n'

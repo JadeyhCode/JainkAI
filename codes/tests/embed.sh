@@ -53,7 +53,7 @@ awk -v a="$hv_cat_dog" 'BEGIN{exit !(a+0 <= 20)}' && chk "旧 hv 对同一对词
                                                   || chk "旧 hv 对同一对词无区分度（$hv_cat_dog%）" 0
 
 echo "② emb 不写进模型文件，读盘后重算 == 原地算"
-{ printf '::load %s\n::near 猫\n::save %s/m.bin\n::load %s/m.bin\n::near 猫\n::quit\n' \
+{ printf '::load %s\n::char off\n::near 猫\n::save %s/m.bin\n::load %s/m.bin\n::char off\n::near 猫\n::quit\n' \
       "$MODEL" "$TMP" "$TMP"; } | "$BIN" 2>&1 | sed -n 's/^   \(..*\) *\([0-9.]*\)%$/\1 \2/p' > "$TMP/near.txt"
 "$BIN" > /dev/null 2>&1 || true
 # 前后各 8 行，必须逐字一致
@@ -78,7 +78,7 @@ awk -v a="$out_max" 'BEGIN{exit !(a+0 >= 50)}' \
     || chk "类外词最高只有 ${out_max}% —— 那也许可以当门槛，需重新评估" 0
 
 echo "④ 边界：关系类比撑不起来时会**诚实拒答**，不是编一个"
-{ printf '::load %s\n::analogy 猫 动物 狗\n::quit\n' "$MODEL"; } | "$BIN" 2>&1 \
+{ printf '::load %s\n::char off\n::analogy 猫 动物 狗\n::quit\n' "$MODEL"; } | "$BIN" 2>&1 \
     | grep -q '推不出来' \
     && chk "::analogy 在表示不够时不编答案" 1 || chk "::analogy 该拒答时却给了答案" 0
 

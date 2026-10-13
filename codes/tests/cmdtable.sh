@@ -40,7 +40,7 @@ n_listed=$(wc -l < help.names)
 
 echo "== ② 帮助里列出的每条命令都真的认得（一次会话里全打一遍） =="
 # quit 会结束会话，跳过（它单独测）；load/save 会动文件，跳过（它们另有回归看护）
-{ printf '::load model.bin\n'
+{ printf '::load model.bin\n::char off\n'
   grep -v -x -e quit -e load -e save help.names | while read -r n; do printf '::%s\n' "$n"; done
   printf '::quit\n'
 } | ./aip > all.log 2>&1 || true

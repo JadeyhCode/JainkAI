@@ -1959,11 +1959,19 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
 
     /* 感知 */
     size_t n;
-    char **words = ai_tokenize(ai, input, &n);
+    /* §6.120：**逐字模式**（默认关）时不分词 —— 先顺序接地，再把字符当"词"；
+     * 关着时一个字都不变（还是 `ai_tokenize`，用户明确要求现在不要撤分词器）。 */
+    char **words = ai->char_stream ? ai_char_tokenize(ai, input, &n)
+                                   : ai_tokenize(ai, input, &n);
     /* 视角切换会把 words/n 往后挪两个词，但**释放必须用原始的指针** ——
      * 不然 free 的是数组中间，是堆破坏（不是崩一下就完的那种）。 */
     char **words_alloc = words;
     size_t n_alloc = n;
+    /* §6.120 **逐字模式的安全上限**：整行语料（几十个字）在逐字模式下会变成几十个"词"，
+     * 而下游有些路径按"一句话几个词"写的（固定数组），实测 `driveprobe` 直接 SIGSEGV ✗。
+     * 所以逐字模式只用**最近 32 个字**（顺序仍然是接地的顺序）；分词器那条路不受影响。
+     * ⚠ 只能在这里挪 `words`：`words_alloc` 必须still 指向**原始**数组（下面 free 用它）。 */
+    if (ai->char_stream && n > 32) { words += (n - 32); n = 32; }
     if (!words || n == 0) {
         /* **没人说话的这一轮**：N4 的空闲思考（默认关）自己从 `[自问:…]` 里挑一个
          * 没想通的问题来想。它**只读**（不提议意图、不沉淀、不动图，见 think.h 的

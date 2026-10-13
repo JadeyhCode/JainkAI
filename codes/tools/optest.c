@@ -1863,6 +1863,41 @@ static void test_redo_alt(void) {
  * 旧的"求解器兜底"（§6.113）已撤：它会让验证器自查"知识库里有吗"时得到"有"，
  * 于是类比链永远被判缺口（实测：`der_verify` 报 1 个缺口）。 */
 /* §6.118 **假设下的结论沉淀成条件缓存**：前提 = **整条假设栈的指纹**（不是最深那层） */
+/* §6.120 **逐字接地队列**（用户提的方向）：顺序接地 + 字符按顺序当"词"，且**分词器保留** */
+static void test_char_stream(void) {
+    printf("== ⓵ 逐字接地：顺序队列 + 字符即词（分词器保留成可选） ==\n");
+    AI *ai = ai_new();
+    (void)T(ai, "字");
+    if (getenv("AIP_CHARSTREAM")) ok(1, "AIP_CHARSTREAM=1（反向测量）：默认值断言按规矩跳过");
+    else ok(ai->char_stream == 0, "**默认关**（关着走分词器，行为一个字不变）");
+    ai_char_ground(ai, "猫有毛");
+    ok(ai->cq_n == 9 && memcmp(ai->cq, "猫有毛", 9) == 0,
+       "顺序接地：3 个汉字 9 字节，**按到达顺序**进队列");
+    { const char *w[8]; char buf[8 * 5];   /* ⚠ 最坏 4 字节/字 + 终止符 */
+      size_t n = ai_char_words(ai, w, buf, 8);
+      ok(n == 3, "字符按顺序切成 3 个「词」");
+      ok(n == 3 && strlen(w[0]) == 3 && strcmp(w[0], "猫") == 0 &&
+         strcmp(w[1], "有") == 0 && strcmp(w[2], "毛") == 0,
+         "每个词是**一个完整 UTF-8 字**（不是字节），且顺序不乱"); }
+    { char **cw = NULL; size_t cn = 0;
+      ai->cq_n = 0;                      /* ⚠ 队列是**累积**的（滚动窗口）：不清空会拿到 6 项 */
+      cw = ai_char_tokenize(ai, "猫有毛", &cn);
+      ok(cw && cn == 3, "`ai_char_tokenize` 的形状与 `ai_tokenize` 一致（3 项，可同样释放）");
+      if (cw) ai_free_words(cw, cn); }
+    { char big[700];
+      for (int i = 0; i < 200; ++i) memcpy(big + i * 3, "猫", 3);
+      big[600] = 0;
+      ai_char_ground(ai, big);
+      ok(ai->cq_n <= sizeof ai->cq, "接地滚动窗口：队列不超过容量");
+      ok(ai->cq_n % 3 == 0, "满了丢**整字**（不会把 UTF-8 截成半个字）");
+      ok(ai->cq_n >= 3 && memcmp(ai->cq + ai->cq_n - 3, "猫", 3) == 0, "保留的是**最新**的字（顺序对）"); }
+    { size_t tn = 0;
+      char **tw = ai_tokenize(ai, "猫 有 毛", &tn);
+      ok(tw && tn >= 1, "**分词器仍在**（这条路一个字都没动 —— 用户要求现在不要撤）");
+      if (tw) ai_free_words(tw, tn); }
+    ai_free(ai);
+}
+
 static void test_hypo_cache(void) {
     printf("== ㊿ 假设结论沉淀：条件缓存 + 整栈指纹（默认关） ==\n");
     AI *ai = ai_new();
@@ -2843,6 +2878,7 @@ int main(void) {
     test_other_hist();
     test_guess_sibling();
     test_hypo_cache();
+    test_char_stream();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();
