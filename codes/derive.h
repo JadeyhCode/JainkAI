@@ -328,7 +328,13 @@ static inline int der_verify(AI *ai, Derivation *d) {
         if (p->kind == DER_CONCLUDE || c->kind == DER_CONCLUDE) continue;
         if (c->kind == DER_SOURCE || c->kind == DER_GAP) continue;
         if (p->kind == DER_SOURCE || p->kind == DER_GAP) continue;
-        if (p->obj && c->subj && p->obj != c->subj) {
+        /* ⚠ **类比步（DER_DEFAULT）的出口是它的"依据词"（`src`），不是 `obj`**：
+         *   `甲熊 会 冬眠`（推测）← 依据 `乙熊 会 冬眠`（事实）—— 逻辑上事实那一环
+         *   接在**依据词**上。老判据一律拿 `p->obj` 比 `c->subj` ⇒ 这条本该成立的链
+         *   被判"断了"，于是**整条联想路（含 R5）永远用不了**（实测：`der_verify` 报 1 个缺口，
+         *   症状就是"学了 乙熊 属于 熊类 / 乙熊 会 冬眠，问甲熊还是答不确定"）。 */
+        const Token *hand = (p->kind == DER_DEFAULT && p->src) ? p->src : p->obj;
+        if (hand && c->subj && hand != c->subj) {
             c->kind = DER_GAP;
             cot_copy(c->note, sizeof c->note, "链在这里断了（上一环的终点≠这一环的起点）");
             d->gaps++;

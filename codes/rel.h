@@ -1145,33 +1145,12 @@ static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_
     return NULL;
 }
 
-/* **求解器层的结构类比兜底**（§6.113）：规则走不通（status 0）时用"同类互推"，
- * 给一个**标了 guessed 的**结论且**留痕**。抽成一处是因为求解器有**两个入口**
- * （`rel_solve` 与 `rel_solve_ignoring_caches`）—— 只挂在一个上，对话那条路照样答不出
- * （实测：开关开着、`::rel analogy solver on` 也打了，回答还是"不确定"）。 */
-static inline void rel_solve_analogy_fallback(AI *ai, const Token *a, uint8_t rid,
-                                             const Token *b, int want_neg, Proof *pf) {
-    if (!ai || !pf || pf->status != 0 || !ai->rel_analogy_solver) return;
-    const Token *sup = NULL;
-    const Token *sib = rel_sibling_with(ai, a, rid, b, &sup);
-    if (!sib) return;
-    proof_push(pf, (Token *)sib, rid, (uint8_t)(want_neg ? 0 : 1), 0, 0);
-    proof_push(pf, (Token *)sib, REL_IS_A, 0, 0, 0);
-    if (sup) proof_push(pf, (Token *)sup, REL_IS_A, 0, 0, 0);
-    pf->status = want_neg ? -1 : 1;
-    pf->guessed = 1;                 /* 关键：标成"猜的"，别让调用方当成确定知识 */
-}
-
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
                              int want_neg, Proof *pf) {
     if (!pf) return;
     pf->n = 0; pf->status = 0; pf->guessed = 0;
     if (!ai || !a || !b) return;
     rel_solve_go(ai, a, rid, b, want_neg, pf, 0, NULL, 0);
-    /* **结构类比兜底**（§6.113，默认关）：规则走不通（status 0）时，用"同类互推"给一个
-     * **标了 guessed 的**结论 —— 判据与对话层共用 `rel_sibling_with()`（一处放）。
-     * 猜出来的东西必须**留痕**：链上写清"依据是同类里的谁、共同上位是谁"。 */
-    rel_solve_analogy_fallback(ai, a, rid, b, want_neg, pf);
 }
 
 /* 把缓存（推出来沉淀的边）当成不存在，再推一遍 —— 这是「缓存跟着前提走」的复核手段。
@@ -1230,10 +1209,19 @@ static inline int rel_struct_sim(const Token *a, const Token *s, size_t *out_com
 
 static inline int rel_guess(AI *ai, const Token *a, uint8_t rid, const Token *b,
                             Proof *pf) {
-    if (!ai || !a || !b || !a->emb || !b->emb || !pf) return 0;
+    /* ⚠ 原来这里硬性要求 `a->emb && b->emb` ⇒ **对话里现学的新词没有 emb**（emb 只在装载/训练时
+     * 构建）⇒ 联想引擎对新词直接罢工（症状：学了 `乙熊 属于 熊类`、`乙熊 会 冬眠` 之后，
+     * 问 `甲熊 会 冬眠 吗` 永远"不确定"）。结构/兄弟这类证据**本来就不需要 emb**：
+     * 下面用到 emb 的地方自己会判 `a->emb && s->emb` ⇒ 这里不必拦。 */
+    if (!ai || !a || !b || !pf) return 0;
     Token *best = NULL;
     int best_pol = 0;
     int best_pct = REL_GUESS_SIM;              /* 门槛：低于它不算"像" */
+    /* **同上位的兄弟**（§6.117）：`a` 与某个 `s` 有共同上位 P，且 `s` 对 (rid,b) 有态度。
+     * 这比"共同关系邻居数"更硬（同为 P 的实例），但小图里共同邻居常只有 1~2 个
+     * ⇒ 以前被 `REL_STRUCT_MIN_COMMON = 3` 挡在门外（实测：甲熊/乙熊 只共 2 个邻居，
+     * 于是"甲熊 会 冬眠 吗"永远答"不确定"）。这里先算一次，循环里给它**够过门槛**的分。 */
+    const Token *sib0 = rel_sibling_with(ai, a, rid, b, NULL);
     int best_struct = 0;                       /* 这次的依据是**结构**还是 emb */
     for (size_t i = 0; i < ai->pool->count; ++i) {
         Token *s = ai->pool->tokens[i];
@@ -1259,6 +1247,10 @@ static inline int rel_guess(AI *ai, const Token *a, uint8_t rid, const Token *b,
                 pct = st;
                 is_struct = 1;
             }
+        }
+        if (sib0 && s == sib0 && pct < REL_STRUCT_MIN_PCT) {
+            /* 兄弟这条证据：直接给到结构门槛分（不再要求共同邻居 ≥3） */
+            pct = REL_STRUCT_MIN_PCT; is_struct = 1;
         }
         if (pct > best_pct || (pct == best_pct && is_struct && !best_struct)) {
             best_pct = pct; best = s; best_pol = pol; best_struct = is_struct;

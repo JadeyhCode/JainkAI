@@ -657,10 +657,6 @@ typedef struct {
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
-    /* **结构类比接进求解器**（§6.113，默认 0）：规则走不通时，求解器自己用"同类互推"
-     * 给一个**标了 guessed 的**结论（`rel.h` 里同一份判据 `rel_sibling_with`）。
-     * 这样**思维/决策**这些不走对话层的调用方也能拿到类比结论（以前只有对话层有 §6.90）。 */
-    int    rel_analogy_solver;
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -1297,8 +1293,6 @@ static inline void ai_switches_init(AI *ai) {
     { const char *dk = getenv("AIP_DRAFTKEEP"); if (dk && dk[0] == '1') ai->draft_keep = 1; }
     ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
     { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
-    ai->rel_analogy_solver = 0;
-    { const char *rs2 = getenv("AIP_RELANALOGYSOLVER"); if (rs2 && rs2[0] == '1') ai->rel_analogy_solver = 1; }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
     { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }
     ai->note_all = 0;                /* 流水线回复进草稿：默认**关** */
