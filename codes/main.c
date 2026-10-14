@@ -646,7 +646,10 @@ static const CmdDef CMDS[] = {
     { "style", NULL, 1, "基本",
       "换一种说法说同一份链（0结论/1结论+链/2只链/3符号）", CMD_STYLE },
     { "rel", NULL, 2, "基本",
-      "列出这个词的关系知识（属于/有/会/怕…）", CMD_REL },
+      "列出这个词的关系知识（属于/有/会/怕…）\n"
+      "开关：`::rel first on|off` **先链后联想**（默认开，§6.124：确定性推理答不出才用同类互推答「大概」）；\n"
+      "  `::rel analogy on|off` 同类互推兜底（§6.121，默认开，`AIP_RELANALOGY=0` 退回）",
+      CMD_REL },
     { "why", NULL, 2, "基本",
       "问 A 关系 B 成不成立，并打出推导路径", CMD_WHY },
     { "relinfer", NULL, 1, "基本",
