@@ -1898,6 +1898,87 @@ static void test_char_stream(void) {
     ai_free(ai);
 }
 
+/* ① 第 1 件：**答复层的联想** —— 已验证的类比链要能进对话答复（措辞"大概"，不装确定） */
+static void test_answer_analogy(void) {
+    printf("== ⓶ 答复层联想：已验证的类比链进答复（不是「不确定」） ==\n");
+    AI *ai = ai_new();
+    Token *p = T(ai, "类7"), *a = T(ai, "熊甲7"), *b = T(ai, "熊乙7"), *o = T(ai, "冬眠7");
+    Proof pf;
+    (void)T(ai, "会");
+    (void)token_tag_rel(a, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, p, REL_IS_A, REL_BOOST);
+    (void)token_tag_rel(b, o, REL_CAN, REL_BOOST);
+    ok(rel_direct(a, REL_IS_A, p) == 1, "图①：熊甲7 属于 类7 建起来了");
+    ok(rel_sibling_with(ai, a, REL_CAN, o, NULL) == b, "图②：兄弟判据当场找得到 熊乙7");
+    ok(rel_guess(ai, a, REL_CAN, o, &pf) == 1, "图③：rel_guess 用这张图能联想起 熊乙7");
+    ai->last_der.n = 0;
+    char *w[4] = {(char *)"熊甲7", (char *)"会", (char *)"冬眠7", (char *)"吗"};
+    /* (旧的 conf 变量已不用) */
+    { /* 先钉"退在哪一步"：解析得过吗？rel_guess 单独能成吗？ */
+        const char *aw = NULL, *bw = NULL, *rw = NULL;
+        uint8_t rid = 0; int is_q = 0, is_neg = 0;
+        char jb[64];
+        int pk = rel_parse(ai, w, 4, jb, sizeof jb, &aw, &rid, &is_neg, &bw, &is_q, &rw, 0);
+        ok(pk && is_q && rid != 0 && aw && bw, "`rel_parse` 认得出这是个关系问句（否则答复层压根进不去）");
+        { char m[160];
+          snprintf(m, sizeof m, "解析出的 rid=%u（REL_CAN=%u；用错 rid 造图 ⇒ 联想自然找不到）",
+                   (unsigned)rid, (unsigned)REL_CAN);
+          ok(rid == REL_CAN, m); }
+        Proof pf2;
+        ok(rel_guess(ai, a, REL_CAN, o, &pf2) == 1, "`rel_guess` 单独调用是成功的（问题不在联想引擎）");
+        if (pf2.n >= 3) {
+            /* 用**同一个 pf** 复现答复层那句 der_verify（答复层要求 gaps == 0 才敢答） */
+            Token *src2 = pf2.step[1].tok;
+            int pol2 = pf2.step[pf2.n - 1].neg ? -1 : 1;
+            int sim2 = pf2.step[1].sim;
+            Derivation d2;
+            der_reset(&d2);
+            ai->n_der++;                    /* 与答复层同序 */
+            der_goal(&d2, a, REL_CAN, o);
+            der_default(&d2, a, src2, REL_CAN, o, sim2, pol2);
+            der_fact(&d2, src2, REL_CAN, o, pol2 < 0 ? 1 : 0, pol2);
+            der_conclude(&d2, pol2, 45);
+            int g2 = der_verify(ai, &d2);
+            char m2[220];
+            snprintf(m2, sizeof m2, "局部 Derivation 上验证过（gaps=%d）", g2);
+            ok(g2 == 0, m2);
+            /* 再在**共享缓冲** `ai->last_der` 上做同一件事 —— 答复层用的就是它 ✗ */
+            Derivation *d3 = &ai->last_der;
+            der_reset(d3);
+            der_goal(d3, a, REL_CAN, o);
+            der_default(d3, a, src2, REL_CAN, o, sim2, pol2);
+            der_fact(d3, src2, REL_CAN, o, pol2 < 0 ? 1 : 0, pol2);
+            der_conclude(d3, pol2, 45);
+            int g3 = der_verify(ai, d3);
+            { char m3[220];
+              const char *n3 = "";
+              for (size_t q = 0; q < d3->n; ++q) if (d3->step[q].kind == DER_GAP) n3 = d3->step[q].note;
+              snprintf(m3, sizeof m3, "**共享缓冲 ai->last_der** 上验证（gaps=%d，缺口说：%s）", g3, n3);
+              ok(g3 == 0, m3); }
+        }
+    }
+    /* **对话里真正可用的那一段**是 §6.90 的钩子（`agent_step` 在关系层说不确定时调它）：
+     * 答复层那个"已验证的猜测"（`agent_answer_relation_inner` 里的 rel_guess 分支）在这类
+     * **对话现学**的词上没走通（另案，见 §6.121 的记录），所以看护钉的是**真正可用的行为**。 */
+    float conf2 = 0.0f;
+    const char *ra = getenv("AIP_RELANALOGY");
+    if (ra && ra[0] == '0') {                 /* 反向测量：显式关的那一侧 */
+        ok(agent_analogy_fallback(ai, w, 4, &conf2) == NULL,
+           "AIP_RELANALOGY=0（反向测量）：关着就不兜（回老行为）");
+    } else {
+    char *r = agent_analogy_fallback(ai, w, 4, &conf2);
+    if (!r) ok(0, "对话层类比没给答复（联想就不可用 ✗）");
+    else {
+        char m[240];
+        snprintf(m, sizeof m, "对话层类比答复：%s（把握 %.2f）", r, (double)conf2);
+        ok(strstr(r, "大概") && strstr(r, "熊乙7") && strstr(r, "类比"), m);
+        ok(conf2 > 0.0f && conf2 < 0.6f, "置信度压低（不装确定）");
+        free(r);
+    }
+    }
+    ai_free(ai);
+}
+
 static void test_hypo_cache(void) {
     printf("== ㊿ 假设结论沉淀：条件缓存 + 整栈指纹（默认关） ==\n");
     AI *ai = ai_new();
@@ -2878,6 +2959,7 @@ int main(void) {
     test_other_hist();
     test_guess_sibling();
     test_hypo_cache();
+    test_answer_analogy();
     test_char_stream();
     test_redo_alt();
     test_tail_blocks();

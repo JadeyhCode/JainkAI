@@ -1316,8 +1316,13 @@ static inline void ai_switches_init(AI *ai) {
     { const char *nd = getenv("AIP_N1DECIDE"); if (nd && nd[0] == '1') ai->n1_decide = 1; }
     ai->draft_keep = 0;
     { const char *dk = getenv("AIP_DRAFTKEEP"); if (dk && dk[0] == '1') ai->draft_keep = 1; }
-    ai->rel_analogy = 0;             /* 类比兜底：默认**关** */
-    { const char *ra = getenv("AIP_RELANALOGY"); if (ra && ra[0] == '1') ai->rel_analogy = 1; }
+    /* **翻默认（§6.121）**：答复层的**同类互推**默认开 —— "联想出来的东西能用"这条要求
+     * 就落在它身上（问 `甲熊 会 冬眠 吗` ⇒ 「大概 —— 同类里 乙熊 也 会 冬眠（…；**类比**，不是直接知识）」）。
+     * 措辞自带"大概 + 标明类比"，绝不装成确定；想回老行为：`AIP_RELANALOGY=0` 或 `::rel analogy off`。 */
+    ai->rel_analogy = 1;             /* 类比兜底：默认**关** */
+    { const char *ra = getenv("AIP_RELANALOGY");
+      if (ra && ra[0] == '1') ai->rel_analogy = 1;
+      else if (ra && ra[0] == '0') ai->rel_analogy = 0;   /* 显式退回（两个方向都测得动） */ }
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
     { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }
     ai->note_all = 0;                /* 流水线回复进草稿：默认**关** */

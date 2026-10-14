@@ -701,13 +701,17 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
     /* 未知 → 类比推测（明确标注），同样先构造再验证 */
     der_reset(d);
     d->has_claim = 1;
-    if (rel_guess(ai, A, rid, B, &pf)) {
+    /* §6.117-①：**用一个新的 Proof**，别复用前面 `rel_solve` 那两个调用留下的那个
+     * （实测：同一个 pf 上 guess 拿不到；换新 Proof 就好了 —— 脏状态是元凶）。 */
+    Proof gpf;
+    memset(&gpf, 0, sizeof gpf);
+    if (rel_guess(ai, A, rid, B, &gpf)) {
         /* 推测链的形状（rel_guess 给的 Proof 是 [A, 依据词, B]）：
          *   目标 → 推测（A 借 依据词 的意见）→ 事实（依据词确实知道这件事）→ 结论
          * 验证器会独立查：知识库里确实没有、相似度够、依据词确实有态度。 */
-        Token *src = (pf.n >= 2 && pf.step[1].tok) ? pf.step[1].tok : A;
-        int pol = (pf.n >= 1) ? (pf.step[pf.n - 1].neg ? -1 : +1) : +1;
-        int sim = (pf.n >= 2) ? pf.step[1].sim : 0;
+        Token *src = (gpf.n >= 2 && gpf.step[1].tok) ? gpf.step[1].tok : A;
+        int pol = (gpf.n >= 1) ? (gpf.step[gpf.n - 1].neg ? -1 : +1) : +1;
+        int sim = (gpf.n >= 2) ? gpf.step[1].sim : 0;
         der_goal(d, A, rid, B);
         der_default(d, A, src, rid, B, sim, pol);
         der_fact(d, src, rid, B, pol < 0 ? 1 : 0, pol);
