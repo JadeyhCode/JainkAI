@@ -2140,12 +2140,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         /* ② 触发接求解：闭合问句答不了时，试**开放式**关系问句（默认关） */
         if (!resp && ai->rel_open) resp = agent_open_relation(ai, words, n, &rc);
         /* ② 类比兜底（默认关）：规则**答不上来**时（不只是没答，而是答了 DER_VERDICT_UNSURE）
-         * 换成"同类互推"的**大概**答案。判据用 `DER_VERDICT_UNSURE` 一处定义，别抄字符串。 */
-        if (resp && !strstr(resp, DER_VERDICT_UNSURE)) {
-            /* 规则真答了（对/不对）⇒ 不动 */
-        } else {
-            char *an = agent_analogy_fallback(ai, words, n, &rc);
-            if (an) { free(resp); resp = an; }
+         * 换成"同类互推"的**大概**答案。判据用 `DER_VERDICT_UNSURE` 一处定义，别抄字符串。
+         * ⚠ §6.124：这里的位置**在确定性推理之前**，于是它会**抢答** ——
+         * 老顺序（默认）留着不动；开了 `ai->rel_first` 就挪到 `agent_answer_relation` 后面。 */
+        if (!ai->rel_first) {
+            if (resp && !strstr(resp, DER_VERDICT_UNSURE)) {
+                /* 规则真答了（对/不对）⇒ 不动 */
+            } else {
+                char *an = agent_analogy_fallback(ai, words, n, &rc);
+                if (an) { free(resp); resp = an; }
+            }
         }
         if (resp) conf = rc;
     }
@@ -2193,6 +2197,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (resp) memcpy(resp, pre, strlen(pre) + 1);
             }
         }
+    }
+
+    /* §6.124 **先链后联想**（默认关）：确定性推理（上面那条）答不上来 / 只答"不确定"时，
+     * 才轮到"同类互推"的**大概**答案。这样"证明过的答案"不会被"猜的答案"抢掉 ——
+     * 与「先有链、才有话」同一条规矩。关着时这段不跑，顺序与一直以来的样子一致。 */
+    if (ai->rel_first && (!resp || strstr(resp, DER_VERDICT_UNSURE))) {
+        float rc = conf;
+        char *an = agent_analogy_fallback(ai, words, n, &rc);
+        if (an) { free(resp); resp = an; conf = rc; }
     }
 
     /* ---- 整句检索优先 ----

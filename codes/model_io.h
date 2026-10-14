@@ -28,6 +28,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+/* §6.124 **自足性**：本文件用了 `fsync`（POSIX，声明在 unistd.h），但一直没包含它 ——
+ * 只在"包含链里恰好有 action.h"的 TU（main.c 那条）里编得过。
+ * `tools/overlapprobe.c` 从 ai.h → frame_io.h → model_io.h 进来，不含 action.h，
+ * 于是探针门（`-std=c11 -Werror`）当场红：`fsync` 隐式声明。
+ * 干净 HEAD 上同样红（已验证）⇒ 不是某次改动引入的，是这里少一行。 */
+#include <unistd.h>
 
 #define MODEL_MAGIC   0x444D4941u  /* "AIMD" */
 /* v8: 「他者模型」带上**他的信念表** —— 归属从标注变成持久状态。

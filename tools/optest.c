@@ -1863,6 +1863,54 @@ static void test_redo_alt(void) {
  * 旧的"求解器兜底"（§6.113）已撤：它会让验证器自查"知识库里有吗"时得到"有"，
  * 于是类比链永远被判缺口（实测：`der_verify` 报 1 个缺口）。 */
 /* §6.118 **假设下的结论沉淀成条件缓存**：前提 = **整条假设栈的指纹**（不是最深那层） */
+/* §6.124 **先链后联想**：确定性推理答不上来时，才轮到"同类互推"的**大概**答案。
+ * 老顺序里联想兜底排在确定性推理**之前** ⇒ 它会抢答（证明过的答案被"猜的答案"盖掉）。
+ * 这里钉三点：① 默认档仍是老顺序（反向测量时跳过断言）；② 开着时证明优先；
+ * ③ 规则真答不了时，联想**照旧能答**（不能修了抢答、把联想弄丢）。 */
+static void test_rel_first_order(void) {
+    printf("== ⓷ 先链后联想：证明过的答案不被「猜的答案」抢掉（默认关） ==\n");
+    const char *cases[3] = { "只有继承", "继承+类比", "只有类比" };
+    for (int rf = 0; rf < 2; ++rf) {
+        for (int mode = 0; mode < 3; ++mode) {
+            Agent *ag = agent_new(NULL, NULL, NULL);
+            AI *ai = ag->brain;
+            if (rf == 0 && !getenv("AIP_RELFIRST") && mode == 0)
+                ok(ai->rel_first == 1, "默认档 `rel_first == 1`（先链后联想已翻默认；env 掀掉时跳过）");
+            else if (rf == 0 && getenv("AIP_RELFIRST") && mode == 0)
+                ok(1, "AIP_RELFIRST 已在环境里（反向测量）：默认值断言按规矩跳过");
+            ai->rel_analogy = 1;
+            ai->rel_first = rf;
+            Token *p = T(ai, "类9"), *a = T(ai, "甲9"), *o = T(ai, "冬眠9"), *b = T(ai, "乙9");
+            (void)T(ai, "会");
+            if (mode != 2) (void)ai_write_rel(ai, p, o, REL_CAN, 0, AI_WSRC_RELATION);
+            (void)ai_write_rel(ai, a, p, REL_IS_A, 0, AI_WSRC_RELATION);
+            if (mode != 0) {
+                (void)ai_write_rel(ai, b, p, REL_IS_A, 0, AI_WSRC_RELATION);
+                (void)ai_write_rel(ai, b, o, REL_CAN, 0, AI_WSRC_RELATION);
+            }
+            char out[512] = {0};
+            agent_step(ag, "甲9 会 冬眠9 吗", out, sizeof out);
+            char msg[220];
+            int guessed = strstr(out, "大概") != NULL;
+            int proved  = strstr(out, "继承") != NULL;
+            if (rf == 0) {
+                if (mode == 0)
+                    snprintf(msg, sizeof msg, "老顺序·%s：规则能证 ⇒ 给证明（无同类可抢）", cases[mode]);
+                else
+                    snprintf(msg, sizeof msg, "老顺序·%s：**联想抢答**（这正是要修的）", cases[mode]);
+                ok(mode == 0 ? proved && !guessed : guessed, msg);
+            } else {
+                if (mode == 0 || mode == 1)
+                    snprintf(msg, sizeof msg, "新顺序·%s：**证明优先**，不再被「大概」盖掉", cases[mode]);
+                else
+                    snprintf(msg, sizeof msg, "新顺序·%s：规则答不了 ⇒ 联想照旧能答「大概」", cases[mode]);
+                ok(mode == 2 ? guessed : (proved && !guessed), msg);
+            }
+            agent_free(ag);
+        }
+    }
+}
+
 /* §6.120 **逐字接地队列**（用户提的方向）：顺序接地 + 字符按顺序当"词"，且**分词器保留** */
 static void test_char_stream(void) {
     printf("== ⓵ 逐字接地：顺序队列 + 字符即词（分词器保留成可选） ==\n");
@@ -2961,6 +3009,7 @@ int main(void) {
     test_hypo_cache();
     test_answer_analogy();
     test_char_stream();
+    test_rel_first_order();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

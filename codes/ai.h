@@ -675,6 +675,12 @@ typedef struct {
     /* **类比兜底**（② 档，默认 0 = 关）：规则（关系边）答不出时，用"上位/同类"的例子答**大概**，
      * 并把置信度压低（0.45~0.50）；措辞一定带"大概"和依据，绝不硬说"对"。 */
     int    rel_analogy;
+    /* **先链后联想**（§6.124，默认 0 = 关）：确定性推理答不上来时，才轮到"同类互推"的
+     * **大概**答案。老顺序里联想兜底排在确定性推理**之前** ⇒ 它会**抢答**：
+     * 实测 `甲9 会 冬眠9 吗`（继承本来能推出确定答案）老顺序答
+     * 「大概 —— 同类里 乙9 也 会 冬眠9」，开着这个开关答「对，甲9-[属于·继承]->类9；类9-[会]->冬眠9」。
+     * 关着时行为与一直以来的样子**逐字节相同**。 */
+    int    rel_first;
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -1323,6 +1329,13 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ra = getenv("AIP_RELANALOGY");
       if (ra && ra[0] == '1') ai->rel_analogy = 1;
       else if (ra && ra[0] == '0') ai->rel_analogy = 0;   /* 显式退回（两个方向都测得动） */ }
+    /* **翻默认（§6.124）**：先链后联想默认**开** —— "证明过的答案不许被猜的答案抢掉"。
+     * 两包实测（optest 默认档 / `AIP_RELFIRST=1` 档，整包 33 套）都全绿 ⇒ 敢翻；
+     * 想回老顺序：`AIP_RELFIRST=0` 或 `::rel first off`。 */
+    ai->rel_first = 1;
+    { const char *rf = getenv("AIP_RELFIRST");
+      if (rf && rf[0] == '1') ai->rel_first = 1;
+      else if (rf && rf[0] == '0') ai->rel_first = 0; }   /* 显式退回：两个方向都测得动 */
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
     { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }
     ai->note_all = 0;                /* 流水线回复进草稿：默认**关** */
