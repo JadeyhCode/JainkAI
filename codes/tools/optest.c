@@ -1979,6 +1979,35 @@ static void test_action_boundary(void) {
       ok(action_check(a, 2, why, sizeof why) == 0, "合法相对子路径没被误伤（cat sub/f.txt）"); }
     { const char *a[] = { "cat", "/etc/passwd" };
       ok(action_check(a, 2, why, sizeof why) != 0, "老规矩还在：绝对路径被拒"); }
+    /* §6.126 外部审计 P2-3：`::patch op 记事本 删 <pos> <len>` 的**有符号溢出**。
+     * 原来 pos=LONG_MAX、len=1 ⇒ pos+len 溢出成负 ⇒ o2<o1 ⇒ `o2-o1` 作 size_t 成巨数
+     * ⇒ memmove 写坏 NoteState 后面的字段。现在钳住 ⇒ 越界输入删不掉东西（草稿不变）。 */
+    { AI *ai = ai_new();
+      (void)patch_mount_builtin(ai, "记事本");
+      char rep1[200] = {0}, rep2[200] = {0}, rep3[200] = {0};
+      { char *a[] = { (char *)"你好世界" };
+        (void)patch_op_call_by_name(ai, "记事本", "写", a, 1, rep1, sizeof rep1); }
+      { char *a[] = { (char *)"9223372036854775807", (char *)"1" };
+        int rc = patch_op_call_by_name(ai, "记事本", "删", a, 2, rep2, sizeof rep2);
+        ok(rc >= 0 && strcmp(rep1, rep2) == 0,
+           "P2-3：pos=LONG_MAX 的删除被钳住（草稿没变，也没崩）"); }
+      { char *a[] = { (char *)"-5", (char *)"-3" };
+        int rc = patch_op_call_by_name(ai, "记事本", "删", a, 2, rep3, sizeof rep3);
+        ok(rc >= 0 && strcmp(rep1, rep3) == 0, "P2-3：负数位置/长度被钳住（草稿没变）"); }
+      { char *a[] = { (char *)"0", (char *)"1" };
+        (void)patch_op_call_by_name(ai, "记事本", "删", a, 2, rep3, sizeof rep3);
+        ok(strcmp(rep1, rep3) != 0, "P2-3：正常删除照旧有效（12 字节 → 9 字节）"); }
+      ai_free(ai); }
+    /* §6.126 外部审计 P2-8：**满参数时 argv 也要 NULL 结尾**（execvp 靠它停）。
+     * 第一版只在 `argc < max` 时补 NULL，正好 32 个参数时数组里没位置 ⇒ 读越界。 */
+    { char buf[512];
+      char *av[ACTION_ARG_MAX + 1];
+      size_t off = 0;
+      for (int i = 0; i < ACTION_ARG_MAX + 1; ++i)
+          off += (size_t)snprintf(buf + off, sizeof buf - off, "%sa%d", i ? " " : "", i);
+      int ac = action_split(buf, av, ACTION_ARG_MAX);
+      ok(ac == ACTION_ARG_MAX, "P2-8：先确认真的塞满了参数（ac=32）");
+      ok(av[ACTION_ARG_MAX] == NULL, "P2-8：塞满时 argv 仍然 NULL 结尾（否则 execvp 读栈上垃圾）"); }
     { /* include 扫描：真写一个越界源文件到工作区，再扫（不跑命令） */
       (void)mkdir("_t", 0755);
       (void)mkdir("_t/work", 0755);

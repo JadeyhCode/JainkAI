@@ -1272,9 +1272,19 @@ static inline int patch_note_op(Patch *p, const char *op, char *const *args, siz
     if (!strcmp(op, "删")) {
         long pos = (n >= 1) ? strtol(args[0], NULL, 10) : 0;
         long len = (n >= 2) ? strtol(args[1], NULL, 10) : 1;
+        /* §6.126（外部审计 P2-3）：**钳住位置与长度**。原来 `pos + len` 会**有符号溢出**
+         * （pos=LONG_MAX、len=1 ⇒ 负数）⇒ `note_utf8_off` 拿到负数 ⇒ o2 < o1
+         * ⇒ `o2 - o1` 作为 size_t 变成巨数 ⇒ `memmove` 写坏 NoteState 后面的字段
+         * （draft/outbox 同一个结构体）。三处钳制：pos ≥ 0、len ≥ 0、两者都不超过容量。 */
+        if (pos < 0) pos = 0;
+        if (len < 0) len = 0;
         {
+            long capc = (long)sizeof st->draft;
+            if (pos > capc) pos = capc;
+            if (len > capc - pos) len = capc - pos;
             size_t o1 = note_utf8_off(st->draft, pos);
-            size_t o2 = note_utf8_off(st->draft, pos + (len < 0 ? 0 : len));
+            size_t o2 = note_utf8_off(st->draft, pos + len);
+            if (o2 < o1) o2 = o1;
             note_delete(st->draft, o1, o2 - o1);
         }
         if (out && cap) snprintf(out, cap, "草稿 %zu 字节", strlen(st->draft));

@@ -178,7 +178,7 @@ static inline int action_split(char *buf, char *argv[], int max) {
     }
     /* ⚠ 必须 NULL 结尾：execvp 要 NULL 终止的 argv，少了这一句的症状是
      * "每条命令都 rc=127"（execvp 顺着栈上的垃圾读下去就失败）。 */
-    if (argc < max) argv[argc] = NULL;
+    argv[argc < max ? argc : max] = NULL;      /* 永远 NULL 结尾（见上） */
     return argc;
 }
 
@@ -338,7 +338,9 @@ static inline int action_run(AI *ai, const char *line) {
         return action_refuse(line, "这一层**默认关**（::act on 打开 / AIP_ACT=1）—— 没打开就绝不动外部世界");
     char buf[ACTION_CMD_CAP];
     snprintf(buf, sizeof buf, "%s", line ? line : "");
-    char *argv[ACTION_ARG_MAX];
+    /* §6.126（外部审计 P2-8）：**多留一格**给 NULL —— 正好 32 个参数时
+     * `if (argc < max)` 那个保护不成立，execvp 会顺着栈上的垃圾往下读（症状 rc=127）。 */
+    char *argv[ACTION_ARG_MAX + 1];
     int argc = action_split(buf, argv, ACTION_ARG_MAX);
     char why[192];
     if (action_check((const char *const *)argv, argc, why, sizeof why) != 0)
