@@ -681,7 +681,7 @@ typedef struct {
      * 「大概 —— 同类里 乙9 也 会 冬眠9」，开着这个开关答「对，甲9-[属于·继承]->类9；类9-[会]->冬眠9」。
      * 关着时行为与一直以来的样子**逐字节相同**。 */
     int    rel_first;
-    /* **记住推出来的结论**（§6.125，默认 0 = 关）：把**类比猜出来的结论**记成
+    /* **记住推出来的结论**（§6.125，默认 1 = 开）：把**类比猜出来的结论**记成
      * "记忆里的猜测"（边上打 `[类比:依据词]`、`role=推论`），下一个问题可以拿它**当中转**。
      * 它**不算知识**（`rel_direct` 跳过），所以不会把"猜的"变成"知道的"。 */
     int    rel_remember;
@@ -1341,10 +1341,15 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rf = getenv("AIP_RELFIRST");
       if (rf && rf[0] == '1') ai->rel_first = 1;
       else if (rf && rf[0] == '0') ai->rel_first = 0; }   /* 显式退回：两个方向都测得动 */
-    ai->rel_remember = 0;            /* 记住猜测结论：默认**关**（关着行为逐字节相同） */
+    /* **翻默认（§6.125）**：记住猜出来的结论默认**开** —— "在交互中学习 / 结论能复用"
+     * 这条要求就落在它身上（问 `类9 会 冬眠9 吗` 类比答完后，再问 `甲9 会 冬眠9 吗`
+     * 就能拿那条**推测**当中转，答复照旧标「大概…其中一环是推测的」）。
+     * 它**不算知识**（`rel_direct` 跳过）⇒ 不会把猜的变成知道的。
+     * 想回老行为：`AIP_RELMEM=0` 或 `::rel mem off`。 */
+    ai->rel_remember = 1;
     { const char *rmm = getenv("AIP_RELMEM");
       if (rmm && rmm[0] == '1') ai->rel_remember = 1;
-      else if (rmm && rmm[0] == '0') ai->rel_remember = 0; }
+      else if (rmm && rmm[0] == '0') ai->rel_remember = 0; }   /* 显式退回：两个方向都测得动 */
     ai->n_rel_guess_mem = 0;
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
     { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }

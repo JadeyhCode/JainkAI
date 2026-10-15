@@ -1918,10 +1918,10 @@ static void test_recursive_transfer(void) {
     for (int rm = 0; rm < 2; ++rm) {
         Agent *ag = agent_new(NULL, NULL, NULL);
         AI *ai = ag->brain;
-        if (rm == 0 && getenv("AIP_RELMEM"))
-            ok(1, "AIP_RELMEM 已在环境里（反向测量）：默认值断言按规矩跳过");
+        if (rm == 0 && !getenv("AIP_RELMEM"))
+            ok(ai->rel_remember == 1, "默认档 `rel_remember == 1`（记住猜测已翻默认；env 掀掉时跳过）");
         else if (rm == 0)
-            ok(ai->rel_remember == 0, "默认档 `rel_remember == 0`（关着行为逐字节相同）");
+            ok(1, "AIP_RELMEM 已在环境里（反向测量）：默认值断言按规矩跳过");
         ai->rel_remember = rm;
         ai->rel_analogy = 1;
         Token *big = T(ai, "大类9"), *c9 = T(ai, "类9"), *c10 = T(ai, "类10");
@@ -1935,8 +1935,8 @@ static void test_recursive_transfer(void) {
         agent_step(ag, "类9 会 冬眠9 吗", q1, sizeof q1);
         agent_step(ag, "甲9 会 冬眠9 吗", q2, sizeof q2);   /* 要靠上面那条当输入 */
         if (rm == 0) {
-            ok(ai->n_rel_guess_mem == 0, "关着：不记（记住条数 0）");
-            ok(strstr(q2, "不 太 懂") && !strstr(q2, "猜"), "关着：迁移不了（Q2 仍是「不太懂」）");
+            ok(ai->n_rel_guess_mem == 0, "显式关掉：不记（记住条数 0）");
+            ok(strstr(q2, "不 太 懂") && !strstr(q2, "猜"), "显式关掉：迁移不了（Q2 仍是「不太懂」）");
         } else {
             char m[240];
             snprintf(m, sizeof m, "开着：Q1 的类比结论被记下（记住 %zu 条）", ai->n_rel_guess_mem);
