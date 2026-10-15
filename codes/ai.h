@@ -690,6 +690,19 @@ typedef struct {
      * 它**不算知识**（`rel_direct` 跳过），所以不会把"猜的"变成"知道的"。 */
     int    rel_remember;
     size_t n_rel_guess_mem;         /* 记住过多少条猜测结论（统计用） */
+    /* §6.132 **一轮之内的整句打分备忘**：`ai_detect_topic` 与 `ai_sent_lookup`
+     * 用**同一个查询**扫同一批库句，同一对 (查询, 库句) 每轮白算两遍。
+     * 键 = 查询内容(token 指针序列) + tick + pairs_n + idf_n ——
+     * ⚠ 必须按**内容**比：两个调用点各传一块临时数组（内容相同），按指针比永远不命中。 */
+    int      *sc_memo;              /* 每条库句的分数 */
+    int      *sc_cov;               /* 每条库句的覆盖率 */
+    size_t    sc_cap;               /* 上面两个数组的长度 */
+    uint64_t  sc_tick;              /* 这份备忘属于哪个 tick */
+    size_t    sc_pairs_n, sc_idf_n; /* 算的时候库有几句 / idf 表多长（变了就作废） */
+    const Token *sc_q[64];          /* 查询指纹：token 指针序列 */
+    size_t    sc_qn;
+    int       sc_valid;
+    size_t    n_sc_call, n_sc_miss;   /* §6.132 记账：查了备忘几次 / 其中真重算几次 */
     /* **全图扫描的账**（§6.126）：维护类活动（GC / 缓存复核 / 巩固）每轮走了多少词、多少边。
      * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
     size_t n_scan_tokens;
@@ -1471,6 +1484,7 @@ static inline void ai_free(AI *ai) {
     ai->lex_extra = NULL; ai->lex_n = 0;
     pool_free(ai->pool);
     free(ai->trace);
+    free(ai->sc_memo); free(ai->sc_cov);      /* §6.132 打分备忘（calloc 起家，可能是 NULL） */
     free(ai->last_output);
     free(ai->last_skipped);
     free(ai->pairs);
@@ -2965,6 +2979,44 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
 /* 完整的话题判定：词表票 + 整句相似度票，同场竞争。
  * 词表投票只要命中一个词就得分，会把真正的意图压掉；
  * 整句相似度是更精确的信号，必须能翻盘（「早上好」就是靠它定到问候话题的）。 */
+/* §6.132：把"查询句 vs 每条库句"的分数量**一轮只算一遍**，两个检索循环共用。
+ * 返回分数数组（长度 = ai->pairs_n），`out_cov` 拿到覆盖率数组；失败返回 NULL。 */
+static inline const int *ai_sent_score_row(AI *ai, Token *const *words, size_t n,
+                                           const int **out_cov) {
+    if (out_cov) *out_cov = NULL;
+    if (!ai || !words || n == 0 || n > 64) return NULL;
+    ai->n_sc_call++;
+    uint64_t tick = ai->pool ? ai->pool->current_tick : 0;
+    int valid = ai->sc_valid && ai->sc_tick == tick &&
+                ai->sc_pairs_n == ai->pairs_n && ai->sc_idf_n == ai->idf_n &&
+                ai->sc_qn == n && memcmp(ai->sc_q, words, n * sizeof *words) == 0;
+    if (!valid) {
+        ai->n_sc_miss++;
+        if (ai->sc_cap < ai->pairs_n) {
+            size_t ncap = ai->pairs_n * 2 + 16;
+            int *a = (int *)malloc(ncap * sizeof *a);
+            int *b = (int *)malloc(ncap * sizeof *b);
+            if (!a || !b) { free(a); free(b); return NULL; }
+            free(ai->sc_memo); free(ai->sc_cov);
+            ai->sc_memo = a; ai->sc_cov = b; ai->sc_cap = ncap;
+        }
+        for (size_t i = 0; i < ai->pairs_n; ++i) {
+            const AISentPair *p = &ai->pairs[i];
+            int cv = 0;
+            ai->sc_memo[i] = ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
+            ai->sc_cov[i] = cv;
+        }
+        ai->sc_tick = tick;
+        ai->sc_pairs_n = ai->pairs_n;
+        ai->sc_idf_n = ai->idf_n;
+        for (size_t i = 0; i < n; ++i) ai->sc_q[i] = words[i];
+        ai->sc_qn = n;
+        ai->sc_valid = 1;
+    }
+    if (out_cov) *out_cov = ai->sc_cov;
+    return ai->sc_memo;
+}
+
 static inline uint8_t ai_detect_topic(AI *ai, Token *const *words, size_t n) {
     uint8_t best = ai_detect_topic_words(ai, words, n);
     uint32_t best_v = 0;
@@ -2978,10 +3030,11 @@ static inline uint8_t ai_detect_topic(AI *ai, Token *const *words, size_t n) {
      * 取最大值才是「这个输入到底属于哪个话题」。 */
     uint32_t tv[AI_MAX_TOPICS];
     memset(tv, 0, sizeof tv);
+    const int *row = ai_sent_score_row(ai, words, n, NULL);   /* §6.132 一轮算一遍 */
     for (size_t i = 0; i < ai->pairs_n; ++i) {
         const AISentPair *p = &ai->pairs[i];
         if (p->topic == ASSOC_TOPIC_NONE || p->topic >= AI_MAX_TOPICS) continue;
-        int sc = ai_sent_score(ai, words, n, (Token *const *)p->in, p->in_n);
+        int sc = row ? row[i] : ai_sent_score(ai, words, n, (Token *const *)p->in, p->in_n);
         if (sc > 0 && (uint32_t)sc > tv[p->topic]) tv[p->topic] = (uint32_t)sc;
     }
     /* 整句票和词表票尺度不同（命中词数 vs 相似度），从零重比。 */
@@ -3001,10 +3054,13 @@ static inline const AISentPair *ai_sent_lookup(AI *ai, Token *const *words, size
     if (!ai || !ai->pairs || ai->pairs_n == 0 || !words || n == 0) return NULL;
     int best = -1, best_cov = 0;
     size_t best_i = 0, ties = 0, best_len = 0;
+    const int *cov_row = NULL;
+    const int *row = ai_sent_score_row(ai, words, n, &cov_row);   /* §6.132 与 detect_topic 共用 */
     for (size_t i = 0; i < ai->pairs_n; ++i) {
         const AISentPair *p = &ai->pairs[i];
         int cv = 0;
-        int sc = ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
+        int sc = row ? row[i] : ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
+        if (row) cv = cov_row[i];
         if (topic != ASSOC_TOPIC_NONE && p->topic == topic) sc += 25;
         if (sc > best) { best = sc; best_i = i; ties = 1; best_cov = cv;
                          best_len = p->in_n; }

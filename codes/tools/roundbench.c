@@ -55,9 +55,15 @@ int main(int argc, char **argv) {
     if (rounds <= 0) rounds = 200;
     Agent *ag = agent_new(NULL, NULL, NULL);
     if (!ag) { printf("建脑失败\n"); return 1; }
+    /* ⚠ 装载（读盘 + 现算 emb / idf / 槽类）是**一次性**开销，别把它摊进"每轮"里：
+     * 100 轮口径下它能有 0.5~0.7 ms/轮（实测：`ai_slots_build` 一次 30 ms、
+     * emb 的 PPMI 两遍累积也是一次性的）。分开计时才看得清"每轮真的花了多少"。 */
+    double load_a = now_ms();
     AI *m = ai_load_file(model);
     if (m) { ai_free(ag->brain); ag->brain = m; }
+    double load_b = now_ms();
     AI *ai = ag->brain;
+    printf("  装载（一次性）：%.1f ms\n", load_b - load_a);
 
     /* 三种输入轮流：① 关系问句（走推理）② 普通话（走帧/检索）③ 陈述（走学习） */
     const char *inputs[3] = { "猫 有 毛 吗", "你 好 呀", "猫 属于 动物" };
@@ -79,6 +85,9 @@ int main(int argc, char **argv) {
            dt / (size_t)rounds, de / (size_t)rounds);
     printf("  推论缓存：%zu 个词身上挂着 / 共 %zu 条推论边（§6.127 队列按这个规模走）\n",
            cw, ce);
+    printf("   打分备忘（§6.132）：查 %zu 次 / 真重算 %zu 次（%.0f%% 命中）\n",
+           ai->n_sc_call, ai->n_sc_miss,
+           ai->n_sc_call ? 100.0 * (double)(ai->n_sc_call - ai->n_sc_miss) / (double)ai->n_sc_call : 0.0);
     printf("  维护开关：GC 每 %zu 轮、巩固每 %zu 轮、睡眠每 %zu 轮、缓存复核每轮\n",
            ai->gc.gc_interval, ai->consolidate_every, ai->sleep_every);
     if (getenv("AIP_ROUNDBENCH_TSV")) {

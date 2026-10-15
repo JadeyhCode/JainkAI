@@ -3198,6 +3198,54 @@ static void test_memory_chain(void) {
     ai_free(ai);
 }
 
+/* §6.132 **整句打分备忘**：`ai_detect_topic` 与 `ai_sent_lookup` 用同一个查询扫同一批库句，
+ * 同一对 (查询, 库句) 原来每轮算两遍。备忘是**纯缓存**（值必须与逐条算一字不差），
+ * 键按**内容**比（两个调用点各传一块临时数组），并在 tick / 库句数 / idf 长度变化时作废。 */
+static void test_score_memo(void) {
+    printf("== ⓽ 打分备忘：一轮算一遍，值与逐条算相同（§6.132） ==\n");
+    AI *ai = ai_new();
+    Token *q[3], *s1[3], *s2[3], *o1[2];
+    q[0] = T(ai, "你"); q[1] = T(ai, "好"); q[2] = T(ai, "吗");
+    s1[0] = T(ai, "你"); s1[1] = T(ai, "好"); s1[2] = T(ai, "呀");
+    s2[0] = T(ai, "猫"); s2[1] = T(ai, "有"); s2[2] = T(ai, "毛");
+    o1[0] = T(ai, "你"); o1[1] = T(ai, "好");
+    ai_sent_add(ai, s1, 3, o1, 2, 1);
+    ai_sent_add(ai, s2, 3, o1, 2, 2);
+    size_t miss0 = ai->n_sc_miss;
+    const int *cov = NULL;
+    const int *row = ai_sent_score_row(ai, q, 3, &cov);
+    ok(row != NULL && cov != NULL, "库句非空时拿得到分数行");
+    ok(ai->n_sc_miss == miss0 + 1, "第一次查：真算了一遍");
+    /* 逐条对拍：备忘里的值必须等于直接算出来的值（这是"纯缓存"的定义） */
+    {
+        int same = 1;
+        for (size_t i = 0; i < ai->pairs_n; ++i) {
+            int cv = 0;
+            int ref = ai_sent_score_cov(ai, q, 3, ai->pairs[i].in, ai->pairs[i].in_n, &cv);
+            if (ref != row[i] || cv != cov[i]) same = 0;
+        }
+        ok(same == 1, "每一格都与逐条算**完全相同**（分数与覆盖率都是）");
+    }
+    size_t miss1 = ai->n_sc_miss;
+    const int *row2 = ai_sent_score_row(ai, q, 3, NULL);   /* 同一句查询、同一个 tick */
+    ok(row2 == row && ai->n_sc_miss == miss1, "同一个查询再查：命中备忘，不重算");
+    /* 换一句查询：必须重算（键按内容比，不是按指针） */
+    Token *q2[3]; q2[0] = s2[0]; q2[1] = s2[1]; q2[2] = s2[2];
+    (void)ai_sent_score_row(ai, q2, 3, NULL);
+    ok(ai->n_sc_miss == miss1 + 1, "换一句查询：作废重算（键按内容，不按临时数组的地址）");
+    /* 库句变多：也必须重算（新那一句没有分数） */
+    size_t miss2 = ai->n_sc_miss;
+    ai_sent_add(ai, s1, 3, o1, 2, 3);
+    const int *row3 = ai_sent_score_row(ai, q, 3, NULL);
+    ok(ai->n_sc_miss == miss2 + 1 && row3 != NULL, "库句变多 ⇒ 作废重算（不会拿旧数组当新库）");
+    /* tick 变了：作废（一轮一份，跨轮不许复用） */
+    size_t miss3 = ai->n_sc_miss;
+    ai->pool->current_tick++;
+    (void)ai_sent_score_row(ai, q, 3, NULL);
+    ok(ai->n_sc_miss == miss3 + 1, "跨到下一個 tick ⇒ 作废（一轮一份）");
+    ai_free(ai);
+}
+
 static void test_lease_gate_tiers(void) {
     printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
     AI *ai = ai_new();
@@ -3335,6 +3383,7 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
+    test_score_memo();
     test_memory_chain();
     test_thin_pursuit();
     test_self_goal();
