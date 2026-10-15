@@ -651,6 +651,8 @@ static const CmdDef CMDS[] = {
       "开关：`::rel first on|off` **先链后联想**（默认开，§6.124：确定性推理答不出才用同类互推答「大概」）；\n"
       "  `::rel mem on|off` **记住猜出来的结论**（默认关，§6.125：记成「记忆里的猜测」，\n"
       "  下一个问题能拿它当中转；它**不算知识**，答复照旧标「大概/推测」）；\n"
+      "  `::rel chain on|off` **记忆链**（默认关，§6.131：猜出来的结论能不能当**中间跳**\n"
+      "  接起来；把握按跳数衰减，话按跳数说「其中 N 环是推测的」）；\n"
       "  `::rel analogy on|off` 同类互推兜底（§6.121，默认开，`AIP_RELANALOGY=0` 退回）",
       CMD_REL },
     { "why", NULL, 2, "基本",
@@ -2392,6 +2394,22 @@ int main(int argc, char **argv) {
                            a->brain->rel_first
                                ? "先用关系/规则把**证明过**的答案拿出来，规则答不出才用同类互推答「大概」"
                                : "老顺序：联想兜底排在确定性推理**前面**（会抢答）");
+                    continue;
+                }
+                if (arg && strncmp(arg, "chain", 5) == 0) {
+                    /* §6.131 **记忆链**：允不允许把"记忆里的猜测"当**中间跳**接起来。
+                     * 关着 = §6.125 的行为（只有终点那一跳能是猜测）。 */
+                    const char *v = arg + 5;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       rel_chain_set(1);
+                    else if (!strcmp(v, "off")) rel_chain_set(0);
+                    else if (*v) { printf("[用法] ::rel chain on|off\n"); continue; }
+                    printf("[记忆链 = %s]\n", rel_chain_on() ? "开" : "关（默认）");
+                    printf("  开着：先前**猜**出来的结论可以当**中间跳**接起来（%s）。\n",
+                           rel_chain_on() ? "现在会接" : "现在不接（只有终点那一跳能是猜测）");
+                    printf("  把握**按跳数衰减**（1 环 0.45，每多一环乘 0.7，下限 0.15）；\n");
+                    printf("  话也按跳数说（「其中 N 环是**推测**的」）。它照旧**不算知识**：\n");
+                    printf("  `rel_direct` 查不到、复核重推不认、验证器自查也看不到。\n");
                     continue;
                 }
                 if (arg && strncmp(arg, "mem", 3) == 0) {

@@ -95,6 +95,9 @@ static inline void der_from_proof(AI *ai, Derivation *d, const Token *a, uint8_t
     der_reset(d);
     der_goal(d, (Token *)a, rid, (Token *)b);
     if (!pf) return;
+    /* §6.131：链里有**几环**是记忆里的猜测（不是"有没有"）—— 置信度按它衰减、话按它说。 */
+    d->guess_hops = pf->guess_hops;
+    if (d->guess_hops > 0) d->guessed = 1;
     for (size_t i = 1; i < pf->n; ++i) {
         const ProofStep *ps = &pf->step[i];
         const ProofStep *prev = &pf->step[i - 1];
@@ -644,7 +647,13 @@ static inline void der_say(const AI *ai, Derivation *d, int style,
         if (d->guessed)
             /* 推测链（含"记忆里的猜测"）：**不说"对"** —— 链上有一环是猜的，
              * 说成「大概吧，对，…」自相矛盾。只给链，并点明这不是知识。 */
-            snprintf(out, cap, "大概 吧 ， %s （其中一环是**推测**的，不是知道）", chain);
+            /* §6.131 **按跳数说清楚**：一环照旧（措辞逐字节不变），多环要报数 ——
+             * "猜了一次"和"猜了三次"在把握上不是一回事，话也不能一样。 */
+            if (d->guess_hops > 1)
+                snprintf(out, cap, "大概 吧 ， %s （其中 %d 环是**推测**的，不是知道）",
+                         chain, d->guess_hops);
+            else
+                snprintf(out, cap, "大概 吧 ， %s （其中一环是**推测**的，不是知道）", chain);
         else if (has_hyp)
             /* 反事实：必须写明是**在假设下**的结论，不能说得像真的一样 */
             snprintf(out, cap, "在 假设 下 ： %s ， %s", verdict, chain);

@@ -755,16 +755,26 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
             der_from_proof(ai, d, A, rid, B, &mp);
             int agree = (mp.status == +1) != (want == 1);
             d->has_claim = 1;
-            der_conclude(d, agree ? +1 : -1, 45);
+            /* §6.131：把握**按猜测环数衰减**（1 环 = 45，与原来逐字节相同；多一环乘 0.7）。
+             * 链越接越长还写着 45 的话，等于"猜得越多越有把握"。 */
+            float mconf = ai_guess_conf(d->guess_hops);
+            int mpct = (int)(mconf * 100.0f + 0.5f);
+            der_conclude(d, agree ? +1 : -1, mpct);
             ai->n_der++;
             if (der_verify(ai, d) == 0) {
                 der_chain_text(ai, d, line, sizeof line);
-                cot_push(ai, COT_INFER, 1, 45,
-                         "记忆：拿先前**推测**出来的结论当输入（不是知识）", line);
+                char mwhy[128];
+                if (d->guess_hops > 1)
+                    snprintf(mwhy, sizeof mwhy,
+                             "记忆链：**%d 环**都是先前推测出来的（每多一环把握就乘一次 0.7）",
+                             d->guess_hops);
+                else
+                    snprintf(mwhy, sizeof mwhy, "记忆：拿先前**推测**出来的结论当输入（不是知识）");
+                cot_push(ai, COT_INFER, 1, mpct, mwhy, line);
                 ai->n_cot++;
                 der_say(ai, d, ai->der_style, resp0, sizeof resp0);
                 ai->n_rel_guess++;
-                if (out_conf) *out_conf = 0.45f;
+                if (out_conf) *out_conf = mconf;
                 char *r = (char *)malloc(strlen(resp0) + 1);
                 if (r) memcpy(r, resp0, strlen(resp0) + 1);
                 return r;

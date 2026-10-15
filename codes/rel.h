@@ -456,6 +456,22 @@ static int g_rel_ignore_derived = 0;
  * 只在两处打开：① 答复层"先按记忆解一遍"；② 验证器复核含记忆步的链时**独立重推**。
  * 复核模式（g_rel_ignore_derived=1）下它一律无效 —— 猜测永远不算"干净依据"。 */
 static int g_rel_guess_visible = 0;
+/* §6.131 **这次的求解用掉了几环"记忆里的猜测"**。
+ * 用模块级计数而不是一路传参数：求解是深递归 + 多处回溯，把计数器塞进签名要动十几个
+ * 调用点，而这里只需要"整趟求解用了几环"这一个数（同一套做法见 g_obs_revised）。
+ * 规则：**回溯失败要把计数还原**（成功那条路保留），入口清零，出口抄进 Proof。 */
+static int g_rel_guess_hops = 0;
+/* §6.131 **记忆链**（默认关，`AIP_RELCHAIN=1`）：允不允许把"记忆里的猜测"当**中间跳**。
+ * 关着时只有终点那一跳能是猜测（= §6.125 的行为，逐字节不变）。 */
+static int g_rel_chain = -1;              /* -1 = 还没读过环境变量 */
+static inline int rel_chain_on(void) {
+    if (g_rel_chain < 0) {
+        const char *e = getenv("AIP_RELCHAIN");
+        g_rel_chain = (e && *e == '1') ? 1 : 0;
+    }
+    return g_rel_chain;
+}
+static inline void rel_chain_set(int on) { g_rel_chain = on ? 1 : 0; }
 
 /* 「把缓存排除在外再推一遍」——定义在下面（rel_solve 之后），这里先声明：
  * ① R0 要拿它当实时闸；② 候选枚举（rel_next_cands）也要用它，
@@ -484,6 +500,7 @@ typedef struct {
     size_t    n;
     int       status;     /* +1 真  -1 假  0 未知 */
     int       guessed;    /* 结论里有没有用到类比推测 */
+    int       guess_hops; /* §6.131：链里有**几环**是记忆里的猜测（0 = 没用） */
 } Proof;
 
 static inline const char *rel_via_name(uint8_t via) {
@@ -617,6 +634,16 @@ static inline int rel_direct_neg(const Token *a, uint8_t rid, const Token *b) {
 }
 
 /* §6.125 「这条边是**记忆里的猜测**吗」（供可见性那一趟用；`derived == 2` 是记号的来源） */
+/* §6.131 **猜出来的结论有多大把握** —— 按"链里有几环是猜测"衰减。
+ * 1 环 = 0.45（与 §6.125 一致，逐字节不变）；每多一环乘 0.7；下限 0.15。
+ * 为什么必须衰减：原来无论接了几环都写死 0.45 ⇒ **猜得越多越像有把握**，方向正好反了。 */
+static inline float ai_guess_conf(int hops) {
+    float c = 0.45f;
+    if (hops <= 1) return c;
+    for (int i = 1; i < hops && i < 12; ++i) c *= 0.7f;
+    return c < 0.15f ? 0.15f : c;
+}
+
 static inline int rel_direct_guess(const Token *a, uint8_t rid, const Token *b, int want_neg) {
     int dv = 0;
     int r = want_neg ? rel_direct_neg_as(a, rid, b, &dv) : rel_direct_as(a, rid, b, &dv);
@@ -645,11 +672,17 @@ static inline size_t rel_next_cands(const AI *ai, const Token *a, uint8_t rid,
         for (size_t i = 0; i < a->count && n < cap; ++i) {
             const AssocEntry *e = &a->assocs[i];
             if (!e->main || e->main == a) continue;
-            /* 缓存当中间跳要**先有依据**：没依据的缓存不算路（和 R0 同一道闸） */
+            /* 缓存当中间跳要**先有依据**：没依据的缓存不算路（和 R0 同一道闸）。
+             * §6.131 例外：**记忆里的猜测**本来就"重推不出来"（它正是为这个才被记下来的），
+             * 所以它永远过不了那道闸 —— 想拿它接链，只能在 `rel_chain_on()` 且
+             * **记忆可见**（不是复核模式）时显式放行，并且由调用方把这一跳计进 guess_hops。 */
             if (e->role == ASSOC_ROLE_DERIVED) {
                 if (g_rel_ignore_derived) continue;
-                /* 求解只读图（不改结构），这里去掉 const 只是为了复用同一个入口 */
-                if (!rel_solve_ignoring_caches((AI *)ai, a, rid, e->main, neg_want)) continue;
+                if (edge_is_guess(e)) {
+                    if (!(g_rel_guess_visible && rel_chain_on())) continue;
+                } else if (!rel_solve_ignoring_caches((AI *)ai, a, rid, e->main, neg_want)) {
+                    continue;
+                }
             }
             if (neg_want ? (e->nrel & bit) : (e->rel & bit)) out[n++] = e->main;
         }
@@ -942,7 +975,7 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
     if (g_rel_guess_visible && !g_rel_ignore_derived) {
         if (!d_pos && rel_direct_guess(a, rid, b, 0)) { d_pos = 1; kn_pos = 2; mem_used = 1; }
         if (!d_neg && rel_direct_guess(a, rid, b, 1)) { d_neg = 1; kn_neg = 2; mem_used = 1; }
-        if (mem_used && pf) pf->guessed = 1;
+        if (mem_used) { g_rel_guess_hops++; if (pf) pf->guessed = 1; }
     }
     if (want_neg ? d_neg : d_pos) {
         uint8_t via = ((want_neg ? hy_neg : hy_pos) && !(want_neg ? rel_direct_neg(a, rid, b)
@@ -1001,12 +1034,19 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
             for (size_t i = 0; i < nc; ++i) {
                 if (cands[i] == b) continue;
                 size_t save = pf ? pf->n : 0;
+                /* §6.131：**这一跳是不是"记忆里的猜测"** —— 是就把它计进整趟的跳数。
+                 * 回溯失败要还原（成功那条路保留），否则计数会把所有试过的岔路都算上。 */
+                int gsave = g_rel_guess_hops;
+                int via_mem = rel_direct_guess(a, rid, cands[i], want_neg);
+                if (via_mem) g_rel_guess_hops++;
                 if (rel_solve_go(ai, cands[i], rid, b, want_neg, pf, depth + 1,
                                  nseen, n_seen + 1)) {
-                    proof_prepend_step(pf, (Token *)a, rid, 1, 0, chyp[i]);
+                    proof_prepend_step(pf, (Token *)a, rid, 1, via_mem ? 5 : 0, chyp[i]);
+                    if (pf && via_mem) pf->guessed = 1;
                     return 1;
                 }
                 if (pf) pf->n = save;
+                g_rel_guess_hops = gsave;
             }
         }
         /* R2 继承（肯定与否定都能继承）—— 同上，被具体事实挡住时不外推 */
@@ -1178,9 +1218,17 @@ static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
                              int want_neg, Proof *pf) {
     if (!pf) return;
-    pf->n = 0; pf->status = 0; pf->guessed = 0;
+    pf->n = 0; pf->status = 0; pf->guessed = 0; pf->guess_hops = 0;
     if (!ai || !a || !b) return;
+    /* §6.131：整趟求解的"用了几环猜测"从这里起算、到这里抄进 Proof。
+     * ⚠ 嵌套求解（复核、候选枚举里的 rel_solve_ignoring_caches）必须自己 save/restore，
+     * 否则内层的清零会把外层已经用掉的跳数抹掉。 */
+    int save_hops = g_rel_guess_hops;
+    g_rel_guess_hops = 0;
     rel_solve_go(ai, a, rid, b, want_neg, pf, 0, NULL, 0);
+    pf->guess_hops = g_rel_guess_hops;
+    if (pf->guess_hops > 0) pf->guessed = 1;
+    g_rel_guess_hops = save_hops + pf->guess_hops;
 }
 
 /* 把缓存（推出来沉淀的边）当成不存在，再推一遍 —— 这是「缓存跟着前提走」的复核手段。
@@ -1191,7 +1239,9 @@ static inline int rel_solve_ignoring_caches(AI *ai, const Token *a, uint8_t rid,
     if (!ai || !a || !b || rid == 0) return 0;
     Proof pf;
     g_rel_ignore_derived = 1;
+    int save_hops = g_rel_guess_hops;      /* 复核用掉的不算外层的账（§6.131） */
     rel_solve(ai, a, rid, b, want_neg, &pf);
+    g_rel_guess_hops = save_hops;
     g_rel_ignore_derived = 0;
     return pf.status != 0;
 }
@@ -1290,6 +1340,7 @@ static inline int rel_guess(AI *ai, const Token *a, uint8_t rid, const Token *b,
     pf->n = 0;
     pf->status = best_pol;
     pf->guessed = 1;
+    pf->guess_hops = 1;                     /* §6.131：一次直接类比 = 一环猜测 */
     proof_push(pf, (Token *)a, 0, 0, 0, 0);
     proof_push(pf, best, rid, 0, 5, best_pct);
     proof_push(pf, (Token *)b, rid, (uint8_t)(best_pol < 0), 0, 0);

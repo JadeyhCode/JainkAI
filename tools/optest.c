@@ -3126,6 +3126,78 @@ static void test_thin_pursuit(void) {
     ai_free(ai);
 }
 
+/* §6.131 **记忆链 + 把握按跳数衰减**：原来"记忆里的猜测"只能当**终点那一跳**
+ * （`rel_next_cands` 里缓存当中间跳要先"重推得出来"，而猜测天生重推不出来 ⇒ 永远被挡）；
+ * 而且无论用了几环都写死 0.45 ⇒ **猜得越多越像有把握**。这一节钉住：
+ * 记忆链默认关、开着能接起来、跳数记得对、把握真按跳数衰减、以及**不中毒**（知识里仍然没有）。 */
+static void test_memory_chain(void) {
+    printf("== ⓼ 记忆链：猜测能当中间跳 + 把握按跳数衰减（§6.131） ==\n");
+    AI *ai = ai_new();
+    Token *A = T(ai, "甲链"), *M = T(ai, "中链"), *B = T(ai, "乙链");
+    Token *s1 = T(ai, "同类链一"), *s2 = T(ai, "同类链二");
+    ai->rel_remember = 1;
+    /* ⚠ 用「属于」（`trans=1`）来测：`REL_HAS` 在关系表里 **trans=0**，
+     * 传递那一支根本不开火 —— 第一版就拿 有 测，结果"链没接起来"，看着像功能没做。 */
+    agent_guess_remember(ai, A, REL_IS_A, M, s1);     /* 猜测：甲链 属于 中链 */
+    agent_guess_remember(ai, M, REL_IS_A, B, s2);     /* 猜测：中链 属于 乙链 */
+    ok(rel_direct_guess(A, REL_IS_A, M, 0) == 1 && rel_direct_guess(M, REL_IS_A, B, 0) == 1,
+       "两条猜测都记下来了（`[类比:…]` + role=推论）");
+    /* ⚠ 默认态要在**任何 rel_chain_set 之前**查：`rel_chain_on()` 第一次调用就去读环境变量
+     * 并缓存，先 set 再看就永远"默认关"（这个坑在别的开关上踩过）。
+     * 反向测量（`AIP_RELCHAIN=1` 跑整包）时这条按规矩跳过 —— 否则整包在反向那一侧必红。 */
+    {
+        const char *env = getenv("AIP_RELCHAIN");
+        if (!env) ok(rel_chain_on() == 0, "记忆链**默认关**（`AIP_RELCHAIN=1` 才开）");
+        else { printf("  [OK]   反向测量 %s：默认关那条断言按规矩跳过\n", env); passes++; }
+    }
+    /* 关着：中间那一跳不许用猜测 ⇒ 接不起来（老行为）。**显式关**，不看环境。 */
+    rel_chain_set(0);
+    Proof p1; memset(&p1, 0, sizeof p1);
+    g_rel_guess_visible = 1;
+    rel_solve(ai, A, REL_IS_A, B, 0, &p1);
+    ok(p1.status == 0, "关着记忆链：中间跳不许用猜测 ⇒ 接不起来（与 §6.125 行为一致）");
+    /* 开着：两环猜测接起来，跳数记成 2 */
+    g_rel_guess_visible = 1; rel_chain_set(1);
+    Proof p2; memset(&p2, 0, sizeof p2);
+    rel_solve(ai, A, REL_IS_A, B, 0, &p2);
+    ok(p2.status != 0, "开着：猜测当中间跳 ⇒ 记忆链接起来了");
+    ok(p2.guess_hops == 2, "跳数记得对：这条链里有**两环**是猜测");
+    ok(p2.guessed == 1, "整条证明标成「用到了猜测」");
+    /* 把握按跳数衰减：1 环 = 0.45（与原来一致）；2 环 = 0.315；下限 0.15 */
+    ok(ai_guess_conf(1) == 0.45f, "1 环 = 0.45（与 §6.125 逐比特一致）");
+    ok(ai_guess_conf(2) > 0.31f && ai_guess_conf(2) < 0.32f, "2 环 ≈ 0.315（每多一环乘 0.7）");
+    ok(ai_guess_conf(9) == 0.15f, "环数再多也有下限 0.15（不会衰减到 0）");
+    ok(ai_guess_conf(2) < ai_guess_conf(1), "**猜得越多越没把握**（这条以前是反的）");
+    /* 不中毒：知识库口径照旧是"没有" */
+    ok(rel_direct(A, REL_IS_A, B) == 0, "知识里仍然没有这条 —— 记忆链不冒充知识");
+    ok(rel_solve_ignoring_caches(ai, A, REL_IS_A, B, 0) == 0, "复核模式（重推）照旧不认记忆");
+    /* 话也要跟着跳数变：1 环与原来一字不差，多环要报数（用真的 Derivation 渲染） */
+    {
+        Derivation dd;
+        der_reset(&dd);
+        dd.has_claim = 1; dd.truth = +1; dd.gaps = 0; dd.conf = 45;
+        dd.guessed = 1; dd.guess_hops = 1;
+        der_goal(&dd, A, REL_IS_A, B);
+        der_default(&dd, A, s1, REL_IS_A, B, 60, +1);
+        der_fact(&dd, s1, REL_IS_A, B, 0, +1);
+        der_conclude(&dd, +1, 45);
+        char say1[THINK_CONCL] = {0}, say2[THINK_CONCL] = {0};
+        der_say(ai, &dd, DER_STYLE_PLAIN, say1, sizeof say1);
+        ok(strstr(say1, "其中一环是**推测**的") != NULL,
+           "1 环的措辞与 §6.125 **一字不差**（不翻默认就不改话）");
+        dd.guess_hops = 2;
+        der_say(ai, &dd, DER_STYLE_PLAIN, say2, sizeof say2);
+        ok(strstr(say2, "2 环") != NULL, "2 环的话报出环数（「其中 2 环是**推测**的」）");
+    }
+    /* 关掉可选项：计数不该被外层的复核/候选枚举串了账 */
+    rel_chain_set(0);
+    g_rel_guess_visible = 0;
+    Proof p3; memset(&p3, 0, sizeof p3);
+    rel_solve(ai, A, REL_IS_A, B, 0, &p3);
+    ok(p3.status == 0 && p3.guess_hops == 0, "记忆不可见时既推不出来、也不记跳数（没串账）");
+    ai_free(ai);
+}
+
 static void test_lease_gate_tiers(void) {
     printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
     AI *ai = ai_new();
@@ -3263,6 +3335,7 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
+    test_memory_chain();
     test_thin_pursuit();
     test_self_goal();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
