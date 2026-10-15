@@ -2624,6 +2624,67 @@ static inline void think_settle(AI *ai) {
  *   · **默认关**：`idle_every == 0` 时一个字都不做（那一轮仍是今天那句"……"）。
  * 节拍：`::idle every <N>`（每 N 个 tick 最多一次）/ `::idle on|off` / `AIP_IDLE=1`。
  * 返回 1 = 这一轮真的空闲想过了（调用方据此判断"这一轮不是白过"）。 */
+/* §6.129 ② **给「薄词目标」一条自己的处理路**。
+ *
+ * 原来 `think_idle` 把目标正文（一个词）原样丢给 `think_run`，而 `think_run` 要**关系形状**：
+ * `think_make_goal` 失败 ⇒ 走"不认识的词"那一支 ⇒ 只有一个词 ⇒ 立刻收束
+ * ⇒ **空闲思考对它其实什么也没干**（实测痕迹里只有一条"没有要弄清的关系问题"）。
+ * 现在：**拿它自己的图拼一个能核的问题**，再走既有的求解/验证/机制那套。两条路：
+ *   ① 它自己有一条**肯定关系边** `W -[R]→ X` ⇒ 问「W R X 吗」——核的是"这条边是不是孤证"；
+ *   ② 只有普通边 `W→Z` ⇒ 看 Z 有没有关系边 `Z -[R]→ X` ⇒ 问「W R X 吗」，
+ *      这正是既有的**经中间词**机制（TG_THROUGH）负责的问题（"接一条链"）。
+ * 拼不出来（它一条边都没有 / 邻域里没有关系边）⇒ 返回 0，调用方退回原话（老行为）。
+ *
+ * ⚠ 只走**肯定**的核心关系：否定问句的形状（`不` 是并进关系词还是单独一个词）
+ * 在这个核心里不唯一，硬拼会拼出解析不了的句子 —— 宁可退回老路（照实记在局限里）。 */
+static inline int think_thin_question(const AI *ai, Token *w,
+                                      char *buf, size_t cap,
+                                      char *why, size_t whycap) {
+    if (!ai || !w || !w->name || !buf || cap == 0) return 0;
+    /* ① 它自己的关系边：命中次数最高的那条 */
+    const AssocEntry *best = NULL;
+    for (size_t i = 0; i < w->count; ++i) {
+        const AssocEntry *e = &w->assocs[i];
+        if (!e->main || e->main == w || e->main->is_garbage) continue;
+        if (e->rel == 0) continue;                     /* 只认肯定关系边（见上面的 ⚠） */
+        if (!best || e->hits > best->hits) best = e;
+    }
+    if (best) {
+        uint8_t rid = 0;
+        for (uint8_t r = 1; r <= REL_CORE_MAX; ++r)
+            if (best->rel & REL_BIT(r)) { rid = r; break; }
+        const char *rn = rid ? rel_name_of(ai, rid) : NULL;
+        if (rn && best->main->name) {
+            snprintf(buf, cap, "%s %s %s 吗", w->name, rn, best->main->name);
+            if (why && whycap)
+                snprintf(why, whycap, "拿它自己的一条边来核：%s %s %s（看它是不是孤证）",
+                         w->name, rn, best->main->name);
+            return 1;
+        }
+    }
+    /* ② 接一条链：W →（普通边）→ Z →（关系边）→ X ⇒ 问「W R X 吗」 */
+    for (size_t i = 0; i < w->count; ++i) {
+        Token *z = w->assocs[i].main;
+        if (!z || z == w || z->is_garbage) continue;
+        for (size_t j = 0; j < z->count; ++j) {
+            const AssocEntry *f = &z->assocs[j];
+            Token *x = f->main;
+            if (f->rel == 0 || !x || x == w || x == z || x->is_garbage || !x->name) continue;
+            uint8_t rid = 0;
+            for (uint8_t r = 1; r <= REL_CORE_MAX; ++r)
+                if (f->rel & REL_BIT(r)) { rid = r; break; }
+            const char *rn = rid ? rel_name_of(ai, rid) : NULL;
+            if (!rn) continue;
+            snprintf(buf, cap, "%s %s %s 吗", w->name, rn, x->name);
+            if (why && whycap)
+                snprintf(why, whycap, "接一条链来核：%s →（%s）→ %s ⇒ 问「%s %s %s 吗」",
+                         w->name, z->name ? z->name : "?", x->name, w->name, rn, x->name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static inline int think_idle(AI *ai) {
     Think *t = think_of(ai);
     if (!ai || !t || t->run_off) return 0;
@@ -2640,9 +2701,18 @@ static inline int think_idle(AI *ai) {
     }
     if (!pick) return 0;                     /* 没有挂着的、还能想的问题：这一轮就白过 */
 
-    /* 把问题还原成词（`[自问:…]` 的正文本来就是**空格连起来的原词**） */
+    /* 把问题还原成词（`[自问:…]` 的正文本来就是**空格连起来的原词**）。
+     * §6.129 ②：**自己立的薄词目标**先走它自己的路 —— 拿它的图拼一个能核的关系问题；
+     * 拼不出来（没有边/邻域里没关系边）就退回原话，与老行为一致。 */
     char buf[THINK_TEXT];
-    think_utf8_clip(buf, sizeof buf, pick->text);
+    char thin_why[THINK_WHY];
+    int made_q = 0;
+    thin_why[0] = 0;
+    if (pick->selfmade && pick->rid == 0 && !pick->obj && pick->subj) {
+        if (think_thin_question(ai, pick->subj, buf, sizeof buf, thin_why, sizeof thin_why))
+            made_q = 1;
+    }
+    if (!made_q) think_utf8_clip(buf, sizeof buf, pick->text);
     char *words[16];
     size_t n = 0;
     for (char *q = buf; *q && n < 16; ) {
@@ -2665,19 +2735,31 @@ static inline int think_idle(AI *ai) {
     t->learn_off = 1;
     think_run(ai, words, n);
     t->learn_off = learn_save;
+    /* ⚠ 这条痕必须记在 `think_run` **之后**：它开头会 `trace_n = 0`（每轮重开），
+     * 记在前面会被当场抹掉 —— 实测踩过（痕里什么都没有，看着像"这条路没跑"）。 */
+    if (made_q) think_step(t, TH_GOAL, 1, 45, "薄词目标：给它拼一个能核的问题", thin_why);
 
     char note[THINK_WHY];
     if (t->concl != 0 && !t->conflict) {
         /* 想通了：把它从"未解"里收起来（**只动内存**），并留一句下次要说的话 */
         think_open_done(t, pick);
         t->mention_pending = 1;
-        snprintf(t->mention_text, sizeof t->mention_text,
-                 "你 上次 问 的 %s，我 自己 又 想 了 想 ： %s %s %s %s",
-                 pick->text,
-                 pick->subj && pick->subj->name ? pick->subj->name : "?",
-                 pick->want_neg ? "不 " : "",
-                 rel_name_of(ai, pick->rid) ? rel_name_of(ai, pick->rid) : "?",
-                 pick->obj && pick->obj->name ? pick->obj->name : "?");
+        if (pick->selfmade) {
+            /* ⚠ 自己立的目标没有 (rid, obj) —— 套用户问句那句会说出「自然 ？ ？」。
+             * 它的结论在 `concl_text` 里（think_run 填的投影），用它。 */
+            /* 两处都限长：mention_text 是 256 字节，中文一字三字节，别按字符估 */
+            snprintf(t->mention_text, sizeof t->mention_text,
+                     "我 自己 琢磨 的 %.60s，想 明白 一点 了 ： %.110s",
+                     pick->text, t->concl_text[0] ? t->concl_text : "有 依据 了");
+        } else {
+            snprintf(t->mention_text, sizeof t->mention_text,
+                     "你 上次 问 的 %s，我 自己 又 想 了 想 ： %s %s %s %s",
+                     pick->text,
+                     pick->subj && pick->subj->name ? pick->subj->name : "?",
+                     pick->want_neg ? "不 " : "",
+                     rel_name_of(ai, pick->rid) ? rel_name_of(ai, pick->rid) : "?",
+                     pick->obj && pick->obj->name ? pick->obj->name : "?");
+        }
         snprintf(note, sizeof note, "没人说话，我自己挑了一个没想通的问题（%s）—— 想通了",
                  pick->text);
         think_step(t, TH_LEARN, 1, 80, "空闲思考：想通了", note);

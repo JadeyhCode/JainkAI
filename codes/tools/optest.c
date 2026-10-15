@@ -3058,6 +3058,74 @@ static void test_self_goal(void) {
     ai_free(ai);
 }
 
+/* §6.129 ② **薄词目标自己的处理路**：原来 `::idle` 把"一个词"丢给 `think_run`（要关系形状）
+ * ⇒ 立刻收束、什么也没干。现在拿它**自己的图**拼一个能核的问题，再走既有机制。这一节钉住：
+ * 两条拼法（自己的关系边 / 接一条链）、拼不出来退回老路、只有自己立的薄词目标才走这条路、
+ * 以及"这条路是**只读**的"（K5：不提议意图、不动图）。 */
+static void test_thin_pursuit(void) {
+    printf("== ⓻ 薄词目标的处理路：拿它自己的图拼问题（§6.129 ②） ==\n");
+    AI *ai = ai_new();
+    Think *t = think_of(ai);
+    /* ① 它自己有一条肯定关系边 ⇒ 问「W 有 X 吗」 */
+    Token *w1 = T(ai, "薄词丁"), *x1 = T(ai, "物件戊");
+    (void)token_tag_rel(w1, x1, REL_HAS, 5);
+    char buf[THINK_TEXT], why[THINK_WHY];
+    ok(think_thin_question(ai, w1, buf, sizeof buf, why, sizeof why) == 1,
+       "有自己的关系边 ⇒ 拼得出问题");
+    ok(strstr(buf, "薄词丁") && strstr(buf, "物件戊") && strstr(buf, "有") && strstr(buf, "吗"),
+       "拼出来的就是「W 有 X 吗」（关系名取自关系表，不是写死的）");
+    /* ② 只有普通边 ⇒ 接一条链：W →（共现）→ Z →（关系）→ X */
+    Token *w2 = T(ai, "薄词己"), *z2 = T(ai, "中间庚");
+    (void)token_observe_pair(w2, z2);              /* 普通共现边 */
+    (void)token_tag_rel(z2, x1, REL_HAS, 5);       /* 中间词与 X 有关系边 */
+    ok(think_thin_question(ai, w2, buf, sizeof buf, why, sizeof why) == 1,
+       "只有普通边 ⇒ 用邻居的关系边接一条链");
+    ok(strstr(buf, "薄词己") && strstr(buf, "物件戊"),
+       "接出来的问题还是冲着 W 自己（「W 有 物件戊 吗」）");
+    /* ③ 什么都没有 ⇒ 拼不出来（调用方退回原话 = 老行为） */
+    Token *w3 = T(ai, "孤零零辛");
+    ok(think_thin_question(ai, w3, buf, sizeof buf, why, sizeof why) == 0,
+       "一条边都没有 ⇒ 拼不出来（退回老路，不硬凑问题）");
+    /* ④ 只有**否定**关系边 ⇒ 也退回老路：否定问句的形状在这个核心里不唯一 */
+    Token *w4 = T(ai, "薄词壬");
+    (void)token_tag_nrel(w4, x1, REL_HAS, 5);
+    ok(think_thin_question(ai, w4, buf, sizeof buf, why, sizeof why) == 0,
+       "只有否定关系边 ⇒ 不拼（否定问句形状不唯一，宁可退回老路）");
+    /* ⑤ 接进 ::idle：自己立的薄词目标走这条路，且**只读**（不动图） */
+    ThinkOpen *o = think_open_add(t, w1, NULL, 0, 0, "薄词丁", ai->pool->current_tick);
+    if (o) o->selfmade = 1;
+    t->idle_every = 1; t->idle_last_tick = 0;
+    size_t edges_before = w1->count;
+    int ran = think_idle(ai);
+    ok(ran == 1 && t->n_idle >= 1, "空闲思考真的跑了这条目标");
+    int found = 0;
+    for (size_t i = 0; i < t->trace_n; ++i)
+        if (t->trace[i].what[0] && strstr(t->trace[i].what, "薄词目标")) found = 1;
+    ok(found == 1, "痕里写明「薄词目标：给它拼一个能核的问题」（可复核，不是黑箱）");
+    ok(w1->count == edges_before, "这条路是**只读**的：W 的边数一个没变（K5）");
+    /* ⑥ 反向对照：**用户问出来的**目标不走这条路（老行为原样） */
+    Token *u1 = T(ai, "用户问的词"), *u2 = T(ai, "对方癸");
+    (void)token_tag_rel(u1, u2, REL_HAS, 5);
+    ThinkOpen *o2 = think_open_add(t, u1, u2, REL_HAS, 0, "用户问的词 有 对方癸 吗",
+                                   ai->pool->current_tick);
+    if (o2) o2->selfmade = 0;
+    /* ⚠ 先清痕再跑：上一轮那条薄词目标**已经想通并被收起**（这一步本身是对的），
+     * 不清痕就会拿上一轮的步子当"这一轮也走了薄词路"的证据。 */
+    t->trace_n = 0;
+    t->idle_last_tick = 0;
+    size_t idle_before = t->n_idle;
+    (void)think_idle(ai);
+    int thin_step = 0;
+    for (size_t i = 0; i < t->trace_n; ++i)
+        if (t->trace[i].what[0] && strstr(t->trace[i].what, "薄词目标")) thin_step++;
+    ok(t->n_idle > idle_before && thin_step == 0,
+       "用户问出来的目标**不**走薄词那条路（这一轮的痕里没有它，但空闲思考照跑）");
+    ok(think_open_find(t, w1, NULL, 0, 0) == NULL,
+       "上一条薄词目标已经被「想通」收起（自己立的也能自收尾）");
+    t->idle_every = 0;
+    ai_free(ai);
+}
+
 static void test_lease_gate_tiers(void) {
     printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
     AI *ai = ai_new();
@@ -3195,6 +3263,7 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
+    test_thin_pursuit();
     test_self_goal();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
