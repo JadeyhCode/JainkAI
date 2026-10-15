@@ -750,7 +750,7 @@ typedef struct {
     float   drive_d_cutoff;
     /* **受审的外部执行 + 写文件**（`action.h` 层）的开关：默认 0 = 关。
      * 层本身（白名单/超时/账/观测标记）全在 action.h，内核只看到这一个数字 ——
-     * 和情绪那张表同一个放法（用户 2026-10-08 拍板：白名单 echo/cat/wc/gcc+grep/head/tail/sed/ls、
+     * 和情绪那张表同一个放法（用户 2026-10-08 拍板：白名单 echo/cat/wc/gcc+grep/head/tail/ls、——sed 已移出见 action.h 内注释：GNU sed 的 e 命令可执行缓冲区内容绕过全部边界（外部审计 2026-10-15）
      * 写文件只在 _t/work/、不联网）。**不进存档**（格式 v10 不动）。 */
     int     act_on;
     /* **原语程序的干跑校验**（`token_lang.h` 的 `token_check_program`）：默认 0 = 关。
