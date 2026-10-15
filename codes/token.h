@@ -289,6 +289,18 @@ static inline int edge_is_causal_guess(const AssocEntry *e) {
     return e && e->action && e->action->name &&
            strcmp(e->action->name, AI_CAUSAL_MARK) == 0;
 }
+/* **记忆里的猜测**（§6.125）标记：动作槽写成 `[类比:依据词]`（像 `[修正:…]`/`[临:…]` 那样自带出处）。
+ * 与「因果猜想」的关键区别：因果猜想**连推论都不是**（草稿，`rel_direct_*` 一律跳过）；
+ * 猜测记忆**是记下来的结论**（`role = 推论`），能被后续推理当输入 ——
+ * 但 `rel_direct`/`rel_direct_review`（"图里有没有这条**知识**"）**跳过它**，
+ * 于是它永远变不成"知道的"，验证器的自查也永远查不到它（不中毒）。 */
+#define AI_GUESS_MARK_PREFIX "[类比"
+static inline int edge_is_guess(const AssocEntry *e) {
+    return e && e->action && e->action->name &&
+           strncmp(e->action->name, AI_GUESS_MARK_PREFIX,
+                   strlen(AI_GUESS_MARK_PREFIX)) == 0;
+}
+
 /* 「这条边是**普通边**（观测/共现/知识/缓存）」吗？—— 因果猜想**不是**。
  * v9 里这个区分靠"边上有没有语境字段"（`n_subs == 0` 就是普通边）；语境字段删掉之后
  * 判据搬到动作槽上，于是**所有"按 main 找那条边"的循环都必须用这个函数跳过猜想边**：

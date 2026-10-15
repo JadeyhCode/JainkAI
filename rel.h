@@ -452,6 +452,10 @@ static inline void rel_excl_build(AI *ai) {
  * 加参数要改十几处调用点，而这个模式只在单线程、非嵌套复核时用得上
  * （和 ai.h 的 g_walk_trace 是同一类东西）。 */
 static int g_rel_ignore_derived = 0;
+/* §6.125 「**允许把记忆里的猜测当输入**」的趟（默认 0 = 不许）。
+ * 只在两处打开：① 答复层"先按记忆解一遍"；② 验证器复核含记忆步的链时**独立重推**。
+ * 复核模式（g_rel_ignore_derived=1）下它一律无效 —— 猜测永远不算"干净依据"。 */
+static int g_rel_guess_visible = 0;
 
 /* 「把缓存排除在外再推一遍」——定义在下面（rel_solve 之后），这里先声明：
  * ① R0 要拿它当实时闸；② 候选枚举（rel_next_cands）也要用它，
@@ -541,7 +545,8 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
             const AssocEntry *e = &a->assocs[i];
             if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
             if (edge_dyn_neg(e)) continue;         /* 要的是**肯定**那条 */
-            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            if (derived) *derived = edge_is_guess(e) ? 2
+                                                     : (e->role == ASSOC_ROLE_DERIVED);
             return 1;
         }
         return 0;
@@ -551,7 +556,8 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
         const AssocEntry *e = &a->assocs[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->rel & bit) {
-            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            if (derived) *derived = edge_is_guess(e) ? 2
+                                                     : (e->role == ASSOC_ROLE_DERIVED);
             return 1;
         }
     }
@@ -566,7 +572,8 @@ static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b,
             const AssocEntry *e = &a->assocs[i];
             if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
             if (!edge_dyn_neg(e)) continue;        /* 要的是**否定**那条 */
-            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            if (derived) *derived = edge_is_guess(e) ? 2
+                                                     : (e->role == ASSOC_ROLE_DERIVED);
             return 1;
         }
         return 0;
@@ -576,7 +583,8 @@ static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b,
         const AssocEntry *e = &a->assocs[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->nrel & bit) {
-            if (derived) *derived = (e->role == ASSOC_ROLE_DERIVED);
+            if (derived) *derived = edge_is_guess(e) ? 2
+                                                     : (e->role == ASSOC_ROLE_DERIVED);
             return 1;
         }
     }
@@ -588,12 +596,14 @@ static inline int rel_direct(const Token *a, uint8_t rid, const Token *b) {
     if (rid >= REL_DYN_BASE) {                      /* 动态关系 */
         uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
         for (size_t i = 0; i < a->count; ++i)
-            if (a->assocs[i].main == b && a->assocs[i].dyn == d) return 1;
+            if (a->assocs[i].main == b && a->assocs[i].dyn == d &&
+                !edge_is_guess(&a->assocs[i])) return 1;
         return 0;
     }
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main == b && (a->assocs[i].rel & bit)) return 1;
+        if (a->assocs[i].main == b && !edge_is_guess(&a->assocs[i]) &&
+            (a->assocs[i].rel & bit)) return 1;      /* §6.125 猜测记忆**不算知识** */
     return 0;
 }
 
@@ -601,8 +611,16 @@ static inline int rel_direct_neg(const Token *a, uint8_t rid, const Token *b) {
     if (!a || !b || rid == 0 || rid >= REL_DYN_BASE) return 0;  /* 否定只支持核心关系 */
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main == b && (a->assocs[i].nrel & bit)) return 1;
+        if (a->assocs[i].main == b && !edge_is_guess(&a->assocs[i]) &&
+            (a->assocs[i].nrel & bit)) return 1;     /* §6.125 同上 */
     return 0;
+}
+
+/* §6.125 「这条边是**记忆里的猜测**吗」（供可见性那一趟用；`derived == 2` 是记号的来源） */
+static inline int rel_direct_guess(const Token *a, uint8_t rid, const Token *b, int want_neg) {
+    int dv = 0;
+    int r = want_neg ? rel_direct_neg_as(a, rid, b, &dv) : rel_direct_as(a, rid, b, &dv);
+    return r && dv == 2;
 }
 
 /* 在最前面插一个起点 t，并把「走到第二个点用的是哪条规则」标在那一步上。
@@ -914,6 +932,18 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
         d_pos = 0;
     if (d_neg && kn_neg && !g_rel_ignore_derived && !rel_solve_ignoring_caches(ai, a, rid, b, 1))
         d_neg = 0;
+    /* §6.125 **记忆里的猜测**（RECURSIVE TRANSFER 的入口）。
+     * 上一段那道"缓存要跟着前提走"的闸，把**纯猜测**（没有独立依据、重推不出来）关在门外 ——
+     * 这正是防中毒的关键。这里给出一趟**明确打开**的例外：只在 `g_rel_guess_visible` 时可见，
+     * 而且用上它就**把整条证明标成 guessed**（答复必须写"先前推测的"）。
+     * 三个"看不见"的场合：复核模式（g_rel_ignore_derived）、验证器自查"知识库里有吗"、
+     * 以及任何没开这个全局的普通求解 —— 所以记忆永远不会变成"知道的"。 */
+    int mem_used = 0;
+    if (g_rel_guess_visible && !g_rel_ignore_derived) {
+        if (!d_pos && rel_direct_guess(a, rid, b, 0)) { d_pos = 1; kn_pos = 2; mem_used = 1; }
+        if (!d_neg && rel_direct_guess(a, rid, b, 1)) { d_neg = 1; kn_neg = 2; mem_used = 1; }
+        if (mem_used && pf) pf->guessed = 1;
+    }
     if (want_neg ? d_neg : d_pos) {
         uint8_t via = ((want_neg ? hy_neg : hy_pos) && !(want_neg ? rel_direct_neg(a, rid, b)
                                                                  : rel_direct(a, rid, b)))

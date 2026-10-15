@@ -648,6 +648,8 @@ static const CmdDef CMDS[] = {
     { "rel", NULL, 2, "基本",
       "列出这个词的关系知识（属于/有/会/怕…）\n"
       "开关：`::rel first on|off` **先链后联想**（默认开，§6.124：确定性推理答不出才用同类互推答「大概」）；\n"
+      "  `::rel mem on|off` **记住猜出来的结论**（默认关，§6.125：记成「记忆里的猜测」，\n"
+      "  下一个问题能拿它当中转；它**不算知识**，答复照旧标「大概/推测」）；\n"
       "  `::rel analogy on|off` 同类互推兜底（§6.121，默认开，`AIP_RELANALOGY=0` 退回）",
       CMD_REL },
     { "why", NULL, 2, "基本",
@@ -2363,6 +2365,52 @@ int main(int argc, char **argv) {
                            a->brain->rel_first
                                ? "先用关系/规则把**证明过**的答案拿出来，规则答不出才用同类互推答「大概」"
                                : "老顺序：联想兜底排在确定性推理**前面**（会抢答）");
+                    continue;
+                }
+                if (arg && strncmp(arg, "mem", 3) == 0) {
+                    /* §6.125 **记忆里的猜测**：记下来的"猜出来的结论"（边上有 [类比:出处] 标记） */
+                    const char *v = arg + 3;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))       a->brain->rel_remember = 1;
+                    else if (!strcmp(v, "off")) a->brain->rel_remember = 0;
+                    else if (!strcmp(v, "clear")) {
+                        size_t gone = 0;
+                        for (size_t i = 0; i < a->brain->pool->count; ++i) {
+                            Token *tk = a->brain->pool->tokens[i];
+                            if (!tk || tk->is_garbage) continue;
+                            for (size_t j = 0; j < tk->count; ++j)
+                                if (edge_is_guess(&tk->assocs[j])) gone++;
+                        }
+                        printf("[清记忆] 有 %zu 条猜测记忆（本次不清图，只报数 —— "
+                               "要真删走撤销路：观测覆盖它 / 依据没了思维层自动撤）\n", gone);
+                        a->brain->n_rel_guess_mem = 0;
+                        continue;
+                    } else if (*v) { printf("[用法] ::rel mem on|off|clear\n"); continue; }
+                    size_t n = 0;
+                    printf("[记忆里的猜测 = %s]（%s）\n", a->brain->rel_remember ? "开" : "关（默认）",
+                           a->brain->rel_remember
+                               ? "类比猜出来的结论会记下来，下一个问题可以拿它当中转；**不算知识**"
+                               : "答完就忘（老行为）");
+                    for (size_t i = 0; i < a->brain->pool->count; ++i) {
+                        Token *tk = a->brain->pool->tokens[i];
+                        if (!tk || tk->is_garbage) continue;
+                        for (size_t j = 0; j < tk->count; ++j) {
+                            const AssocEntry *e = &tk->assocs[j];
+                            if (!edge_is_guess(e) || !e->main) continue;
+                            for (uint8_t r = 1; r <= REL_CORE_MAX; ++r) {
+                                uint16_t bit = REL_BIT(r);
+                                if (!(e->rel & bit) && !(e->nrel & bit)) continue;
+                                printf("  %s %s%s %s   （出处：%s）\n",
+                                       tk->name ? tk->name : "?",
+                                       (e->nrel & bit) ? "不 " : "",
+                                       rel_name_of(a->brain, r) ? rel_name_of(a->brain, r) : "?",
+                                       e->main->name ? e->main->name : "?",
+                                       e->action && e->action->name ? e->action->name : "?");
+                                n++;
+                            }
+                        }
+                    }
+                    printf("  共 %zu 条（上限 %d；`::rel mem on|off` 开关）\n", n, AI_GUESS_MEM_MAX);
                     continue;
                 }
                 if (arg && strncmp(arg, "analogy", 7) == 0) {

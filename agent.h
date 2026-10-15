@@ -126,6 +126,43 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
  *   · 措辞一定是「**大概**」+ 说清依据是谁（绝不硬说"对"）；
  *   · 置信度**压低**（0.45~0.50），进 `out_conf`；
  *   · 上游"有没有据"的账照旧（这条不进图、不改知识，只影响这一次回答）。 */
+/* §6.125 **记住一条猜出来的结论**（默认关，`ai->rel_remember`）。
+ * 边上打 `[类比:依据词]`（自带出处）+ `role = 推论`：
+ *   · 下一个问题可以拿它**当中转**（R0 在"记忆可见"那一趟里才认它）；
+ *   · 但 `rel_direct` 一律跳过它 ⇒ "图里有没有这条**知识**"仍然是"没有"
+ *     ⇒ 验证器的自查查不到它，**永远不会把"猜的"变成"知道的"**。
+ * 幂等 + 有界（同一个 A-关系-B 只记一条；上限 `AI_GUESS_MEM_MAX` 条防长会话无界增长）。 */
+#define AI_GUESS_MEM_MAX 512
+static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
+                                       const Token *sib) {
+    if (!ai || !ai->rel_remember || !A || !B || rid == 0 || rid >= REL_DYN_BASE) return;
+    if (!sib || !sib->name) return;
+    if (rel_direct(A, rid, B)) return;              /* 观测/知识里已经有了：不必记，也绝不动它 */
+    if (rel_direct_guess(A, rid, B, 0)) return;      /* 记过了：幂等 */
+    if (ai->n_rel_guess_mem >= AI_GUESS_MEM_MAX) return;
+    /* **别用 `token_tag_rel` 写这条边**：① 它是**观测**写法（"观测压过缓存"会把已有的推论边
+     * 清成观测 ⇒ 猜测当场变成知识，实测中毒过一次）；② 它的返回值是 **0 = 成功** 的约定
+     * （我按"非 0 才成功"写，于是一建边就 return，留下一条没打标记的观测边 ✗）。
+     * 照 `micro.h` 的 `MOD_TAG_DERIVED`：纯建边 → 置位 → **角色最后打** → 拒绝降级观测。 */
+    for (size_t i = 0; i < A->count; ++i)
+        if (edge_premise_polarity(&A->assocs[i])) return;   /* 这条边上挂着前提（条件缓存）：不掺和 */
+    char mark[80];
+    snprintf(mark, sizeof mark, AI_GUESS_MARK_PREFIX ":%s]", sib->name);
+    Token *m = pool_token_intern(ai->pool, mark);
+    if (!m) return;
+    if (token_add_assoc_unique(A, B) != 0) return;   /* 0 = 成功（这个家族都是这个约定） */
+    AssocEntry *e = NULL;
+    for (size_t i = 0; i < A->count; ++i)
+        if (A->assocs[i].main == B && edge_is_plain(&A->assocs[i])) { e = &A->assocs[i]; break; }
+    if (!e) return;
+    uint16_t bit = REL_BIT(rid);
+    if ((e->rel & bit) && e->role != ASSOC_ROLE_DERIVED) return;   /* 已是观测：拒绝降级 */
+    e->rel |= bit;
+    e->action = m;                              /* 出处写在动作槽上（就像 [因果]/[前提]） */
+    e->role = ASSOC_ROLE_DERIVED;               /* 角色最后打（观测写法会清掉它） */
+    ai->n_rel_guess_mem++;
+}
+
 static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n, float *out_conf) {
     if (!ai || !ai->rel_analogy || !words || n < 3 || n > 6) return NULL;
     const char *aw = NULL, *bw = NULL, *rw = NULL;
@@ -149,6 +186,9 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
                  A->name ? A->name : "?", sib->name ? sib->name : "?",
                  sup && sup->name ? sup->name : "?");
         if (out_conf) *out_conf = 0.45f;
+        /* §6.125：把这条**猜出来的结论**记下来（默认关）—— 这样下一个问题能拿它当中转，
+         * 而不是每次都从零再猜一遍。记的是"猜测"，不是知识。 */
+        agent_guess_remember(ai, A, rid, B, sib);
         char *r = (char *)malloc(strlen(buf) + 1);
         if (r) memcpy(r, buf, strlen(buf) + 1);
         return r;
@@ -696,6 +736,38 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         char *r = (char *)malloc(strlen(resp0) + 1);
         if (r) memcpy(r, resp0, strlen(resp0) + 1);
         return r;
+    }
+
+    /* §6.125 **记忆里的猜测**（默认关）：先前类比推出来的结论，这一轮可以拿来当输入 ——
+     * ① 同一个问题再问一次（答案一致，不再从零猜）；② **拿它当中转再走一跳**（递归迁移）。
+     * 这一趟显式打开"记忆可见"，跑完立刻还原；验证器照旧要独立重推（它会认出记忆步）。 */
+    if (!solved && ai->rel_remember) {
+        int save_gv = g_rel_guess_visible;
+        g_rel_guess_visible = 1;
+        Proof mp;
+        rel_solve(ai, A, rid, B, want, &mp);
+        if (mp.status == 0) rel_solve(ai, A, rid, B, !want, &mp);
+        g_rel_guess_visible = save_gv;
+        if (mp.status != 0) {
+            der_reset(d);
+            der_from_proof(ai, d, A, rid, B, &mp);
+            int agree = (mp.status == +1) != (want == 1);
+            d->has_claim = 1;
+            der_conclude(d, agree ? +1 : -1, 45);
+            ai->n_der++;
+            if (der_verify(ai, d) == 0) {
+                der_chain_text(ai, d, line, sizeof line);
+                cot_push(ai, COT_INFER, 1, 45,
+                         "记忆：拿先前**推测**出来的结论当输入（不是知识）", line);
+                ai->n_cot++;
+                der_say(ai, d, ai->der_style, resp0, sizeof resp0);
+                ai->n_rel_guess++;
+                if (out_conf) *out_conf = 0.45f;
+                char *r = (char *)malloc(strlen(resp0) + 1);
+                if (r) memcpy(r, resp0, strlen(resp0) + 1);
+                return r;
+            }
+        }
     }
 
     /* 未知 → 类比推测（明确标注），同样先构造再验证 */

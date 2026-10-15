@@ -1911,6 +1911,50 @@ static void test_rel_first_order(void) {
     }
 }
 
+/* §6.125 **递归迁移**：类比猜出来的结论记下来，**下一个问题能拿它当中转** ——
+ * 但绝不算知识（`rel_direct`/`rel_solve`/复核三处都查不到），答复照旧标"推测"。 */
+static void test_recursive_transfer(void) {
+    printf("== ⓸ 递归迁移：猜出来的结论当下一个问题的输入（默认关） ==\n");
+    for (int rm = 0; rm < 2; ++rm) {
+        Agent *ag = agent_new(NULL, NULL, NULL);
+        AI *ai = ag->brain;
+        if (rm == 0 && getenv("AIP_RELMEM"))
+            ok(1, "AIP_RELMEM 已在环境里（反向测量）：默认值断言按规矩跳过");
+        else if (rm == 0)
+            ok(ai->rel_remember == 0, "默认档 `rel_remember == 0`（关着行为逐字节相同）");
+        ai->rel_remember = rm;
+        ai->rel_analogy = 1;
+        Token *big = T(ai, "大类9"), *c9 = T(ai, "类9"), *c10 = T(ai, "类10");
+        Token *jia = T(ai, "甲9"), *o = T(ai, "冬眠9");
+        (void)T(ai, "会");
+        (void)ai_write_rel(ai, c9, big, REL_IS_A, 0, AI_WSRC_RELATION);
+        (void)ai_write_rel(ai, c10, big, REL_IS_A, 0, AI_WSRC_RELATION);
+        (void)ai_write_rel(ai, c10, o, REL_CAN, 0, AI_WSRC_RELATION);   /* 只有同类知道 */
+        (void)ai_write_rel(ai, jia, c9, REL_IS_A, 0, AI_WSRC_RELATION); /* 甲9 属于 类9 */
+        char q1[600] = {0}, q2[600] = {0};
+        agent_step(ag, "类9 会 冬眠9 吗", q1, sizeof q1);
+        agent_step(ag, "甲9 会 冬眠9 吗", q2, sizeof q2);   /* 要靠上面那条当输入 */
+        if (rm == 0) {
+            ok(ai->n_rel_guess_mem == 0, "关着：不记（记住条数 0）");
+            ok(strstr(q2, "不 太 懂") && !strstr(q2, "猜"), "关着：迁移不了（Q2 仍是「不太懂」）");
+        } else {
+            char m[240];
+            snprintf(m, sizeof m, "开着：Q1 的类比结论被记下（记住 %zu 条）", ai->n_rel_guess_mem);
+            ok(ai->n_rel_guess_mem == 1, m);
+            ok(strstr(q2, "大概") && strstr(q2, "猜"),
+               "开着：Q2 拿它当中转（答复「大概」+ 链上标「猜」）");
+            Proof pf;
+            rel_solve(ai, c9, REL_CAN, o, 0, &pf);
+            ok(rel_direct(c9, REL_CAN, o) == 0 && pf.status == 0 &&
+               rel_direct_review(c9, REL_CAN, o, 0) == 0,
+               "**不中毒**：猜测记忆不算知识（rel_direct / rel_solve / 复核 三处都查不到）");
+            ok(ai->last_der.guessed == 1 && ai->last_der.gaps == 0,
+               "链标成「推测」且缺口=0（验证器独立重推过）");
+        }
+        agent_free(ag);
+    }
+}
+
 /* §6.120 **逐字接地队列**（用户提的方向）：顺序接地 + 字符按顺序当"词"，且**分词器保留** */
 static void test_char_stream(void) {
     printf("== ⓵ 逐字接地：顺序队列 + 字符即词（分词器保留成可选） ==\n");
@@ -3010,6 +3054,7 @@ int main(void) {
     test_answer_analogy();
     test_char_stream();
     test_rel_first_order();
+    test_recursive_transfer();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

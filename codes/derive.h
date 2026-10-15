@@ -141,6 +141,11 @@ static inline void der_from_proof(AI *ai, Derivation *d, const Token *a, uint8_t
                     k->rid = ps->rel ? ps->rel : rid;
                     k->neg = (uint8_t)(neg ? 1 : 0);
                     k->truth = neg ? -1 : +1;
+                    /* §6.125：这一环是**记忆里的猜测**（不是推论缓存）—— 链上必须看得出来，
+                     * 否则"我先前猜的"会被读成"我以前推出来过"。 */
+                    if (rel_direct_guess(k->subj, k->rid, k->obj, 0) ||
+                        rel_direct_guess(k->subj, k->rid, k->obj, 1))
+                        cot_copy(k->note, sizeof k->note, "记忆：这一环是我先前**推测**出来的");
                 }
             } else {
                 der_fact(d, (Token *)prev->tok, ps->rel ? ps->rel : rid,
@@ -352,6 +357,30 @@ static inline int der_verify(AI *ai, Derivation *d) {
             rel_solve(ai, g->subj, g->rid, g->obj, 0, &pf);
             if (pf.status == 0) rel_solve(ai, g->subj, g->rid, g->obj, 1, &pf);
             if (pf.status == 0) {
+                /* §6.125 例外（**只对记忆开**）：链里含**已验证的记忆步**
+                 * （`DER_KNOWN` 且那条边是 `[类比:…]` 的猜测记忆）时，
+                 * 独立重推允许在「记忆可见」那一趟里做 —— 记忆是**明确标出来的非知识**，
+                 * 所以这不等于"拿结论证明结论"：重推仍然要真的走通，而且结论会被标成 guessed。
+                 * 复核模式（g_rel_ignore_derived）下 g_rel_guess_visible 一律无效 ⇒ 自查照旧严格。 */
+                int mem_used = 0;
+                for (size_t i = 0; i < d->n; ++i) {
+                    const DerStep *s2 = &d->step[i];
+                    if (s2->kind != DER_KNOWN || !s2->verified) continue;
+                    if (rel_direct_guess(s2->subj, s2->rid, s2->obj, s2->neg ? 1 : 0)) {
+                        mem_used = 1;
+                        break;
+                    }
+                }
+                if (mem_used) {
+                    int save_gv = g_rel_guess_visible;
+                    g_rel_guess_visible = 1;
+                    rel_solve(ai, g->subj, g->rid, g->obj, 0, &pf);
+                    if (pf.status == 0) rel_solve(ai, g->subj, g->rid, g->obj, 1, &pf);
+                    g_rel_guess_visible = save_gv;
+                    if (pf.status != 0) d->guessed = 1;   /* 记忆支撑 ⇒ 这是**猜的**，不是知道的 */
+                }
+            }
+            if (pf.status == 0) {
                 der_gap(d, "结论重推不出来");
                 d->gaps++;
             }
@@ -495,7 +524,10 @@ static inline void der_chain_text(const AI *ai, const Derivation *d,
         } else {
             const char *rule = (s->kind == DER_RULE) ? der_rule_name(s->rule)
                              : (s->kind == DER_HYP ? "假设"
-                             : (s->kind == DER_KNOWN ? "记" : ""));
+                             : (s->kind == DER_KNOWN
+                                    ? (rel_direct_guess(s->subj, s->rid, s->obj,
+                                                        s->neg ? 1 : 0) ? "猜" : "记")
+                                    : ""));
             char lbl[48];
             if (s->kind == DER_RULE && (s->rule == 10 || s->rule == 11))
                 snprintf(lbl, sizeof lbl, "%s", der_rule_name(s->rule));  /* 前提/前提不 */
@@ -610,7 +642,9 @@ static inline void der_say(const AI *ai, Derivation *d, int style,
     case DER_STYLE_PLAIN:
     default:
         if (d->guessed)
-            snprintf(out, cap, "大概 吧 ， %s （%s）", verdict, chain);
+            /* 推测链（含"记忆里的猜测"）：**不说"对"** —— 链上有一环是猜的，
+             * 说成「大概吧，对，…」自相矛盾。只给链，并点明这不是知识。 */
+            snprintf(out, cap, "大概 吧 ， %s （其中一环是**推测**的，不是知道）", chain);
         else if (has_hyp)
             /* 反事实：必须写明是**在假设下**的结论，不能说得像真的一样 */
             snprintf(out, cap, "在 假设 下 ： %s ， %s", verdict, chain);

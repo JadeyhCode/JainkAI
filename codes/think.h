@@ -2047,6 +2047,15 @@ static inline void think_run(AI *ai, char *const *words, size_t n) {
  * 这是有意的保守：**捷径不许嵌套**，否则一条过时的缓存会拖着后面一串。 */
 static inline int think_cache_supported(AI *ai, Token *a, uint8_t rid, Token *b, int neg) {
     if (!ai || !a || !b || rid == 0) return 0;
+    /* §6.125 **"记忆里的猜测"不是"跟着前提走的缓存"** —— 它的依据是**类比依据**
+     * （同类那个词现在还得有这条关系）。用复核模式问"重推得出来吗"必然失败
+     * （猜测本来就推不出来），于是清扫会把刚记住的猜测当场撤掉（实测：记住=1，下一轮边上就空了）。
+     * 所以这里另判：`rel_guess` 还成立 ⇒ 依据还在，留着；依据没了 ⇒ 照旧撤销。 */
+    if (rel_direct_guess(a, rid, b, neg)) {
+        Proof gp;
+        memset(&gp, 0, sizeof gp);
+        return rel_guess(ai, a, rid, b, &gp) ? 1 : 0;
+    }
     Proof pf;
     g_rel_ignore_derived = 1;
     rel_solve(ai, a, rid, b, neg, &pf);

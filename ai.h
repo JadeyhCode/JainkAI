@@ -681,6 +681,11 @@ typedef struct {
      * 「大概 —— 同类里 乙9 也 会 冬眠9」，开着这个开关答「对，甲9-[属于·继承]->类9；类9-[会]->冬眠9」。
      * 关着时行为与一直以来的样子**逐字节相同**。 */
     int    rel_first;
+    /* **记住推出来的结论**（§6.125，默认 0 = 关）：把**类比猜出来的结论**记成
+     * "记忆里的猜测"（边上打 `[类比:依据词]`、`role=推论`），下一个问题可以拿它**当中转**。
+     * 它**不算知识**（`rel_direct` 跳过），所以不会把"猜的"变成"知道的"。 */
+    int    rel_remember;
+    size_t n_rel_guess_mem;         /* 记住过多少条猜测结论（统计用） */
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -1336,6 +1341,11 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rf = getenv("AIP_RELFIRST");
       if (rf && rf[0] == '1') ai->rel_first = 1;
       else if (rf && rf[0] == '0') ai->rel_first = 0; }   /* 显式退回：两个方向都测得动 */
+    ai->rel_remember = 0;            /* 记住猜测结论：默认**关**（关着行为逐字节相同） */
+    { const char *rmm = getenv("AIP_RELMEM");
+      if (rmm && rmm[0] == '1') ai->rel_remember = 1;
+      else if (rmm && rmm[0] == '0') ai->rel_remember = 0; }
+    ai->n_rel_guess_mem = 0;
     ai->idle_speak = 0;              /* N4 主动说话：默认**关** */
     { const char *is = getenv("AIP_IDLESPEAK"); if (is && is[0] == '1') ai->idle_speak = 1; }
     ai->note_all = 0;                /* 流水线回复进草稿：默认**关** */
