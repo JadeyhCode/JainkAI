@@ -185,6 +185,13 @@ typedef struct {
     uint64_t born_tick, last_try;
     size_t   tries;
     int      stalled;         /* 试够了次数，停止再试（但不删） */
+    /* §6.129 **「想通」的判据要能容下自己立的目标**：原来只有一条硬编码判据 ——
+     * `subj->count > 0`（＝"这个词我原本一条边都没有，现在有了"）。那对
+     * **自己给自己立的目标**不成立：薄词/没底的词的 count 本来就 > 0，挂上就当场"想通"。
+     * 于是记下"立目标时它有几条边"，判据改成"比那时**多了**东西"。
+     * 对老路径（count==0 才挂）逐比特等价：born_count=0 ⇒ 仍然是 `count > 0`。 */
+    uint32_t born_count;
+    uint8_t  selfmade;        /* 这条是**自己**立的（不是用户问出来的）—— ::pending 要标出来 */
     char     text[THINK_TEXT];/* 原话（给人看的） */
 } ThinkOpen;
 
@@ -220,6 +227,9 @@ typedef struct {
     size_t    n_open;                   /* 还活着的 */
     size_t    n_asked, n_resolved, n_expired, n_open_blocked;
     size_t    n_restored;               /* 装载时从 [自问:…] 标记里恢复回来的条数 */
+    size_t    n_selfmade;               /* §6.129 自己立起来的目标（不是用户问的） */
+    uint64_t  selfgoal_last;            /* 上一次「看自己有没有缺口」的 tick（节流用） */
+    uint8_t   selfgoal_seen;            /* 看过没有 —— tick 从 0 起，光比 last 会在第 0 轮失效 */
 
     /* ---- 留痕 ---- */
     ThinkStep trace[THINK_TRACE_MAX];
@@ -701,6 +711,7 @@ static inline ThinkOpen *think_open_add(Think *t, Token *subj, Token *obj,
         o->subj = subj; o->obj = obj;
         o->rid = rid; o->want_neg = (uint8_t)(want_neg ? 1 : 0);
         o->born_tick = tick; o->last_try = tick;
+        o->born_count = (subj && subj->count <= 0xFFFFFFFFu) ? (uint32_t)subj->count : 0;
         think_utf8_clip(o->text, sizeof o->text, text ? text : "");
         t->n_open++;
         t->n_asked++;              /* 累计挂过多少条（和「当前还挂着」分开算） */
@@ -748,6 +759,19 @@ static inline size_t think_restore_pending(AI *ai) {
             w[nw++] = q;
             while (*q && *q != ' ') q++;
             if (*q) *q++ = 0;
+        }
+        if (nw < 1) continue;
+        /* §6.129：**自己立的目标**（正文就是一个词）也要能恢复。
+         * 老路径只认关系问句（≥3 个词 + rel_parse），单个词会被跳过 ——
+         * 于是"我自己在琢磨什么"跨一次重启就丢了，而用户问的却记得住（不对等）。 */
+        if (nw == 1) {
+            Token *A = pool_find(ai->pool, w[0]);
+            if (!A) continue;
+            size_t before = t->n_asked;
+            ThinkOpen *o = think_open_add(t, A, NULL, 0, 0, text, ai->pool->current_tick);
+            if (o) o->selfmade = 1;
+            if (t->n_asked > before) restored++;
+            continue;
         }
         if (nw < 3) continue;
         char jbuf[64];
@@ -2159,6 +2183,103 @@ static inline void think_open_done(Think *t, ThinkOpen *o) {
     t->n_resolved++;
 }
 
+/* ============================ 目标自建（§6.129） ============================
+ *
+ * 盘点下来，「目标」原来只有**一个来源**：用户问出来的东西（问句想不通 ⇒ 挂未解问题）。
+ * 它跨轮活着（`think_settle` 每轮重试）、能过期、能被装载恢复 —— **但不会自己长出来**。
+ * 这一支补的就是那个空白：从**自己**的状态里立一个目标。
+ *
+ * 用什么信号（必须是**已经在维护**的量，不新造统计）：`Token.recent_misses` ——
+ * 输出侧每次"没底/含糊/沉默"就给它 +1（见 agent.h 的表达模式 switch），
+ * 意思是**"我一开口从它这儿出发就没底"**。再叠一条"它连的东西太少"（`count` 小）：
+ * 有底的词不需要帮忙，没底且薄的词才是真的缺口。
+ *
+ * 三个动作都齐了才叫"完备"：
+ *   · **自建** —— 这一支（每 20 轮看一次，避免每轮扫池子）；
+ *   · **自跟** —— 挂上之后走既有两条路：`think_settle` 每轮重试 + `think_idle`（N4，默认关）
+ *     挑一条最久没试过的来想；外加"够得着就问用户一句"（`mention_pending`）；
+ *   · **自闭** —— 既有三条：比立目标时**多了边** ⇒ 想通；试够次数 ⇒ 停下（不删）；
+ *     放太久 ⇒ 过期。`born_count` 就是为此加的（见 ThinkOpen 的注释）。
+ *
+ * **默认关**（`AIP_SELFGOAL=1` / `::selfgoal on`）：它会往图上落 `[自问:…]` 标记，
+ * 属于**行为改动** —— 按纪律先默认关 + A/B，量过再翻默认。
+ * ⚠ 这个扫描**记进 `n_scan_tokens`**：上一轮刚立了"扫全局要记账"的规矩，别自己破例。 */
+#ifndef AI_SELFGOAL_EVERY
+#define AI_SELFGOAL_EVERY 20
+#endif
+#ifndef AI_SELFGOAL_MISSES
+#define AI_SELFGOAL_MISSES 4     /* 最近"没底"到这个次数才值得立目标 */
+#endif
+#ifndef AI_SELFGOAL_THIN
+#define AI_SELFGOAL_THIN 6       /* 边数到这个数就不算"薄"了（有东西可依） */
+#endif
+
+/* -1 = 还没定过；0 = 关（默认）；1 = 开。环境变量与 `::selfgoal on` 都写这一个。 */
+static int g_think_selfgoal = -1;
+static inline int think_selfgoal_on(void) {
+    if (g_think_selfgoal < 0) {
+        const char *e = getenv("AIP_SELFGOAL");
+        g_think_selfgoal = (e && *e == '1') ? 1 : 0;
+    }
+    return g_think_selfgoal;
+}
+static inline void think_set_selfgoal(int on) { g_think_selfgoal = on ? 1 : 0; }
+
+static inline size_t think_selfgoal(AI *ai) {
+    Think *t = think_of(ai);
+    if (!ai || !t || !ai->pool || t->run_off) return 0;
+    if (!think_selfgoal_on()) return 0;
+    uint64_t tick = ai->pool->current_tick;
+    /* ⚠ 节流必须用**独立的"看过没有"标志**：`current_tick` 在新建的脑子里是 0，
+     * 只比 `last &&` 的话第 0 轮永远不节流（实测：刚立完又立刻重立一条）。 */
+    if (t->selfgoal_seen && tick < t->selfgoal_last + AI_SELFGOAL_EVERY) return 0;
+    t->selfgoal_seen = 1;
+    t->selfgoal_last = tick;
+    if (t->n_open >= THINK_MAX_OPEN) { t->n_open_blocked++; return 0; }
+
+    Token *best = NULL;
+    ai->n_scan_tokens += ai->pool->count;            /* 扫全局要记账（§6.128 的规矩） */
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *w = ai->pool->tokens[i];
+        if (!w || w->is_garbage || !w->name || !w->name[0]) continue;
+        if (w->name[0] == '[') continue;             /* 内部记号不算「要弄懂的东西」 */
+        if (w == ai->pool->unknowing) continue;      /* 那个「（未知）」占位词不是真词 */
+        if (strcmp(w->name, TOKEN_UNKNOWING_NAME) == 0) continue;
+        if (w->recent_misses < AI_SELFGOAL_MISSES) continue;
+        if (w->count >= AI_SELFGOAL_THIN) continue;
+        if (think_open_find(t, w, NULL, 0, 0)) continue;   /* 已经挂着了 */
+        if (!best || w->recent_misses > best->recent_misses) best = w;
+    }
+    if (!best) return 0;                             /* 没有缺口：这一轮不立目标（不硬凑） */
+
+    ThinkOpen *o = think_open_add(t, best, NULL, 0, 0, best->name, tick);
+    if (!o) { t->n_blocked++; return 0; }
+    o->selfmade = 1;
+    t->n_selfmade++;
+    char note[THINK_WHY];
+    snprintf(note, sizeof note,
+             "「%s」我一开口就没底（最近 %u 次），可它只连了 %zu 条边 —— 自己立个目标弄懂它",
+             best->name, (unsigned)best->recent_misses, best->count);
+    think_step(t, TH_ASK, 1, 35, "自建目标", note);
+    /* 落一个可辨识的节点：**和用户问出来的那条走同一套**（意图队列 + 安全内核 + 预算） */
+    if (!t->learn_off && !micro_of(ai)->safe.mod_off) {
+        ModIntent in;
+        memset(&in, 0, sizeof in);
+        in.type = MOD_ADD_TOKEN;
+        in.target = best;
+        think_ask_name(in.name, sizeof in.name, best->name);
+        snprintf(in.source, sizeof in.source, "思维:自建目标");
+        (void)mod_propose(&micro_of(ai)->queue, &in);
+    }
+    /* 自跟（够得着的那一半）：把"我在琢磨什么"说出来，别自己憋着 */
+    if (!t->mention_pending) {
+        t->mention_pending = 1;
+        snprintf(t->mention_text, sizeof t->mention_text,
+                 "我 一直 对 %s 没 什么 底 —— 你 能 多 说 点 吗", best->name);
+    }
+    return 1;
+}
+
 /* 在安全点之前调用：这一轮学到的东西可能让**旧问题**想通了。
  * 也是元认知看思维本身的地方（打转 / 挂太多 / 矛盾）。 */
 static inline void think_settle(AI *ai) {
@@ -2174,13 +2295,16 @@ static inline void think_settle(AI *ai) {
         retried++;
         o->tries++;
         o->last_try = tick;
-        /* 第一类：「这个词我还不认识」——它现在有边了，就算想通了 */
+        /* 第一类：「这个词我还不认识 / 我对它一直没底」——它现在**比立目标时**多了边，就算想通了。
+         * §6.129 之前这里写死成 `count > 0`；现在按 `born_count` 比，老路径（立目标时 count==0）
+         * 逐比特等价，而**自己立的目标**（立的时候它已经有几条边）也判得出来。 */
         if (o->rid == 0 || !o->obj) {
-            if (o->subj && o->subj->count > 0) {
+            if (o->subj && o->subj->count > (size_t)o->born_count) {
                 think_open_done(t, o);
                 char note[THINK_WHY];
-                snprintf(note, sizeof note, "现在我认识「%s」了（它连上了 %zu 条边）",
-                         o->subj->name ? o->subj->name : "?", o->subj->count);
+                snprintf(note, sizeof note, "现在我认识「%s」了（它连上了 %zu 条边，立目标时 %u 条）",
+                         o->subj->name ? o->subj->name : "?", o->subj->count,
+                         (unsigned)o->born_count);
                 think_step(t, TH_LEARN, 1, 70, "跨轮想通", note);
                 t->mention_pending = 1;
                 snprintf(t->mention_text, sizeof t->mention_text,
@@ -2235,6 +2359,10 @@ static inline void think_settle(AI *ai) {
             think_step(t, TH_REST, 0, 0, "过期", "放太久了，旧问题过期（问过一次就够了）");
         }
     }
+
+    /* ①b §6.129 **目标自建**：不靠用户提问，从"我自己老没底"里长出一个目标（默认关）。
+     * 放在重试之后：这一轮先照顾**旧问题**，有富余才立新的。 */
+    (void)think_selfgoal(ai);
 
     /* ② 思维改脑：只提两类意图（都有依据，且都过安全内核） */
     if (!t->learn_off && !micro_of(ai)->safe.mod_off) {
@@ -2676,8 +2804,8 @@ static inline void think_pending_report(const AI *ai) {
     if (!ai || !ai->think) { printf("[未解问题] 还没有（跑过一轮对话才可能有）\n"); return; }
     const Think *t = (const Think *)ai->think;
     if (t->n_open == 0) {
-        printf("[未解问题] 没有挂着的（累计挂过 %zu，想通 %zu，过期 %zu）\n",
-               t->n_asked, t->n_resolved, t->n_expired);
+        printf("[未解问题] 没有挂着的（累计挂过 %zu，想通 %zu，过期 %zu，自己立的 %zu）\n",
+               t->n_asked, t->n_resolved, t->n_expired, t->n_selfmade);
         return;
     }
     printf("[未解问题] 还挂着 %zu 个（跨轮会拿新知识再试%s）：\n", t->n_open,
@@ -2685,11 +2813,14 @@ static inline void think_pending_report(const AI *ai) {
     for (size_t i = 0; i < THINK_MAX_OPEN; ++i) {
         const ThinkOpen *o = &t->open[i];
         if (!o->active) continue;
-        printf("  - %-40s 试过 %zu 次%s\n", o->text, o->tries,
+        printf("  - %-40s 试过 %zu 次%s%s\n", o->text, o->tries,
+               o->selfmade ? "（**我自己立的**）" : "",
                o->stalled ? "（已停止再试，等它自然过期）" : "");
     }
-    printf("     累计：挂过 %zu / 想通 %zu / 过期 %zu / 挂满被拦 %zu / 装载恢复 %zu\n",
-           t->n_asked, t->n_resolved, t->n_expired, t->n_open_blocked, t->n_restored);
+    printf("     累计：挂过 %zu / 想通 %zu / 过期 %zu / 挂满被拦 %zu / 装载恢复 %zu"
+           " / **自己立的 %zu**\n",
+           t->n_asked, t->n_resolved, t->n_expired, t->n_open_blocked, t->n_restored,
+           t->n_selfmade);
 }
 
 /* 一行摘要，挂在 ::stats 后面（和 micro_stats 同一个位置，一眼看出「它在想什么」） */

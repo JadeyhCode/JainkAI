@@ -3000,6 +3000,64 @@ static void test_alias_and_posterior(void) {
  *   ① **知识租约（TTL）**：`stable` 不是终态，而是带期限的状态；**降级只改状态，不删记录**；
  *   ② **写入分级闸门**：imp 评分 <0.40 的"随口一说"不落库（默认关）；
  *   ③ **前提第三档 verified**：够得着还不够，前提本身要**有据**。 */
+/* §6.129 **目标自建 / 自跟 / 自闭**（默认关；老路径逐比特等价；单词语标能恢复）：
+ * 盘点发现「目标」原来只有一个来源 —— 用户问出来的东西。这一节钉住补上的那一支：
+ * 从**自己**的状态（`recent_misses` 高 + 边数少）里立目标，并守住三条边界。 */
+static void test_self_goal(void) {
+    printf("== ⓺ 目标自建：从「我自己没底」里立目标（默认关；§6.129） ==\n");
+    AI *ai = ai_new();
+    Think *t = think_of(ai);
+    Token *thin = T(ai, "薄词甲");            /* 有 1 条边 ⇒ count > 0 */
+    Token *oth  = T(ai, "陪衬乙");
+    (void)token_observe_pair(thin, oth);
+    thin->recent_misses = AI_SELFGOAL_MISSES + 3;
+    think_set_selfgoal(0);
+    t->selfgoal_last = 0; t->selfgoal_seen = 0;
+    ok(think_selfgoal(ai) == 0, "默认关：一个字都不立");
+    ok(t->n_open == 0 && t->n_selfmade == 0, "默认关：议程与账都没动");
+    think_set_selfgoal(1);
+    t->selfgoal_last = 0; t->selfgoal_seen = 0;
+    ok(think_selfgoal(ai) == 1, "开着：从「薄词甲」立出一个目标（判据全在图上）");
+    ok(t->n_open == 1 && t->n_selfmade == 1, "议程上多一条，并记成「自己立的」");
+    ThinkOpen *o = think_open_find(t, thin, NULL, 0, 0);
+    ok(o && o->selfmade == 1, "那条目标标着 selfmade（::pending 会打出来）");
+    ok(o && o->born_count == thin->count, "记下「立目标时它有几条边」——判据靠它");
+    t->selfgoal_last = 0; t->selfgoal_seen = 0;
+    ok(think_selfgoal(ai) == 0, "节流：同一个 tick 再看一次不会重复立（每 20 个 tick 看一次）");
+    /* 自闭（新判据）：**比立目标时多了边**才算想通 —— 老判据 `count > 0` 对它当场成立（错） */
+    size_t before = thin->count;
+    (void)token_observe_pair(thin, T(ai, "陪衬丙"));
+    ok(thin->count > before, "它真的多了边");
+    think_settle(ai);
+    ok(think_open_find(t, thin, NULL, 0, 0) == NULL, "自闭：比立目标时多了边 ⇒ 收起来（想通）");
+    ok(t->n_resolved >= 1, "记进「想通」账");
+    /* 老路径逐比特等价：count==0 才挂 ⇒ born_count=0 ⇒ 「有第一条边」就算想通 */
+    Token *unk = T(ai, "从没见过的丙");
+    (void)think_open_add(t, unk, NULL, 0, 0, "从没见过的丙", ai->pool->current_tick);
+    ThinkOpen *o2 = think_open_find(t, unk, NULL, 0, 0);
+    ok(o2 && o2->born_count == 0, "老路径（count==0 才挂）⇒ born_count=0（判据与原来一致）");
+    (void)token_observe_pair(unk, oth);
+    think_settle(ai);
+    ok(think_open_find(t, unk, NULL, 0, 0) == NULL, "老路径照旧：有第一条边就算想通");
+    /* 跨装载：**单个词**的自问标记也要恢复（原来只认 ≥3 个词的关系问句） */
+    Token *thin2 = T(ai, "薄词乙");
+    (void)pool_token_intern(ai->pool, MICRO_ASK_TOKEN_PREFIX "薄词乙]");
+    size_t got = think_restore_pending(ai);
+    ThinkOpen *o3 = think_open_find(t, thin2, NULL, 0, 0);
+    ok(got >= 1 && o3 != NULL, "装载恢复：单词语标 [自问:薄词乙] 挂回议程（原来会被跳过）");
+    ok(o3 && o3->selfmade == 1, "恢复回来的那条也标成「自己立的」");
+    /* 「（未知）」占位词不算要弄懂的东西（否则会立一个"弄懂（未知）"的傻目标） */
+    Token *unkk = ai->pool->unknowing;
+    if (unkk) {
+        unkk->recent_misses = AI_SELFGOAL_MISSES + 5;
+        t->selfgoal_seen = 0;
+        (void)think_selfgoal(ai);
+        ok(think_open_find(t, unkk, NULL, 0, 0) == NULL, "「（未知）」占位词不会被立成目标");
+    }
+    think_set_selfgoal(0);
+    ai_free(ai);
+}
+
 static void test_lease_gate_tiers(void) {
     printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
     AI *ai = ai_new();
@@ -3137,6 +3195,7 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
+    test_self_goal();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }
