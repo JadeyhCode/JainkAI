@@ -18,6 +18,7 @@
 #include "../model_io.h"
 #include "../code.h"   /* code_rule_for：修法表按错误文本选规则（§6.97） */
 #include "../token_lang.h"
+#include "../action.h"   /* §6.126：动作层的边界判据（外部审计 P0/P1-1 的回归） */
 
 #include <stdio.h>
 #include <string.h>
@@ -1955,6 +1956,50 @@ static void test_recursive_transfer(void) {
     }
 }
 
+/* §6.126 **受审执行层的边界**（外部审计 P0 + P1-1，先本机复现、再修、这里钉住）：
+ *   · P0：`sed e <文件>` 把**文件内容**交给 /bin/sh 执行（argv 表面检查看不到 payload）
+ *   · P1-1a：`@响应文件` 把参数从文件里读出来（`-o /tmp/x` 就这么溜出去的）
+ *   · P1-1b：`-o/tmp/x`、`-I/etc` 这类**开关里夹带路径**（一个字参数，不以 / 开头）
+ *   · P1-1c：源码里的 `#include "/etc/passwd"` / `../../etc/passwd`（编译期读工作区外）
+ * 还钉住"合法用法没被误伤"。 */
+static void test_action_boundary(void) {
+    printf("== ⓹ 受审执行层边界：sed/@/开关路径/include 越界（§6.126） ==\n");
+    char why[192];
+    { const char *a[] = { "sed", "e", "pwn.txt" };
+      ok(action_check(a, 3, why, sizeof why) != 0, "P0：sed 不在白名单（命令被拒）"); }
+    { const char *a[] = { "gcc", "@args.txt", "x.c" };
+      ok(action_check(a, 3, why, sizeof why) != 0, "P1-1a：@响应文件被拒"); }
+    { const char *a[] = { "gcc", "-o/tmp/x", "s.c" };
+      ok(action_check(a, 3, why, sizeof why) != 0, "P1-1b：开关里夹带路径被拒（-o/tmp/x）"); }
+    { const char *a[] = { "gcc", "-I/etc", "s.c" };
+      ok(action_check(a, 3, why, sizeof why) != 0, "P1-1b：-I/etc 被拒"); }
+    { const char *a[] = { "gcc", "-O2", "-o", "a.out", "s.c" };
+      ok(action_check(a, 5, why, sizeof why) == 0, "合法编译没被误伤（-O2 -o a.out s.c）"); }
+    { const char *a[] = { "cat", "sub/f.txt" };
+      ok(action_check(a, 2, why, sizeof why) == 0, "合法相对子路径没被误伤（cat sub/f.txt）"); }
+    { const char *a[] = { "cat", "/etc/passwd" };
+      ok(action_check(a, 2, why, sizeof why) != 0, "老规矩还在：绝对路径被拒"); }
+    { /* include 扫描：真写一个越界源文件到工作区，再扫（不跑命令） */
+      (void)mkdir("_t", 0755);
+      (void)mkdir("_t/work", 0755);
+      FILE *f = fopen("_t/work/越界.c", "w");
+      int wrote = 0;
+      if (f) { fputs("#include \"/etc/hostname\"\nint main(void){return 0;}\n", f); fclose(f); wrote = 1; }
+      if (wrote) {
+          const char *a[] = { "gcc", "-E", "越界.c" };
+          ok(action_scan_includes(a, 3, why, sizeof why) != 0, "P1-1c：源码里的越界 include 被拒");
+          FILE *g = fopen("_t/work/干净.c", "w");
+          if (g) { fputs("#include <stdio.h>\n#include \"sub/h.h\"\n", g); fclose(g); }
+          const char *b[] = { "gcc", "-c", "干净.c" };
+          ok(action_scan_includes(b, 3, why, sizeof why) == 0,
+             "合法的 <stdio.h> / 相对 include 没被误伤");
+          (void)remove("_t/work/越界.c");
+          (void)remove("_t/work/干净.c");
+      } else {
+          ok(0, "P1-1c：写测试用源文件失败（跳过）");
+      } }
+}
+
 /* §6.120 **逐字接地队列**（用户提的方向）：顺序接地 + 字符按顺序当"词"，且**分词器保留** */
 static void test_char_stream(void) {
     printf("== ⓵ 逐字接地：顺序队列 + 字符即词（分词器保留成可选） ==\n");
@@ -3055,6 +3100,7 @@ int main(void) {
     test_char_stream();
     test_rel_first_order();
     test_recursive_transfer();
+    test_action_boundary();
     test_redo_alt();
     test_tail_blocks();
     test_credibility();

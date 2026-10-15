@@ -1,7 +1,9 @@
 #!/bin/sh
 # tests/action.sh — **受审的外部执行 + 写文件**（`action.h` 层）
 #
-# 用户 2026-10-08 拍板：白名单 `echo / cat / wc / gcc` 再加 `grep / head / tail / sed / ls`
+# 用户 2026-10-08 拍板：白名单 `echo / cat / wc / gcc` 再加 `grep / head / tail / ls`
+# ⚠ §6.126（外部审计 P0，本机复现后修）：**sed 已移出白名单** —— GNU sed 的 `e` 命令
+#   把**文件内容**交给 /bin/sh 执行，argv 表面检查全被绕过（payload 不在 argv 里）。
 # （**不含 `sh`**）；写文件固定在 `_t/work/`；不联网；`AIP_ACT=1` / `::act on` 打开，**默认关**。
 #
 # 这一套盯七件事（每条都要能证伪）：
@@ -107,11 +109,35 @@ else
         && ok "审计账对得上（AIP_ACT=1 跑法：跑 7 = 成功 5 + 非零 1 + 超时 1；拒 5；写 1）" \
         || bad "审计账（AIP_ACT=1）" "$(grep -m1 '账：' out.log)"
 fi
-has 'echo cat wc gcc grep head tail sed ls' && ok "白名单表就是那一份（九个首词，没有 sh）" \
+has 'echo cat wc gcc grep head tail ls' && ok "白名单表就是那一份（八个首词，**没有 sh、也没有 sed**）" \
     || bad "白名单表" "$(grep -m1 '白名单' out.log)"
 
 echo
 echo "== ⑥ 输出变观测，但**不是知识**（关系表里不许有它） =="
+# §6.126 四条**逃逸/加固**的看护（外部审计 P0 + P1-1，都是本机先复现、再修、再钉住的）
+{ printf '::act on\n'
+  printf '::act write pwn.txt echo x > /tmp/aip_action_escape_probe\n'
+  printf '::act run sed e pwn.txt\n'                 # P0：sed e 会跑文件内容
+  printf '::act write rsp.txt -o /tmp/aip_action_escape_probe2 s.c\n'
+  printf '::act run gcc @rsp.txt\n'                  # P1-1a：@响应文件绕过 argv 检查
+  printf '::act run gcc -o/tmp/aip_action_escape_probe3 s.c\n'   # P1-1b：开关里夹带路径
+  printf '::act write leak.c #include "/etc/hostname"\n'
+  printf '::act run gcc -E leak.c\n'                 # P1-1c：源码 include 读工作区外
+  printf '::quit\n'; } \
+  | ./aip > esc.log 2>&1       # ⚠ 套件 cd 进 $WORK，二进制就叫 ./aip（**没有 $BIN 这个变量**：
+                              #    写成 $BIN 会展开成空 ⇒ 管道静默产生空日志 ⇒ 断言**假绿**，踩过）
+# ⚠ 注意 `has` 查的是 **out.log**（那一份是主会话的）；这一段另写 esc.log，所以自己 grep，
+#   别拿 has 去查（第一版就查错了文件，四条断言全假红）。
+esc_has() { grep -qF -- "$1" esc.log; }
+esc_has '首词 sed 不在白名单里' && ok "P0：sed 已出白名单（拒绝）" || bad "sed 加固" "$(grep -m1 没跑 esc.log)"
+esc_has '不许 @响应文件' && ok "P1-1a：@响应文件被拒" || bad "@加固" "$(grep -m2 没跑 esc.log | tail -1)"
+esc_has '开关参数里不许带路径' && ok "P1-1b：-o/tmp/x 这类开关被拒" || bad "开关路径加固" "$(grep -m3 没跑 esc.log | tail -1)"
+esc_has '#include 越界' && ok "P1-1c：源码里的越界 include 被拒" || bad "include 加固" "$(grep -m4 没跑 esc.log | tail -1)"
+[ ! -e /tmp/aip_action_escape_probe ] && [ ! -e /tmp/aip_action_escape_probe2 ] \
+    && [ ! -e /tmp/aip_action_escape_probe3 ] \
+    && ok "三条写逃逸都**真的**没在工作区外留下文件" || bad "逃逸实测" "$(ls -la /tmp/aip_action_escape_probe* 2>&1)"
+rm -f /tmp/aip_action_escape_probe /tmp/aip_action_escape_probe2 /tmp/aip_action_escape_probe3
+
 { printf '::act on\n::act run echo 观测检查\n::edges [运行:0]\n::rel 我\n::quit\n'; } \
     | ./aip > obs.log 2>&1 || true
 grep -qF '落图：[运行:0]' obs.log && ok "跑完落了一个 [运行:0] 标记节点（观测）" \

@@ -1,7 +1,12 @@
 /* action.h — **受审的外部执行 + 写文件**（在内核之外，和 drive.h 同一层）
  *
  * 用户 2026-10-08 拍板：
- *   · 白名单 = `echo / cat / wc / gcc` **再加 `grep / head / tail / sed / ls`**（**不含 `sh`**）
+ *   · 白名单 = `echo / cat / wc / gcc` **再加 `grep / head / tail / ls`**（**不含 `sh`**）
+ *     ⚠ **§6.126：`sed` 已移出白名单**（外部审计 2026-10-15 的 P0，本机复现过）——
+ *     GNU sed 的 `e` 命令把**缓冲区内容**交给 /bin/sh 执行，而边界检查只看 argv 表面
+ *     （首词白名单 / 参数不以 `/` 开头 / 不含 `..`），payload 藏在**文件内容**里 ⇒ 全部绕过。
+ *     实测：`::act write pwn.txt echo … > /tmp/x` 后 `::act run sed e pwn.txt`，
+ *     工作区外的 `/tmp/x` 真的被写出来了。cat+echo+gcc 已覆盖它的场景。
  *   · 写文件固定在 `_t/work/`；**不联网**（白名单里没有网络工具）
  *   · `AIP_ACT=1` / `::act on` 打开，**默认关**
  *
@@ -65,7 +70,6 @@ static const ActionAllow ACTION_ALLOW[] = {
     { "grep",  5000,  "在工作区里找一行" },
     { "head",  2000,  "看开头几行" },
     { "tail",  2000,  "看结尾几行" },
-    { "sed",   5000,  "按脚本改文本（s/…/…/ 这类；cwd 在工作区，改不到外面）" },
     { "ls",    2000,  "列工作区目录（只看一眼自己写了什么）" },
     { NULL, 0, NULL }
 };
@@ -205,6 +209,64 @@ static inline int action_check(const char *const *argv, int argc, char *why, siz
             snprintf(why, cap, "不许 ..（爬出工作区）：%s", argv[i]);
             return -1;
         }
+        /* §6.126（外部审计 P1-1，本机复现过）：**`@响应文件`** 会把参数从文件里读出来，
+         * 这里的 argv 检查一个字符都看不到（实测 `gcc @args.txt` 里写 `-o /tmp/x`，
+         * 二进制就落在工作区外）。一律拒。 */
+        if (argv[i][0] == '@') {
+            snprintf(why, cap, "不许 @响应文件（参数会从文件里读出来，绕过这里的检查）：%s", argv[i]);
+            return -1;
+        }
+        /* **开关参数里也不许夹带路径**：`-o/tmp/x`、`-I/etc`、`-specs=/x` 都是一个参数，
+         * 不以 `/` 开头 ⇒ 老检查放行。规矩：以 `-` 开头的参数里不许出现 `/`。 */
+        if (argv[i][0] == '-' && strchr(argv[i], '/')) {
+            snprintf(why, cap, "开关参数里不许带路径（%s）—— 例如 -o/tmp/x、-I/etc 会把结果写到工作区外",
+                     argv[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* §6.126（P1-1 读越界）：**源码里的 include 也要查** —— argv 检查看不到文件内容。
+ * 审计实测：源文件里写 `#include "/etc/passwd"`（或 `../../../../etc/passwd`），
+ * `gcc -E` 就能把工作区外的内容打到 stdout、跟着进观测标记。
+ * 只扫工作区里的 `.c`/`.h`：`<stdio.h>` 这类系统头（相对 include 路径）照旧放行，
+ * 只拦**绝对路径**和带 `..` 的。 */
+static inline int action_scan_includes(const char *const *argv, int argc, char *why, size_t cap) {
+    for (int i = 1; i < argc; ++i) {
+        const char *a = argv[i];
+        if (!a || a[0] == '-' || a[0] == '@') continue;
+        size_t len = strlen(a);
+        if (len < 2 || (strcmp(a + len - 2, ".c") != 0 && strcmp(a + len - 2, ".h") != 0)) continue;
+        char path[ACTION_PATH_CAP];
+        snprintf(path, sizeof path, "%s/%s", ACTION_WORK_DIR, a);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;                        /* 不存在的文件交给 gcc 自己报错 */
+        char line[512];
+        int bad = 0;
+        char target[256];
+        target[0] = 0;
+        while (fgets(line, sizeof line, f)) {
+            const char *h = strstr(line, "#include");
+            if (!h) continue;
+            h += 8;
+            while (*h == ' ' || *h == '\t') h++;
+            if (*h != '"' && *h != '<') continue;
+            char close = (*h == '"') ? '"' : '>';
+            const char *e = strchr(h + 1, close);
+            if (!e) continue;
+            size_t n = (size_t)(e - (h + 1));
+            if (n >= sizeof target) n = sizeof target - 1;
+            memcpy(target, h + 1, n);
+            target[n] = 0;
+            if (target[0] == '/' || strstr(target, "..")) { bad = 1; break; }
+        }
+        fclose(f);
+        if (bad) {
+            snprintf(why, cap, "源码里的 #include 越界（%s → %s）—— 编译期会把工作区外的内容读进来",
+                     a, target);
+            return -1;
+        }
     }
     return 0;
 }
@@ -268,6 +330,7 @@ static inline int action_refuse(const char *what, const char *why) {
 
 /* 跑一条外部命令。返回：子进程退出码（正常）/ -9（超时被杀）/ -2（被拒）。 */
 static inline int action_run(AI *ai, const char *line) {
+    /* 注意：`action_check` 只查 argv 表面；`#include` 要看**文件内容** ⇒ 另扫一遍。 */
     if (!ai) return -1;
     g_act.last_reason[0] = 0; g_act.last_out[0] = 0; g_act.last_mark[0] = 0;
     g_act.last_rc = -1; g_act.last_ms = 0;
@@ -279,6 +342,8 @@ static inline int action_run(AI *ai, const char *line) {
     int argc = action_split(buf, argv, ACTION_ARG_MAX);
     char why[192];
     if (action_check((const char *const *)argv, argc, why, sizeof why) != 0)
+        return action_refuse(line, why);
+    if (action_scan_includes((const char *const *)argv, argc, why, sizeof why) != 0)
         return action_refuse(line, why);
     if (action_ensure_workdir() != 0)
         return action_refuse(line, "工作目录建不出来（" ACTION_WORK_DIR "）");
@@ -436,7 +501,7 @@ static inline void action_print(const AI *ai) {
            (ai && ai->act_on) ? "开" : "关（默认）",
            (ai && ai->act_on) ? "改行为前先 A/B" : "没打开就绝不动外部世界；::act on / AIP_ACT=1 打开");
     printf("  边界：**不用 shell**（fork/exec + argv；`;|&` 只是普通参数）｜子进程 cwd = %s"
-           "｜不许绝对路径 / 不许 `..`｜stdin = /dev/null｜不联网\n", ACTION_WORK_DIR);
+           "｜不许绝对路径 / 不许 `..` / 不许 `@响应文件` / 开关参数不许夹带路径｜stdin = /dev/null｜不联网\n", ACTION_WORK_DIR);
     printf("  白名单（首词精确匹配；::act timeout <ms> 覆盖超时，0 = 用表里的）：\n");
     for (size_t i = 0; i < ACTION_ALLOW_N; ++i) {
         long t = (g_act_timeout_ms > 0) ? g_act_timeout_ms : ACTION_ALLOW[i].timeout_ms;
