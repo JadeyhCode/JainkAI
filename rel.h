@@ -41,7 +41,7 @@
  *   所以系统不被 7 个动词框死。动态关系只支持肯定，不支持否定与传递 ——
  *   老实记在文档的局限里。
  *
- * 依赖：ai.h（AI / Token / emb_cosine / cot_push）与 frame.h 的 fr_is_func。
+ * 依赖：ai.h（AI / 符号节点 / emb_cosine / cot_push）与 frame.h 的 fr_is_func。
  */
 #ifndef REL_H
 #define REL_H
@@ -156,14 +156,14 @@ static const RelAlias REL_ALIASES[] = {
      *   —— 实测被 `tests/hypo_frames.sh` 当场抓住（假设下的帧/检索路径不再被走到）。
      *   这是"归属该给谁"的设计裁量，不是能顺手改的事：先按现状（帧层 owns 害怕），
      *   把冲突记在这里与 docs/对照-lingshu与五个局限.md 里。 */
-    /* ⚠ 别名**只对分词器不切开的词有效**：多字词必须先是词表里的 token，
+    /* ⚠ 别名**只对分词器不切开的词有效**：多字词必须先是词表里的符号节点，
      *   否则会被切成单字（实测「喜爱」被切成「喜」+「爱」→ 别名永远看不到）。
-     *   所以下面几行现在只有 `拥有` 是**真的可达**的（它是模型里的 token），
+     *   所以下面几行现在只有 `拥有` 是**真的可达**的（它是模型里的符号节点），
      *   其余先留着 —— 等它们进了词表就自动生效，不用再改代码。 */
     { "惧怕", REL_FEAR },
     { "喜爱", REL_LIKE },
     { "喜好", REL_LIKE },
-    { "拥有", REL_HAS },    /* 模型里的 token（实测 3 条边）—— 当前唯一可达的别名 */
+    { "拥有", REL_HAS },    /* 模型里的符号节点（实测 3 条边）—— 当前唯一可达的别名 */
     { "具有", REL_HAS },
     { NULL, 0 }
 };
@@ -199,7 +199,7 @@ static inline const char *rel_neg_of(const AI *ai, uint8_t id) {
 /* 否定形式的**两种写法**（同一个判据，两处调用）。
  *
  * 关系表里声明的是一种写法（`不 会`），可**实际输入**可能是另一种：分词器把最常见的
- * 「不会」切成**一个** token（`不喜欢`/`不是` 同理），而 `不属于`/`不能`/`不敢` 却是两词。
+ * 「不会」切成**一个** 符号节点（`不喜欢`/`不是` 同理），而 `不属于`/`不能`/`不敢` 却是两词。
  * 于是同一份声明得两种都认 —— 判据只写这一处：**把声明里的空格去掉再比**。
  *
  * ⚠ 这不是新语义：声明还是那一条（`AI_RELS[]` 里只有一份），这里只是"同一个否定词的两种切法"。
@@ -250,7 +250,7 @@ static inline int rel_merged_neg_id(const char *w, uint8_t *out) {
 
 /* 把关系清单里的词**先 intern 进词池**。
  *
- * 不这么做的话，`包含` 这种词从没作为 Token 存在过（AI_RELS 只是编译期表），
+ * 不这么做的话，`包含` 这种词从没作为符号节点存在过（AI_RELS 只是编译期表），
  * 切词器就会把 `动物 包含 猫 吗` 切成 动物/包/含/猫/吗 —— 于是关系解析
  * 在第 1 个词位上看到「包」，整句都认不出来（实测）。
  * 让它们成为真词，切词/帧/检索全都会顺带受益。 */
@@ -1033,7 +1033,7 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
          *   A —[前提]→ P，**P 在当前注意窗口里**（前提成立），且 P R B ⟹ A R B。
          * 与 R2 继承的区别：走的是**前提链接**（边上的 [前提] 标记），不是「属于」；
          * 而且它**带闸门**：前提不成立就**不用**这条连结（不是"图里没有"，
-         * 而是"现在用不了"）。前提本身是普通 token（联想照走）—— 闸门只在逻辑这一侧。
+         * 而是"现在用不了"）。前提本身是普通符号节点（联想照走）—— 闸门只在逻辑这一侧。
          * 由 `tools/optest.c` / `tests/tokenop.sh` 钉住：前提在提问里 → 用；不在 → 不用。 */
         if (!spec_blocked) {
             for (size_t i = 0; i < a->count; ++i) {
@@ -1342,7 +1342,7 @@ static inline int rel_is_qmark(const char *w) {
 }
 
 /* 正好一个汉字、而且是实词。虚词检查极要紧：`你 吃 火锅 了 吗` 里 `了`
- * 也是单字，不管它就会把宾语拼成 `火锅了`，解析器凭空造出垃圾 Token（踩过）。 */
+ * 也是单字，不管它就会把宾语拼成 `火锅了`，解析器凭空造出垃圾符号节点（踩过）。 */
 static inline int rel_one_cjk(const char *s) {
     if (!s) return 0;
     if (strlen(s) != 3 || ((unsigned char)s[0] & 0xF0) != 0xE0) return 0;
@@ -1409,7 +1409,7 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
     }
     if (ri >= last) return 0;
     uint8_t id = 0;
-    const char *merged_name = NULL;   /* 合写时：那个 token 里**已经含**否定了，别再拼一遍 */
+    const char *merged_name = NULL;   /* 合写时：那个符号节点里**已经含**否定了，别再拼一遍 */
     /* 「不 X」/「没 X」：先看**拼起来**是不是情态说法（`不能`/`没法`/`不敢` —— 分词器把
      * 它们切成两个词，所以得拼回去查那张表）；再看 X 是不是关系词。
      * 顺序要紧：先查表再 `rel_id_of(..., allow_new)`，否则「能」会被当场登记成动态谓语。 */
@@ -1427,7 +1427,7 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
         }
     }
     if (!is_neg) {
-        /* 合写否定（`不会`/`不喜欢`/`不是`）：**一个 token 就是「否定 + 关系」** ——
+        /* 合写否定（`不会`/`不喜欢`/`不是`）：**一个符号节点就是「否定 + 关系」** ——
          * 与两词写法共用同一份声明（`rel_merged_neg_id` 去空格比）。 */
         uint8_t mid = 0;
         if (rel_merged_neg_id(words[1], &mid)) {

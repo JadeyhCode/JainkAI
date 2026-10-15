@@ -69,7 +69,7 @@ static void pair_mode(AI *ai, const char *pname, const char *cname) {
 /* 分布相似度：v 和 e 的出边邻居重叠（Dice×100）。
  * 不看它们彼此有没有边，只看「邻居像不像」——
  * 这是判断「支持」和「画画」是不是同一类槽位取值的候选证据。
- * 注意：token 的边里同一个 main 会有重复行，必须先按 main 去重，
+ * 注意：符号节点的边里同一个 main 会有重复行，必须先按 main 去重，
  * 否则 Dice 会算出 >100 的分数（探针踩过这个坑）。 */
 static int dice100(Token *a, Token *b) {
     if (!a || !b || a->count == 0 || b->count == 0) return 0;
@@ -250,7 +250,7 @@ static void cover_mode(AI *ai, const char *exlist) {
 /* 中转（relay）信号：抽象节点到底能不能当「中转站」用。
  * 问三件事：
  *   ① 有多少个 [抽象N]，各挂几个成员；
- *   ② 有多少 Token 是「死胡同」—— 自己走出去没路（ai_can_continue_from 判 0）；
+ *   ② 有多少符号节点是「死胡同」—— 自己走出去没路（ai_can_continue_from 判 0）；
  *   ③ 这些死胡同里有多少**挂在抽象节点下**（有 parent）——
  *      也就是说「死路时经 parent 绕一步」能救回多少。 */
 static void relay_mode(AI *ai) {
@@ -288,7 +288,7 @@ static void relay_mode(AI *ai) {
     }
     printf("[抽象N] 个数=%zu  成员总数=%zu  单个最多成员=%zu\n",
            n_abs, n_member, max_member);
-    printf("内容 Token: 有出边=%zu  死胡同=%zu\n", n_live, n_dead);
+    printf("内容符号节点: 有出边=%zu  死胡同=%zu\n", n_live, n_dead);
     printf("死胡同里**挂在抽象节点下**（可经 parent 绕行）= %zu", n_dead_rescuable);
     if (n_dead) printf("（占死胡同 %.0f%%）", 100.0 * (double)n_dead_rescuable / (double)n_dead);
     printf("\n");
@@ -299,7 +299,7 @@ static void relay_mode(AI *ai) {
  *   ① 边上有多少带类型信息（角色/话题/句尾模式）—— 符号侧的结构化程度；
  *   ② 两个语义相关的词的 VSA 相似度，和随机词对的相似度比 ——
  *      如果一样（都≈0），说明超向量只是「名字的随机投影」，没学到任何东西；
- *   ③ 有多少 Token 的 hv 和 hv_prev 不同 —— 如果全是 0，
+ *   ③ 有多少符号节点的 hv 和 hv_prev 不同 —— 如果全是 0，
  *      说明 hv 建好之后从没被学习更新过，所谓「漂移度量」恒等于 0；
  *   ④ ai_analogy（bind/unbind 做 A:B::C:? 推理）有没有被调用过
  *      —— 这个只能在源码里数，这里给出它依赖的数据是否就绪。 */
@@ -316,7 +316,7 @@ static void neuro_mode(AI *ai) {
             if (e->pattern) e_pat++;
         }
     }
-    printf("① 内容 Token 的出边 %zu 条：带角色 %zu (%.1f%%)  带话题 %zu (%.1f%%)  带句尾模式 %zu (%.1f%%)\n",
+    printf("① 内容符号节点的出边 %zu 条：带角色 %zu (%.1f%%)  带话题 %zu (%.1f%%)  带句尾模式 %zu (%.1f%%)\n",
            e_all, e_role, e_all ? 100.0 * (double)e_role / (double)e_all : 0.0,
            e_topic, e_all ? 100.0 * (double)e_topic / (double)e_all : 0.0,
            e_pat, e_all ? 100.0 * (double)e_pat / (double)e_all : 0.0);
@@ -369,7 +369,7 @@ static void neuro_mode(AI *ai) {
         n_hv++;
         if (memcmp(t->hv, t->hv_prev, VSA_DIM) != 0) n_diff++;
     }
-    printf("③ hv 与 hv_prev 不同的 Token = %zu / %zu", n_diff, n_hv);
+    printf("③ hv 与 hv_prev 不同的符号节点 = %zu / %zu", n_diff, n_hv);
     if (n_hv) printf("（%.1f%%）", 100.0 * (double)n_diff / (double)n_hv);
     printf("\n   0%% 就意味着超向量建好之后再没被学习更新过，\n"
            "   那么 ai_drift_sample 里的 vsa_cosine(hv, hv_prev) 恒等于 1，漂移恒为 0。\n");
@@ -382,7 +382,7 @@ static void neuro_mode(AI *ai) {
         if (!t->name || t->name[0] == '[' || !t->emb) continue;
         for (size_t d = 0; d < VSA_DIM; ++d) if (t->emb[d]) { n_emb++; break; }
     }
-    printf("④ emb（PPMI 随机索引，1024 维）非零的 Token = %zu\n", n_emb);
+    printf("④ emb（PPMI 随机索引，1024 维）非零的符号节点 = %zu\n", n_emb);
     printf("   语义相关词对：\n");
     for (size_t i = 0; pairs[i][0]; ++i) {
         Token *x = pool_find(ai->pool, pairs[i][0]);

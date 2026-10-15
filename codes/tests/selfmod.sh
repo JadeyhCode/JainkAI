@@ -52,7 +52,7 @@ grep -q '^  → 雪 ' o3 && ok "::edges 里能看到这条边" || bad "edges" "$
 run '::mod try 加边 鱼 鱼\n' o5
 grep -q '被拒.*不许自环' o5 && ok "自环被拒" || bad "自环" "$(grep '手动意图' o5)"
 run '::mod try 加Token [原语:偷偷改] 鱼\n' o6
-grep -q '被拒.*不许改保留 Token' o6 && ok "拿保留名造 Token 被拒" || bad "保留名" "$(grep '手动意图' o6)"
+grep -q '被拒.*不许改保留符号节点' o6 && ok "拿保留名造 Token 被拒" || bad "保留名" "$(grep '手动意图' o6)"
 run '::mod try\n' o7
 grep -q '用法' o7 && ok "参数不全时给用法（不静默）" || bad "用法" "$(cat o7)"
 
@@ -88,7 +88,7 @@ grep -q '打关系' o9r && ok "审计里看得见「打关系」（谁批的、�
 grep -qE '感知=[1-9]' o9r && ok "写入账照记（感知那一档仍在记账）" \
     || bad "写入账" "$(grep '写入账' o9r)"
 # **骨架端点不路由**（K6 的静态例外）：时间链的端点 `[时刻:…]` 在保留命名空间里，
-# 内核按规矩本来就不接（以前实测是"拒绝 1：不许改保留 Token"）——它走直写、账照记，
+# 内核按规矩本来就不接（以前实测是"拒绝 1：不许改保留符号节点"）——它走直写、账照记，
 # 于是"路由打开"不会把时间线弄丢。这条是**可证伪**的：拒绝数必须是 0、时间点必须还在。
 run '::safe route on\n你好\n::safe\n::stats\n' o10r
 grep -qE '判定：允许 0 拒绝 0' o10r && ok "骨架写入（[时刻:] 链）不路由：拒绝 0（不是被内核拒了）" \
@@ -105,7 +105,7 @@ grep -q '手动意图已应用.*猫→雪' o9 && ok "::mod on 之后恢复" || b
 
 run '::safe newtoken off\n::mod try 加Token [新概念:测试] 鱼\n::safe newtoken on\n::mod try 加Token [新概念:测试] 鱼\n::edges [新概念:测试]\n' o10
 grep -q '被拒.*这一类修改被关着' o10 && ok "::safe newtoken off：造 Token 被拒" || bad "newtoken off" "$(grep '手动意图' o10)"
-grep -q '手动意图已应用.*加Token' o10 && ok "放开后能造（并且立刻接回网络）" || bad "newtoken on" "$(grep '手动意图' o10)"
+grep -q '手动意图已应用.*加符号节点' o10 && ok "放开后能造（并且立刻接回网络）" || bad "newtoken on" "$(grep '手动意图' o10)"
 grep -q '^  → 鱼 ' o10 && ok "新 Token 挂在触发它的上下文上（不是孤岛）" || bad "新 Token 连接" "$(grep -m3 '→' o10)"
 
 run '::safe freeze on\n::mod try 加边 狗 雪\n::safe reset\n::mod try 加边 狗 雪\n' o12

@@ -1,4 +1,4 @@
-/* tools/rttok.c — 比较两个模型文件的 **Token 层**（存读往返差异定位）
+/* tools/rttok.c — 比较两个模型文件的 **符号节点层**（存读往返差异定位）
  * 用法: ./build_rttok A.bin B.bin */
 #include "../agent.h"
 #include "../model_io.h"
@@ -8,7 +8,7 @@ int main(int argc, char **argv) {
     AI *a = ai_load_file(argv[1]);
     AI *b = ai_load_file(argv[2]);
     if (!a || !b) { printf("load fail\n"); return 1; }
-    printf("token 数: %zu vs %zu\n", a->pool->count, b->pool->count);
+    printf("符号节点数: %zu vs %zu\n", a->pool->count, b->pool->count);
     size_t shown = 0;
     for (size_t i = 0; i < a->pool->count && i < b->pool->count && shown < 10; ++i) {
         Token *x = a->pool->tokens[i], *y = b->pool->tokens[i];
@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
             shown++;
         }
     }
-    if (!shown) printf("  Token 层逐条一致\n");
+    if (!shown) printf("  符号节点层逐条一致\n");
     /* 池级标量 */
     printf("池: tick %llu/%llu  n_entries %zu/%zu\n",
            (unsigned long long)a->pool->current_tick, (unsigned long long)b->pool->current_tick,

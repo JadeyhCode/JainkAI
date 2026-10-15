@@ -1,6 +1,6 @@
 /* micro.h — 微内核：安全内核 + 自修改（修改意图队列）+ 补丁边界 + 元认知
  *
- * 这是「关联机」定义里第二条（**Token 和关联在运行时被系统自身修改**）
+ * 这是「关联机」定义里第二条（**符号节点和关联在运行时被系统自身修改**）
  * 的落地层。核心的其它部分（token.h 的图、ai.h 的认知）都不动，
  * 结构修改统一走这一条通道：
  *
@@ -13,7 +13,7 @@
  *     安全内核 safety_review ──拒绝──→ 审计（理由分类，可查）
  *          │  允许
  *          ▼
- *     应用（加 Token / 加边 / 打关系 / 剪枝 …）+ 记账（预算）
+ *     应用（加符号节点 / 加边 / 打关系 / 剪枝 …）+ 记账（预算）
  *          │
  *          ▼
  *     元认知 micro_metacog：看速率、拒绝率、补丁健康
@@ -21,19 +21,19 @@
  *
  * 为什么必须「提议 → 安全点应用」而不是就地改：
  *   遍历中 realloc 会让 `AssocEntry *e` 当场失效；`for (i < reach)` 里
- *   `count` 变了会漏边；路径栈里没有新 Token 会被重复激活。
+ *   `count` 变了会漏边；路径栈里没有新符号节点会被重复激活。
  *   所以 on_visit / 补丁里**只记录想干什么**，结构不动。
- *   （token.h 的注释「on_visit 内不得对当前 Token 做 add_assoc」就是这个边界。）
+ *   （token.h 的注释「on_visit 内不得对当前符号节点做 add_assoc」就是这个边界。）
  *
  * 补丁边界（微内核的「外设」）：
- *   核心只认 Token。补丁负责把外部信号变成 Token（sense），
- *   或把核心给的 Token 变成外部动作（act），或提议结构修改（propose）。
+ *   核心只认符号节点。补丁负责把外部信号变成符号节点（sense），
+ *   或把核心给的符号节点变成外部动作（act），或提议结构修改（propose）。
  *   三条硬规矩：
- *     ① 补丁只交换 Token，不碰核心内部结构（要改结构就提议）；
+ *     ① 补丁只交换符号节点，不碰核心内部结构（要改结构就提议）；
  *     ② 补丁可缺失：没有补丁，内核照跑（本文件里 sense/act 全是空转）；
  *     ③ 补丁可失败：崩溃/超时/连续出错 → 自动停用并留下提醒，不影响内核。
  *   本仓库**不预置任何硬件补丁**（视觉/3D/听觉那些是「外设」，与内核职责无关）。
- *   内建的只有一个 `自省` 补丁：它把**内核自己的状态**变成 Token，
+ *   内建的只有一个 `自省` 补丁：它把**内核自己的状态**变成符号节点，
  *   用来证明这条边界真的能用，且不依赖任何外部设备。
  *
  * 依赖：token.h + ai.h（本文件在 ai.h 末尾被包含，此时 AI 已完整）。
@@ -84,17 +84,17 @@
 #define MICRO_D4_MIN_PAIR_HITS  2    /* 那条连结本身至少被命中过 2 次才算"观测到的连结"——
                                       * 否则检测器会拿**自己刚造出来的边**当依据
                                       * （和"缓存不许互相为依据"是同一条纪律） */
-#define MICRO_D2_EVERY        100   /* 缺口命名：至少隔多少轮才允许造一个 Token */
+#define MICRO_D2_EVERY        100   /* 缺口命名：至少隔多少轮才允许造一个符号节点 */
 #define MICRO_D2_GAP_NUM       65   /* 空缺感 ≥ 0.65 */
 #define MICRO_D2_GAP_DEN      100
 #define MICRO_D3_MIN_AGE     2000   /* 剪枝：边至少这么久没被碰过 */
 #define MICRO_D3_PER_STEP       1
 #define MICRO_PATCH_SILENT     40   /* 感知补丁连续多少轮没输出算「沉默」 */
-#define MICRO_OP_MAX_INTENTS    8   /* 一条「Token 行为」一次最多展开几条修改意图 */
+#define MICRO_OP_MAX_INTENTS    8   /* 一条「符号节点行为」一次最多展开几条修改意图 */
 
 /* ---- 修改意图的种类 ---- */
 typedef enum {
-    MOD_ADD_TOKEN = 1,      /* 造一个新 Token，并接回触发它的上下文 */
+    MOD_ADD_TOKEN = 1,      /* 造一个新符号节点，并接回触发它的上下文 */
     MOD_ADD_ASSOC,          /* 加一条共现边 */
     /* **沉淀**：把「推出来并且验证过」的东西记成图里的一条边，
      * 但标上 ASSOC_ROLE_DERIVED —— 它比观测弱、可被观测推翻、可撤销。
@@ -105,15 +105,15 @@ typedef enum {
     MOD_SET_PARENT,         /* 设父类（类别继承） */
     MOD_SET_CATEGORY,       /* 标成类别 */
     MOD_BUMP_HITS,          /* 给一条边加权 */
-    MOD_DECAY,              /* 衰减一个 Token 的所有边 */
+    MOD_DECAY,              /* 衰减一个符号节点的所有边 */
     MOD_REMOVE_ASSOC,       /* 删一条边 */
-    /* **在 A 与 B 之间插一个 Token**：A→N→B，并让 A、B **不直连**
+    /* **在 A 与 B 之间插一个符号节点**：A→N→B，并让 A、B **不直连**
      * （直连边要不要拆由安全内核裁决 —— 关系边受铁律 2 保护，拆不掉就如实说）。
-     * 这是「给 Token 加行为」里那个复合动作：一次意图做成三件事（造 N + 两条边 + 拆直连），
+     * 这是「给符号节点加行为」里那个复合动作：一次意图做成三件事（造 N + 两条边 + 拆直连），
      * 所以它必须是**一条**意图 —— 分成三条的话，拆直连会在 N 还没建好时就执行。 */
     MOD_INSERT_BETWEEN,
-    /* 回收一个**临时 Token**（草稿）。硬约束：只许删 [临: 命名空间、
-     * 且必须已经没有任何边引用它（含指向它的边）—— 别的 Token 一律拒绝。 */
+    /* 回收一个**临时符号节点**（草稿）。硬约束：只许删 [临: 命名空间、
+     * 且必须已经没有任何边引用它（含指向它的边）—— 别的符号节点一律拒绝。 */
     MOD_REMOVE_TOKEN,
     /* **调用补丁的操作**：AI 想对外设说话（输出侧的记事本、草稿区、发送……
      * 具体是什么由补丁自己解释）。它不改图，但**照样走受审通道** ——
@@ -123,7 +123,7 @@ typedef enum {
 
 /* MOD_INSERT_BETWEEN 的 flags */
 #define MOD_FLAG_SPLIT_DIRECT 1u   /* 拆掉 A—B 那条直连边（拆不动就保留并说明） */
-#define MOD_FLAG_MARK_PREMISE 2u   /* 把 A→N 这条边标成「前提链接」（N 就是前提 token） */
+#define MOD_FLAG_MARK_PREMISE 2u   /* 把 A→N 这条边标成「前提链接」（N 就是前提符号节点） */
 #define MOD_FLAG_MARK_PREMISE_NOT 4u /* 标成「**反**前提」：条件是 N 不在注意窗口里 */
 #define MOD_FLAG_PROCESS 8u        /* 这条边是**过程边**（role=过程，第 9 条 ①）——
                                     * 由 `::op 加步骤/加调用/加回边` 提出来，走同一条受审通道 */
@@ -139,17 +139,17 @@ typedef enum {
     SAFE_DENY_SWITCH,        /* 自修改总开关关着 */
     SAFE_DENY_FROZEN,        /* 预算长期触顶已冻结 */
     SAFE_DENY_BUDGET_EDGE,   /* 本步新建边超预算 */
-    SAFE_DENY_BUDGET_TOKEN,  /* 本步新建 Token 超预算 */
+    SAFE_DENY_BUDGET_TOKEN,  /* 本步新建符号节点超预算 */
     SAFE_DENY_TOTAL,         /* 池子总量触顶 */
-    SAFE_DENY_EDGE_CAP,      /* 单个 Token 的边数触顶 */
-    SAFE_DENY_RESERVED,      /* 不许改保留 Token（[原语:…]/[时刻:…]/[提醒:…]） */
+    SAFE_DENY_EDGE_CAP,      /* 单个符号节点的边数触顶 */
+    SAFE_DENY_RESERVED,      /* 不许改保留符号节点（[原语:…]/[时刻:…]/[提醒:…]） */
     SAFE_DENY_RELATION,      /* 不许删关系边（那是知识，不是共现） */
     SAFE_DENY_CYCLE,         /* 父节点不许接成环 */
     SAFE_DENY_SELF,          /* 自环 */
-    SAFE_DENY_BADREF,        /* 引用了空/垃圾 Token */
+    SAFE_DENY_BADREF,        /* 引用了空/垃圾符号节点 */
     SAFE_DENY_TYPE,          /* 这一类修改被开关关掉了 */
     SAFE_DENY_RATE,          /* 速率闸：元认知把提案关小了 */
-    SAFE_DENY_NOT_TEMP,      /* 只许回收「临时 Token」（草稿纸），别的 Token 不许删 */
+    SAFE_DENY_NOT_TEMP,      /* 只许回收「临时符号节点」（草稿纸），别的符号节点不许删 */
     SAFE_DENY_BUDGET_PATCH,  /* 本步调用补丁操作的次数超预算 */
     SAFE_DENY_NOPATCH,       /* 目标补丁没挂载/已停用/不认这个操作 */
     SAFE_REASON_N
@@ -157,10 +157,10 @@ typedef enum {
 
 static const char *const SAFE_REASON_NAME[SAFE_REASON_N] = {
     "允许", "自修改总开关关着", "已冻结(预算长期触顶)", "本步新建边超预算",
-    "本步新建 Token 超预算", "池子总量触顶", "单 Token 边数触顶",
-    "不许改保留 Token", "不许删关系边", "父节点不许成环",
-    "不许自环", "引用了空/垃圾 Token", "这一类修改被关着", "速率闸(元认知关小)",
-    "只许回收临时 Token",
+    "本步新建符号节点超预算", "池子总量触顶", "单符号节点边数触顶",
+    "不许改保留符号节点", "不许删关系边", "父节点不许成环",
+    "不许自环", "引用了空/垃圾符号节点", "这一类修改被关着", "速率闸(元认知关小)",
+    "只许回收临时符号节点",
     /* ⚠ 这两条**曾经漏掉**（枚举里加了、名字表没加）⇒ 一旦真被它们拒，
      * 审计里打出来的是 `(null)`（实测：N2 的轮中草稿把每步补丁预算挤爆时看到）。
      * 名字表必须**逐条**和 SafeReason 对上 —— tools/microtest.c 里有一条自检钉着。 */
@@ -176,7 +176,7 @@ typedef enum {
     MICRO_REMIND_THROTTLE,       /* 关小生效 */
     MICRO_REMIND_PATCH_ERR,      /* 补丁连续出错 → 已自动停用 */
     MICRO_REMIND_PATCH_SILENT,   /* 补丁沉默（挂着但一直没输出） */
-    MICRO_REMIND_PATCH_CONFLICT, /* 两个补丁对同一个 Token 给出相反信号 */
+    MICRO_REMIND_PATCH_CONFLICT, /* 两个补丁对同一个符号节点给出相反信号 */
     MICRO_REMIND_TOTAL,          /* 池子总量触顶 */
     /* 思维层（think.h）也要用同一套提醒记账 —— 元认知是一件事，不是两件 */
     MICRO_REMIND_THINK_STALL,    /* 思维在原地打转 */
@@ -202,14 +202,14 @@ static inline int micro_token_reserved(const Token *t) {
     return !t || t->is_garbage || micro_reserved(t->name);
 }
 
-/* 「造新 Token」的**命名空间**：自修改造出来的概念统一用这个前缀。
+/* 「造新符号节点」的**命名空间**：自修改造出来的概念统一用这个前缀。
  * 保留名规则本来是一律不许碰 '[' 开头的名字（那些是 [原语:…] / [时刻:…] 这类骨架），
  * 但「把未知具体化」造出来的概念本身也该是可辨识的内部节点，
  * 所以给它开一个专用前缀，其余 '[' 前缀照旧一律拒绝。 */
 #define MICRO_NEW_TOKEN_PREFIX "[新概念:"
 #define MICRO_ASK_TOKEN_PREFIX "[自问:"
-/* **临时 Token（草稿纸）**：只在会话里活着的中间节点 —— 例如「在这两个词之间插一个
- * token，让它们不直连、经它中转」时那个中转节点。它**能参与边**，但**不存盘**、
+/* **临时符号节点（草稿纸）**：只在会话里活着的中间节点 —— 例如「在这两个词之间插一个
+ * 符号节点，让它们不直连、经它中转」时那个中转节点。它**能参与边**，但**不存盘**、
  * 没人引用时会被回收（见 model_io.h 的跳过规则与 MOD_REMOVE_TOKEN）。
  * 命名空间规则和上面两个一模一样：这里放行，别的 '[' 名字照旧拒绝。 */
 #define MICRO_TEMP_TOKEN_PREFIX   "[临:"
@@ -220,16 +220,16 @@ static inline int micro_token_reserved(const Token *t) {
  * 撤掉的东西图里本来没有痕迹，于是 `n_retracted` 重载后恢复不了（推论档后验偏乐观）。
  * 有了标记，`ai_recount_evidence` 就能从图里把数**数回来**（零格式改动）。 */
 #define MICRO_REVOKE_TOKEN_PREFIX "[撤销:"
-/* **草稿持久化**用的标记：`[草稿:<文本>]`（普通 token，随图存盘）。
+/* **草稿持久化**用的标记：`[草稿:<文本>]`（普通符号节点，随图存盘）。
  * 草稿区本身是瞬态的，靠它恢复 —— 和未解问题用 `[自问:…]` 同一个路子，**不改格式**。 */
 #define MICRO_DRAFT_TOKEN_PREFIX "[草稿:"
-/* **外部执行的观测标记**：`[运行:<rc>]`（普通 token，随图存盘）——
+/* **外部执行的观测标记**：`[运行:<rc>]`（普通符号节点，随图存盘）——
  * `action.h` 每跑一次外部命令落一个（rc = 退出码，超时约定 -9）。
  * 和 `[草稿:…]` 一样是**留痕/观测**，不是知识：只连回宿主"我"，不建关系边、不进关系表。 */
 #define MICRO_RUN_TOKEN_PREFIX "[运行:"
-/* **写代码闭环的观测标记**：`[代码:<最终rc>]`（普通 token，随图存盘）——
+/* **写代码闭环的观测标记**：`[代码:<最终rc>]`（普通符号节点，随图存盘）——
  * `code.h` 走完一轮"写-跑-看错-改"落一个。和 `[运行:…]` 一样是留痕，不是知识。 */
-/* **动作 token**（① 档最后一条，§6.82）：`[执行:动作词 参数…]` —— 图上的一个普通节点，
+/* **动作符号节点**（① 档最后一条，§6.82）：`[执行:动作词 参数…]` —— 图上的一个普通节点，
  * 也是一个步骤的**目标**。过程跑到这一步时，如果它真出现在步骤位上，就走 `action_run()`
  * **真的调一次**（白名单 + 超时 + 账，都在 action.h 那层）。干跑时只核过、不动外部世界。 */
 #define MICRO_EXEC_TOKEN_PREFIX "[执行:"
@@ -246,13 +246,13 @@ static inline int micro_internal_ns(const char *name) {
                                       MICRO_TOKEN_PROC_PREFIX,
                                       MICRO_REVOKE_TOKEN_PREFIX, NULL };
     if (!name) return 0;
-    /* `[前提]` 是**行为 token（标记）**：挂在边的动作槽上，表示「那一端是前提」。
+    /* `[前提]` 是**行为符号节点（标记）**：挂在边的动作槽上，表示「那一端是前提」。
      * 它是精确名字，不是前缀命名空间。 */
     if (strcmp(name, AI_PREMISE_MARK) == 0) return 1;
     if (strcmp(name, AI_PREMISE_NOT_MARK) == 0) return 1;
     /* 过程记号（第 9 条 ②）也是**我们自己的记号**：可以当端点 ——
      * 「回边」就是要指回某一步（`[步骤:N]`），不许它当端点的话回边根本建不起来
-     * （实测：被拒理由「不许改保留 Token」）。 */
+     * （实测：被拒理由「不许改保留符号节点」）。 */
     if (strncmp(name, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) == 0) return 1;
     if (strcmp(name, PROC_CALL_MARK) == 0) return 1;
     if (strcmp(name, PROC_BACK_MARK) == 0) return 1;
@@ -267,7 +267,7 @@ static inline int micro_reserved_new_name(const char *name) {
     if (!micro_reserved(name)) return 0;
     return !micro_internal_ns(name);
 }
-/* 这个 Token 是**临时草稿**吗（名字前缀是唯一判据 —— 它必须不依赖存档字段，
+/* 这个符号节点是**临时草稿**吗（名字前缀是唯一判据 —— 它必须不依赖存档字段，
  * 这样跳过存盘才是格式安全的）。 */
 static inline int token_is_temp(const Token *t) {
     return t && t->name &&
@@ -303,7 +303,7 @@ static inline int micro_edge_is_derived(const Token *t, const Token *main) {
     return token_edge_is_derived(t, main);
 }
 
-/* 出邻居（跳过垃圾与保留 Token），最多 cap 个 */
+/* 出邻居（跳过垃圾与保留符号节点），最多 cap 个 */
 static inline size_t micro_neighbors(const Token *t, Token **out, size_t cap) {
     size_t n = 0;
     if (!t) return 0;
@@ -335,7 +335,7 @@ static inline int micro_jaccard_at_least(const Token *a, const Token *b, size_t 
 
 static inline const char *micro_mod_type_name(ModType t) {
     switch (t) {
-    case MOD_ADD_TOKEN:      return "加Token";
+    case MOD_ADD_TOKEN:      return "加符号节点";
     case MOD_ADD_ASSOC:      return "加边";
     case MOD_TAG_DERIVED:    return "沉淀";
     case MOD_TAG_REL:        return "打关系";
@@ -345,7 +345,7 @@ static inline const char *micro_mod_type_name(ModType t) {
     case MOD_BUMP_HITS:      return "强化";
     case MOD_DECAY:          return "衰减";
     case MOD_REMOVE_ASSOC:   return "删边";
-    case MOD_INSERT_BETWEEN: return "插词";   /* 在两个词之间插一个 Token（经它中转） */
+    case MOD_INSERT_BETWEEN: return "插词";   /* 在两个词之间插一个符号节点（经它中转） */
     case MOD_REMOVE_TOKEN:   return "回收临时";
     case MOD_PATCH_CALL:     return "调用补丁";
     default:                 return "?";
@@ -356,14 +356,14 @@ static inline const char *micro_mod_type_name(ModType t) {
 
 typedef struct {
     ModType  type;
-    Token   *target;                    /* 对哪个 Token 动手 */
-    Token   *main;                      /* 边的另一头 / 新 Token 要连回谁 */
+    Token   *target;                    /* 对哪个符号节点动手 */
+    Token   *main;                      /* 边的另一头 / 新符号节点要连回谁 */
     Token   *action;                    /* 设动作 */
     uint8_t  rel_id;                    /* 打关系 / 沉淀 */
     uint8_t  neg;                       /* 沉淀时：记的是不是「不 R」 */
     uint8_t  flags;                     /* 复合意图的开关位（见 MOD_FLAG_*） */
     uint32_t bump;                      /* 加权 */
-    char     name[96];                  /* 加 Token / 插词：名字；调用补丁：操作名。
+    char     name[96];                  /* 加符号节点 / 插词：名字；调用补丁：操作名。
                                          * 96 = 给 `[自问:<问句>]` 留 ~86 字节正文
                                          * （以前 48 只够 ~38 字节，恢复出来的问句被截得厉害） */
     char     source[24];                /* 谁提的（检测器名 / 补丁名） */
@@ -440,15 +440,15 @@ typedef struct {
 
 typedef struct {
     /* ---- 硬预算（可调，但都在 ::safe 里看得见）---- */
-    int    max_new_tokens_step;   /* 一步最多造几个 Token（默认 2） */
+    int    max_new_tokens_step;   /* 一步最多造几个符号节点（默认 2） */
     int    max_new_edges_step;    /* 一步最多新建几条边（默认 8） */
-    int    max_edges_per_token;   /* 单个 Token 边数上限（默认 512） */
+    int    max_edges_per_token;   /* 单个符号节点边数上限（默认 512） */
     int    max_patch_calls_step;  /* 一步最多调用几次补丁操作（默认 4；外设也是资源） */
     int    max_tokens_total;      /* 池子总量上限（默认 400000） */
     /* ---- 开关（反向命名：calloc 出来的就是默认值）----
      * 自修改默认**开**。想关就 ::mod off。 */
     int    mod_off;               /* 0 = 自修改通道开（默认） */
-    int    new_token_off;         /* 0 = 允许造新 Token（默认，预算极紧） */
+    int    new_token_off;         /* 0 = 允许造新符号节点（默认，预算极紧） */
     int    remove_off;            /* 0 = 允许删边（默认，判据苛刻） */
     /* ---- 停止条件 ---- */
     int    freeze;                /* 1 = 冻结：一律拒绝，等手段解除 */
@@ -474,7 +474,7 @@ static inline int micro_edge_removable(const AssocEntry *e) {
     return 1;
 }
 
-/* 有没有**任何** Token 的边指向 t？（回收临时草稿前必须确认为假）
+/* 有没有**任何** 符号节点的边指向 t？（回收临时草稿前必须确认为假）
  * 全池扫一遍、找到就收；只在回收草稿时调用，代价可忽略。 */
 static inline int micro_token_has_in_edge(const TokenPool *p, const Token *t) {
     if (!p || !t) return 1;                      /* 判不准 ⇒ 当作有人引用（保守） */
@@ -506,7 +506,7 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
         return SAFE_OK;
     }
 
-    /* 引用合法性：任何一条意图都不许引用空/垃圾 Token */
+    /* 引用合法性：任何一条意图都不许引用空/垃圾符号节点 */
     if (!m->target || m->target->is_garbage) return SAFE_DENY_BADREF;
     if (m->main && m->main->is_garbage) return SAFE_DENY_BADREF;
 
@@ -521,7 +521,7 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
         return SAFE_OK;
     case MOD_ADD_ASSOC: {
         /* 另一个端点可以**按名字**给（`::op 加步骤 泡茶 烧水` 的动作词可能还是个新词）：
-         * 名字不在池子里 = 这一步要新建一个 Token ⇒ 照 INSERT_BETWEEN 的规矩**记预算**，
+         * 名字不在池子里 = 这一步要新建一个符号节点 ⇒ 照 INSERT_BETWEEN 的规矩**记预算**，
          * 不许"悄悄建词"绕过记账。 */
         Token *Mn = m->main;        /* 池里已有的端点 */
         int named_new = 0;          /* 端点只给了名字、而且池里还没有 ⇒ 这一步要建它 */
@@ -609,8 +609,8 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
         if (!micro_edge_removable(&m->target->assocs[i])) return SAFE_DENY_RELATION;
         return SAFE_OK;
     }
-    /* **在 A 与 B 之间插一个 Token**：A→N→B，且（可选）让 A、B 不直连。
-     * 它是一次复合改动，所以按「新 Token + 两条新边」一起算预算。 */
+    /* **在 A 与 B 之间插一个符号节点**：A→N→B，且（可选）让 A、B 不直连。
+     * 它是一次复合改动，所以按「新符号节点 + 两条新边」一起算预算。 */
     case MOD_INSERT_BETWEEN: {
         if (!m->main) return SAFE_DENY_BADREF;
         if (m->target == m->main) return SAFE_DENY_SELF;
@@ -755,7 +755,7 @@ static inline int safety_check_stop(SafetyKernel *sk, const TokenPool *pool) {
 typedef enum { PATCH_SENSE = 1, PATCH_ACT = 2, PATCH_BOTH = 3 } PatchKind;
 
 /* 补丁交给内核的一条信号。neg = 「这条是**否定**信号」（补丁自己带极性，
- * 内核不解释语义，只负责把它们变成 Token 放进同一轮里）。 */
+ * 内核不解释语义，只负责把它们变成符号节点放进同一轮里）。 */
 typedef struct {
     Token *tok;
     int    neg;
@@ -993,9 +993,9 @@ static inline void safety_set(AI *ai, const char *what, int on) {
 /* ============================ 补丁：内建 + 收集 ============================ */
 
 /* ---- 内建补丁：自省 ----
- * 把**内核自己的状态**变成 Token。它证明了补丁边界能用，
+ * 把**内核自己的状态**变成符号节点。它证明了补丁边界能用，
  * 而且不依赖任何外部设备（没有摄像头、没有麦克风、没有 3D）。
- * 内核完全不知道「自省」是什么 —— 它只是收到了一批 Token。 */
+ * 内核完全不知道「自省」是什么 —— 它只是收到了一批符号节点。 */
 static inline size_t patch_introspect_sense(Patch *p, TokenPool *pool,
                                             PatchOut *out, size_t cap) {
     AI *ai = (AI *)p->priv;
@@ -1035,7 +1035,7 @@ static inline size_t patch_sense_all(AI *ai, PatchOut *out, size_t cap) {
         p->n_out_last = got;
         p->n_out_total += got;
         if (got) p->last_out_tick = ai->pool->current_tick;
-        /* 冲突检测：两个补丁对同一个 Token 一个说「有」一个说「没有」 */
+        /* 冲突检测：两个补丁对同一个符号节点一个说「有」一个说「没有」 */
         for (size_t a = 0; a < got; ++a) {
             if (!out[n + a].tok) continue;
             for (size_t b = 0; b < n; ++b) {
@@ -1175,7 +1175,7 @@ typedef struct {
     int    send_flag;                 /* 本轮发送过吗（emit 用） */
     int    decided;                   /* 本轮 AI **明确表过态**（发送/不发）：流水线不许再改主意 */
     /* **草稿持久化**（不改存档格式）：`存草稿` 把草稿写成一个 `[草稿:…]` **标记节点**
-     * （普通 token，随图存盘），装载/挂载时扫回来。和未解问题用 `[自问:…]` 恢复同一个路子。 */
+     * （普通符号节点，随图存盘），装载/挂载时扫回来。和未解问题用 `[自问:…]` 恢复同一个路子。 */
     void  *ai;
     char   save_pending[PATCH_NOTE_CAP];
     int    save_wanted;
@@ -1411,7 +1411,7 @@ static inline int patch_note_emit(Patch *p, char *out, size_t cap) {
     return 0;                              /* 不接管：内核用流水线文本 */
 }
 
-/* 把草稿写成一个**标记节点**（普通 token，随图存盘）—— 这就是"草稿持久化"，
+/* 把草稿写成一个**标记节点**（普通符号节点，随图存盘）—— 这就是"草稿持久化"，
  * 而且**没动存档格式**：标记是图里已有的东西，恢复时扫一遍就行。
  * 名字里不留空格（老规矩，`::edges [草稿:…]` 要打得出）。 */
 static inline int patch_note_propose(Patch *p, void *mq) {
@@ -1431,7 +1431,7 @@ static inline int patch_note_propose(Patch *p, void *mq) {
     ModIntent m;
     memset(&m, 0, sizeof m);
     m.type = MOD_ADD_TOKEN;
-    /* 接回"我"；**没有"我"**（比如单元测试里的空脑子）时退回到池里第一个普通 token ——
+    /* 接回"我"；**没有"我"**（比如单元测试里的空脑子）时退回到池里第一个普通符号节点 ——
      * 这个挂靠点只是让标记有个归属，不参与语义（确定性：按池子下标取第一个）。 */
     Token *host = ai->self;
     if (!host)
@@ -1586,7 +1586,7 @@ static inline void micro_detect_coactivation(AI *ai, char *const *words, size_t 
     }
 }
 
-/* D2 缺口命名：空缺感高的时候，把一个**新的** Token 造出来并接回网络。
+/* D2 缺口命名：空缺感高的时候，把一个**新的** 符号节点造出来并接回网络。
  * 「未知」要能变成「有名字的东西」，否则系统永远只有「不知道」。
  * 严格限速（每 MICRO_D2_EVERY 轮最多一个），名字从这轮的词里取。 */
 /* ---- D4 条件依赖：前提的**生产端** ----
@@ -1773,7 +1773,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
     switch (m->type) {
     case MOD_ADD_TOKEN: {
         /* intern 而不是 pool_token：同名已存在时是**幂等**（返回老节点），
-         * 不会造出两个同名 Token —— 那种图连 ::edges 都读不明白。 */
+         * 不会造出两个同名符号节点 —— 那种图连 ::edges 都读不明白。 */
         int existed = pool_find(p, m->name) != NULL;
         Token *nt = pool_token_intern(p, m->name);
         if (!nt) return -1;
@@ -1795,7 +1795,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
     }
     case MOD_ADD_ASSOC: {
         /* 另一个端点可以**按名字**给（`::op 加步骤 …` 的动作词可能是新词）：
-         * 到这一步才 intern —— **在受审通道之内**（检查器已经按名字记过新 Token 预算）。
+         * 到这一步才 intern —— **在受审通道之内**（检查器已经按名字记过新符号节点预算）。
          * 意图本身是只读的，所以用局部 `Mn`，不改 `m`。 */
         Token *Mn = m->main;
         if (!Mn && m->name[0]) Mn = pool_token_intern(p, m->name);
@@ -1854,6 +1854,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             e->nrel |= bit;
         }
         e->role = ASSOC_ROLE_DERIVED;
+        token_cache_enqueue(m->target);   /* §6.127：新落的推论边进复核队列（不再每轮扫全图） */
         e->hits += m->bump ? m->bump : 1;
         e->mem_state = MEM_ACTIVE;
         e->last_touch_tick = p->current_tick;
@@ -1917,7 +1918,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
                            m->main->name ? m->main->name : "?");
         return 1;
     }
-    /* **在 A 与 B 之间插一个 Token**：A→N→B；带 SPLIT_DIRECT 时让 A、B 不再直连。
+    /* **在 A 与 B 之间插一个符号节点**：A→N→B；带 SPLIT_DIRECT 时让 A、B 不再直连。
      * 一体化做三件事，所以是**一条**意图：分成三条的话「拆直连」会在 N 还没建好时执行。 */
     case MOD_INSERT_BETWEEN: {
         Token *A = m->target, *B = m->main;
@@ -1933,9 +1934,9 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             for (size_t k = 0; k < N->count; ++k)
                 if (N->assocs[k].main == B) N->assocs[k].hits += bump;
         }
-        /* **前提**：把 A→N 标成「前提链接」——N 就是这两个词之间的**前提 token**。
-         * 它是行为 token（标记）挂在动作槽上，所以：联想照走（A→N→B 都是普通边）、
-         * 前提 token 照常能被联想到（它就是普通 token）、而逻辑问得出它是谁
+        /* **前提**：把 A→N 标成「前提链接」——N 就是这两个词之间的**前提符号节点**。
+         * 它是行为符号节点（标记）挂在动作槽上，所以：联想照走（A→N→B 都是普通边）、
+         * 前提符号节点照常能被联想到（它就是普通符号节点）、而逻辑问得出它是谁
          * （token_premise_between）。 */
         if (m->flags & (MOD_FLAG_MARK_PREMISE | MOD_FLAG_MARK_PREMISE_NOT)) {
             const char *mk = (m->flags & MOD_FLAG_MARK_PREMISE_NOT) ? AI_PREMISE_NOT_MARK
@@ -1967,11 +1968,11 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             memcpy(note, tmp, l);
             note[l] = 0;
         }
-        return existed ? 1 : 2;        /* 2 = 连 Token 也是新建的 */
+        return existed ? 1 : 2;        /* 2 = 连符号节点也是新建的 */
     }
     /* 回收临时草稿（安全内核已经保证它没人引用、且是 [临: 命名空间） */
     case MOD_REMOVE_TOKEN: {
-        /* 软删（和 ai_gc 一样：标垃圾、清空边表），不把 Token 从池里搬走 ——
+        /* 软删（和 ai_gc 一样：标垃圾、清空边表），不把符号节点从池里搬走 ——
          * 池里到处是指针，物理搬走会让它们全悬空。 */
         Token *t = m->target;
         t->is_garbage = 1;
@@ -2099,21 +2100,21 @@ static inline SafeReason micro_try(AI *ai, const ModIntent *in, char *note, size
     return SAFE_OK;
 }
 
-/* ============================ Token 行为（图操作） ============================
+/* ============================ 符号节点行为（图操作） ============================
  *
- * 「给 Token 加上行为」：一个 Token 可以**命令图改变自己** —— 接线、按语境接线、
- * 在两者之间插一个中转 Token、回收草稿……这些是**操作**（机制），不是知识。
+ * 「给符号节点加上行为」：一个符号节点可以**命令图改变自己** —— 接线、按语境接线、
+ * 在两者之间插一个中转符号节点、回收草稿……这些是**操作**（机制），不是知识。
  *
  * 所以它们写成一张表：{名字, 参数形状, 说明, 参数个数, 展开函数}。
  * 展开函数**只产出 ModIntent、不碰图** —— 结构改动照旧只有 `micro_step` 一个入口，
- * 每条意图都要过安全内核（预算、底线、审计），所以「Token 有行为」不等于
- * 「Token 能绕过审查改脑」。
+ * 每条意图都要过安全内核（预算、底线、审计），所以「符号节点有行为」不等于
+ * 「符号节点能绕过审查改脑」。
  *
  * 新增一种行为 = 表里加一行 + 写它那个展开函数（不碰循环、不碰安全内核）。
  * 现在的行为（用户点名的三条 + 淘汰「语境」后的前提表示）：
- *   ① 加前提    ：A 与 B 之间加一个**前提 token** P（缺省临时 token）→ A —[前提]→ P → B
+ *   ① 加前提    ：A 与 B 之间加一个**前提符号节点** P（缺省临时符号节点）→ A —[前提]→ P → B
  *   ② 前提接线  ：让 A 经前提 P 也能到 Y（选择判据是**图里的前提链接**，不是边上的字段）
- *   ③ 中间插词  ：在 A 与 B 之间插一个 Token N，使二者**不直连**、经 N 中转
+ *   ③ 中间插词  ：在 A 与 B 之间插一个符号节点 N，使二者**不直连**、经 N 中转
  *   ④ 回收临时  ：回收没人引用的草稿（前提缺省值就是草稿）
  */
 typedef struct {
@@ -2154,13 +2155,13 @@ static inline int token_op_call_patch(AI *ai, char *const *args, size_t n, ModQu
 /* ① 加前提 <A> <B> [前提名]
  *
  * **淘汰「语境」后的主角**：一条「有前提的连结」= `A —[前提]→ P → B`
- *   · P 是**普通 token**（前提 token）：联想照走、能被正常联想到、逻辑查得到；
- *   · `[前提]` 是**行为 token**（标记），挂在 A→P 的动作槽上；
- *   · 不给名字时 P 用**临时 token** `[临:前提]`（草稿：不存盘、可回收）。
+ *   · P 是**普通符号节点**（前提符号节点）：联想照走、能被正常联想到、逻辑查得到；
+ *   · `[前提]` 是**行为符号节点**（标记），挂在 A→P 的动作槽上；
+ *   · 不给名字时 P 用**临时符号节点** `[临:前提]`（草稿：不存盘、可回收）。
  * 建好后：直接连结 A—B 会被拆掉（连结改「经过前提」），这条由安全内核裁决。 */
 /* ---- 过程记号（第 9 条 ①+②）：建过程 / 加步骤 / 加调用 / 加回边 ----
  *
- * 一个"过程"= 根 Token `[过程:名字]` + 从它出去的过程边；控制流记号挂在**动作槽**上。
+ * 一个"过程"= 根符号节点 `[过程:名字]` + 从它出去的过程边；控制流记号挂在**动作槽**上。
  * 全部走 `token_op_run`（提议 → 安全内核审查 → 应用 → 记账）—— 和自修改同一条路，
  * "过程记号"不是绕过内核的后门。**记号与 role 都是数据**，不改存档布局。 */
 static inline Token *proc_find(AI *ai, const char *bare) {
@@ -2182,7 +2183,7 @@ static inline int token_op_make_proc(AI *ai, char *const *args, size_t n, ModQue
     m.type = MOD_ADD_TOKEN;
     snprintf(m.name, sizeof m.name, "%s", full);
     /* 挂靠点（和草稿补丁同一个规矩）：标记得有个归属，它不参与语义 ——
-     * 没有"我"（单元测试里的空脑子）就退回到池里第一个普通 token。 */
+     * 没有"我"（单元测试里的空脑子）就退回到池里第一个普通符号节点。 */
     Token *host = ai->self;
     if (!host)
         for (size_t i = 0; i < ai->pool->count; ++i) {
@@ -2203,7 +2204,7 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
     if (n < 2) { snprintf(note, cap, "要 <过程> <动作>"); return -1; }
     Token *root = proc_find(ai, args[0]);
     if (!root) { snprintf(note, cap, "没有这个过程：%s（先 `::op 建过程 %s`）", args[0], args[0]); return -1; }
-    /* `加回边 <过程> <步号>`：指回**第 N 步**（端点用 `[步骤:N]` 那个记号 Token）。
+    /* `加回边 <过程> <步号>`：指回**第 N 步**（端点用 `[步骤:N]` 那个记号符号节点）。
      * 为什么给这个形状：图的边是 (起点,终点) 唯一的 —— 指回**动作词**会和那一步共用同一条边，
      * 把它的动作槽覆盖掉（实测：`加步骤 泡茶 烧水` 之后再 `加回边 泡茶 烧水`，那一步就没了）。
      * 指回步号不会撞车。 */
@@ -2319,7 +2320,7 @@ static inline int token_op_add_back(AI *ai, char *const *args, size_t n, ModQueu
  * （记号 = `[步骤:N@要:S/R/B]`）—— 跑的时候用 `rel_solve` + `der_verify` 独立复核，
  * 这就是"步骤带对象"那条（第 9 条 ① 的收口）。 */
 /* `加执行 <过程> <动作词> [参数…]`：给过程加一个**真的会调动作**的步骤。
- * 记号端点是 `[执行:动作词 参数…]`（动作 token）；动作词必须是白名单里的（`::act list` 看）。 */
+ * 记号端点是 `[执行:动作词 参数…]`（动作符号节点）；动作词必须是白名单里的（`::act list` 看）。 */
 static inline int token_op_add_exec(AI *ai, char *const *args, size_t n, ModQueue *q,
                                     char *note, size_t cap) {
     if (n < 2) { snprintf(note, cap, "要 <过程> <动作词> [参数…]"); return -1; }
@@ -2356,7 +2357,7 @@ static inline int token_op_add_exec(AI *ai, char *const *args, size_t n, ModQueu
     m.type = MOD_ADD_ASSOC;
     m.target = root;
     m.main = pool_token_intern(ai->pool, mk);
-    if (!m.main) { snprintf(note, cap, "动作 token 建不出来"); return -1; }
+    if (!m.main) { snprintf(note, cap, "动作符号节点建不出来"); return -1; }
     snprintf(m.name, sizeof m.name, "%s", mk);
     snprintf(m.source, sizeof m.source, "行为:加执行");
     m.flags = MOD_FLAG_PROCESS;
@@ -2572,9 +2573,9 @@ static inline int token_op_premise_tie(AI *ai, char *const *args, size_t n, ModQ
 }
 
 /* ③ 中间插词 <A> <B> [<中转名>]
- * 语义（用户点名的那条）：**不要让 A 与 B 直接联想到** —— 在它们之间插一个 Token，
+ * 语义（用户点名的那条）：**不要让 A 与 B 直接联想到** —— 在它们之间插一个符号节点，
  * 让连接经过它中转（A→N→B），并把 A—B 那条直连拆掉（拆不动就保留并说明：
- * 观测到的关系边是知识，铁律 2 不许剪）。不给名字时用临时 Token。 */
+ * 观测到的关系边是知识，铁律 2 不许剪）。不给名字时用临时符号节点。 */
 static inline int token_op_insert_between(AI *ai, char *const *args, size_t n, ModQueue *q,
                                           char *note, size_t cap) {
     Token *A = pool_find(ai->pool, args[0]);
@@ -2598,8 +2599,8 @@ static inline int token_op_insert_between(AI *ai, char *const *args, size_t n, M
     return ok ? 1 : 0;
 }
 
-/* ④ 回收临时：没人引用的草稿 Token（自己没边、也没人指向它）提出来删掉。
- * 临时 Token **不存盘**，所以这一步只是省内存；把它做成一条行为是为了走同一条审查路径。 */
+/* ④ 回收临时：没人引用的草稿符号节点（自己没边、也没人指向它）提出来删掉。
+ * 临时符号节点 **不存盘**，所以这一步只是省内存；把它做成一条行为是为了走同一条审查路径。 */
 static inline int token_op_collect_temp(AI *ai, char *const *args, size_t n, ModQueue *q,
                                         char *note, size_t cap) {
     (void)args; (void)n;
@@ -2617,20 +2618,20 @@ static inline int token_op_collect_temp(AI *ai, char *const *args, size_t n, Mod
         snprintf(m.source, sizeof m.source, "行为:回收");
         if (mod_propose(q, &m)) pushed++;
     }
-    snprintf(note, cap, "没人引用的临时 Token %zu 个；提出回收 %zu 条", found, pushed);
+    snprintf(note, cap, "没人引用的临时符号节点 %zu 个；提出回收 %zu 条", found, pushed);
     return (int)pushed;
 }
 
 static const TokenOp TOKEN_OPS[] = {
-    { "加前提",     "<A> <B> [前提名]", "给 A 与 B 之间加一个**前提 token**（默认临时 [临:前提]）：A —[前提]→ P → B",
+    { "加前提",     "<A> <B> [前提名]", "给 A 与 B 之间加一个**前提符号节点**（默认临时 [临:前提]）：A —[前提]→ P → B",
       2, 3, token_op_add_premise },
     { "加反前提",   "<A> <B> [前提名]", "同「加前提」，但条件是**前提不在注意窗口里**（[前提不]）",
       2, 3, token_op_add_premise_not },
     { "前提接线",   "<A> <前提P> <目标Y>", "让 A 经前提 P 也能到 Y（确保 A—[前提]→P，并加 P→Y）",
       3, 3, token_op_premise_tie },
-    { "中间插词",   "<A> <B> [中转名]", "在 A 与 B 之间插一个 Token（默认临时 [临:中转]），"
+    { "中间插词",   "<A> <B> [中转名]", "在 A 与 B 之间插一个符号节点（默认临时 [临:中转]），"
       "让它们不直连、经它中转", 2, 3, token_op_insert_between },
-    { "回收临时",   "", "回收没人引用的临时 Token（草稿纸）", 0, 0, token_op_collect_temp },
+    { "回收临时",   "", "回收没人引用的临时符号节点（草稿纸）", 0, 0, token_op_collect_temp },
     { "调用补丁",   "<补丁> <操作> [参数…]", "走受审通道调用外设补丁的操作（如 记事本 写/提交/发送）",
       2, 6, token_op_call_patch },
     /* ⚠ 下面四条是**第 9 条（过程记号）**新加的 —— 必须留在**表尾**：
@@ -2651,7 +2652,7 @@ static const TokenOp TOKEN_OPS[] = {
     { "加否则",     "<过程> <动作>", "⑤ 给过程加**另一支**（`[否则]`）：上面那条条件不成立时走它",
       2, 2, token_op_add_else },
     { "加执行",     "<过程> <动作词> [参数…]", "① 给过程加一个**真的会调动作**的步骤"
-      "（动作 token = `[执行:动作词 参数…]`）；跑的时候走 `action_run`（白名单+超时+账），"
+      "（动作符号节点 = `[执行:动作词 参数…]`）；跑的时候走 `action_run`（白名单+超时+账），"
       "干跑时只核过、不动外部世界", 2, 6, token_op_add_exec },
     { "加断言",     "<过程> <主语> <关系> <宾语> [不] [序号]", "① 给过程加一个**要核的步骤**"
       "（`[步骤:N@要:S/R/B]`）：跑的时候 `rel_solve` + `der_verify` **独立复核**，核不过就是断点",
@@ -2669,7 +2670,7 @@ static inline size_t token_op_count(void) {
 
 /* 跑一条行为：展开 → 逐条走「审查 → 记账 → 应用 → 审计」（和自修改同一条路）。
  * 返回应用成功的条数；-1 = 没有这个行为 / 参数不对 / 前提不成立。 */
-/* 按名字找一条 Token 行为（`::op` 与过程执行那一层共用；判据只写这一处）。 */
+/* 按名字找一条符号节点行为（`::op` 与过程执行那一层共用；判据只写这一处）。 */
 static inline const TokenOp *token_op_by_name(const char *name) {
     if (!name) return NULL;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i)
@@ -2846,7 +2847,7 @@ static inline size_t micro_drain_queue(AI *ai) {
 
 /* 一轮的**唯一**结构修改入口。放在输出成句之后 ——
  * 此时遍历早就结束了（不在任何 for (i < t->count) 里），
- * 加边/加 Token 不会破坏任何正在进行的迭代。 */
+ * 加边/加符号节点不会破坏任何正在进行的迭代。 */
 static inline void micro_step(AI *ai, char *const *words, size_t n, const char *out) {
     if (!ai) return;
     Micro *mk = micro_of(ai);
@@ -2894,7 +2895,7 @@ static inline void micro_step(AI *ai, char *const *words, size_t n, const char *
 
 /* ---- 补丁注入 / 取出：内核与补丁的**唯一**两个接触点 ---- */
 
-/* 激活前：把补丁给的 Token 放进这一轮的上下文（焦点 + 时刻）。
+/* 激活前：把补丁给的符号节点放进这一轮的上下文（焦点 + 时刻）。
  * 没有补丁时这里是空转 —— 「核心不依赖补丁」不是口号，是这段代码。 */
 static inline size_t micro_patch_sense(AI *ai) {
     if (!ai) return 0;
@@ -2917,7 +2918,7 @@ static inline size_t micro_patch_sense(AI *ai) {
 }
 
 /* 激活后：把这一轮说出去的话交给动作补丁。
- * 内核不知道「日志」「音箱」「机械臂」是什么 —— 它只给 Token。 */
+ * 内核不知道「日志」「音箱」「机械臂」是什么 —— 它只给符号节点。 */
 static inline size_t micro_patch_act(AI *ai, const char *out) {
     if (!ai || !out || !out[0]) return 0;
     Micro *mk = micro_of(ai);
@@ -2934,7 +2935,7 @@ static inline size_t micro_patch_act(AI *ai, const char *out) {
     return n;
 }
 
-/* ============================ 对话触发：自然语言 → Token 行为 ============================
+/* ============================ 对话触发：自然语言 → 符号节点行为 ============================
  *
  * 用户要的「对话触发」：`猫 和 鱼 之间 加 个 词` 这种话要真的能干活，
  * 而不是只能手打 `::op 中间插词 猫 鱼`。
@@ -2947,7 +2948,7 @@ static inline size_t micro_patch_act(AI *ai, const char *out) {
  * 触发的动作**照样走受审通道**（token_op_run → 审查/预算/审计）——
  * 自然语言只是"入口"，不是"特权"。 */
 typedef struct {
-    const char *name;        /* 触发的 Token 行为（TOKEN_OPS[] 里的名字） */
+    const char *name;        /* 触发的符号节点行为（TOKEN_OPS[] 里的名字） */
     const char *kind;        /* 种类词（"词" / "前提" / "反前提" / "草稿"） */
     const char *help;        /* 一句话说明（::triggers 里列出来） */
 } DialogTriggerRow;
@@ -2957,15 +2958,15 @@ static const char *const DIALOG_CONNECTIVES[] = { "和", "跟", "与", "同", "�
 /* 动词多收几个说法：加/插/添/塞/放 都是"往中间放一个"；连/接/搭 是"接上" */
 static const char *const DIALOG_VERBS[]       = { "加", "插", "添", "塞", "放",
                                                   "连", "接", "搭", NULL };
-static const char *const DIALOG_KIND_WORD[]   = { "词", "词儿", "词儿", "token", NULL };
+static const char *const DIALOG_KIND_WORD[]   = { "词", "词儿", "词儿", "token", "符号节点", NULL };
 static const char *const DIALOG_KIND_PREM[]   = { "前提", "条件", "前题", NULL };
 static const char *const DIALOG_NEG[]          = { "反", "不", "别", NULL };
 static const char *const DIALOG_RECYCLE_ACT[] = { "回收", "清理", "收", "清", NULL };
-static const char *const DIALOG_RECYCLE_OBJ[] = { "草稿", "草稿纸", "临时", "临时词", "临时token", NULL };
+static const char *const DIALOG_RECYCLE_OBJ[] = { "草稿", "草稿纸", "临时", "临时词", "临时符号节点", NULL };
 
 /* 词的"连写匹配"：**分词器会把词切开**（实测「前提」被切成「前」+「提」），
- * 所以候选词要么一个 token 就够，要么两个 token 拼起来正好是它。
- * 返回用掉几个 token（0 = 不匹配）。 */
+ * 所以候选词要么一个符号节点就够，要么两个符号节点拼起来正好是它。
+ * 返回用掉几个符号节点（0 = 不匹配）。 */
 static inline size_t dialog_match_word(char *const *words, size_t n, size_t t,
                                        const char *want) {
     if (!words || !want || t >= n) return 0;
@@ -3113,7 +3114,7 @@ typedef enum {
     DWC_ANCHOR,       /* 之间/中间/当中 */
     DWC_V_INSERT,     /* 加/插/添/塞/放/搁/堆 */
     DWC_V_CONNECT,    /* 连/接/搭（动作同插词：往中间接一个） */
-    DWC_KIND_WORD,    /* 词/词儿/词元/token */
+    DWC_KIND_WORD,    /* 词/词儿/词元/符号节点 */
     DWC_KIND_PREM,    /* 前提/条件/前题/前提词/条件词 */
     DWC_NEG_KIND,     /* 反/非（修饰种类词 → 反前提） */
     DWC_NEG_CMD,      /* 别/甭/莫/不要/不用/不（**否定命令 → 不动手**） */
@@ -3134,7 +3135,7 @@ static const DialogWordRow DIALOG_WORDS[] = {
     { "堆", DWC_V_INSERT },
     { "连", DWC_V_CONNECT }, { "接", DWC_V_CONNECT }, { "搭", DWC_V_CONNECT },
     { "词", DWC_KIND_WORD }, { "词儿", DWC_KIND_WORD }, { "词元", DWC_KIND_WORD },
-    { "token", DWC_KIND_WORD },
+    { "符号节点", DWC_KIND_WORD }, { "token", DWC_KIND_WORD },   /* 老说法照收，不破坏已有脚本 */
     { "前提", DWC_KIND_PREM }, { "条件", DWC_KIND_PREM }, { "前题", DWC_KIND_PREM },
     { "前提词", DWC_KIND_PREM }, { "条件词", DWC_KIND_PREM },
     { "反", DWC_NEG_KIND }, { "非", DWC_NEG_KIND },
@@ -3154,7 +3155,7 @@ static const DialogWordRow DIALOG_WORDS[] = {
     { "回收", DWC_RECYCLE }, { "清理", DWC_RECYCLE }, { "收", DWC_RECYCLE },
     { "清", DWC_RECYCLE },
     { "草稿", DWC_DRAFT }, { "草稿纸", DWC_DRAFT }, { "临时", DWC_DRAFT },
-    { "临时词", DWC_DRAFT }, { "临时token", DWC_DRAFT },
+    { "临时词", DWC_DRAFT }, { "临时符号节点", DWC_DRAFT },
     { NULL, DWC_NONE }
 };
 
@@ -3165,7 +3166,7 @@ static inline uint8_t dialog_class_of(const char *w) {
     return DWC_NONE;
 }
 
-/* 在位置 i 上归一（连写匹配：分词器会把「前提/词儿」切开）→ 类别；*used = 吃掉几个 token */
+/* 在位置 i 上归一（连写匹配：分词器会把「前提/词儿」切开）→ 类别；*used = 吃掉几个符号节点 */
 static inline uint8_t dialog_class_at(char *const *words, size_t n, size_t i, size_t *used) {
     if (used) *used = 0;
     if (!words || i >= n) return DWC_NONE;
@@ -3189,7 +3190,7 @@ static inline int dialog_trigger_try_norm(AI *ai, char *const *words, size_t n,
     size_t m = (n < DIALOG_MAX_WORDS) ? n : DIALOG_MAX_WORDS;
     uint8_t cls[DIALOG_MAX_WORDS];
     for (size_t i = 0; i < m; ++i) cls[i] = DWC_NONE;
-    /* ① 归一：一次扫过去，连写的第二个 token 标成"已被吃掉"（用 255 表示） */
+    /* ① 归一：一次扫过去，连写的第二个符号节点标成"已被吃掉"（用 255 表示） */
     for (size_t i = 0; i < m;) {
         size_t u = 0;
         uint8_t c = dialog_class_at(words, m, i, &u);
@@ -3298,7 +3299,7 @@ static inline int ai_trigger_norm_on(void) { return g_dialog_norm_shown; }
 static inline void dialog_trigger_norm_note(int on) { g_dialog_norm_shown = on; }
 
 static inline void dialog_trigger_list(void) {
-    printf("对话触发（自然语言 → Token 行为）：\n");
+    printf("对话触发（自然语言 → 符号节点行为）：\n");
     printf("  <A> 和 <B> 之间 加|插 个 词 [<名字>]     → ::op 中间插词\n");
     printf("  <A> 和 <B> 之间 加|插 个 前提 [<前提>]   → ::op 加前提\n");
     printf("  <A> 和 <B> 之间 加|插 个 反 前提 [<前提>] → ::op 加反前提\n");
@@ -3332,7 +3333,7 @@ static inline void micro_report(const AI *ai) {
            mk->prune_off ? "关" : "开");
     printf("         安全点走过 %zu 轮：提了 %zu 条（去重 %zu / 队列溢出 %zu）\n",
            mm->n_steps, mm->n_proposed, mm->n_dedup, mm->n_dropped);
-    printf("         应用 %zu（新边 %zu 新Token %zu 打关系 %zu 沉淀 %zu 强化 %zu 删边 %zu）  被拒 %zu\n",
+    printf("         应用 %zu（新边 %zu 新符号节点 %zu 打关系 %zu 沉淀 %zu 强化 %zu 删边 %zu）  被拒 %zu\n",
            mm->n_applied, mm->n_new_edges, mm->n_new_tokens, mm->n_rel,
            mm->n_derived, mm->n_bumped, mm->n_removed, mm->n_denied);
     printf("         最近 %zu 轮速率 %.2f 条/轮  元认知关小过 %zu 次  当前%s\n",
@@ -3368,17 +3369,17 @@ static inline void safety_report(const AI *ai) {
                ai->route_writes ? "开" : "关（默认）");
         printf("               都改走受审通道。**两类刻意直写**：① 感知共现（它带 hits/pattern/topic\n");
         printf("               这些观测细节，转成意图会丢信息，而且是知识的来源）；② 端点落在**协议骨架**\n");
-        printf("               里的写入（[时刻:…] 这类名字 —— 内核按规矩不接「改保留 Token」，而时间链是内核\n");
+        printf("               里的写入（[时刻:…] 这类名字 —— 内核按规矩不接「改保留符号节点」，而时间链是内核\n");
         printf("               自己的记账、不是自修改）。两类都照记写入账。)\n");
     }
     if (!ai || !ai->micro) { printf("[安全内核] 还没起来\n"); return; }
     const SafetyKernel *sk = &((const Micro *)ai->micro)->safe;
     printf("[安全内核] 总闸=%s  冻结=%s（冻结过 %zu 次）\n",
            sk->mod_off ? "关" : "开", sk->freeze ? "是" : "否", sk->n_freeze);
-    printf("           预算：每步新增边 ≤%d、新增 Token ≤%d；单 Token 边 ≤%d；池子 ≤%d\n",
+    printf("           预算：每步新增边 ≤%d、新增符号节点 ≤%d；单符号节点边 ≤%d；池子 ≤%d\n",
            sk->max_new_edges_step, sk->max_new_tokens_step,
            sk->max_edges_per_token, sk->max_tokens_total);
-    printf("           开关：造新 Token=%s  删边=%s\n",
+    printf("           开关：造新符号节点=%s  删边=%s\n",
            sk->new_token_off ? "关" : "开", sk->remove_off ? "关" : "开");
     printf("           判定：允许 %zu 拒绝 %zu\n", sk->n_allowed, sk->n_denied);
     printf("           拒绝理由分布：");
@@ -3419,7 +3420,7 @@ static inline void patch_report(const AI *ai) {
                p->n_sense, p->n_out_total, p->n_out_last, p->n_act, p->n_propose, p->n_err);
         if (p->err[0]) printf("             最后一次错误：%s（连续 %d 次）\n", p->err, p->err_streak);
     }
-    printf("       可用内建：自省（把内核自己的状态变成 Token）｜记事本（**输出侧**：可编辑的答复 + 草稿区 + 发送控制）\n");
+    printf("       可用内建：自省（把内核自己的状态变成符号节点）｜记事本（**输出侧**：可编辑的答复 + 草稿区 + 发送控制）\n");
 }
 
 /* ---- 开关：::mod off / on / coact off … ---- */
@@ -3452,7 +3453,7 @@ static inline int micro_set_detector(AI *ai, const char *name, int on) {
 
 static inline void patch_list_builtin(void) {
     printf("可用内建补丁：\n");
-    printf("  自省    感知侧：把内核自己的状态变成 Token（不依赖任何外部设备）\n");
+    printf("  自省    感知侧：把内核自己的状态变成符号节点（不依赖任何外部设备）\n");
     printf("  记事本  输出侧：可编辑的答复文本 + 草稿区 + 什么时候发送\n");
     printf("          操作：写/插入/删/改/清空/提交/清空发言/插入发言/删发言/改发言/发送/不发/模式/读\n");
     printf("          ::patch mount 记事本 → ::patch op 记事本 写 <文本>\n");
@@ -3470,7 +3471,7 @@ static inline void micro_stats(const AI *ai) {
     size_t rem = 0;
     for (int k = 0; k < MICRO_REMIND_N; ++k) rem += mm->n_reminders[k];
     printf("       微内核：自修改=%s%s  安全点=%zu轮 意图=%zu(应用%zu/拒%zu/去重%zu) "
-           "新边=%zu 新Token=%zu 沉淀=%zu 删边=%zu 补丁=%zu 提醒=%zu\n",
+           "新边=%zu 新符号节点=%zu 沉淀=%zu 删边=%zu 补丁=%zu 提醒=%zu\n",
            mk->safe.mod_off ? "关" : "开",
            mk->safe.freeze ? "(已冻结)" : (mk->propose_off ? "(关小中)" : ""),
            mm->n_steps, mm->n_proposed,

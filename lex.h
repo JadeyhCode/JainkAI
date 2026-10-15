@@ -5,20 +5,20 @@
  * 代码要的是另一套规矩，就四条：
  *   · 标识符：`[A-Za-z_][A-Za-z0-9_]*`
  *   · 数字：  `[0-9]+` 或 `[0-9]+.[0-9]+`（小数点后面没数字就不吃那个点）
- *   · 标点：  **逐字符**一个 token（`(` `)` `[` `]` `{` `}` `:` `;` `,` `+` `-` `*` `/`
+ *   · 标点：  **逐字符**一个符号节点（`(` `)` `[` `]` `{` `}` `:` `;` `,` `+` `-` `*` `/`
  *             `=` `<` `>` `!` `"` `#` `&` `|` `%` `^` `~` `?` `.` …）
- *   · 空白：  **归一**（空格/制表/换行…都只是一处分隔，不进 token）——
- *             **token 里不能有空格**，这是硬边界（存进池子的 token 名字靠空白分开）
+ *   · 空白：  **归一**（空格/制表/换行…都只是一处分隔，不进符号节点）——
+ *             **符号节点里不能有空格**，这是硬边界（存进池子的符号节点名字靠空白分开）
  *
  * **往返判据只写在这一处**（`lex_roundtrip()`，tests 只调它，别在测试里再抄一遍）：
- *   ① **逐字保留**：把 token 首尾相接（不加分隔）== 源文本去掉空白后的字节串
+ *   ① **逐字保留**：把符号节点首尾相接（不加分隔）== 源文本去掉空白后的字节串
  *      —— 一个字节不许丢、不许改、不许凭空多出来；
- *   ② **幂等**：canonical 形态（token 之间恰好一个空格）**再词法一遍**，
+ *   ② **幂等**：canonical 形态（符号节点之间恰好一个空格）**再词法一遍**，
  *      canonical 必须逐字节相同（说明空白真的归一干净了、词法没有上下文依赖）。
  * 两条都过 = 往返成立。`::lex` 打的就是这两条 + 括号配对。
  *
  * 边界（照实说，别当 bug）：
- *   · **非 ASCII 字节按"一个字节一个 token"**（UTF-8 汉字会碎成 3 个词）——
+ *   · **非 ASCII 字节按"一个字节一个符号节点"**（UTF-8 汉字会碎成 3 个词）——
  *     这一层管的是 ASCII 代码；`::lex` 会把非 ASCII 字节数出来提醒你。
  *   · **不认字符串与注释**：引号、`//`、块注释符号都与普通标点一样逐字符切。
  *     逐字保留不受影响（字节一个不少），但**括号配对**会被字符串/注释里的括号骗到。
@@ -71,7 +71,7 @@ static inline const char *lex_kind_name(int k) {
     }
 }
 
-/* 词法扫描：**不改源文本**（token 只记 off/len） */
+/* 词法扫描：**不改源文本**（符号节点只记 off/len） */
 static inline void lex_scan(const char *src, LexProg *out) {
     if (!out) return;
     memset(out, 0, sizeof *out);
@@ -113,7 +113,7 @@ static inline void lex_scan(const char *src, LexProg *out) {
     }
 }
 
-/* canonical 形态需要多少字节（token 之间恰好一个空格 + 结尾 0） */
+/* canonical 形态需要多少字节（符号节点之间恰好一个空格 + 结尾 0） */
 static inline size_t lex_canon_need(const LexProg *p) {
     size_t need = 1;
     if (!p) return need;
@@ -147,7 +147,7 @@ static inline int lex_roundtrip(const char *src, char *why, size_t whycap) {
         return 0;
     }
 
-    /* ① 逐字保留：源文本里每个**非空白**字节，必须按顺序正好等于 token 拼起来的字节串 */
+    /* ① 逐字保留：源文本里每个**非空白**字节，必须按顺序正好等于符号节点拼起来的字节串 */
     size_t ti = 0, tj = 0;                     /* 第 ti 个词里的第 tj 个字节 */
     for (size_t i = 0; i < a.n; ++i) {
         unsigned char c = (unsigned char)src[i];
@@ -156,7 +156,7 @@ static inline int lex_roundtrip(const char *src, char *why, size_t whycap) {
         if (ti >= a.n_tok || src[a.tok[ti].off + tj] != (char)c) {
             if (why && whycap)
                 snprintf(why, whycap,
-                         "第 %zu 个字节（`%c`）没进 token 或被改了 —— 逐字保留不成立",
+                         "第 %zu 个字节（`%c`）没进符号节点或被改了 —— 逐字保留不成立",
                          i + 1, (c >= 0x20 && c < 0x7f) ? (char)c : '?');
             return 0;
         }
@@ -164,7 +164,7 @@ static inline int lex_roundtrip(const char *src, char *why, size_t whycap) {
     }
     while (ti < a.n_tok && tj >= a.tok[ti].len) { ti++; tj = 0; }
     if (ti != a.n_tok || tj != 0) {
-        if (why && whycap) snprintf(why, whycap, "token 里多出了源文本没有的字节");
+        if (why && whycap) snprintf(why, whycap, "符号节点里多出了源文本没有的字节");
         return 0;
     }
 

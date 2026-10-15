@@ -35,7 +35,7 @@ pct() {   # $1=段落 $2=词A $3=词B
 }
 
 echo "① emb 存在，且相关/无关分得开"
-nz=$(printf '%s\n' "$neuro" | sed -n 's/.*emb（PPMI 随机索引，1024 维）非零的 Token = \([0-9]*\).*/\1/p')
+nz=$(printf '%s\n' "$neuro" | sed -n 's/.*emb（PPMI 随机索引，1024 维）非零的符号节点 = \([0-9]*\).*/\1/p')
 [ -n "$nz" ] && [ "$nz" -ge 500 ] && chk "有 emb 的 Token = $nz（≥500）" 1 \
                                  || chk "有 emb 的 Token 太少（${nz:-?}）" 0
 cat_dog=$(pct "$embsec" 猫 狗)

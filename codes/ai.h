@@ -148,7 +148,7 @@ typedef struct {
  * 前面都没话说才存在** —— 这才叫链，不是并列地试四种策略。
  */
 typedef enum {
-    COT_READ = 1,   /* 读入：分词 + token 代数（拆解/合并/新建/中转） */
+    COT_READ = 1,   /* 读入：分词 + 符号节点代数（拆解/合并/新建/中转） */
     COT_ASSOC,      /* 联想：沿关联链想一遍，拿到候选 */
     COT_PARSE,      /* 骨架：认出哪个帧、哪个槽位 */
     COT_GATE,       /* 校验：槽位取值的类证据够不够 */
@@ -546,10 +546,10 @@ typedef struct {
     AISentPair *pairs;              /* 整句检索库 */
     size_t pairs_n, pairs_cap;
     int    use_retrieval;           /* 1 = 优先整句检索 */
-    float *idf;                     /* 每个 Token 的 IDF 权重（越小越常见） */
+    float *idf;                     /* 每个符号节点的 IDF 权重（越小越常见） */
     /* idf 数组的**实际长度**。必须单独记：ai->idf 是按「重建那一刻的
      * pool->count」分配的，而重建之后还会造词（关系词 intern、frame 造词、
-     * 抽象 Token）。原来 ai_idf_of() 拿 pool->count 当边界，于是新词会**越界读**
+     * 抽象符号节点）。原来 ai_idf_of() 拿 pool->count 当边界，于是新词会**越界读**
      * 到别的堆内容 —— 浮点垃圾值每次进程都不一样（地址相关），
      * 结果就是「装载态」和「训练态」的联想链、回复都不一样。
      * 症状隐蔽：整个词池 dump 逐字节相同，只有 idf 那 50 个词是垃圾。 */
@@ -564,7 +564,7 @@ typedef struct {
     size_t slots_n;
     size_t n_frames;                /* 结构化帧生成成功的次数 */
     size_t n_frame_assoc;           /* 其中「靠关联链证据放行槽位」才成功的次数 */
-    size_t n_coined;                /* 其中「现场造词」造出来的新 Token 数 */
+    size_t n_coined;                /* 其中「现场造词」造出来的新符号节点数 */
     size_t n_split;                 /* 其中「拆解切分」才匹配上的次数 */
     size_t n_merge;                 /* 其中「合并切分」才匹配上的次数 */
     size_t n_relay;                 /* 其中「中转词容错」生效的次数 */
@@ -686,6 +686,10 @@ typedef struct {
      * 它**不算知识**（`rel_direct` 跳过），所以不会把"猜的"变成"知道的"。 */
     int    rel_remember;
     size_t n_rel_guess_mem;         /* 记住过多少条猜测结论（统计用） */
+    /* **全图扫描的账**（§6.126）：维护类活动（GC / 缓存复核 / 巩固）每轮走了多少词、多少边。
+     * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
+    size_t n_scan_tokens;
+    size_t n_scan_edges;
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -767,7 +771,7 @@ typedef struct {
      * 只读（他者信念只在**他的**名下，判定现算不落库）；关着时整条路不跑（与今天逐字节相同）。 */
     int     others_ask;
     /* **过程执行**（第 9 条 ③ 写引擎，默认 0 = 关）：`::proc run <名字>` 把一条过程跑一遍 ——
-     * 逐步核对（认识吗 / 前提成立吗 / 是不是 Token 行为），核对本身只读；真的执行某一步行为
+     * 逐步核对（认识吗 / 前提成立吗 / 是不是符号节点行为），核对本身只读；真的执行某一步行为
      * 时走的是老那条受审通道。关着时那个命令只说"关着"，一个字的既有行为都不变。 */
     int     proc_run;
     /* **干跑**（第 9 条 ④，默认 0）：过程执行时"前提不成立"改成**假定成立**（记进假设层）、
@@ -854,14 +858,14 @@ typedef struct {
      * （结构体定义在那边，而 ai_new 排在它前面）。懒分配：第一轮走到安全点时
      * micro_of() 才建，所以它不进存档、也不影响 ai_new 的默认值。
      * 存档格式不含它：补丁是运行时驱动、意图是暂态；
-     * 自修改**产生的 Token 和边本身**已经随图存盘了。 */
+     * 自修改**产生的符号节点和边本身**已经随图存盘了。 */
     void  *micro;
 
     /* ---- 思维循环（think.h）----
      * 议程 / 未解问题 / 痕迹 / 元认知。同样用 void* 懒分配：
      * 结构体定义在 think.h 里，而那个头文件要用 rel.h/derive.h，只能放在本文件末尾。
      * 它也不进存档：未解问题是**会话内**的东西（想通了就没了），
-     * 想通之后落地的只有那些经安全内核审查过的 Token/边。 */
+     * 想通之后落地的只有那些经安全内核审查过的符号节点/边。 */
     void  *think;
 } AI;
 
@@ -937,7 +941,7 @@ static inline void ai_init_expr_pools(AI *ai) {
  *     w(age) = exp(-γ · age)        γ = 1 / 半衰期刻度
  *
  * 目前两个用户：逐条可信度的"新近项"、`::order`/租约式的年龄比较。
- * （token 的 hits 衰减是**按巩固周期离散**的几何衰减，属于另一套口径 —— 它作用在
+ * （符号节点的 hits 衰减是**按巩固周期离散**的几何衰减，属于另一套口径 —— 它作用在
  *   hits 计数上，不参与"这条知识多有底气"的判定；两套口径的分工写在这里，别再混。） */
 #define AI_TIME_GAMMA_DEFAULT 0.00002f      /* 半衰期约 34657 tick（≈ 训练语料的量级） */
 
@@ -1618,7 +1622,7 @@ static inline size_t cjk_char_len(const unsigned char *p) {
  *
  * 这一步是整个对话能力的关键：语料里写的是多字词（「什么」「我们」「老师」），
  * 而用户输入如果不按同一套词汇去切，就会出现「语料里的 `什么`」和「输入切出来的
- * `什` + `么`」是两个不同 Token 的错位 —— 表现为答非所问/只会复读。
+ * `什` + `么`」是两个不同符号节点的错位 —— 表现为答非所问/只会复读。
  * 所以这里做「最长优先」的词汇匹配：先试 4/3/2 字，池里没有就退回单字。 */
 static inline size_t ai_match_word(const AI *ai, const unsigned char *p, size_t remain) {
     if (!ai || !ai->pool) return 0;
@@ -1661,7 +1665,7 @@ static inline char **ai_tokenize(AI *ai, const char *text, size_t *out_n) {
     while (*p) {
         /* 原语标记是一个整体：[原语:对象]、[原语:分割] …
          * 必须先于「单字节 ASCII」分支处理，否则 '[' 会被当成一个孤立标点，
-         * 整个标记被拆成 原|语|对|象 —— 与语料里的 Token 完全对不上。 */
+         * 整个标记被拆成 原|语|对|象 —— 与语料里的符号节点完全对不上。 */
         if (*p == '[') {
             const char *close = strchr((const char *)p, ']');
             if (close && close > (const char *)p + 1) {
@@ -1804,8 +1808,8 @@ static inline float ai_focus_get(const AI *ai, const Token *t) {
 /* ============================ 前提成立吗（推理层按前提决定用不用） ============================
  *
  * 用户的话：「**联想本来不依赖前提**，可以正常联想……但是逻辑会知道这两个之间的前提
- * token 是什么」+「推理/思维层按前提决定用不用」。所以判据放在**逻辑**这一侧：
- * **前提 token 出现在当前注意窗口里（输入里的词会被推进焦点环）→ 前提成立**。
+ * 符号节点是什么」+「推理/思维层按前提决定用不用」。所以判据放在**逻辑**这一侧：
+ * **前提符号节点出现在当前注意窗口里（输入里的词会被推进焦点环）→ 前提成立**。
  * 它只看注意力，不看权重：简单、确定、说出来也听得懂（"你刚才提到过它"）。
  * 联想/走边**不看这个** —— 那是刻意的（前提不该挡住回忆）。 */
 /* 前提在图上"够得着"吗：从当前注意窗口出发做一次**受限扩散**（深度 ≤2、能量 ≥0.25），
@@ -1896,7 +1900,7 @@ static inline void ai_char_ground(AI *ai, const char *text) {
     }
 }
 /* 把队列里的字符按顺序切成"词"（每个 UTF-8 字符一个词）—— 返回条数。
- * `buf` 用来存每段的终止符（调用方给 n 个 ' ' 的空间）。 */
+ * `buf` 用来存每段的终止符（调用方给 n 个 '\0' 的空间）。 */
 static inline size_t ai_char_words(const AI *ai, const char **w, char *buf, size_t n) {
     if (!ai || !w || !buf) return 0;
     size_t i = 0, k = 0, cnt = 0;
@@ -2272,7 +2276,7 @@ static inline void ai_learn_expression(AI *ai, ExprMode mode, int feedback) {
 
 /* ============================ 生成 ============================ */
 
-/* 这个 Token 是不是「表达池」用的脚手架（[表达:*] 及其变体 应该/大概/…）？
+/* 这个符号节点是不是「表达池」用的脚手架（[表达:*] 及其变体 应该/大概/…）？
  * 它们是给 ai_render_expr 拼前后缀用的，不该被当成内容词再吐出来 ——
  * 否则输出会变成「大概，猫人知道地上来了再见」这种带前缀残留的句子。 */
 static inline int ai_is_expr_scaffold(const AI *ai, const Token *t) {
@@ -2342,7 +2346,7 @@ static inline int ai_can_continue_from(AI *ai, const Token *from, const Token *t
  * want = ASSOC_ROLE_REPLY 时，**只**在标了「回复」角色的边里选 —— 这就是「按我建议的干」
  * 的那一步：从回复首词出去时，只能走同样是回复内部学到的转移，语料别处的高频共现
  * （反义/什么/属 于…）进不来。没有该角色的边时才退化成通用边，保证不会走投无路。 */
-/* 这个 Token 出现在某个话题里吗（投票表） */
+/* 这个符号节点出现在某个话题里吗（投票表） */
 static inline int ai_topic_has(const AI *ai, uint8_t topic, const Token *t) {
     if (!ai || !t || topic >= AI_MAX_TOPICS) return 0;
     const AITopic *T = &ai->topics[topic];
@@ -2528,7 +2532,7 @@ static inline void ai_embed_build(AI *ai) {
     const uint32_t DF_MAX = (uint32_t)(n_content * 15 / 100);
     #define EMB_CTX_OK(m) ((m)->name && (m)->name[0] != '[' && df[(m)->id] <= DF_MAX)
 
-    /* ① 行和：每个内容 Token 的出边权重之和 */
+    /* ① 行和：每个内容符号节点的出边权重之和 */
     int64_t tot = 0;
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
@@ -2752,7 +2756,7 @@ static inline float ai_idf_of(const AI *ai, const Token *t) {
     return v > 0.0f ? v : 1.0f;
 }
 
-/* 把 Token 名的 UTF-8 拆成「字符」，喂给 bigram 用 */
+/* 把符号节点名的 UTF-8 拆成「字符」，喂给 bigram 用 */
 static inline size_t ai_name_chars(const char *name, const char **out, uint8_t *lens,
                                    size_t max) {
     if (!name) return 0;
@@ -2774,24 +2778,136 @@ static inline size_t ai_name_chars(const char *name, const char **out, uint8_t *
     return n;
 }
 
+/* **带缓存的字符切分**（§6.127）：token.h 的 `Token.ch_p/ch_len/n_ch` 是对
+ * `name` 的**纯派生**缓存（名字 intern 后不再变）。这里不重切、只按名字指针读回。
+ * 超长名字（n_ch==255 哨兵）与"没名字"照旧现场切 —— 与旧行为**逐字节相同**，
+ * 只是把重复的字节遍历去掉。这是 `ai_char_bigram_score` 里最贵的一步：
+ * 那一项占全轮 76% 的 CPU，而每次调用都要把两边名字重切一遍。 */
+static inline size_t token_name_chars(const Token *t, const char **out, uint8_t *lens,
+                                      size_t max) {
+    if (!t || !t->name) return 0;
+    if (t->n_ch == 0) {                       /* 第一次用：切一遍存下来 */
+        Token *m = (Token *)t;
+        size_t n = ai_name_chars(t->name, m->ch_p, m->ch_len, TOKEN_CH_MAX);
+        uint32_t sig = 0;                     /* 顺带把这名字的**字符集位图**算出来 */
+        for (size_t i = 0; i < n; ++i) {
+            uint32_t h = 2166136261u;
+            for (uint8_t k = 0; k < m->ch_len[i]; ++k) {
+                h ^= (uint8_t)m->ch_p[i][k]; h *= 16777619u;
+            }
+            sig |= (uint32_t)1u << (h & 31u);
+        }
+        m->ch_sig = sig;
+        m->n_ch = (n >= TOKEN_CH_MAX) ? 255u : (uint8_t)n;   /* 满了 ⇒ 哨兵：以后不再缓存 */
+    }
+    if (t->n_ch != 255u && t->n_ch <= max) {
+        for (uint8_t i = 0; i < t->n_ch; ++i) { out[i] = t->ch_p[i]; lens[i] = t->ch_len[i]; }
+        return t->n_ch;
+    }
+    return ai_name_chars(t->name, out, lens, max);           /* 超长：现场切（旧路径） */
+}
+/* 名字的**字符集位图**（跟着上面的缓存一起算，之后是 O(1) 读）。
+ * 用途见 ai_char_bigram_score 的预筛：位图不相交 ⇒ 字符 bigram 必然不相交。
+ * ⚠ 只能是**超集**（宁可多置位）：少置一位就会把"其实有重合"错判成 0，那才是改分数。 */
+static inline uint32_t token_name_sig(const Token *t) {
+    if (!t || !t->name) return 0;
+    if (t->n_ch == 0) {
+        const char *o[TOKEN_CH_MAX]; uint8_t l[TOKEN_CH_MAX];
+        (void)token_name_chars(t, o, l, TOKEN_CH_MAX);
+    }
+    if (t->n_ch != 255u) return t->ch_sig;
+    uint32_t s = 0;                           /* 超长名字（没缓存）：现场算，位图仍是超集 */
+    const char *o[96]; uint8_t l[96];
+    size_t n = ai_name_chars(t->name, o, l, 96);
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t h = 2166136261u;
+        for (uint8_t k = 0; k < l[i]; ++k) { h ^= (uint8_t)o[i][k]; h *= 16777619u; }
+        s |= (uint32_t)1u << (h & 31u);
+    }
+    return s;
+}
+
+/* 一个字符是否相同。**不用 memcmp** ：长度是变量、gcc 内联不了 ⇒ 每次都是一次
+ * 真正的函数调用，而这里的内层循环每轮跑几百万次（§6.127 量出来的头号热点）。
+ * 1~4 字节（UTF-8 的全部字符宽度）走内联比较，超长才落到 memcmp。 */
+static inline int ai_ch_eq(const char *x, const char *y, uint8_t l) {
+    if (l == 3) return x[0] == y[0] && x[1] == y[1] && x[2] == y[2];   /* 汉字：最常见 */
+    if (l == 1) return x[0] == y[0];
+    if (l == 2) return x[0] == y[0] && x[1] == y[1];
+    if (l == 4) return x[0] == y[0] && x[1] == y[1] && x[2] == y[2] && x[3] == y[3];
+    return memcmp(x, y, l) == 0;
+}
+
+/* **查询侧的字符切分备忘**（§6.127）：检索是"一个查询 × 几千条库句"，
+ * 每一对都重新切一遍**同一句查询**的字符（`_t/roundbench_last.tsv`：每轮 1.3 万次调用）。
+ * 切一次、存下来，后面几千次直接读回。
+ * 键是**内容**（符号节点指针序列）+ 脑 + 池子 —— 调用方每次传的是两块**不同的临时数组**
+ * （内容相同），按指针比会一次都不命中（这一点是量出来的）；而带上 `ai`/`pool`
+ * 是为了防"同一块内存被另一个脑子复用"（工具里连着建两个 AI 时真的会撞地址）。 */
+typedef struct {
+    uint64_t     serial;    /* pool 的序号（不受 malloc 地址复用影响） */
+    const Token *tok[64];
+    size_t       n, nc;
+    const char  *c[96];
+    uint8_t      l[96];
+    uint32_t     sig;
+} AiCharQueryMemo;
+static AiCharQueryMemo g_charq;
+
+/* 就绪之后：ca/la_/na/sig 是这次查询的字符切分 */
+static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an) {
+    enum { MAXC = 96 };
+    if (g_charq.serial == serial &&
+        g_charq.n == an && an <= 64 && memcmp(g_charq.tok, a, an * sizeof *a) == 0)
+        return 1;
+    g_charq.serial = serial; g_charq.n = an;
+    for (size_t i = 0; i < an; ++i) g_charq.tok[i] = a[i];
+    size_t nc = 0;
+    uint32_t sig = 0;
+    for (size_t i = 0; i < an && nc + 8 < MAXC; ++i) {
+        nc += token_name_chars(a[i], g_charq.c + nc, g_charq.l + nc, MAXC - nc);
+        sig |= token_name_sig(a[i]);
+    }
+    g_charq.nc = nc; g_charq.sig = sig;
+    return 0;
+}
+
 /* 字符 bigram 重合度：Dice。抓「怎么说」相似而词不完全一样的情况
  * （「你平常做什么」对「你平时做什么」词重叠只有一半，字符几乎全同）。 */
-static inline int ai_char_bigram_score(Token *const *a, size_t an,
+static inline int ai_char_bigram_score(uint64_t serial,
+                                       Token *const *a, size_t an,
                                        Token *const *b, size_t bn) {
+    /* A/B 开关（默认 on）：`AIP_CHARBG=0` 把这一项整条关掉，用来量它在总分里到底占多少。
+     * 只做性能标定用，不改默认行为。 */
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("AIP_CHARBG"); on = (e && *e == '0') ? 0 : 1; }
+    if (!on) return 0;
     enum { MAXC = 96 };
-    const char *ca[MAXC], *cb[MAXC];
-    uint8_t la_[MAXC], lb_[MAXC];
-    size_t na = 0, nb = 0;
-    for (size_t i = 0; i < an && na + 8 < MAXC; ++i)
-        na += ai_name_chars(a[i] ? a[i]->name : NULL, ca + na, la_ + na, MAXC - na);
+    const char *cb[MAXC];
+    uint8_t lb_[MAXC];
+    (void)ai_char_query_prep(serial, a, an);
+    const char *const *ca = g_charq.c;
+    const uint8_t *la_ = g_charq.l;
+    size_t na = g_charq.nc, nb = 0;
     for (size_t i = 0; i < bn && nb + 8 < MAXC; ++i)
-        nb += ai_name_chars(b[i] ? b[i]->name : NULL, cb + nb, lb_ + nb, MAXC - nb);
+        nb += token_name_chars(b[i], cb + nb, lb_ + nb, MAXC - nb);
     if (na < 2 || nb < 2) return 0;
+    /* **字符集位图预筛**（§6.127）：这一趟是每次检索的**头号热点**
+     * （`gprof`：占全部 CPU 的 44%，出厂模型下每轮 1.3 万次调用 —— 每轮把
+     * 几千条库句逐条算一遍字符 bigram，`_t/roundbench_last.tsv`）。
+     * 判据是**精确**的：一个字符都不共享 ⇒ 一个字符 bigram 也不可能共享 ⇒ inter=0。
+     * 所以这是"提前知道结果是 0"，不是近似 —— 位图碰撞只会让预筛**放行**
+     * （多算一次），永远不会改分数。省掉的是那圈 O(na×nb) 的比较。 */
+    {
+        uint32_t sb = 0;
+        for (size_t j = 0; j < bn; ++j) sb |= token_name_sig(b[j]);
+        if ((g_charq.sig & sb) == 0) return 0;
+    }
     size_t inter = 0, tot_a = 0, tot_b = 0;
     for (size_t i = 0; i + 1 < na; ++i) {
         tot_a++;
         for (size_t j = 0; j + 1 < nb; ++j) {
-            if (la_[i] == lb_[j] && memcmp(ca[i], cb[j], la_[i]) == 0) { inter++; break; }
+            if (la_[i] == lb_[j] && ai_ch_eq(ca[i], cb[j], la_[i])) { inter++; break; }
         }
     }
     for (size_t j = 0; j + 1 < nb; ++j) tot_b++;
@@ -2835,7 +2951,7 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
         for (size_t j = 0; j < bn; ++j)
             if (a[i] == b[j]) { inter++; break; }
     int dice = (int)((inter * 200) / (an + bn));
-    int bg = ai_char_bigram_score(a, an, b, bn);
+    int bg = ai_char_bigram_score(ai && ai->pool ? ai->pool->serial : 0, a, an, b, bn);
     int sc = (cov * 55 + bg * 30 + dice * 15) / 100;
     if (sc > 100) sc = 100;
     if (out_cov) *out_cov = cov;
@@ -2915,10 +3031,10 @@ static inline const AISentPair *ai_sent_lookup(AI *ai, Token *const *words, size
 }
 
 
-/* 检索：返回最佳匹配的回复句（调用方负责把 Token* 转成字符串）。
+/* 检索：返回最佳匹配的回复句（调用方负责把符号节点* 转成字符串）。
  * 命中话题的候选有加权；同分时用 rng 随机选一个，避免每次都同一句。 */
 
-/* 把一串 Token 拼成可读文本（CJK 之间补空格，ASCII 字母数字之间不补） */
+/* 把一串符号节点拼成可读文本（CJK 之间补空格，ASCII 字母数字之间不补） */
 static inline char *ai_tokens_to_text(Token *const *toks, size_t n) {
     size_t cap = 64, len = 0;
     char *buf = (char *)malloc(cap);
@@ -3515,6 +3631,11 @@ static inline void ai_gc(AI *ai) {
     uint8_t del_state = ai->gc.gc_delete_state;
     float rate = ai->gc.gc_upgrade_rate;
 
+    /* ⚠ §6.127 试过把「晋级态 / 挑出该埋的」并成一趟（省一趟全扫），**撤了**：
+     * 两趟不是纯后缀 —— 第一趟里的 `ai_gc_indegree(p, t)` 会**跳过已经标成垃圾的词**，
+     * 于是"边涨边埋"会让后面那些词算出的入度与原来不同（决策跟着变）。
+     * 收益本来也可忽略（GC 每 100 轮才走一趟，约占每轮开销 1%），不值得拿等价性去换。 */
+    ai->n_scan_tokens += p->count;
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (t->is_garbage || t->mem_state >= del_state) continue;
@@ -3525,11 +3646,13 @@ static inline void ai_gc(AI *ai) {
         float keep = ai_gc_keep_prob(ai, age, rec, token_hits_total(t), val, ind);
         if (ai_gc_rand(ai) < (1.0f - keep) * rate) t->mem_state++;
     }
+    ai->n_scan_tokens += p->count;
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (t->is_garbage) continue;
         for (size_t j = 0; j < t->count; ++j) {
             AssocEntry *e = &t->assocs[j];
+            ai->n_scan_edges++;
             if (e->mem_state >= del_state) continue;
             uint64_t age = now - e->birth_tick, rec = now - e->last_touch_tick;
             int val = (e->main == ai->good || e->main == ai->bad);
@@ -3538,12 +3661,14 @@ static inline void ai_gc(AI *ai) {
         }
     }
     size_t deleted = 0;
+    ai->n_scan_tokens += p->count;
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (t->is_garbage || t->mem_state < del_state) continue;
         if (ai_gc_protected(ai, t)) continue;
         t->is_garbage = 1; deleted++;
     }
+    ai->n_scan_tokens += p->count;   /* 清边那一趟同样逐词走 */
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (t->is_garbage) {
@@ -3551,6 +3676,7 @@ static inline void ai_gc(AI *ai) {
             t->count = 0;
             continue;
         }
+        ai->n_scan_edges += t->count;
         for (size_t j = 0; j < t->count; ) {
             AssocEntry *e = &t->assocs[j];
             int remove = 0;
@@ -3947,7 +4073,7 @@ static inline void ai_imagine(AI *ai) {
  * emb 是从 PPMI 邻居投影出来的，所以这个偏移方向真的对应「A 到 B 的那种关系」。
  * 实测 `猫 动物 狗` 能落在「同类词」上（见 ::analogy）。
  *
- * 返回值是最近的那个真实词（不新建 Token），相似度写进 out_sim。 */
+ * 返回值是最近的那个真实词（不新建符号节点），相似度写进 out_sim。 */
 static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
                                Token *item_c, float *out_sim) {
     if (!ai || !item_a || !pair_ab || !item_c) return NULL;
@@ -4240,9 +4366,9 @@ static inline void ai_stats(const AI *ai) {
         case MEM_FORGOTTEN: forgotten++; break;
         }
     }
-    printf("[统计] Token=%zu (活跃%zu 淡化%zu 休眠%zu 遗忘%zu 垃圾%zu)  边=%zu\n",
+    printf("[统计] 符号节点=%zu (活跃%zu 淡化%zu 休眠%zu 遗忘%zu 垃圾%zu)  边=%zu\n",
            ai->pool->count, active, fading, dormant, forgotten, garbage, edges);
-    printf("       已学=%zu  轮次=%zu  已删Token=%zu  已删边=%zu\n",
+    printf("       已学=%zu  轮次=%zu  已删符号节点=%zu  已删边=%zu\n",
            ai->n_learned, ai->turns,
            ai->n_gc_deleted_tokens, ai->n_gc_deleted_edges);
     printf("       惊讶=%zu  抽象=%zu  睡眠=%zu  轨迹=%zu  睡眠中=%d\n",

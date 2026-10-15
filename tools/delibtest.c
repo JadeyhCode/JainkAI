@@ -215,7 +215,7 @@ static void test_idle_think(void) {
     ok(t->n_idle == 1 && t->idle_note[0], "记账：想过 1 轮 + 记下挑的是哪个问题");
     ok(strstr(t->idle_note, "跳舞") != NULL, "挑的正是挂着的那条问题");
     ok(ai->pool->count == tokens0 && count_rel_edges(ai) == edges0,
-       "**只读**：没往图里写（Token 数 / 关系边数都不动）");
+       "**只读**：没往图里写（符号节点数 / 关系边数都不动）");
     ok(micro_of(ai)->queue.n == q0, "**只读**：没提议任何意图（意图队列长度不变）");
     int saw = 0;
     for (size_t i = 0; i < t->trace_n; ++i)
@@ -422,7 +422,7 @@ static void test_crossturn(void) {
     ok(t->n_asked == 1, "「累计挂过」在走");
     /* 思维改脑走的是意图队列：安全点应用之后，图里应该有个 [自问:…] 节点 */
     micro_step(ai, w, 4, "测试");
-    ok(mk->meta.n_new_tokens == 1, "经意图队列落了 1 个新 Token（安全内核放行）");
+    ok(mk->meta.n_new_tokens == 1, "经意图队列落了 1 个新符号节点（安全内核放行）");
     ok(has_token(ai, "[自问:猫_会_跳舞_吗]"), "落成的是可辨识的自问节点（名字无空格）");
     ok(micro_has_edge(pool_find(ai->pool, "[自问:猫_会_跳舞_吗]"), T(ai, "猫")),
        "自问节点接回触发它的词（不是孤岛）");

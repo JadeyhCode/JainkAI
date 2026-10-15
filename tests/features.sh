@@ -41,7 +41,7 @@ echo "== 3. 前提（淘汰「语境」后的表示）：前关联+连接 建出
 run '::asm [原语:对象] 猫 [原语:对象] 吃 [原语:前关联] 饿 [原语:连接]\n::edges 猫\n::premise 猫 饿\n' o3
 has '\*\*前提\*\*' "$(cat o3)" && ok "前提链接：前关联+连接 建出 A—[前提]→P（$(grep -o '→ [^ ]* .*\*\*前提\*\*' o3 | head -1 | cut -c1-40)）" \
     || bad "前提链接" "$(grep -E '饿|前提' o3 | head -3)"
-has '之间的前提 token' "$(cat o3)" && ok "逻辑查得到前提 token 是什么（::premise 猫 饿 → $(grep -A1 '之间的前提 token' o3 | tail -1 | tr -d ' ' | cut -d'（' -f1)）" \
+has '之间的前提符号节点' "$(cat o3)" && ok "逻辑查得到前提 token 是什么（::premise 猫 饿 → $(grep -A1 '之间的前提符号节点' o3 | tail -1 | tr -d ' ' | cut -d'（' -f1)）" \
     || bad "::premise" "$(grep -A2 '前提' o3 | head -4)"
 # 语境退役（v10）：**连字段都删了**。这条断言两件可证伪的事 ——
 #   ① AssocEntry 里不许再长回 subs/subs_not（结构体正文里 grep 不到）；

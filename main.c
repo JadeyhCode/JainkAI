@@ -19,7 +19,7 @@
 #define DEFAULT_MODEL "model.bin"
 
 /* 内存态指纹：把整张图滚成一个 FNV 哈希，用来验证 model.bin 存取是否无损。
- * 覆盖 tick、每个 Token 的元数据、每条边的全部字段与端点 id。 */
+ * 覆盖 tick、每个符号节点的元数据、每条边的全部字段与端点 id。 */
 static uint64_t state_fingerprint(const AI *ai) {
     const TokenPool *p = ai->pool;
     uint64_t h = 1469598103934665603ULL;
@@ -81,7 +81,7 @@ static void fingerprint_dims(const AI *ai) {
            (unsigned long long)hp, (unsigned long long)hhv);
 }
 
-/* 逐 Token / 逐边指纹，用来 diff 出「到底哪一条不一样」 */
+/* 逐符号节点 / 逐边指纹，用来 diff 出「到底哪一条不一样」 */
 static void fingerprint_all(const AI *ai) {
     const TokenPool *p = ai->pool;
     for (size_t i = 0; i < p->count; ++i) {
@@ -115,7 +115,7 @@ static size_t ai_stats_edges(const AI *ai) {
     return na;
 }
 
-/* 只读查找：按名字找 Token，不改图 */
+/* 只读查找：按名字找符号节点，不改图 */
 static const Token *find_token_const(const TokenPool *p, const char *name) {
     if (!p || !name) return NULL;
     for (size_t i = 0; i < p->count; ++i) {
@@ -125,7 +125,7 @@ static const Token *find_token_const(const TokenPool *p, const char *name) {
     return NULL;
 }
 
-/* ============================ 原语层 → Token 行为 ============================
+/* ============================ 原语层 → 符号节点行为 ============================
  *
  * 原语栈机（token_lang.h）不认识 AI、也不许直接改图；它只把「行为编号 + 操作数」
  * 交给宿主。这里就是**唯一**的宿主实现：编号 → 行为名走 `TOKEN_OPS[]`
@@ -148,7 +148,7 @@ static int interp_op_host(void *user, InterpOpKind op, char *const *args, size_t
  * 执行后：图里多一条 猫 → 动物 的直接边，没有中间原语节点。
  *
  * 整行交给 ai_tokenize：它把 [原语:…] 当整体、正文按「池里认识的词」最长匹配。
- * 这样语料里的词和用户输入切出来的词**必然是同一个 Token**，不会错位。 */
+ * 这样语料里的词和用户输入切出来的词**必然是同一个符号节点**，不会错位。 */
 static size_t g_corpus_check_bad = 0;   /* 语料行校验拦下几行（§6.80，只统计 + 只报前 5 条） */
 
 static void learn_primitive_line(AI *ai, const char *line) {
@@ -248,7 +248,7 @@ static void reinforce_reply_slots(AI *ai, const char *path, size_t abstraction_i
         char **words = ai_tokenize(ai, line, &n);
         if (!words || n == 0) { ai_free_words(words, n); continue; }
 
-        /* 按「段」收集 Token，再给段内所有 n-gram 转移打角色标签。
+        /* 按「段」收集符号节点，再给段内所有 n-gram 转移打角色标签。
          * 段 = 紧跟 [原语:对象] 之后的内容词；遇到任何其他 [原语:*] 收尾。
          * 窗口和 token_observe_names 完全一致，
          * 保证「观察到的边」和「打上角色的边」是同一批。 */
@@ -406,7 +406,7 @@ static size_t train_on_corpus(AI *ai, const char *path) {
      *   两边的派生层就不一样了。
      *   ① idf 还额外按当时的 pool->count 分配数组，早算会让后造的词越界读堆内存
      *      （拿到地址相关的垃圾浮点 → 联想链都不一样，实测差 50 个词）；
-     *   ② emb 早算的症状更隐蔽：词池逐字节相同，但 810 个 Token 的 emb 不同。 */
+     *   ② emb 早算的症状更隐蔽：词池逐字节相同，但 810 个符号节点的 emb 不同。 */
     ai_embed_build(ai);           /* 分布式表示：从最终的图现算一遍 */
     ai_slots_build(ai);
     ai_idf_rebuild(ai);
@@ -435,7 +435,7 @@ static void train_corpus_batch(AI *ai, const char *path, size_t interval) {
         if (n % interval) continue;
         ai->turns = n;
 
-        /* 1 启发式巩固：按 hits 重排每个 Token 的边，再整体衰减 */
+        /* 1 启发式巩固：按 hits 重排每个符号节点的边，再整体衰减 */
         for (size_t i = 0; i < ai->pool->count; ++i) {
             Token *t = ai->pool->tokens[i];
             if (t->is_garbage || t->count == 0) continue;
@@ -463,7 +463,7 @@ static void train_corpus_batch(AI *ai, const char *path, size_t interval) {
             ai_gc(ai);
 
         while (n >= next_report * 5000) {
-            fprintf(stderr, "  ... %zu 行  Token=%zu 边=%zu 抽象=%zu 睡眠=%zu\n",
+            fprintf(stderr, "  ... %zu 行  符号节点=%zu 边=%zu 抽象=%zu 睡眠=%zu\n",
                     n, ai->pool->count, ai_stats_edges(ai),
                     ai->n_abstractions, ai->n_sleeps);
             next_report++;
@@ -482,7 +482,7 @@ static void train_corpus_batch(AI *ai, const char *path, size_t interval) {
      *   两边的派生层就不一样了。
      *   ① idf 还额外按当时的 pool->count 分配数组，早算会让后造的词越界读堆内存
      *      （拿到地址相关的垃圾浮点 → 联想链都不一样，实测差 50 个词）；
-     *   ② emb 早算的症状更隐蔽：词池逐字节相同，但 810 个 Token 的 emb 不同。 */
+     *   ② emb 早算的症状更隐蔽：词池逐字节相同，但 810 个符号节点的 emb 不同。 */
     ai_embed_build(ai);           /* 分布式表示：从最终的图现算一遍 */
     ai_slots_build(ai);
     ai_idf_rebuild(ai);
@@ -536,8 +536,8 @@ typedef enum {
     CMD_WHY,
     CMD_RELINFER,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
-    CMD_OP,                 /* Token 行为（图操作）：接线 / 插词 / 回收临时 */
-    CMD_PREMISE,            /* 问：这两个词之间的前提 token 是什么 */
+    CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
+    CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
     CMD_NOTEPAD,            /* AI 自己用记事本：写草稿 / 什么时候发送 */
     CMD_SRC,                /* 来源账：这条知识是哪来的（基准/观测/推论/他说的/假设） */
@@ -562,7 +562,7 @@ typedef enum {
     CMD_PROC,                /* 过程记号：看一个过程的步骤/调用/回边（第 9 条 ①②） */
     CMD_GC,
     CMD_ASM,
-    CMD_LEX,                /* ASCII 代码词法：看一眼切成哪些 token + 往返判据 */
+    CMD_LEX,                /* ASCII 代码词法：看一眼切成哪些符号节点 + 往返判据 */
     CMD_ASCII,              /* 把代码词法接进代码通道（默认关） */
     CMD_LEARN,
     CMD_EDGES,
@@ -606,7 +606,7 @@ static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
       "这份帮助", CMD_HELP },
     { "stats", NULL, 0, "基本",
-      "统计（Token/边/状态/计数器）", CMD_STATS },
+      "统计（符号节点/边/状态/计数器）", CMD_STATS },
     { "save", NULL, 1, "基本",
       "保存完整模型快照（默认 %M）", CMD_SAVE },
     { "load", NULL, 1, "基本",
@@ -626,7 +626,7 @@ static const CmdDef CMDS[] = {
     { "framegate", NULL, 1, "基本",
       "帧槽位是否允许读关联链产物（默认 on）", CMD_FRAMEGATE },
     { "coin", NULL, 1, "基本",
-      "允许现场造词：没见过的复合词造成 Token 并接线（默认 on）", CMD_COIN },
+      "允许现场造词：没见过的复合词造成符号节点并接线（默认 on）", CMD_COIN },
     { "seg", NULL, 1, "基本",
       "允许换切分找帧：拆解（好吗→好+吗）/ 合并（人工+智能）（默认 on）", CMD_SEG },
     { "relay", NULL, 1, "基本",
@@ -659,9 +659,9 @@ static const CmdDef CMDS[] = {
     { "revise", NULL, 1, "基本",
       "改口语义：后说的观测替掉先说的对立极性（默认 on；off 回到旧语义做 A/B）", CMD_REVISE },
     { "op", NULL, 1, "基本",
-      "Token 行为（图操作）：::op 看清单，::op <行为> <参数…> 跑一条（经安全内核）", CMD_OP },
+      "符号节点行为（图操作）：::op 看清单，::op <行为> <参数…> 跑一条（经安全内核）", CMD_OP },
     { "premise", NULL, 2, "基本",
-      "问 A 与 B 之间的**前提 token** 是什么（前提是普通 token：联想照走、逻辑查得到）", CMD_PREMISE },
+      "问 A 与 B 之间的**前提符号节点** 是什么（前提是普通符号节点：联想照走、逻辑查得到）", CMD_PREMISE },
     { "drive", NULL, 1, "基本",
       "驱动参与决策：off（默认）| on；列出**耦合表**与当前生效的修正", CMD_DRIVE },
     { "act", NULL, 1, "基本",
@@ -688,7 +688,7 @@ static const CmdDef CMDS[] = {
     { "trust", NULL, 1, "基本",
       "逐条可信度是否参与判定：off（默认，只说清我更信哪一条）| on（差得多时按它选边）", CMD_TRUST },
     { "triggers", NULL, 1, "基本",
-      "对话触发（自然语言 → Token 行为）有哪几种说法；加说法只改 DIALOG_WORDS 一张表。\n"
+      "对话触发（自然语言 → 符号节点行为）有哪几种说法；加说法只改 DIALOG_WORDS 一张表。\n"
       "::triggers norm on|off  切匹配器：说法归一表 + 槽位（新）/ 关键词表 + 位置算术（老）；"
       "AIP_TRIGGER=norm|kw", CMD_TRIGGERS },
     { "src", "<A> <关系> <B>", 3, "基本",
@@ -702,7 +702,7 @@ static const CmdDef CMDS[] = {
     { "analogy", NULL, 2, "基本",
       "关系类比 A:B :: C:?（emb 空间向量算术）", CMD_ANALOGY },
     { "tokens", NULL, 1, "基本",
-      "列出关联最多的前 N 个 Token", CMD_TOKENS },
+      "列出关联最多的前 N 个符号节点", CMD_TOKENS },
     { "excl", NULL, 0, "基本",
       "「独占」判定表：样本数 / 似然比 / 是印证还是改口", CMD_EXCL },
     { "frames", NULL, 0, "基本",
@@ -729,7 +729,7 @@ static const CmdDef CMDS[] = {
       "::proc dry on|off   ④ **干跑**（假设世界，**默认开**；AIP_PROCDRY=0 退回关）：前提不成立 → 假定成立\n"
       "  （记进假设层）、行为步骤不执行；跑完 pop 干净 —— 假设层用的是现成的 `Hypo`\n"
       "::proc run <名字>   把一条过程跑一遍：逐步核对（认识吗 / 前提成立吗 / 是不是行为）——\n"
-      "  核对只读；哪一步是 Token 行为就走**受审通道**真执行；断点用 `DerGap` 记下来\n"
+      "  核对只读；哪一步是符号节点行为就走**受审通道**真执行；断点用 `DerGap` 记下来\n"
       "  控制流：`[调用]` 递归跑子过程（深度≤3）、`[回边]` 跳回第 N 步（迭代≤2）", CMD_PROC },
     { "prims", NULL, 0, "基本",
       "列出所有原语 + 各自的**栈效应**（要/拿/放 + 名字与真实行为不一致的地方）——\n"
@@ -742,8 +742,8 @@ static const CmdDef CMDS[] = {
       "  栈效应干跑一遍，认「未知原语名 / 括号不配对 / 操作数不够 / 如果-结束不配对 / 空程序 /\n"
       "  参数缺失」，**没过就不执行**（关着时错名字照旧被静默吞掉，与今天逐字节相同）", CMD_ASM },
     { "lex", "<代码文本>", 2, "基本",
-      "ASCII 代码词法**看一眼**：这段文本会被切成哪些 token（标识符/数字/**标点逐字符**、\n"
-      "空白归一——token 里不能有空格）。判据只有一处（lex.h 的 lex_roundtrip）：\n"
+      "ASCII 代码词法**看一眼**：这段文本会被切成哪些符号节点（标识符/数字/**标点逐字符**、\n"
+      "空白归一——符号节点里不能有空格）。判据只有一处（lex.h 的 lex_roundtrip）：\n"
       "① 逐字保留（非空白字节一个不少不改）② canonical 幂等；另打括号 `()[]{}` 配对", CMD_LEX },
     { "ascii", NULL, 1, "基本",
       "把 ASCII 代码词法接进代码通道（默认关；AIP_ASCII=1）：开着时 `::code` 的痕里多一行\n"
@@ -751,7 +751,7 @@ static const CmdDef CMDS[] = {
     { "learn", NULL, 2, "基本",
       "按共现学一句普通文本", CMD_LEARN },
     { "edges", NULL, 2, "基本",
-      "列出某个 Token 的所有边（含 hits/状态；标出推出来的缓存）", CMD_EDGES },
+      "列出某个符号节点的所有边（含 hits/状态；标出推出来的缓存）", CMD_EDGES },
     { "quit", "exit", 0, "基本",
       "退出（不自动存盘；要存用 ::save）", CMD_QUIT },
     { "delib", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
@@ -782,9 +782,9 @@ static const CmdDef CMDS[] = {
       "挑一个没想通的问题来想。**只读**：不提议意图、不沉淀、不动图，也不进睡眠/巩固那些账。\n"
       "::idle on|off｜::idle every <N>（每 N 个 tick 最多想一次）｜不给参数看状态", CMD_IDLE },
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
-      "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加Token|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
+      "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加符号节点|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
-      "安全内核总闸（默认 on）；不给参数看预算/拒绝理由/审计\n::safe newtoken|remove [on|off]  允许造新 Token / 允许删边（默认都允许）\n::safe freeze on|off   手动冻结/解冻；::safe reset 解冻并清空本步预算", CMD_SAFE },
+      "安全内核总闸（默认 on）；不给参数看预算/拒绝理由/审计\n::safe newtoken|remove [on|off]  允许造新符号节点 / 允许删边（默认都允许）\n::safe freeze on|off   手动冻结/解冻；::safe reset 解冻并清空本步预算", CMD_SAFE },
     { "patch", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "补丁注册表与健康（默认一个都没挂 —— 内核不依赖补丁）\n::patch mount|unmount <名字>  挂载/卸载内建补丁；::patch on|off <名字> 启停\n::patch list        列出可用内建补丁", CMD_PATCH },
     { "fingerprint", "fp", 0, "调试/诊断",
@@ -792,7 +792,7 @@ static const CmdDef CMDS[] = {
     { "fpall", NULL, 0, "调试/诊断",
       "逐维度指纹（定位「哪里不一样」）", CMD_FPALL },
     { "fpone", NULL, 2, "调试/诊断",
-      "一个 Token 的逐字段转储", CMD_FPONE },
+      "一个符号节点的逐字段转储", CMD_FPONE },
     { "pairs", NULL, 1, "调试/诊断",
       "整句记忆库（可带过滤词）", CMD_PAIRS },
     { "topics", NULL, 0, "调试/诊断",
@@ -914,7 +914,7 @@ static void cmd_help(void) {
 static void cmd_tokens(const AI *ai, size_t top) {
     const TokenPool *p = ai->pool;
     size_t shown = 0;
-    printf("[Token 前 %zu（按边数）]\n", top);
+    printf("[符号节点前 %zu（按边数）]\n", top);
     /* 简单选择：反复挑当前最大 —— 语料规模下够用，不引额外内存 */
     size_t last_count = (size_t)-1;
     while (shown < top) {
@@ -937,7 +937,7 @@ static void cmd_tokens(const AI *ai, size_t top) {
 
 static void cmd_edges(const AI *ai, const char *word) {
     const Token *t = find_token_const(ai->pool, word);
-    if (!t) { printf("[没有这个 Token: %s]\n", word); return; }
+    if (!t) { printf("[没有这个符号节点: %s]\n", word); return; }
     printf("[%s] 有 %zu 条边：\n", word, t->count);
     for (size_t i = 0; i < t->count; ++i) {
         const AssocEntry *e = &t->assocs[i];
@@ -950,7 +950,7 @@ static void cmd_edges(const AI *ai, const char *word) {
             printf("}");
         }
         if (edge_is_premise_link(e))
-            printf("  **前提**（%s 是这两个词之间的前提 token）",
+            printf("  **前提**（%s 是这两个词之间的前提符号节点）",
                    e->main && e->main->name ? e->main->name : "?");
         else if (edge_is_causal_guess(e))
             printf("  **因果猜想**（动作槽上的 [因果] 标记；不是知识，不参与走边）");
@@ -964,7 +964,7 @@ static void cmd_edges(const AI *ai, const char *word) {
 
 /* ============================ `::proc`：看一个过程（第 9 条 ①②） ============================
  *
- * 过程 = 根 Token `[过程:名字]` + 从它出去的**过程边**（role=过程，动作槽上挂着
+ * 过程 = 根符号节点 `[过程:名字]` + 从它出去的**过程边**（role=过程，动作槽上挂着
  * `[步骤:N]` / `[调用]` / `[回边]`）。这个命令把两者一起打出来，并且**明确分开**：
  * 哪些边是过程的一部分、哪些只是普通共现 —— 这正是用户拍板要 role 标记解决的那个问题。 */
 static int proc_step_cmp(const void *x, const void *y) {
@@ -1133,7 +1133,7 @@ static void cmd_proc(AI *ai, const char *cmd) {
                ai->proc_run ? "`::proc run <名字>` 会真的跑一遍：逐步核对 + 受审执行"
                             : "`::proc run` 只回一句「关着」，既有行为逐字节不变");
         printf("  三条判据都是现成的：① 动作词在图上有没有连结 ② 根与这一步之间的前提成立吗\n"
-               "  ③ 是 Token 行为吗（是就走受审通道真执行；要参数的 v1 不猜，只记断点）\n");
+               "  ③ 是符号节点行为吗（是就走受审通道真执行；要参数的 v1 不猜，只记断点）\n");
         return;
     }
     if (arg && !strncmp(arg, "run", 3) && (arg[3] == 0 || arg[3] == ' ')) {
@@ -1373,7 +1373,7 @@ static void cmd_asm(AI *ai, const char *src) {
      * （实测 `甲 乙 丙 连接` 只建 乙→丙，甲→乙 那条共现边没有）。补上这一步。 */
     token_observe_names(ai->pool, (const char *const *)names, n, 5);
     token_run_names_ctx(ai->pool, names, n, interp_op_host, ai);
-    printf("[执行了 %zu 个 token]（另：观察遍也走了一遍 —— 和语料行同一条路）\n", n);
+    printf("[执行了 %zu 个符号节点]（另：观察遍也走了一遍 —— 和语料行同一条路）\n", n);
 }
 
 /* `::asm check [on|off]`：看/切干跑校验（默认关，`AIP_ASMCHECK=1`） */
@@ -1386,7 +1386,7 @@ static void cmd_asm_check(AI *ai, const char *arg) {
            " 如果-结束不配对 / 空程序 / 参数缺失」，**没过就不执行**。\n");
     printf("  判据来自原语表里**代码真实行为**的栈效应（`[原语:分割]` 是清空整栈、"
            "`包裹/嵌套/捆绑` 是整栈折成一个 —— 名字与行为不一致的地方按行为写）。\n");
-    printf("  干跑**不 intern**：打错的原语名不会被当场造成 Token。\n");
+    printf("  干跑**不 intern**：打错的原语名不会被当场造成符号节点。\n");
 }
 
 int main(int argc, char **argv) {
@@ -1608,13 +1608,13 @@ int main(int argc, char **argv) {
             }
             /* ---- 微内核：自修改通道 ---- */
             case CMD_PREMISE: {
-                /* 「逻辑知道这两个之间的前提 token 是什么」——这一条就是那句话的实现。
-                 * 前提 token 是**普通 token**（联想照走），所以这里只回答它是谁。 */
+                /* 「逻辑知道这两个之间的前提符号节点是什么」——这一条就是那句话的实现。
+                 * 前提符号节点是**普通符号节点**（联想照走），所以这里只回答它是谁。 */
                 const char *arg = (cmd[7] == ' ') ? cmd + 8 : NULL;
                 while (arg && *arg == ' ') arg++;
                 char w1[64] = {0}, w2[64] = {0};
                 if (!arg || sscanf(arg, "%63s %63s", w1, w2) != 2) {
-                    printf("[用法] ::premise <A> <B>（问这两个之间的前提 token 是什么）\n");
+                    printf("[用法] ::premise <A> <B>（问这两个之间的前提符号节点是什么）\n");
                     continue;
                 }
                 Token *A = pool_find(a->brain->pool, w1);
@@ -1626,7 +1626,7 @@ int main(int argc, char **argv) {
                 if (np == 0) {
                     printf("[%s 与 %s 之间没有前提]（直接连结，或压根不相连）\n", w1, w2);
                 } else {
-                    printf("[%s 与 %s 之间的前提 token：%zu 个]\n", w1, w2, np);
+                    printf("[%s 与 %s 之间的前提符号节点：%zu 个]\n", w1, w2, np);
                     for (size_t i = 0; i < np; ++i) {
                         const Token *p = ps[i];
                         int ok = ai_premise_cond_ok(a->brain, p, pol[i]);
@@ -1640,7 +1640,7 @@ int main(int argc, char **argv) {
                             else if (ai_premise_wellfounded(a->brain, p)) how = "成立（够得着·有据）";
                             else                                 how = "成立（够得着）";
                         }
-                        printf("    %s%s  （%s；普通 token：联想照走、::rel/::edges 都能正常处理它）\n",
+                        printf("    %s%s  （%s；普通符号节点：联想照走、::rel/::edges 都能正常处理它）\n",
                                pol[i] < 0 ? "前提不：" : "前提：",
                                p && p->name ? p->name : "?", how);
                     }
@@ -1719,13 +1719,13 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_OP: {
-                /* Token 行为（图操作）：一张 TOKEN_OPS[] 表，表里的展开函数只产出
+                /* 符号节点行为（图操作）：一张 TOKEN_OPS[] 表，表里的展开函数只产出
                  * ModIntent，逐条走「审查 → 记账 → 应用 → 审计」——
-                 * 和自修改同一条路，所以「Token 有行为」并不等于绕过安全内核。 */
+                 * 和自修改同一条路，所以「符号节点有行为」并不等于绕过安全内核。 */
                 const char *arg = (cmd[2] == ' ') ? cmd + 3 : NULL;
                 while (arg && *arg == ' ') arg++;
                 if (!arg || !*arg) {
-                    printf("[Token 行为（图操作）：%zu 条]\n", token_op_count());
+                    printf("[符号节点行为（图操作）：%zu 条]\n", token_op_count());
                     for (size_t i = 0; TOKEN_OPS[i].name; ++i)
                         printf("  ::op %-12s %-22s %s\n", TOKEN_OPS[i].name,
                                TOKEN_OPS[i].shape, TOKEN_OPS[i].help);
@@ -1733,7 +1733,7 @@ int main(int argc, char **argv) {
                     for (size_t i = 0; i < a->brain->pool->count; ++i)
                         if (token_is_temp(a->brain->pool->tokens[i]) &&
                             !a->brain->pool->tokens[i]->is_garbage) ntemp++;
-                    printf("  当前未回收的临时 Token：%zu 个（不存盘；::op 回收临时 清理）\n", ntemp);
+                    printf("  当前未回收的临时符号节点：%zu 个（不存盘；::op 回收临时 清理）\n", ntemp);
                     continue;
                 }
                 /* 9 格 = 操作名 + **8 个参数**（表里 max_args 最大是 6：`加断言`/`调用补丁`）——
@@ -1769,7 +1769,7 @@ int main(int argc, char **argv) {
                     char op[16] = {0}, x[40] = {0}, y[40] = {0}, z[40] = {0};
                     int nn = sscanf(rest, "%15s %39s %39s %39s", op, x, y, z);
                     if (nn < 2) {
-                        printf("[用法] ::mod try 加边 <A> <B> | 加Token <名字> [<连回>] | "
+                        printf("[用法] ::mod try 加边 <A> <B> | 加符号节点 <名字> [<连回>] | "
                                "打关系 <A> <关系> <B> | 删边 <A> <B> | 强化 <A> <B>\n");
                         continue;
                     }
@@ -1785,7 +1785,8 @@ int main(int argc, char **argv) {
                         in.type = MOD_REMOVE_ASSOC; in.target = A; in.main = B;
                     } else if (!strcmp(op, "强化") || !strcmp(op, "bump")) {
                         in.type = MOD_BUMP_HITS; in.target = A; in.main = B; in.bump = REL_BOOST;
-                    } else if (!strcmp(op, "加Token") || !strcmp(op, "addtok")) {
+                    } else if (!strcmp(op, "加符号节点") || !strcmp(op, "加Token") ||
+                               !strcmp(op, "addtok")) {   /* 老说法照收（术语改了，命令词不废） */
                         in.type = MOD_ADD_TOKEN; in.target = B;
                         snprintf(in.name, sizeof in.name, "%s", x);
                     } else if (!strcmp(op, "打关系") || !strcmp(op, "rel")) {
@@ -1796,7 +1797,7 @@ int main(int argc, char **argv) {
                         bad = 1;
                     }
                     if (bad) {
-                        printf("[用法] ::mod try 加边 <A> <B> | 加Token <名字> [<连回>] | "
+                        printf("[用法] ::mod try 加边 <A> <B> | 加符号节点 <名字> [<连回>] | "
                                "打关系 <A> <关系> <B> | 删边 <A> <B> | 强化 <A> <B>\n");
                         continue;
                     }
@@ -1871,7 +1872,7 @@ int main(int argc, char **argv) {
                     if (val[0] && strcmp(val, "on") && strcmp(val, "off")) { printf("[用法] ::safe %s on|off\n", sub); continue; }
                     int on = !val[0] || !strcmp(val, "on");
                     safety_set(a->brain, sub, on);
-                    printf("[%s = %s]\n", !strcmp(sub, "newtoken") ? "造新Token" : "删边", on ? "允许" : "禁止");
+                    printf("[%s = %s]\n", !strcmp(sub, "newtoken") ? "造新符号节点" : "删边", on ? "允许" : "禁止");
                 } else {
                     printf("[用法] ::safe [on|off|reset|freeze on|off|newtoken on|off|remove on|off]\n");
                 }
@@ -1897,7 +1898,7 @@ int main(int argc, char **argv) {
                     char *opn = pn ? strtok(NULL, " ") : NULL;
                     if (!pn || !opn) { printf("[用法] ::patch op <补丁> <操作> [参数…]\n"); continue; }
                     /* 参数按空格切，但 **双引号里算一个**（这样 `改发言 "猫 跑" 走`
-                     * 才能替换带空格的串 —— 以前单 token 的限制就在这儿）。 */
+                     * 才能替换带空格的串 —— 以前单符号节点的限制就在这儿）。 */
                     char *argv[6];
                     size_t an = 0;
                     {
@@ -1947,7 +1948,7 @@ int main(int argc, char **argv) {
                 size_t na = 0;
                 for (size_t i = 0; i < a->brain->pool->count; ++i)
                     na += a->brain->pool->tokens[i]->count;
-                printf("[指纹] %016llx  tick=%llu token=%zu 边=%zu 已学=%zu 轮次=%zu\n",
+                printf("[指纹] %016llx  tick=%llu 符号节点=%zu 边=%zu 已学=%zu 轮次=%zu\n",
                        (unsigned long long)state_fingerprint(a->brain),
                        (unsigned long long)a->brain->pool->current_tick,
                        a->brain->pool->count, na, a->brain->n_learned, a->brain->turns);
@@ -2124,7 +2125,7 @@ int main(int argc, char **argv) {
                 printf("[现场造词 = %s]（已造出 %zu 个）\n",
                        a->brain->coin_off
                            ? "关（槽位取值不认识的复合词就按字拆）"
-                           : "开（默认：把「火锅」这种没见过的词造成 Token 并现场接线）",
+                           : "开（默认：把「火锅」这种没见过的词造成符号节点并现场接线）",
                        a->brain->n_coined);
                 continue;
             }
@@ -2574,7 +2575,7 @@ int main(int argc, char **argv) {
                     printf("    %s  ←  %s\n", t->name, back);
                 }
                 if (nrev == 0) printf("    （还没有：这一会话里没发生过改口）\n");
-                printf("  临时 Token（草稿）：%s（::op 看清单 / ::op 回收临时）\n",
+                printf("  临时符号节点（草稿）：%s（::op 看清单 / ::op 回收临时）\n",
                        "[临:…]，不存盘");
                 continue;
             }

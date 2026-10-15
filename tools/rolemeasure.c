@@ -19,10 +19,10 @@ int main(int argc, char **argv) {
         if (rp > 7) rp = 7;
         hist[rp]++;
     }
-    printf("内容 Token=%zu  平均角色出边=%.2f  平均总出边=%.2f\n",
+    printf("内容符号节点=%zu  平均角色出边=%.2f  平均总出边=%.2f\n",
            n_rep, (double)out_rep / (n_rep ? n_rep : 1),
            (double)out_all / (n_rep ? n_rep : 1));
-    printf("没有回复角色出边的 Token = %zu (%.0f%%)\n", dead,
+    printf("没有回复角色出边的符号节点 = %zu (%.0f%%)\n", dead,
            100.0 * (double)dead / (n_rep ? n_rep : 1));
     printf("角色出边数分布 (0..7+):");
     for (int i = 0; i < 8; ++i) printf(" %zu", hist[i]);

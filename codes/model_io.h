@@ -2,7 +2,7 @@
  *
  * 为什么不能直接用 token.h 的 token_pool_dump：
  *   那份 v4 流只写「符号图」，读回来会丢：
- *     - Token 的 birth_tick / last_touch_tick / mem_state / is_garbage / next_in_time
+ *     - 符号节点的 birth_tick / last_touch_tick / mem_state / is_garbage / next_in_time
  *     - AssocEntry 的 birth_tick / last_touch_tick / mem_state
  *     - TokenPool 的 current_tick 与视角栈
  *     - 以及整个 AI 层（rng / 内生状态 / 元认知 / 校准 / 表达自举 / 时间线 / 他者 /
@@ -12,8 +12,8 @@
  *
  * 格式（全小端，自描述，无结构体 padding 依赖）：
  *   [FileHeader 40B]
- *   [TokenRec × n]                       每 Token 一条，长度可变
- *   [AssocRec × total_assocs]            全池所有边，按 token 下标顺序
+ *   [TokenRec × n]                       每符号节点一条，长度可变
+ *   [AssocRec × total_assocs]            全池所有边，按符号节点下标顺序
  *   [AIBlock]                            AI 层状态
  *
  * 依赖：token.h + ai.h 里的类型。被 ai.h 之后包含。
@@ -120,8 +120,8 @@ static inline int mr_ids(MReader *r, TokenPool *p, Token ***arr, size_t *ncap, s
     return 0;
 }
 
-/* 这条边会不会被存盘：两端（主语与宾语）、动作里**没有临时 Token**。
- * 临时 Token 是草稿纸，不存盘；指向它的边也不存 —— 否则装载时会指向不存在的 id。
+/* 这条边会不会被存盘：两端（主语与宾语）、动作里**没有临时符号节点**。
+ * 临时符号节点是草稿纸，不存盘；指向它的边也不存 —— 否则装载时会指向不存在的 id。
  * （v10：边的语境字段已删，所以这里只看 main/action 两端。） */
 static inline int mio_edge_saved(const AssocEntry *e) {
     if (!e) return 0;
@@ -138,10 +138,10 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     MWriter w = { out, 0, cap, 0 };
 
     /* ---- 头 ---- */
-    /* **临时 Token（[临:…]）不存盘**：它是草稿纸（会话内的中间节点），
+    /* **临时符号节点（[临:…]）不存盘**：它是草稿纸（会话内的中间节点），
      * 存它等于把草稿写成知识。跳过它**以及指向它的边**（不然装载时会指向不存在的 id）。
      * 名字前缀是唯一判据 —— 这条路**不需要为它动存档格式**（v10 里连语境字段都没了，判断更简单）。
-     * 没有临时 Token 时，下面每个过滤都恒真 ⇒ 输出逐字节不变（roundtrip 钉着这一点）。 */
+     * 没有临时符号节点时，下面每个过滤都恒真 ⇒ 输出逐字节不变（roundtrip 钉着这一点）。 */
     size_t saved_tokens = 0;
     uint32_t total_assocs = 0;
     for (size_t i = 0; i < p->count; ++i) {
@@ -161,7 +161,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     mw_u32(&w, (uint32_t)(p->perspective_cur ? p->perspective_cur->depth : 0));
     if (w.err) return 0;
 
-    /* ---- Token 段 ---- */
+    /* ---- 符号节点段 ---- */
     for (size_t i = 0; i < p->count; ++i) {
         const Token *t = p->tokens[i];
         if (token_is_temp(t)) continue;
@@ -257,7 +257,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     mw_f32(&w, ai->meta.gap_feel);
     mw_f32(&w, ai->meta.total);
 
-    /* 核心 Token 指针 */
+    /* 核心符号节点指针 */
     mw_u32(&w, ai->self        ? ai->self->id        : TOKEN_ID_NONE);
     mw_u32(&w, ai->good        ? ai->good->id        : TOKEN_ID_NONE);
     mw_u32(&w, ai->bad         ? ai->bad->id         : TOKEN_ID_NONE);
@@ -507,10 +507,10 @@ static inline AI *ai_load_file(const char *path) {
     fclose(f);
     if (rd != (size_t)flen) { free(buf); return NULL; }
 
-    /* 关键：这里不能用 ai_new()。ai_new() 会先建一个自己的池，并把该池的 Token
+    /* 关键：这里不能用 ai_new()。ai_new() 会先建一个自己的池，并把该池的符号节点
      * 写进表达池的边（ai_init_expr_pools）。如果之后把 ai->pool 换成快照池，那些边
      * 就指向已经 free 掉的内存 —— 症状是几轮之后 token_add_assoc_ex 堆越界。
-     * 所以这里只 calloc 一个空 AI 骨架，全部 Token 都从快照池里长出来。 */
+     * 所以这里只 calloc 一个空 AI 骨架，全部符号节点都从快照池里长出来。 */
     AI *ai = (AI *)calloc(1, sizeof *ai);
     if (!ai) { free(buf); return NULL; }
     TokenPool *np = NULL;   /* 提前声明：fail 路径按「是否已建好新池」决定释放 */
@@ -538,10 +538,10 @@ static inline AI *ai_load_file(const char *path) {
     if (!np) goto fail;
 
     /* 两遍读：
-     *   第一遍只建 Token 骨架 + 把边当成「4 字节裸 id」堆在边上，不做任何指针解析；
-     *   第二遍（池里 0..n-1 全都有名字之后）再把 id 换成 Token*。
-     * 必须在第二遍才解析，因为边可以引用文件里更靠后的 Token（例如 id 0 的「我」
-     * 很可能比引用它的 Token 先出现），第一遍就去解析会拿到 NULL 而误判成损坏。 */
+     *   第一遍只建符号节点骨架 + 把边当成「4 字节裸 id」堆在边上，不做任何指针解析；
+     *   第二遍（池里 0..n-1 全都有名字之后）再把 id 换成符号节点*。
+     * 必须在第二遍才解析，因为边可以引用文件里更靠后的符号节点（例如 id 0 的「我」
+     * 很可能比引用它的符号节点先出现），第一遍就去解析会拿到 NULL 而误判成损坏。 */
     uint32_t *tok_parent = NULL, *tok_next = NULL, *tok_persp = NULL;
 
     tok_parent = (uint32_t *)calloc(n_tok, sizeof *tok_parent);
@@ -628,7 +628,7 @@ static inline AI *ai_load_file(const char *path) {
     if (r.err) goto fail;
     if (np->count != n_tok || assoc_seen != (uint64_t)n_assoc) goto fail;
 
-    /* 现在池里 0..n-1 齐了，重扫一遍把所有裸 id 换成 Token* */
+    /* 现在池里 0..n-1 齐了，重扫一遍把所有裸 id 换成符号节点* */
     {
         MReader rr = { buf, (size_t)flen, 0, 0 };
         (void)mr_u32(&rr); (void)mr_u32(&rr); (void)mr_u32(&rr);
@@ -737,7 +737,7 @@ static inline AI *ai_load_file(const char *path) {
     ai->split_tok = pool_find(np, AI_DIALOG_SPLIT_NAME);
     /* 视角栈按深度重放 */
     if (depth) {
-        /* 视角在快照里只留了深度；用池里名字带 [视角: 的 Token 无法可靠还原，
+        /* 视角在快照里只留了深度；用池里名字带 [视角: 的符号节点无法可靠还原，
            这里保守地保持 root——深度不为 0 只可能出现在语料跑 [原语:视角] 中途存盘，
            训练/对话存档时深度恒为 0。 */
         (void)depth;
@@ -1049,7 +1049,7 @@ static inline AI *ai_load_file(const char *path) {
      *   训练收尾顺序完全一致（frames_load → stabilize → emb → 槽类 → idf）。
      *   它们都是「从最终的图现算」：早算一步就等于算在旧的图上，
      *   而存盘存的是最终的图 —— 读盘重算后两边就不一样了。
-     *   ① emb 早算的症状最隐蔽：词池逐字节相同，但 810 个 Token 的 emb 不同；
+     *   ① emb 早算的症状最隐蔽：词池逐字节相同，但 810 个符号节点的 emb 不同；
      *   ② idf 早算还会越界（数组按当时的 pool->count 分配，之后又造了词）。 */
     ai_embed_build(ai);       /* 分布式表示（PPMI 随机索引）也现算，不进快照 */
     ai_slots_build(ai);       /* 同位槽类同理 */

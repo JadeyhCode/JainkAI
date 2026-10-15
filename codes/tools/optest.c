@@ -1,10 +1,10 @@
-/* tools/optest.c — **Token 行为（图操作）+ 临时 Token + 修正的记忆** 的自测（C 级）
+/* tools/optest.c — **符号节点行为（图操作）+ 临时符号节点 + 修正的记忆** 的自测（C 级）
  *
  * 用户要的三件事，在这里逐条钉住：
- *   ① 「给带 token 的连接 token」     → 随语境接线（带语境 X 的边接上 Y）
- *   ② 「给带**指定** token 的连接另一个 token」 → 指定接线（限定主语）
- *   ③ 「在这两个 token 之间加一个 token，不要直连、经它中转」 → 中间插词
- *   ④ 临时 Token（[临:…]）：能参与边、**不存盘**、没人引用时可回收
+ *   ① 「给带符号节点的连接符号节点」     → 随语境接线（带语境 X 的边接上 Y）
+ *   ② 「给带**指定** 符号节点的连接另一个符号节点」 → 指定接线（限定主语）
+ *   ③ 「在这两个符号节点之间加一个符号节点，不要直连、经它中转」 → 中间插词
+ *   ④ 临时符号节点（[临:…]）：能参与边、**不存盘**、没人引用时可回收
  *   ⑤ 修正的记忆 / 来源监控：改口留一个 [修正:…] 标记（幂等、不冒充知识、能存盘）
  *
  * 还有一条这一轮**查出来的洞**的看护：安全内核的「每步新建边预算」原来永远扣不着
@@ -34,7 +34,7 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 
 /* ============================ ① 行为表自检 ============================ */
 static void test_table(void) {
-    printf("== ① Token 行为表：名字不重复、每条都有展开函数 ==\n");
+    printf("== ① 符号节点行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
     ok(n == 15, "表里 15 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
                 "后 9 条 = 过程记号/执行槽，**必须在表尾** —— 原语层按下标引用这张表）");
@@ -54,7 +54,7 @@ static void test_table(void) {
 
 /* ============================ ② 中间插词（不直连，经它中转） ============================ */
 static void test_insert_between(void) {
-    printf("== ② 中间插词：A 与 B 不直连，经插入的 Token 中转 ==\n");
+    printf("== ② 中间插词：A 与 B 不直连，经插入的符号节点中转 ==\n");
     AI *ai = ai_new();
     Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
     (void)token_observe_pair(cat, moon);                  /* 先有一条普通直连边 */
@@ -65,7 +65,7 @@ static void test_insert_between(void) {
     int got = token_op_run(ai, "中间插词", args, 2, note, sizeof note);
     ok(got == 1, "行为跑通了（展开 1 条意图并应用）");
     Token *via = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
-    ok(via != NULL, "中转 Token 建出来了（默认是临时 Token [临:中转]）");
+    ok(via != NULL, "中转符号节点建出来了（默认是临时符号节点 [临:中转]）");
     ok(via && token_is_temp(via), "它标着「临时」——不存盘的草稿");
     ok(micro_has_edge(cat, via), "A → 中转 在");
     ok(micro_has_edge(via, moon), "中转 → B 在");
@@ -88,9 +88,9 @@ static void test_insert_between(void) {
     ai_free(ai); ai_free(ai2);
 }
 
-/* ============================ ④ 临时 Token 不存盘 ============================ */
+/* ============================ ④ 临时符号节点不存盘 ============================ */
 static void test_temp_not_saved(void) {
-    printf("== ④ 临时 Token 与指向它的边**不进存档**（草稿不写进知识） ==\n");
+    printf("== ④ 临时符号节点与指向它的边**不进存档**（草稿不写进知识） ==\n");
     AI *ai = ai_new();
     Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
     Token *via = T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]");
@@ -103,23 +103,23 @@ static void test_temp_not_saved(void) {
     size_t i_via = (size_t)-1;
     for (size_t i = 0; i < cat->count; ++i) if (cat->assocs[i].main == via) i_via = i;
     ok(i_via != (size_t)-1 && !mio_edge_saved(&cat->assocs[i_via]),
-       "指向临时 Token 的边不存盘（否则装载会指向不存在的 id）");
+       "指向临时符号节点的边不存盘（否则装载会指向不存在的 id）");
     /* v10：语境字段删了，「不存盘」的判据只看两端（main / action）。
-     * 补一条现在**真的存在**的路径：**动作槽**里是临时 Token 的边也不存盘。 */
+     * 补一条现在**真的存在**的路径：**动作槽**里是临时符号节点的边也不存盘。 */
     {
         Token *mark = pool_token_intern(ai->pool, MICRO_TEMP_TOKEN_PREFIX "草稿标记]");
         (void)token_add_assoc_action_unique(moon, cat, mark);
         long i_act = micro_edge_index(moon, cat);
         ok(i_act >= 0 && !mio_edge_saved(&moon->assocs[i_act]),
-           "**动作槽**里带临时 Token 的边也不存盘");
+           "**动作槽**里带临时符号节点的边也不存盘");
     }
-    ok(!token_is_temp(cat) && !token_is_temp(NULL), "普通 Token / NULL 不是临时");
+    ok(!token_is_temp(cat) && !token_is_temp(NULL), "普通符号节点 / NULL 不是临时");
     ai_free(ai);
 }
 
 /* ============================ ⑤ 回收临时 ============================ */
 static void test_collect_temp(void) {
-    printf("== ⑤ 回收临时：只回收**没人引用**的草稿；别的 Token 一律不许删 ==\n");
+    printf("== ⑤ 回收临时：只回收**没人引用**的草稿；别的符号节点一律不许删 ==\n");
     AI *ai = ai_new();
     Token *cat = T(ai, "猫"), *moon = T(ai, "月亮");
     Token *orphan = T(ai, MICRO_TEMP_TOKEN_PREFIX "孤儿]");      /* 谁都不连它 */
@@ -128,18 +128,18 @@ static void test_collect_temp(void) {
     char *args[2] = {(char *)"猫", (char *)"月亮"};
     ok(token_op_run(ai, "中间插词", args, 2, note, sizeof note) == 1, "先插一个中转（它会被引用）");
     Token *used = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "中转]");
-    ok(used != NULL, "在用中的临时 Token 存在");
+    ok(used != NULL, "在用中的临时符号节点存在");
     int got = token_op_run(ai, "回收临时", NULL, 0, note, sizeof note);
     ok(got == 1, "回收临时：只提出 1 条（孤儿那条）");
     ok(orphan->is_garbage, "没人引用的草稿被回收（软删：标垃圾，池里的指针不悬空）");
     ok(used && !used->is_garbage, "**还在用**的草稿不动（自己还连着边）");
 
-    /* 非临时 Token 永远不许走这条路 */
+    /* 非临时符号节点永远不许走这条路 */
     ModIntent m;
     memset(&m, 0, sizeof m);
     m.type = MOD_REMOVE_TOKEN; m.target = cat;
     ok(safety_review(&micro_of(ai)->safe, ai->pool, &m) == SAFE_DENY_NOT_TEMP,
-       "回收一条**普通** Token → 被拒（只许回收临时草稿）");
+       "回收一条**普通** 符号节点 → 被拒（只许回收临时草稿）");
     ai_free(ai);
 }
 
@@ -221,7 +221,7 @@ static void test_revise_memory(void) {
 
 /* ============================ ⑧ 原语栈式组合（复用已有栈机） ============================
  *
- * 用户的选择：**用临时 Token，不另造 Token 栈**；真要组合时复用**已有的** Interp 栈机。
+ * 用户的选择：**用临时符号节点，不另造符号节点栈**；真要组合时复用**已有的** Interp 栈机。
  * 这一节钉住那条路：原语层只把「行为编号 + 操作数」交给宿主，
  * **自己不碰图** —— 所以「行为」在语言层能写、能组合，但落地仍然只有安全内核那一个入口。 */
 typedef struct {
@@ -348,7 +348,7 @@ static void test_prim_stack(void) {
         for (size_t i = 0; i < ai2->pool->count; ++i) after += ai2->pool->tokens[i]->count;
         ok(before == after, "没有宿主 → 图的边数一条不变（语言层不碰结构）");
         ok(pool_find(ai2->pool, MICRO_TEMP_TOKEN_PREFIX "中转]") == NULL,
-           "也没有偷偷造出临时 Token");
+           "也没有偷偷造出临时符号节点");
         ai_free(ai2);
     }
     /* 组合出来的行为是**真的**能落地：宿主用 token_op_run，走安全内核 */
@@ -358,22 +358,22 @@ static void test_prim_stack(void) {
         const char *seq[] = { PRIM_OBJECT, "猫", PRIM_OBJECT, "月亮", PRIM_INSERT };
         token_run_names_ctx(ai->pool, seq, 5, prim_host_tokrun, ai);
         ok(!micro_has_edge(cat, moon), "组合起来跑一条：直连被拆");
-        ok(micro_has_edge(cat, T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]")), "中转接上了（经临时 Token）");
+        ok(micro_has_edge(cat, T(ai, MICRO_TEMP_TOKEN_PREFIX "中转]")), "中转接上了（经临时符号节点）");
     }
     ai_free(ai);
 }
 
-/* ============================ ⑨ 前提 token（淘汰「语境」后的表示） ============================
+/* ============================ ⑨ 前提符号节点（淘汰「语境」后的表示） ============================
  *
- * 用户的澄清：「联想本来不依赖前提，可以正常联想；前提 token 可以被正常联想到，
- * 但是**逻辑会知道这两个之间的前提 token 是什么**，并且可以被正常处理。」
+ * 用户的澄清：「联想本来不依赖前提，可以正常联想；前提符号节点可以被正常联想到，
+ * 但是**逻辑会知道这两个之间的前提符号节点是什么**，并且可以被正常处理。」
  * 这一节把三句话逐条钉住：
- *   ① 表示：A —[前提]→ P → B（P 是普通 token，`[前提]` 是挂在动作槽上的行为 token）
- *   ② 联想照走 / 前提可联想：A→P 是普通可走边；P 是普通 token（有 hits、有邻居）
+ *   ① 表示：A —[前提]→ P → B（P 是普通符号节点，`[前提]` 是挂在动作槽上的行为符号节点）
+ *   ② 联想照走 / 前提可联想：A→P 是普通可走边；P 是普通符号节点（有 hits、有邻居）
  *   ③ 逻辑知道前提是谁：token_premise_between(A,B) 直接答出 P（可多个）
  * 外加两条纪律：**语境字段不再有创建者**（退役）+ 旧模型读得回来（容忍）。 */
 static void test_premise(void) {
-    printf("== ⑨ 前提 token：联想照走、前提可联想、逻辑查得到它是谁 ==\n");
+    printf("== ⑨ 前提符号节点：联想照走、前提可联想、逻辑查得到它是谁 ==\n");
     AI *ai = ai_new();
     Token *cat = T(ai, "猫"), *moon = T(ai, "月亮"), *food = T(ai, "食物");
     (void)T(ai, "鱼");                                       /* 操作数要已在池子里 */
@@ -382,15 +382,15 @@ static void test_premise(void) {
     char *a1[2] = {(char *)"猫", (char *)"月亮"};
     ok(token_op_run(ai, "加前提", a1, 2, note, sizeof note) == 1, "::op 加前提 跑通");
     Token *via = pool_find(ai->pool, MICRO_TEMP_TOKEN_PREFIX "前提]");
-    ok(via != NULL && token_is_temp(via), "缺省前提是**临时 token**（[临:前提]，草稿）");
+    ok(via != NULL && token_is_temp(via), "缺省前提是**临时符号节点**（[临:前提]，草稿）");
     ok(!micro_has_edge(cat, moon), "直连被拆：连结改成「经过前提」");
     ok(micro_has_edge(cat, via) && micro_has_edge(via, moon), "A —[前提]→ P → B 两跳都在");
     ok(edge_is_premise_link(&cat->assocs[micro_edge_index(cat, via)]),
-       "A→P 上挂着 `[前提]` 行为 token（标记）");
+       "A→P 上挂着 `[前提]` 行为符号节点（标记）");
 
     const Token *ps[4];
     size_t np = token_premise_between(cat, moon, ps, 4);
-    ok(np == 1 && ps[0] == via, "**逻辑问得出**：猫 与 月亮 之间的前提就是那个临时 token");
+    ok(np == 1 && ps[0] == via, "**逻辑问得出**：猫 与 月亮 之间的前提就是那个临时符号节点");
 
     /* 前提用**真词**：它照常能被联想到（可走边、有权重），逻辑也知道它是前提 */
     char *a2[3] = {(char *)"猫", (char *)"月亮", (char *)"食物"};
@@ -401,7 +401,7 @@ static void test_premise(void) {
     ok(ip >= 0 && edge_is_premise_link(&cat->assocs[ip]), "食物 也是前提链接的目标");
     ok(ip >= 0 && ai_edge_walkable(ai, &cat->assocs[ip], 1.0f) == 1,
        "**联想照走**：A→前提 是普通可走边（前提不挡联想）");
-    ok(food->count > 0, "**前提 token 能被正常联想到**：它就是普通 token，有自己的边");
+    ok(food->count > 0, "**前提符号节点能被正常联想到**：它就是普通符号节点，有自己的边");
 
     /* 原语路径：前关联 + 连接 → 前提是那个**真词**，不写退役字段 */
     AI *ai2 = ai_new();
@@ -472,7 +472,7 @@ static void test_premise(void) {
 
 /* ============================ ⑩ 推理/思维层按前提决定用不用（R10） ============================
  *
- * 用户：「推理/思维层按前提决定用不用」。判据：**前提 token 在当前注意窗口里** → 前提成立。
+ * 用户：「推理/思维层按前提决定用不用」。判据：**前提符号节点在当前注意窗口里** → 前提成立。
  * 这一节钉住四件事：
  *   ① 求解器：前提不成立 → **不用**那条连结（status 0）；成立 → 用（status +1，R10 规则 10）
  *   ② 验证器：这条链独立复核得通过（gaps==0），而且**伪造的前提步会被拒**
@@ -546,7 +546,7 @@ static void test_premise_gate(void) {
 /* ============================ ⑪ 前提极性 + 前提说明进答复 ============================
  *
  * 补掉上一轮列的两条局限：
- *   ① **反前提**（`[前提不]`）：条件是"前提 token **不**在注意窗口里"——
+ *   ① **反前提**（`[前提不]`）：条件是"前提符号节点 **不**在注意窗口里"——
  *      旧 `subs_not` 的能力有了替代（而且同样带验证器复核）；
  *   ② **前提说明进答复**：默认开（A/B 量过 0/8），把"为什么没用那条连结"追加进回答。
  */
@@ -610,7 +610,7 @@ static void test_premise_polarity_out(void) {
 /* ============================ ⑫ 未解问题持久化（不动存档格式） ============================
  *
  * 用户点过「关掉再打开还记得没想通的事」。做法不是升格式，而是**用已经存盘的标记**：
- * 思维层挂问题时经安全内核落了一个 `[自问:…]` 节点（普通 token、随图存盘），
+ * 思维层挂问题时经安全内核落了一个 `[自问:…]` 节点（普通符号节点、随图存盘），
  * 装载时扫一遍把它解析回 (主语,关系,宾语,极性) 重新挂上议程。 */
 static void test_restore_pending(void) {
     printf("== ⑫ 未解问题持久化：从 [自问:…] 标记恢复 ==\n");
@@ -744,7 +744,7 @@ static void test_notepad_patch(void) {
             if (t && t->name && strncmp(t->name, MICRO_DRAFT_TOKEN_PREFIX,
                                         strlen(MICRO_DRAFT_TOKEN_PREFIX)) == 0) mark = t;
         }
-        ok(mark != NULL, "图里出现了 [草稿:…] 标记（普通 token → 随图存盘）");
+        ok(mark != NULL, "图里出现了 [草稿:…] 标记（普通符号节点 → 随图存盘）");
         (void)patch_unmount_by_name(ai, "记事本");
         ok(patch_mount_builtin(ai, "记事本") == 0, "重新挂载");
     { char repA[64]; char *avA[1] = {(char *)"auto"};
@@ -1058,7 +1058,7 @@ static void test_provenance(void) {
     ai_free(ai);
 }
 
-/* ============================ ⑰ 对话触发：自然语言 → Token 行为 ============================
+/* ============================ ⑰ 对话触发：自然语言 → 符号节点行为 ============================
  *
  * 「猫 和 鱼 之间 加 个 词」这种话要真的能干活（用户要的对话触发）。
  * 三条纪律：
@@ -1178,7 +1178,7 @@ static void test_write_ledger(void) {
         ok(a4->writes[AI_WSRC_PERCEIVE] == 2, "K6：账照记（两条路都记来源档）");
 
         /* **骨架端点不路由**（K6 那条静态例外）：`[时刻:…]` 这类协议骨架名字，
-         * 内核按规矩本来就不接（"不许改保留 Token"）—— 而时间链是**内核自己的记账**，
+         * 内核按规矩本来就不接（"不许改保留符号节点"）—— 而时间链是**内核自己的记账**，
          * 不是自修改。所以它走直写：边照样有、审计里没有它的拒绝记录。
          * 这一条是可证伪的：如果哪天有人把例外去掉，这里会看到"允许 0 拒绝 1"（实测过）。 */
         AI *a6 = ai_new();
@@ -1245,7 +1245,7 @@ static void test_order_query(void) {
 
 /* ============================ ㉑ 合写否定：两种写法同一份声明 ============================
  *
- * 关系表声明的是两词形式（`不 会`），而分词器把「不会」「不喜欢」「不是」切成**一个** token
+ * 关系表声明的是两词形式（`不 会`），而分词器把「不会」「不喜欢」「不是」切成**一个** 符号节点
  * （「不属于/不能」却是两词）。这一节钉：两种写法**解析结果一样**、`rel_word` 归一成关系词
  * （否则调用方按 `is_neg` 拼一遍会得到「不 不会」）、以及关系文件装载器也认合写。 */
 static void test_merged_neg(void) {
@@ -1259,7 +1259,7 @@ static void test_merged_neg(void) {
     char *(w1[4]) = {(char *)"猫", (char *)"不会", (char *)"飞", (char *)"吗"};
     int p1 = rel_parse(ai, w1, 4, jbuf, sizeof jbuf, &aw, &rid, &neg, &bw, &isq, &rw, 0);
     ok(p1 && rid == REL_CAN && neg == 1 && isq == 1 && strcmp(aw, "猫") == 0 && strcmp(bw, "飞") == 0,
-       "「猫 不会 飞 吗」→ 关系=会、否定=1、问句（一个 token 就带否定）");
+       "「猫 不会 飞 吗」→ 关系=会、否定=1、问句（一个符号节点就带否定）");
     ok(p1 && rw && strcmp(rw, "会") == 0,
        "`rel_word` 归一是**关系词本身**（「会」，不是输入那个「不会」）—— 不然会拼出「不 不会」");
     /* 两词写法：同答案 */
@@ -1367,7 +1367,7 @@ static void test_process_marks(void) {
 /* ==================== ㉔ 过程执行引擎（第 9 条 ③，默认关） ====================
  *
  * ①+② 让过程记得下（§6.70），③ 让它**跑得起来也停得下来**：逐步核对（词在 / 前提成立 /
- * 是不是 Token 行为），核对只读、真执行走受审通道、断点用 `DerGap`。这一节钉：
+ * 是不是符号节点行为），核对只读、真执行走受审通道、断点用 `DerGap`。这一节钉：
  * 默认关、断点判据（前提不成立 / 要参数）、真执行计数、以及**过程边不许被拆**（结构）。 */
 static void test_proc_run(void) {
     printf("== ㉔ 过程执行引擎：跑得起来、也停得下来（§6.106 起默认**开**） ==\n");
@@ -1810,7 +1810,7 @@ static void test_tail_blocks(void) {
     }
 }
 
-/* ① 档最后两条（§6.82）：**动作 token**（`[执行:…]`）+ **过程的执行槽**（步骤真的调动作） */
+/* ① 档最后两条（§6.82）：**动作符号节点**（`[执行:…]`）+ **过程的执行槽**（步骤真的调动作） */
 /* ② 档第一件（§6.83）：求值层样板 —— 条件里的**数值比较**真算一遍 */
 /* ② 档"分词最长匹配"（§6.84）：分词器本来就是**池内最长匹配** —— 切开的词全是池里没有的，
  * 缺口在**词表覆盖**。`lexicon.txt`（一行一个词）就是补这一块的**数据**入口。 */
@@ -2161,7 +2161,7 @@ static void test_hypo_cache(void) {
     agent_hypo_cache(ai, a, REL_IS_A, b, 0, 1);
     ok(ai->n_hypo_cache == 1, "假设下推出 ⇒ 沉淀一条**条件缓存**");
     Token *P = pool_find(ai->pool, fp1);
-    ok(P && strncmp(P->name, "[假设栈:", 9) == 0, "前提 token = **整栈指纹**（[假设栈:xxxxxxxx]）");
+    ok(P && strncmp(P->name, "[假设栈:", 9) == 0, "前提符号节点 = **整栈指纹**（[假设栈:xxxxxxxx]）");
     ok(ai_premise_holds(ai, P) == 1, "栈还活着 ⇒ 前提成立 ⇒ 缓存可用");
     ok(hypo_push(&ai->hypo, h) == 1 && hypo_add(&ai->hypo, b, a, REL_IS_A, 0) == 1, "再进一层（嵌套）");
     char fp2[32];
@@ -2428,7 +2428,7 @@ static void test_n1_decide(void) {
 
 static void test_code_fixes(void) {
     printf("== ㊶ C③：修法表（补分号/补 #include/补声明）+ 多轮修正开关 ==\n");
-    ok(code_rule_for("error: expected ';' before '}' token") != NULL, "缺分号 ⇒ 认得出（规则 0）");
+    ok(code_rule_for("error: expected ';' before '}' 符号节点") != NULL, "缺分号 ⇒ 认得出（规则 0）");
     ok(code_rule_for("error: implicit declaration of function 'foo'") != NULL, "没声明函数 ⇒ 认得出（规则 1）");
     ok(code_rule_for("error: 'bar' undeclared (first use in this function)") != NULL,
        "没声明的名字 ⇒ 认得出（规则 2，**这轮新加的**）");
@@ -2656,7 +2656,7 @@ static void test_eval_num(void) {
 }
 
 static void test_exec_step(void) {
-    printf("== ㉝ 动作 token + 过程执行槽：步骤会**真的调动作**（白名单+超时+账） ==\n");
+    printf("== ㉝ 动作符号节点 + 过程执行槽：步骤会**真的调动作**（白名单+超时+账） ==\n");
     AI *ai = ai_new();
     char note[220];
     { char *a[1] = {(char *)"试跑"}; (void)token_op_run(ai, "建过程", a, 1, note, sizeof note); }
@@ -2672,7 +2672,7 @@ static void test_exec_step(void) {
       ok(strstr(note, "白名单") != NULL || strstr(note, "命令名") != NULL,
          "带管道/路径的动作词**当场拒**（别把 shell 语法塞进图里）"); }
     Token *mk = pool_find(ai->pool, "[执行:echo 哟]");
-    ok(mk != NULL, "动作 token `[执行:echo 哟]` 真的建在图上（不是虚构的记号）");
+    ok(mk != NULL, "动作符号节点 `[执行:echo 哟]` 真的建在图上（不是虚构的记号）");
     Token *root = proc_root_of(ai, "试跑");
     long st = -1;
     if (root) for (size_t i = 0; i < root->count; ++i)
@@ -3137,6 +3137,6 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
-    printf("\nToken 行为 / 临时 Token / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
+    printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }

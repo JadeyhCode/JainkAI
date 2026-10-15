@@ -63,7 +63,7 @@ echo "== 3. 诚实 + 挂问题 + 思维改脑走受审通道 =="
 run '猫 会 跳舞 吗\n::delib\n::pending\n::mod\n' o4
 grep -qE '停止原因：推不出来|停止原因：原地打转' o4 && ok "没知识就写明推不下去" || bad "停因" "$(grep '停止原因' o4)"
 grep -q '还挂着 1 个' o4 && ok "把想不通的问题挂起来（跨轮接着想）" || bad "挂问题" "$(grep -A3 '未解问题' o4)"
-grep -q '加Token \[自问:猫_会_跳舞_吗\].*思维:自问' o4 \
+grep -q '加符号节点 \[自问:猫_会_跳舞_吗\].*思维:自问' o4 \
     && ok "自问节点经**意图队列**落地（审计里看得见来源）" || bad "受审通道" "$(grep -A4 '最近应用' o4)"
 
 echo "== 4. 铁律：推出来的可以沉淀，但**不许当成观测** =="
@@ -106,7 +106,7 @@ grep -q '思维循环关着' o10 && ok "::thinkrun off 之后不再想" || bad "
 run '::thinkbudget 1\n猫 会 唱歌 吗\n::delib\n' o11
 grep -q '步数预算用完' o11 && ok "::thinkbudget 1 → 停因=步数预算用完" || bad "预算" "$(grep '停止原因' o11)"
 run '::thinklearn off\n猫 会 跳舞 吗\n::mod\n::pending\n' o12
-grep -q '新Token 0' o12 && ok "::thinklearn off → 不落自问节点（改不了脑）" || bad "thinklearn off" "$(grep '应用 ' o12)"
+grep -q '新符号节点 0' o12 && ok "::thinklearn off → 不落自问节点（改不了脑）" || bad "thinklearn off" "$(grep '应用 ' o12)"
 grep -q '还挂着 1 个' o12 && ok "但问题照样挂（想还是照想）" || bad "照想" "$(grep '未解问题' o12)"
 
 echo "== 8. 未解问题持久化：关掉再打开还记得没想通的事（**不动存档格式**） =="
@@ -160,7 +160,7 @@ grep -q '（继承）' o16 && ok "步骤里带得出规则名（继承）—— 
 grep -q '\[当场复核\].*缺口 0（站得住）' o16 \
     && ok "::thinkobj verify 当场把对象里的链**又独立重推了一遍**：缺口 0" \
     || bad "当场复核" "$(grep -m1 '当场复核' o16)"
-grep -q '没有这个 Token: \[思考:1\]' o16 \
+grep -q '没有这个符号节点: \[思考:1\]' o16 \
     && ok "对象**没进图**（铁律：只有观测进图 —— ::edges 找不到它这个 Token）" \
     || bad "对象进图了" "$(grep -m2 '思考:1' o16)"
 
@@ -215,8 +215,8 @@ grep -q '最近挑的是：猫 会 跳舞 吗' o21 && ok "::idle 报得出最近
 # **只读**：把两份 ::stats 里**该一动不动**的那几行抽出来逐字节比
 # （图/边/已学/轮次/睡眠/轨迹/写入账/内核计数）—— 思考自己的"想过 N 轮"当然会涨，
 # 那本来就是"在想"，不算账被动了。
-awk '/\[统计\] Token=/{n++} { if (n==2) print > "st2.txt"; else if (n==3) print > "st3.txt" }' o21
-inv() { grep -E '\[统计\] Token=|已学=|惊讶=|信用=|睡眠=|轨迹=|帧生成=|思维链步数=|关系知识：|假设层：|世界假设：|他者=|想象=|诊断=|微内核：|写入账|判定：|拒绝理由' "$1"; }
+awk '/\[统计\] 符号节点=/{n++} { if (n==2) print > "st2.txt"; else if (n==3) print > "st3.txt" }' o21
+inv() { grep -E '\[统计\] 符号节点=|已学=|惊讶=|信用=|睡眠=|轨迹=|帧生成=|思维链步数=|关系知识：|假设层：|世界假设：|他者=|想象=|诊断=|微内核：|写入账|判定：|拒绝理由' "$1"; }
 inv st2.txt > st2i.txt
 inv st3.txt > st3i.txt
 if [ -s st2i.txt ] && diff -q st2i.txt st3i.txt > /dev/null 2>&1; then

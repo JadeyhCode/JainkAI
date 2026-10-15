@@ -154,8 +154,8 @@ static inline int fr_wellformed(const char *s) {
     return 1;
 }
 
-/* 两个 Token 的出边邻居重叠度（Dice×100，0~100）。
- * 必须先按 main 去重：token 的边表里同一个邻居会有重复行，
+/* 两个符号节点的出边邻居重叠度（Dice×100，0~100）。
+ * 必须先按 main 去重：符号节点的边表里同一个邻居会有重复行，
  * 不去重会算出 >100 的分数（写探针时踩过）。 */
 static inline int fr_dice(const Token *a, const Token *b) {
     if (!a || !b || a->count == 0 || b->count == 0) return 0;
@@ -190,7 +190,7 @@ static inline int fr_dice(const Token *a, const Token *b) {
 }
 
 /* Gate B 本体：候选 cand 能不能靠关联链证据填进「示范集 ex」这个槽位。 */
-/* 这个 Token 名是不是**正好一个汉字**。
+/* 这个符号节点名是不是**正好一个汉字**。
  * 切词器只在「找不到更长的词」时才按字切，所以「整段都是单字」正是
  * 「用户写了个不存在的复合词」的指纹。这条判据是拿血换来的：
  *   `你 吃 火锅 了 吗`  → 火/锅 都是单字 → 是切词产物 → 可以拼回「火锅」✓
@@ -266,7 +266,7 @@ static inline int fr_span_admit(const FrValue *v, Token *const *ex, size_t ne) {
     return 0;
 }
 
-/* 某个 token 是不是在一个「允许填充集合」里 */
+/* 某个符号节点是不是在一个「允许填充集合」里 */
 static inline int fr_in_set(Token *const *set, size_t n, const Token *t) {
     if (!t) return 0;
     for (size_t i = 0; i < n; ++i) {
@@ -314,7 +314,7 @@ typedef struct {
 
 /* ---------------------------------------------------------------- 造词 */
 
-/* 现场造词：槽位取值是「本不存在的复合词」时，把它造成一个 Token 并接进图里。
+/* 现场造词：槽位取值是「本不存在的复合词」时，把它造成一个符号节点并接进图里。
  *
  * 起因：`你 吃 火锅 了 吗` 里的「火锅」在语料里从没出现过，切词器只能按字切成
  * 火 + 锅。于是槽位取值变成两个单字，帧要么答出「我 吃 了 火 锅」（难看），
@@ -381,7 +381,7 @@ static inline char *fr_dup(const char *s) {
 
 /* ---------------------------------------------------------------- 模板切分 */
 
-/* 把 "你 喜欢 <X> 吗" 切成 token 序列；遇到 <X> 时记下槽位位置。
+/* 把 "你 喜欢 <X> 吗" 切成符号节点序列；遇到 <X> 时记下槽位位置。
  * slot_at[k] = 该位置是哪个槽位（-1 表示普通词）。 */
 static inline int fr_split(AI *ai, const char *text, Token **out, int *slot_at,
                            size_t max_tok, const char **slot_names, size_t *n_slot,
@@ -489,7 +489,7 @@ static inline size_t fr_load(AI *ai, FrameSet *fs, const char *path) {
                 while (*p && *p != ',' && *p != ' ') p++;
                 char save = *p; *p = 0;
                 if (*s) {
-                    /* 用「整段」当 token，不交给 ai_tokenize ——
+                    /* 用「整段」当符号节点，不交给 ai_tokenize ——
                      * 后者对「画画」会按池里认识的最长词切成 画+画，
                      * 声明里就会变成两个单字，反而匹配不上用户输入的「画画」。 */
                     Token *t = pool_token_intern(ai->pool, s);
@@ -717,7 +717,7 @@ static inline char *fr_render(const Frame *fr, const FrTemplates *T,
 /* 把槽位里的**单字部件**拼回一个整词（`北 京` → `北京`）。
  * 和 fr_coin 的区别：这里**不要求类证据** —— 降级答复没有对取值做任何断言，
  * 「我 不 太 懂 北京」里的「北京」纯粹是复述用户说的词，成不成词只看它像不像词。
- * 好处是顺带把用户的新词收进池子（下次 ::think 北京 就是一个 Token 了），
+ * 好处是顺带把用户的新词收进池子（下次 ::think 北京 就是一个符号节点了），
  * 代价是这类词**没有边**，所以不会污染游走。
  * 受 ::coin off 管：不想让它造词就一起关掉。 */
 static inline Token *fr_join_fill(AI *ai, FrValue *v) {
@@ -763,7 +763,7 @@ static inline char *fr_try_fall(AI *ai, const Frame *fr, FrValue *fill) {
 
 /* 一个问法模板和输入对齐：返回「用户改了哪些槽位」以及取值。
  * 要求长度一致（问法变体之间本来就该长度一致），逐位比较：
- *   槽位位置 → 记下用户那一侧的 token
+ *   槽位位置 → 记下用户那一侧的符号节点
  *   普通位置 → 必须相同，否则不匹配 */
 /* 模板与输入做**严格的位置走法**：
  *   - 普通词必须和输入当前词**完全相同**，否则不匹配；
@@ -939,7 +939,7 @@ static inline char *fr_generate_one(AI *ai, FrameSet *fs, Token *const *words, s
                 }
             }
             /* 拆解的护栏：**不许把拆开的碎片一起塞进同一个槽位**。
-             * origin[i] = 这个 token 是第几个原词拆出来的（-1 = 没拆过）。
+             * origin[i] = 这个符号节点是第几个原词拆出来的（-1 = 没拆过）。
              * 反例（实测）：`你 怕 老师 吗` 在拆解候选里变成 你/怕/老/师/吗，
              * 模板「你 怕 <X> 吗」把 老+师 一起吞进 X，而 老 正好在恐惧类白名单里
              * → Gate A 放行 → 答出「我 怕 老 师」。槽位取值是两个碎片，
@@ -953,7 +953,7 @@ static inline char *fr_generate_one(AI *ai, FrameSet *fs, Token *const *words, s
                     if (fill[k].n < 2) continue;
                     int o = -1, same = 1;
                     for (size_t t = 0; t < fill[k].n; ++t) {
-                        /* 恢复出每个填充 token 在本次输入里的位置 */
+                        /* 恢复出每个填充符号节点在本次输入里的位置 */
                         int oi = -1;
                         for (size_t q = 0; q < n; ++q)
                             if (words[q] == fill[k].tok[t]) { oi = origin[q]; break; }

@@ -32,12 +32,12 @@ run() { cp model.bin m.bin; { printf '::notepad off\n::char off\n::hypo cache of
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
-grep -q 'Token 行为（图操作）：15 条' o1 && ok "::op 列出 15 条行为（表生成；过程记号+执行槽那九条在**表尾**）" \
+grep -q '符号节点行为（图操作）：15 条' o1 && ok "::op 列出 15 条行为（表生成；过程记号+执行槽那九条在**表尾**）" \
     || bad "行为表" "$(grep -A3 'Token 行为' o1 | head -4)"
 for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行; do
     grep -q "::op $op" o1 || bad "表里少了行为 $op" "$(grep '::op' o1 | head -5)"
 done
-grep -q '当前未回收的临时 Token：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
+grep -q '当前未回收的临时符号节点：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
     || bad "临时计数" "$(grep '临时 Token' o1 | head -2)"
 
 echo "== ② 中间插词：不直连，经临时 Token 中转 =="
@@ -78,7 +78,7 @@ grep -q '行为 加前提' o4 && ok "::op 加前提 跑通（A —[前提]→ P 
     || bad "加前提" "$(grep '行为' o4 | head -3)"
 grep -q '\*\*前提\*\*' o4 && ok "::edges 把前提链接标出来（不是藏在字段里）" \
     || bad "前提标记" "$(grep -E '→|前提' o4 | head -4)"
-grep -q '之间的前提 token' o4 && ok "::premise 答出「这两个之间的前提 token 是什么」" \
+grep -q '之间的前提符号节点' o4 && ok "::premise 答出「这两个之间的前提符号节点 是什么」" \
     || bad "::premise" "$(grep -A2 '前提' o4 | head -4)"
 # 前提用**真词**时：它照常能被联想到（有 hits、可走边），逻辑也知道它是前提
 run '::premhold mention\n::op 加前提 猫 月亮 食物
@@ -87,8 +87,8 @@ run '::premhold mention\n::op 加前提 猫 月亮 食物
 ' o4b
 grep -qE '→ 食物 *_? *hits=[1-9]' o4b && ok "前提用真词（食物）：前提 token 有边有权重 —— 能被正常联想到" \
     || bad "前提可联想" "$(grep '食物' o4b | head -3)"
-grep -q '食物' o4b && grep -q '之间的前提 token' o4b && ok "逻辑同时知道「食物 是这两个之间的前提」" \
-    || bad "前提可识别" "$(grep -A2 '前提 token' o4b | head -3)"
+grep -q '食物' o4b && grep -q '之间的前提符号节点' o4b && ok "逻辑同时知道「食物 是这两个之间的前提」" \
+    || bad "前提可识别" "$(grep -A2 '前提符号节点' o4b | head -3)"
 # 前提接线：让 A 经前提 P 也能到 Y（选择判据是图里的前提链接）
 run '::premhold mention\n::op 加前提 猫 月亮 食物
 ::op 前提接线 猫 食物 鱼
@@ -99,17 +99,17 @@ grep -q '行为 前提接线' o5 && ok "::op 前提接线 跑通（经前提 P �
     || bad "前提接线" "$(grep '行为' o5 | head -3)"
 grep -qE '→ 鱼 *_? *hits=[1-9]' o5 && ok "前提的出口 P→鱼 建出来了" \
     || bad "前提出口" "$(grep '鱼' o5 | head -3)"
-grep -q '之间的前提 token' o5 && ok "::premise 猫 鱼 也答得出前提（食物）" \
-    || bad "前提查询" "$(grep -A2 '前提 token' o5 | head -3)"
+grep -q '之间的前提符号节点' o5 && ok "::premise 猫 鱼 也答得出前提（食物）" \
+    || bad "前提查询" "$(grep -A2 '前提符号节点' o5 | head -3)"
 
 echo "== ⑤ 临时 Token 不存盘：存读之后它不在，模型照常装 =="
 run '::op 中间插词 猫 月亮\n::save slot\n' o7
 [ -s slot ] && ok "存盘成功（临时 Token 与指向它的边被跳过）" || bad "存盘" "$(tail -2 o7)"
 mv slot m.bin
 printf '::op\n::edges [临:中转]\n::quit\n' | ./aip --model m.bin > o8 2>&1 || true
-grep -q '当前未回收的临时 Token：0 个' o8 && ok "重载后没有临时 Token（草稿没被写成知识）" \
+grep -q '当前未回收的临时符号节点：0 个' o8 && ok "重载后没有临时 Token（草稿没被写成知识）" \
     || bad "临时 Token 被存下来了" "$(grep '临时 Token' o8 | head -2)"
-grep -q '没有这个 Token' o8 && ok "指向它的边也没有留下悬空引用（装载不报错）" \
+grep -q '没有这个符号节点' o8 && ok "指向它的边也没有留下悬空引用（装载不报错）" \
     || bad "悬空引用" "$(grep -A2 '临:中转' o8 | head -3)"
 
 echo "== ⑥ 修正的记忆（来源监控）：改口留痕、列得出、存读还在 =="
@@ -160,8 +160,8 @@ grep -q '\[原语 加前提\]' o14 && ok "[原语:前关联]+[原语:连接] →
     || bad "原语加前提" "$(grep '原语' o14 | head -3)"
 grep -q '\*\*前提\*\*' o14 && ok "建出的是前提链接（不是退役的语境字段）" \
     || bad "前提链接" "$(grep -E '饿|前提' o14 | head -4)"
-grep -q '之间的前提 token' o14 && ok "::premise 猫 饿 答得出前提" \
-    || bad "原语前提查询" "$(grep -A2 '前提 token' o14 | head -4)"
+grep -q '之间的前提符号节点' o14 && ok "::premise 猫 饿 答得出前提" \
+    || bad "原语前提查询" "$(grep -A2 '前提符号节点' o14 | head -4)"
 # [原语:前提接线]：让 A 经前提 P 也能到 Y
 run '::asm [原语:对象] 吃 [原语:对象] 猫 [原语:对象] 火 [原语:前提接线]\n::edges 吃\n' o15
 grep -q '\[原语 前提接线\]' o15 && ok "[原语:前提接线] 跑通了" \
@@ -173,7 +173,7 @@ grep -qE '→ 火 *_? *hits=[1-9]' o15 && ok "前提的出口 P→火 建出来�
 run '::asm [原语:对象] 猫 [原语:对象] 月亮 [原语:插词]
 ::asm [原语:回收临时]
 ' o16
-grep -q '\[原语 回收临时\] 没人引用的临时 Token 0 个' o16 \
+grep -q '\[原语 回收临时\] 没人引用的临时符号节点 0 个' o16 \
     && ok "[原语:回收临时] 在位，且在用中的草稿不收" || bad "原语回收" "$(grep '回收' o16)"
 
 # ::prims 也必须由**原语表**生成（以前它手抄了第三份清单，会漏列新原语）
@@ -217,7 +217,7 @@ echo "== ⑨ 反前提（[前提不]）+ 前提说明进答复（A/B 量过 0/8 
 # 反前提：条件是「前提 token 不在注意窗口里」。不提「人」→ 条件成立 → 用这条连结。
 run '::premhold mention\n::op 加反前提 猫 做饭 人\n::premise 猫 做饭\n猫 会 做饭 吗\n' o21
 grep -q '前提不：人' o21 && ok "::premise 报出极性（前提不：人）" \
-    || bad "反前提登记" "$(grep -A2 '前提 token' o21 | head -3)"
+    || bad "反前提登记" "$(grep -A2 '前提符号节点' o21 | head -3)"
 grep -q '对 ， 猫 -\[前提不\]-> 人' o21 && ok "人没出现 → 条件成立 → 用这条连结（链上读作 前提不）" \
     || bad "反前提该成立" "$(grep 'AI >' o21 | tail -1)"
 # 提到「人」之后 → 条件不成立 → 不用它。

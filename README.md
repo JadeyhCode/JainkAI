@@ -14,7 +14,7 @@
 # 1) 编译（C11 + libc，约 20 秒）
 gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o build_aip main.c -lm
 
-# 2) 跑起来（model.bin 是出厂模型：约 1200 个 Token / 4 万条边）
+# 2) 跑起来（model.bin 是出厂模型：约 1200 个符号节点 / 4 万条边）
 ./build_aip --model model.bin
 你 > 猫 属于 动物          # 陈述：它当场学进图里
 你 > 猫 会 飞 吗            # 提问：走关系层求解 + 验证
@@ -28,7 +28,7 @@ sh tests/all.sh
 
 ```sh
 sh tests/relations.sh     # 关系层：传递/否定/情态说法
-sh tests/tokenop.sh       # Token 行为（图操作）与过程记号
+sh tests/tokenop.sh       # 符号节点行为（图操作）与过程记号
 sh tests/thinking.sh      # 思维循环
 BIN=./build_aip sh tests/belief.sh   # 也能指定二进制
 ```
@@ -85,7 +85,7 @@ BIN=./build_aip sh tests/belief.sh   # 也能指定二进制
 | `main.c` | 入口 + 全部 `::` 元命令 + 语料装载 |
 | `ai.h` | AI 状态机与机制：感知/学习/情绪/直觉/输出流水线开关 |
 | `micro.h` | **微内核**：受审通道（提议/审查/预算/应用/审计）＋ `TOKEN_OPS[]` 行为表 |
-| `token.h` | 图的底层：Token、边（角色/动作槽/命中）、极性、前提、顺序、词法 |
+| `token.h` | 图的底层：符号节点、边（角色/动作槽/命中）、极性、前提、顺序、词法 |
 | `rel.h` | 关系层：谓语表、求解、否定/情态归一、他者宾语蕴含 |
 | `derive.h` | 推导与验证：`Derivation`、缺口、`der_verify` |
 | `think.h` | 思维循环：议程/机制/回溯/未解问题/空闲思考/思考对象 |

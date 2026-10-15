@@ -47,7 +47,7 @@ static inline void agent_revise_name(char *dst, size_t cap, const char *a, int n
  * **缺一端**的关系问句全掉"我不太懂" —— 可图里明明答得出来（正向查邻居 / 反向扫一遍）。
  * 关系层此前只答**闭合**问句（`A R B 吗`）。这一段把"表面说法"接到**求解器**上：
  *   · `A R 什么/谁`     ⇒ 正向查 `rel_neighbors(a, rid)`；
- *   · `什么/谁 R B`     ⇒ **反向**扫一遍（谁有 `R` 边指向 B），上限 64 个 token。
+ *   · `什么/谁 R B`     ⇒ **反向**扫一遍（谁有 `R` 边指向 B），上限 64 个符号节点。
  * 默认关（`AIP_RELOPEN=1` / `::rel open on`）：关着时这些话照旧走流水线（逐字节相同）。 */
 static inline int agent_open_slot_word(const char *w) {
     return w && (strcmp(w, "什么") == 0 || strcmp(w, "谁") == 0 || strcmp(w, "哪些") == 0 ||
@@ -160,6 +160,7 @@ static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
     e->rel |= bit;
     e->action = m;                              /* 出处写在动作槽上（就像 [因果]/[前提]） */
     e->role = ASSOC_ROLE_DERIVED;               /* 角色最后打（观测写法会清掉它） */
+    token_cache_enqueue(A);                     /* §6.127：新落的推论边要进复核队列 */
     ai->n_rel_guess_mem++;
 }
 
@@ -637,6 +638,7 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
         AssocEntry *e = &A->assocs[k];
         if (e->main == B && ((neg && (e->nrel & REL_BIT(rid))) || (!neg && (e->rel & REL_BIT(rid))))) {
             e->role = ASSOC_ROLE_DERIVED;
+            token_cache_enqueue(A);              /* §6.127：同上 */
             break;
         }
     }
@@ -690,7 +692,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
     if (!rel_parse(ai, words, n, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
                    &bw, &is_q, &rw, 0)) return NULL;
     if (!is_q) return NULL;
-    /* **只查不建**：解析阶段绝不往池子里塞新 Token（造出过 `火锅了` 那种垃圾）。 */
+    /* **只查不建**：解析阶段绝不往池子里塞新符号节点（造出过 `火锅了` 那种垃圾）。 */
     Token *A = pool_find(ai->pool, aw);
     Token *B = pool_find(ai->pool, bw);
     if (!A || !B) return NULL;
@@ -850,7 +852,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
     return NULL;
 }
 
-/* 帧层给的是**文本**：把它拆回 Token 序列，再用同一套冲突检测。
+/* 帧层给的是**文本**：把它拆回符号节点序列，再用同一套冲突检测。
  * （帧的答复本来就是空格分隔的词，和 ai_tokens_to_text 一个口径。） */
 static inline size_t resp_conflicts_hypo(AI *ai, const char *text,
                                          char *note, size_t cap) {
@@ -1091,9 +1093,9 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
  *
  * 三条判据（**都是现成的**，没有新语义）：
  *   ① **认识吗**：动作词在图上有没有连结（孤立词做不了）；
- *   ② **前提成立吗**：过程根与这一步之间的**前提 token**（`token_premises`）用
+ *   ② **前提成立吗**：过程根与这一步之间的**前提符号节点**（`token_premises`）用
  *      `ai_premise_cond_ok` 判（就是"提到过 / 够得着 / 有据"那三档）—— 不成立 ⇒ 断点；
- *   ③ **是 Token 行为吗**：是就走 `token_op_run`（**受审通道**）真执行；要参数的 v1 只记一条断点
+ *   ③ **是符号节点行为吗**：是就走 `token_op_run`（**受审通道**）真执行；要参数的 v1 只记一条断点
  *      （**不猜参数** —— 猜出来的执行比不执行更坏）。
  * 控制流：`[调用]` → 递归跑子过程（深度 ≤ 3）；`[回边]` → 跳回第 N 步（每步迭代 ≤ 2，防死循环）。
  * **只读 + 受审**：核对不动图；真执行某一步行为时走的是老那条通道（有审查、有预算、有账）。
@@ -1106,7 +1108,7 @@ typedef struct {
     size_t n_step;      /* 记了几步（含调用展开） */
     size_t n_ok;        /* 放行的步数 */
     size_t n_gap;       /* 断点数 */
-    size_t n_ran;       /* 真执行过的 Token 行为数 */
+    size_t n_ran;       /* 真执行过的符号节点行为数 */
     size_t n_call;      /* 进过几次子过程 */
     /* ---- ④ 假设层（执行栈与作用域）---- */
     size_t n_assume;      /* 记了几条假设（干跑：前提假定成立） */
@@ -1166,7 +1168,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
         pr->n_gap++;
         return 0;
     }
-    /* ② 前提成立吗（根与这一步之间的前提 token；三档判据都是现成的） */
+    /* ② 前提成立吗（根与这一步之间的前提符号节点；三档判据都是现成的） */
     {
         const Token *ps[8];
         int pol[8];
@@ -1191,7 +1193,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             return 0;
         }
     }
-    /* ③ 是 Token 行为吗 → 真的走受审通道执行；要参数的 v1 不猜 */
+    /* ③ 是符号节点行为吗 → 真的走受审通道执行；要参数的 v1 不猜 */
     {
         const TokenOp *op = token_op_by_name(act->name);
         if (op && op->min_args > 0) {
@@ -1234,7 +1236,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             return 0;
         }
     }
-        /* ① **动作 token**（§6.82）：这一步的目标是 `[执行:动作词 参数…]` ⇒ **真的调一次**
+        /* ① **动作符号节点**（§6.82）：这一步的目标是 `[执行:动作词 参数…]` ⇒ **真的调一次**
          * （走 `action_run`：白名单 + 超时 + 账）。干跑时只核过；执行层关着就是**断点**
          * （不许假装做过了）。 */
         if (act->name && strncmp(act->name, MICRO_EXEC_TOKEN_PREFIX,
@@ -1745,7 +1747,7 @@ static inline int dialog_try_proc_plan(AI *ai, char *const *words, size_t n,
  * 认法**窄**到三种（宁可漏，不可误触发）：不认识就整条不触发，走流水线。动作照样走
  * `token_op_run`（受审通道）—— 对话只是入口，不是特权。 */
 /* 把 from 起剩下的词**拼成一个词**（分词器会把「泡茶」切成 泡+茶 —— §C 那条老坑：
- * 触发这一层拿到的是 token，不是原句；用户说的确实是「泡茶」，拼回去才是他说的那个词）。 */
+ * 触发这一层拿到的是符号节点，不是原句；用户说的确实是「泡茶」，拼回去才是他说的那个词）。 */
 static inline size_t dialog_join_words(char *const *words, size_t n, size_t from,
                                        char *buf, size_t cap) {
     size_t k = 0;
@@ -2125,7 +2127,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     ai_focus_decay(ai, 0.85f);
 
     /* ---- 微内核：补丁注入 ----
-     * 补丁把外部信号变成 Token 交进来，内核只当它们是一批 Token
+     * 补丁把外部信号变成符号节点交进来，内核只当它们是一批符号节点
      * （放进焦点 + 挂到当前时刻，剩下的靠关联学习自己长）。
      * **没挂补丁时这里是空转** —— 内核不依赖任何补丁。 */
     micro_patch_sense(ai);
@@ -2167,7 +2169,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                  ai->n_merge ? "（有合并）" : "",
                  ai->n_coined ? "（有造词）" : "",
                  ai->n_relay ? "（有中转容错）" : "");
-        cot_push(ai, COT_READ, 1, 100, "分词 + token 代数", note);
+        cot_push(ai, COT_READ, 1, 100, "分词 + 符号节点代数", note);
         ai->n_cot++;
     }
 
@@ -2589,9 +2591,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* ---- 微内核安全点 ----
      * 一轮的**唯一**结构修改入口：补丁动作先做（它看的是刚说出去的话），
      * 然后自修改走「提议 → 安全内核审查 → 应用 + 记账 → 元认知」。
-     * 放在这里是因为所有遍历早就结束了 —— 加边/加 Token 不会
+     * 放在这里是因为所有遍历早就结束了 —— 加边/加符号节点不会
      * 让任何正在进行的 `for (i < t->count)` 失效。 */
-    /* ---- 对话触发：自然语言 → Token 行为（表驱动，窄集）----
+    /* ---- 对话触发：自然语言 → 符号节点行为（表驱动，窄集）----
      * 放在这里（学完、话也组好了之后）：命中就用它的答复**替掉**流水线那句，
      * 但**不跳过**学习 —— 触发是"入口"，不是"特权"，动作照样走受审通道。 */
     {
@@ -2602,7 +2604,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             dialog_trigger_try_others(ai, words, n, tobuf, sizeof tobuf) ||
             dialog_trigger_try(ai, words, n, tobuf, sizeof tobuf)) {
             snprintf(out, out_cap, "%s", tobuf);
-            cot_push(ai, COT_INFER, 1, 80, "对话触发（Token 行为）", tobuf);
+            cot_push(ai, COT_INFER, 1, 80, "对话触发（符号节点行为）", tobuf);
             ai->n_cot++;
         }
     }
@@ -2611,7 +2613,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 放在思维循环**之后**：这时候痕已经写完了，补一条"这我记过过程"谁都不会打断。 */
     think_note_process(ai, words, n);
 
-    /* ---- 输出侧补丁（第一步）：暂存 + 动作补丁看 Token ----
+    /* ---- 输出侧补丁（第一步）：暂存 + 动作补丁看符号节点 ----
      * 把"这一轮本来要说的话"先交给补丁暂存；能编辑自己发言的补丁（记事本）
      * 从这里拿到原文。**决策**留到后面 —— 它得先想完（think_settle）才有话说。 */
     patch_stage_all(ai, out);
@@ -2646,6 +2648,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* 维护 */
     ai->turns++;
     if (ai->consolidate_every && (ai->turns % ai->consolidate_every) == 0) {
+        ai->n_scan_tokens += ai->pool->count;
         for (size_t i = 0; i < ai->pool->count; ++i) {
             Token *t = ai->pool->tokens[i];
             if (t->is_garbage) continue;

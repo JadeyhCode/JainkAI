@@ -290,7 +290,7 @@ static inline int action_observe_mark(AI *ai, const char *prefix, int rc, const 
     ModIntent m;
     memset(&m, 0, sizeof m);
     m.type = MOD_ADD_TOKEN;
-    /* 挂回"我"；没有"我"（单元测试里的空脑子）就退回池里第一个普通 token ——
+    /* 挂回"我"；没有"我"（单元测试里的空脑子）就退回池里第一个普通符号节点 ——
      * 这个挂靠点只是归属，不参与语义（确定性：按池子下标取第一个）。 */
     Token *host = ai->self;
     if (!host)
@@ -304,7 +304,7 @@ static inline int action_observe_mark(AI *ai, const char *prefix, int rc, const 
     Micro *mk = micro_of(ai);
     if (!mk) return -1;
     /* 一次动作算内核眼里的**一小步**：重开这一步的预算，否则第一条标记就把
-     * 「一步最多造几个 Token」用光，后面的标记会被安全内核按预算拒掉（实测过：
+     * 「一步最多造几个符号节点」用光，后面的标记会被安全内核按预算拒掉（实测过：
      * 账上"观测标记 1 个"而实际跑了三条命令）。 */
     safety_step_begin(ai);
     if (!mod_propose(&mk->queue, &m)) return -1;

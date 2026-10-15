@@ -132,7 +132,7 @@ int main(void) {
         }
         ok(dup == 0, "PRIMS 里名字不重复（以前 prim_kind 与 pool_init_prims 各写一份）");
         ok(dead == 0, "PRIMS 里没有 kind 落空的条目");
-        ok(prim_count() >= 37, "PRIMS 条数与实现相符（含 Token 行为入口）");
+        ok(prim_count() >= 37, "PRIMS 条数与实现相符（含符号节点行为入口）");
         AI *ai = ai_new();
         pool_init_prims(ai->pool);
         size_t miss = 0;
@@ -142,7 +142,7 @@ int main(void) {
             if (!pool_find(ai->pool, PRIM_SYMS[i])) miss++;
         ok(miss == 0, "pool_init_prims 把表里的名字（含符号）都 intern 了");
         ok(prim_kind(pool_find(ai->pool, PRIM_INSERT)) == PK_INSERT,
-           "intern 出来的 Token 认得出是原语（识别与 intern 同一张表）");
+           "intern 出来的符号节点认得出是原语（识别与 intern 同一张表）");
         ai_free(ai);
     }
 

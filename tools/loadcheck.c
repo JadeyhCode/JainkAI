@@ -19,8 +19,8 @@ int main(int argc, char **argv) {
             bad++;
         }
     }
-    printf("坏 token 数 = %zu\n", bad);
-    /* 单个 token 的追加测试：不存在的目标，必然走到 append 分支 */
+    printf("坏符号节点数 = %zu\n", bad);
+    /* 单个符号节点的追加测试：不存在的目标，必然走到 append 分支 */
     Token *cat = pool_token_intern(ai->pool, "猫");
     Token *probe = pool_token_intern(ai->pool, "[探针:测试]");
     printf("cat count=%zu cap=%zu assocs=%p probe=%p\n",

@@ -150,7 +150,7 @@ typedef enum {
     TG_OPPOSITE,     /* 换问法（机制：R7/R8/R9 这类规则只在问否定时开火） */
     TG_ANALOGY,      /* 借一个最近的词的意见（机制：要求表示层在） */
     TG_NEED,         /* 缺哪条前提（**由关系表声明 rd->prereq 决定**） */
-    TG_PREMISE,      /* 问前提：这条连结有前提 token，前提成立吗（R10 的闸门） */
+    TG_PREMISE,      /* 问前提：这条连结有前提符号节点，前提成立吗（R10 的闸门） */
     TG_THROUGH,      /* 经由一个**图里给出的**中间词（由 rd->trans / rd->inherit 决定） */
     TG_WORD          /* 这个词我不认识 —— 认识一下（挂成未解问题） */
 } ThinkGoalKind;
@@ -713,7 +713,7 @@ static inline ThinkOpen *think_open_add(Think *t, Token *subj, Token *obj,
  *
  * 未解问题本身**不进存档**（`Think` 是瞬态的），但思维层在挂问题时已经经安全内核
  * 落了一个 `[自问:<问题文本>]` 标记节点（名字里的空格换成 `_`）并连回主语。
- * 那些标记是**普通 token**，随图存盘 —— 所以「关掉再打开还记得没想通的事」
+ * 那些标记是**普通符号节点**，随图存盘 —— 所以「关掉再打开还记得没想通的事」
  * **不用升格式、不用重训**：装载后扫一遍这些标记，把问题重新挂回议程。
  *
  * 局限（照实说）：名字里的文本当初被截断过（think_ask_name 的预算），
@@ -2067,49 +2067,86 @@ static inline int think_cache_supported(AI *ai, Token *a, uint8_t rid, Token *b,
     return der_verify(ai, &d) == 0;
 }
 
-/* **缓存跟着前提走**：扫一遍图上所有缓存，把已经没有依据的提出来撤销。
+/* **缓存跟着前提走**：把已经没有依据的缓存提出来撤销。
  * 前提被观测推翻（那条边自己打架了）、被撤掉、或者它的中间跳没了 ——
  * 三种情况都会让依据复核失败，这条缓存就不该再当事实用。
  * 求解器那边还有一道实时闸（R0 里拒绝无依据的缓存），这里负责**清理**，
- * 免得它一直挂在图上、每次都要复核一次。 */
+ * 免得它一直挂在图上、每次都要复核一次。
+ *
+ * §6.127 **改成走候选队列**：原来这里**每轮扫全图**（所有词 × 所有边），
+ * 出厂模型下每轮 4 万次边访问，而真正带推论边的词只有一小撮 ——
+ * 90% 以上的访问是白走的（实测：`_t/roundbench_last.tsv`）。
+ * 现在的口径（不变式：**图上每条推论边，其起点词必进过队列**）：
+ *   · 写入时入队 —— token_tag_full / micro.h 的 MOD_TAG_DERIVED / agent.h 两处，
+ *     凡是把一条边的 role 打成「推论」的地方都调 token_cache_enqueue()；
+ *   · 读盘/新建后的**第一趟**全图播一次种（存档里的推论边没人替它入队），只播一次；
+ *   · 处理完一个词，若它身上**还有**推论边，就重新入队到**下一轮**那条链 ——
+ *     所以"活着的缓存每轮都复核"这条语义没变，变的只是"不再走遍全图"。 */
 static inline void think_revalidate_caches(AI *ai, Think *t) {
     if (!ai || !t || t->learn_off) return;
     if (micro_of(ai)->safe.mod_off) return;
     ModQueue *q = &micro_of(ai)->queue;
-    for (size_t i = 0; i < ai->pool->count; ++i) {
-        Token *a = ai->pool->tokens[i];
-        if (!a || a->is_garbage) continue;
-        for (size_t j = 0; j < a->count; ++j) {
-            AssocEntry *e = &a->assocs[j];
-            if (e->role != ASSOC_ROLE_DERIVED || !e->main) continue;
-            for (uint8_t rid = 1; rid <= REL_CORE_MAX; ++rid) {
-                uint16_t bit = REL_BIT(rid);
-                int neg;
-                if (e->rel & bit)       neg = 0;
-                else if (e->nrel & bit) neg = 1;
-                else                    continue;
-                if (think_cache_supported(ai, a, rid, e->main, neg)) continue;
-                ModIntent in;
-                memset(&in, 0, sizeof in);
-                in.type = MOD_REMOVE_ASSOC;
-                in.target = a;
-                in.main = e->main;
-                snprintf(in.source, sizeof in.source, "思维:前提没了");
-                if (mod_propose(q, &in)) {
-                    char note[THINK_WHY];
-                    snprintf(note, sizeof note,
-                             "这条缓存的依据没有了（%s %s%s %s 已经推不出来）—— 撤销它",
-                             a->name ? a->name : "?", neg ? "不 " : "",
-                             rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?",
-                             e->main->name ? e->main->name : "?");
-                    think_step(t, TH_LEARN, 1, 60, "前提没了", note);
-                    t->n_stale++;
-                } else {
-                    t->n_cache_blocked++;
-                }
-                break;      /* 这条边整条要撤，别再逐位看 */
+    TokenPool *p = ai->pool;
+    if (!p) return;
+
+    if (!p->cache_seeded) {                 /* 首趟：全图播种（整场只有这一次） */
+        p->cache_seeded = 1;
+        ai->n_scan_tokens += p->count;
+        for (size_t i = 0; i < p->count; ++i) {
+            Token *a = p->tokens[i];
+            if (!a || a->is_garbage) continue;
+            for (size_t j = 0; j < a->count; ++j) {
+                ai->n_scan_edges++;
+                AssocEntry *e = &a->assocs[j];
+                if (e->role == ASSOC_ROLE_DERIVED && e->main) { token_cache_enqueue(a); break; }
             }
         }
+    }
+
+    Token *a = token_cache_take(p);
+    while (a) {
+        Token *next = a->cache_next;
+        a->cache_q = 0;
+        a->cache_next = NULL;
+        if (!a->is_garbage) {
+            ai->n_scan_tokens++;
+            int still = 0;                  /* 处理完还留着推论边吗（留 ⇒ 下一轮接着复核） */
+            for (size_t j = 0; j < a->count; ++j) {
+                AssocEntry *e = &a->assocs[j];
+                ai->n_scan_edges++;
+                if (e->role != ASSOC_ROLE_DERIVED || !e->main) continue;
+                still = 1;
+                for (uint8_t rid = 1; rid <= REL_CORE_MAX; ++rid) {
+                    uint16_t bit = REL_BIT(rid);
+                    int neg;
+                    if (e->rel & bit)       neg = 0;
+                    else if (e->nrel & bit) neg = 1;
+                    else                    continue;
+                    if (think_cache_supported(ai, a, rid, e->main, neg)) continue;
+                    ModIntent in;
+                    memset(&in, 0, sizeof in);
+                    in.type = MOD_REMOVE_ASSOC;
+                    in.target = a;
+                    in.main = e->main;
+                    snprintf(in.source, sizeof in.source, "思维:前提没了");
+                    if (mod_propose(q, &in)) {
+                        char note[THINK_WHY];
+                        snprintf(note, sizeof note,
+                                 "这条缓存的依据没有了（%s %s%s %s 已经推不出来）—— 撤销它",
+                                 a->name ? a->name : "?", neg ? "不 " : "",
+                                 rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?",
+                                 e->main->name ? e->main->name : "?");
+                        think_step(t, TH_LEARN, 1, 60, "前提没了", note);
+                        t->n_stale++;
+                    } else {
+                        t->n_cache_blocked++;
+                    }
+                    break;      /* 这条边整条要撤，别再逐位看 */
+                }
+            }
+            if (still) token_cache_enqueue(a);      /* 活着的缓存：下一轮还要复核 */
+        }
+        a = next;
     }
 }
 

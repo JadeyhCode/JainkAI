@@ -38,19 +38,19 @@
 #define PRIM_QUERY        "[原语:检索]"
 #define PRIM_EXTRACT_REL  "[原语:抽关系]"
 #define PRIM_APPLY_REL    "[原语:套关系]"
-/* ---- Token 行为（图操作）的原语入口：把「行为」写进语言层，用**已有的栈机**组合 ----
- *   [原语:对象] A [原语:对象] B [原语:插词]            在 A、B 之间插一个临时 Token（经它中转）
- *   [原语:对象] A [原语:对象] B [原语:插词为] <名字>    同上，但中转 Token 用这个名字
+/* ---- 符号节点行为（图操作）的原语入口：把「行为」写进语言层，用**已有的栈机**组合 ----
+ *   [原语:对象] A [原语:对象] B [原语:插词]            在 A、B 之间插一个临时符号节点（经它中转）
+ *   [原语:对象] A [原语:对象] B [原语:插词为] <名字>    同上，但中转符号节点用这个名字
  *   [原语:对象] A [原语:对象] P [原语:前提接线] Y?      见下（前提接线要三个操作数）
  *   [原语:对象] A [原语:对象] P [原语:对象] Y [原语:前提接线]  让 A 经前提 P 也能到 Y
  *   [原语:回收临时]                                     回收没人引用的草稿
  *
  * **前提**（淘汰「语境」后的表示）：`[原语:前关联] P` 之后紧跟的 `[原语:连接]` 不再往边上
- * 写「必需语境」字段，而是建出 `A —[前提]→ P → B`：P 是**普通 token**（联想照走、
- * 能被正常联想到），`[前提]` 是挂在动作槽上的**行为 token**，逻辑用
+ * 写「必需语境」字段，而是建出 `A —[前提]→ P → B`：P 是**普通符号节点**（联想照走、
+ * 能被正常联想到），`[前提]` 是挂在动作槽上的**行为符号节点**，逻辑用
  * `token_premise_between(A,B)` 就能问出「这两个之间的前提是什么」。
  * 注意：原语层**不碰图** —— 它只把「行为编号 + 操作数」交给宿主注入的回调，
- * 由持有 AI 的那一层过 token_op_run（安全内核 + 预算 + 审计）。见 docs/token行为-图操作与临时token.md。 */
+ * 由持有 AI 的那一层过 token_op_run（安全内核 + 预算 + 审计）。见 docs/符号节点行为-图操作与临时token.md。 */
 #define PRIM_PREMISE_TIE  "[原语:前提接线]"
 #define PRIM_PRE_ASSOC_NOT "[原语:前关联不]"   /* 反前提：条件是 P **不**在注意窗口里 */
 #define PRIM_INSERT       "[原语:插词]"
@@ -58,7 +58,7 @@
 #define PRIM_COLLECT_TEMP "[原语:回收临时]"
 
 /* 原语**命名空间**的前缀：只写一份。
- * 校验器靠它把「打错的原语名」和「普通数据 token」分开 —— 别的 `[xxx:yyy]`
+ * 校验器靠它把「打错的原语名」和「普通数据符号节点」分开 —— 别的 `[xxx:yyy]`
  * （`[符号:好]`、`[时刻:12]`、`[关系:之前]`…）都是运行时的**数据**，不许当成原语名报错。 */
 #define PRIM_PREFIX       "[原语:"
 #define PRIM_PREFIX_LEN   (sizeof(PRIM_PREFIX) - 1)
@@ -79,11 +79,11 @@ typedef enum {
     PK_TIME_NOW, PK_TIME_BEFORE, PK_TIME_AFTER, PK_TIME_CHAIN,
     PK_BIND, PK_UNBIND, PK_BUNDLE, PK_QUERY,
     PK_EXTRACT_REL, PK_APPLY_REL,
-    /* Token 行为的原语入口（它们不改图，只把请求交给宿主回调） */
+    /* 符号节点行为的原语入口（它们不改图，只把请求交给宿主回调） */
     PK_PREMISE_TIE, PK_INSERT, PK_INSERT_NAMED, PK_COLLECT_TEMP, PK_PRE_ASSOC_NOT,
 } PrimKind;
 
-/* 「Token 行为」在原语层的**编号**：按下标引用 micro.h 的 TOKEN_OPS[]。
+/* 「符号节点行为」在原语层的**编号**：按下标引用 micro.h 的 TOKEN_OPS[]。
  * 原语层看不到 micro.h（分层的），所以这里只带编号 ——
  * 「编号 ↔ 行为名」的对应由 tools/optest.c 钉住（改了 TOKEN_OPS 顺序那里当场变红）。 */
 typedef enum {
@@ -95,7 +95,7 @@ typedef enum {
     IPOP_N
 } InterpOpKind;
 
-/* 宿主回调：把一条「Token 行为」落地。返回应用条数（<0 = 没跑成）。 */
+/* 宿主回调：把一条「符号节点行为」落地。返回应用条数（<0 = 没跑成）。 */
 typedef int (*InterpOpFn)(void *user, InterpOpKind op, char *const *args, size_t n);
 
 typedef struct {
@@ -113,7 +113,7 @@ typedef struct {
     Token    **ctx;
     size_t     n_ctx;
     float      energy;
-    /* Token 行为的宿主（原语层靠它把请求交出去；NULL = 没人接，原语不生效） */
+    /* 符号节点行为的宿主（原语层靠它把请求交出去；NULL = 没人接，原语不生效） */
     InterpOpFn op_fn;
     void      *op_user;
 } Interp;
@@ -156,7 +156,7 @@ static inline void token_run_names_ctx(TokenPool *p, const char *const *names, s
  *   名字暗示"按语句分段"，实际没有分段这个概念。**行为不改**（改了会动一堆看护），
  *   校验器照真实行为判 —— 否则会认出假错误，"认错比不认更糟"。
  * 另：`绑定/解绑/认为/抽关系/套关系` 那几条在 `!hv` 时不推结果 —— 那是**池子能力**
- * 决定的（正常池子每个 Token 都有 hv），不算"看数据"，所以表里按"推"记；
+ * 决定的（正常池子每个符号节点都有 hv），不算"看数据"，所以表里按"推"记；
  * 真正看数据的是 `展开`（推 0~2）与 `检索`（中没中），它们标 PF_INEXACT。 */
 typedef enum {
     PF_NONE     = 0,
@@ -212,7 +212,7 @@ static const PrimDef PRIMS[] = {
     { PRIM_EXTRACT_REL,  PK_EXTRACT_REL,   2, 2, 1, PF_NONE },
     { PRIM_APPLY_REL,    PK_APPLY_REL,     2, 2, 1, PF_NONE },
     { PRIM_PRE_ASSOC_NOT, PK_PRE_ASSOC_NOT, 1, 1, 0, PF_NONE },    /* 反前提（[原语:前关联不]） */
-    { PRIM_PREMISE_TIE,  PK_PREMISE_TIE,   3, 3, 0, PF_NONE },     /* Token 行为入口（见文件头注释） */
+    { PRIM_PREMISE_TIE,  PK_PREMISE_TIE,   3, 3, 0, PF_NONE },     /* 符号节点行为入口（见文件头注释） */
 
     { PRIM_INSERT,       PK_INSERT,        2, 2, 0, PF_NONE },
     { PRIM_INSERT_NAMED, PK_INSERT_NAMED,  2, 2, 0, PF_ARG },      /* 多一个名字当参数 */
@@ -272,8 +272,8 @@ static inline const char *prim_effect_text(PrimKind k) {
     return buf;
 }
 
-/* 按**名字**认原语。校验器走的就是这一条：它拿到的是一串词，还没有 Token
- * （干跑不许 intern —— 一 intern 就等于把打错的名字当场造成新 Token，
+/* 按**名字**认原语。校验器走的就是这一条：它拿到的是一串词，还没有符号节点
+ * （干跑不许 intern —— 一 intern 就等于把打错的名字当场造成新符号节点，
  * 那正是今天"错名字被静默吞掉"的机制本身）。 */
 static inline PrimKind prim_kind_name(const char *name) {
     const PrimDef *d = prim_def_by_name(name);   /* 同一张表，不再抄一遍循环 */
@@ -313,7 +313,7 @@ static inline Token *interp_sym(Interp *ip, Token **slot, const char *name) {
 
 /* ============================ 原语执行 ============================ */
 
-/* 把一条「Token 行为」交给宿主（原语层**不碰图**）。
+/* 把一条「符号节点行为」交给宿主（原语层**不碰图**）。
  * 没有宿主（op_fn == NULL）就什么也不做 —— 语言层不该自己改结构，
  * 结构改动只有 micro_step 一个入口。 */
 static inline void interp_ask_op(Interp *ip, InterpOpKind op, Token **operands, size_t n) {
@@ -401,7 +401,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         if (a && b) {
             if (ip->pending_sub) {
                 /* **前提**（淘汰「语境」后的表示）：不往边上写字段，而是建
-                 * `A —[前提]→ P → B`（P 是普通 token，逻辑查得到它是前提）。
+                 * `A —[前提]→ P → B`（P 是普通符号节点，逻辑查得到它是前提）。
                  * 语言层照样不碰图：交给宿主走安全内核。 */
                 Token *ops[3] = { a, b, ip->pending_sub };
                 interp_ask_op(ip, ip->pending_not ? IPOP_PREMISE_CONNECT_NOT
@@ -422,15 +422,15 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         break;
     }
 
-    /* ---- Token 行为：只组装请求，不改图（见文件头那段注释）---- */
-    case PK_INSERT: {                       /* [原语:插词]：pop B, A → A、B 之间插临时 Token */
+    /* ---- 符号节点行为：只组装请求，不改图（见文件头那段注释）---- */
+    case PK_INSERT: {                       /* [原语:插词]：pop B, A → A、B 之间插临时符号节点 */
         Token *b = interp_pop(ip);
         Token *a = interp_pop(ip);
         Token *ops[2] = { a, b };
         interp_ask_op(ip, IPOP_INSERT, ops, 2);
         break;
     }
-    case PK_INSERT_NAMED: {                 /* [原语:插词为] <名字>：param 是中转 Token 的名字 */
+    case PK_INSERT_NAMED: {                 /* [原语:插词为] <名字>：param 是中转符号节点的名字 */
         Token *b = interp_pop(ip);
         Token *a = interp_pop(ip);
         Token *ops[3] = { a, b, param };
@@ -666,7 +666,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
  *
  * 三条硬规矩（都是本项目已经踩出来的）：
  *   ① **干跑不许 intern**：只按名字查表（`prim_def_by_name`）。一 intern 就等于把
- *      打错的名字当场造成一个新 Token —— 校验器自己把那件事做成了。
+ *      打错的名字当场造成一个新符号节点 —— 校验器自己把那件事做成了。
  *   ② **只按代码真实行为判**（§6.58）：栈效应来自上面那张表，名字与行为不一致的地方
  *      （分割=清空整栈、包裹/嵌套/捆绑=整栈折成一个）就按真实行为写，别按名字猜。
  *   ③ **不确定就不判**：`展开/检索` 推几个看数据 ⇒ 从那一步起栈深不确定，
@@ -756,7 +756,7 @@ static inline int token_check_program(const char *const *names, size_t n, TokenC
                 char msg[TOKEN_CHECK_MSG_CAP];
                 snprintf(msg, sizeof msg,
                          "未知原语名：`%s`（表里没有这种写法；干跑**不**intern，"
-                         "不会当场造一个 Token 把错字吞掉）", w);
+                         "不会当场造一个符号节点把错字吞掉）", w);
                 token_check_add(out, i, w, msg);
                 continue;                     /* 认不出就不猜它的栈效应 */
             }
@@ -874,7 +874,7 @@ static inline void token_run_ctx(TokenPool *p, Token **prog, size_t n,
                                  InterpOpFn op_fn, void *op_user) {
     Interp ip = {0};
     ip.pool = p;
-    ip.op_fn = op_fn;          /* 宿主：把 Token 行为交出去落地（NULL = 原语不生效） */
+    ip.op_fn = op_fn;          /* 宿主：把符号节点行为交出去落地（NULL = 原语不生效） */
     ip.op_user = op_user;
     token_run_env(&ip, prog, n);
     free(ip.stack);
@@ -891,7 +891,7 @@ static inline void token_run_names_ctx(TokenPool *p, const char *const *names, s
     token_run_ctx(p, prog, n, op_fn, op_user);
     free(prog);
 }
-/* 不带宿主的版本：Token 行为的原语**不生效**（语言层不自己改图） */
+/* 不带宿主的版本：符号节点行为的原语**不生效**（语言层不自己改图） */
 static inline void token_run_names(TokenPool *p, const char *const *names, size_t n) {
     token_run_names_ctx(p, names, n, NULL, NULL);
 }

@@ -4,7 +4,7 @@
  *   ① 意图队列：去重、容量封顶、溢出记账
  *   ② 安全内核：每一种拒绝理由都真的会拒绝（自环/保留名/预算/关系边/成环/开关/冻结），
  *                以及「被拒的意图不吃预算」
- *   ③ 应用：加边幂等、打关系、设类别/父类、加固、删边、造 Token 必须接回网络
+ *   ③ 应用：加边幂等、打关系、设类别/父类、加固、删边、造符号节点必须接回网络
  *   ④ 检测器：共现固化（图内有证据才接线，邻居不重叠的不许接）、缺口命名
  *   ⑤ 补丁边界：热插拔、越界输出按容量截断、连续出错自动停用、冲突/沉默提醒、
  *                补丁提议照样过安全内核、坏补丁不影响好补丁
@@ -28,7 +28,7 @@ static void ok(int cond, const char *what) {
 static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, name); }
 static void link2(Token *a, Token *b) { (void)token_add_assoc_unique(a, b); }
 
-/* 共享邻居池：让两个 Token 的邻居高度重叠，制造「图里已有证据」的局面 */
+/* 共享邻居池：让两个符号节点的邻居高度重叠，制造「图里已有证据」的局面 */
 static const char *const SHARED[] = {"s1","s2","s3","s4","s5","s6","s7","s8","s9","s10"};
 static void fanout(AI *ai, const char *name, int n) {
     Token *t = T(ai, name);
@@ -94,7 +94,7 @@ static void test_safety(void) {
     ok(safety_review(sk, ai->pool, &m) == SAFE_DENY_SELF, "自环被拒");
 
     m = mkintent(MOD_ADD_ASSOC, prim, b);
-    ok(safety_review(sk, ai->pool, &m) == SAFE_DENY_RESERVED, "拿保留 Token（[原语:…]）当目标被拒");
+    ok(safety_review(sk, ai->pool, &m) == SAFE_DENY_RESERVED, "拿保留符号节点（[原语:…]）当目标被拒");
 
     m = mkintent(MOD_ADD_ASSOC, a, b);
     ok(safety_review(sk, ai->pool, &m) == SAFE_OK, "普通加边放行");
@@ -102,16 +102,16 @@ static void test_safety(void) {
     m = mkintent(MOD_ADD_ASSOC, a, NULL);
     ok(safety_review(sk, ai->pool, &m) == SAFE_DENY_BADREF, "引用空 main 被拒");
 
-    /* 造新 Token：预算 2 条，第 3 条必须被拒 */
+    /* 造新符号节点：预算 2 条，第 3 条必须被拒 */
     for (int i = 0; i < 2; ++i) {
         ModIntent t = mkintent(MOD_ADD_TOKEN, a, NULL);
         snprintf(t.name, sizeof t.name, "新%d", i);
-        ok(safety_review(sk, ai->pool, &t) == SAFE_OK, "造新 Token 在预算内放行");
+        ok(safety_review(sk, ai->pool, &t) == SAFE_OK, "造新符号节点在预算内放行");
         safety_charge(sk, ai->pool, &t);
     }
     ModIntent t3 = mkintent(MOD_ADD_TOKEN, a, NULL);
     snprintf(t3.name, sizeof t3.name, "新3");
-    ok(safety_review(sk, ai->pool, &t3) == SAFE_DENY_BUDGET_TOKEN, "第 3 个新 Token 超预算被拒");
+    ok(safety_review(sk, ai->pool, &t3) == SAFE_DENY_BUDGET_TOKEN, "第 3 个新符号节点超预算被拒");
     sk->step_new_tokens = 0;
     ModIntent t4 = mkintent(MOD_ADD_TOKEN, a, NULL);
     snprintf(t4.name, sizeof t4.name, "[原语:偷偷改]");
@@ -183,9 +183,9 @@ static void test_apply(void) {
 
     ModIntent nt = mkintent(MOD_ADD_TOKEN, b, NULL);
     snprintf(nt.name, sizeof nt.name, "新概念");
-    ok(micro_apply_one(ai, &nt, note, sizeof note) == 1, "造新 Token");
+    ok(micro_apply_one(ai, &nt, note, sizeof note) == 1, "造新符号节点");
     Token *created = pool_find(ai->pool, "新概念");
-    ok(created && micro_has_edge(created, b), "新 Token 有边接回触发它的上下文（不是孤岛）");
+    ok(created && micro_has_edge(created, b), "新符号节点有边接回触发它的上下文（不是孤岛）");
     ai_free(ai);
 }
 
@@ -225,9 +225,9 @@ static void test_detectors(void) {
     char *w3[3] = {(char *)"甲", (char *)"乙", (char *)"戊"};
     micro_step(ai, w3, 3, "测试");
     Token *nc = pool_find(ai->pool, "[新概念:甲+乙]");
-    ok(nc != NULL, "缺口命名：造出了新概念 Token");
+    ok(nc != NULL, "缺口命名：造出了新概念符号节点");
     ok(nc && micro_has_edge(nc, seed), "新概念接回了触发它的上下文");
-    ok(mk->meta.n_new_tokens == 1, "新 Token 计数在走");
+    ok(mk->meta.n_new_tokens == 1, "新符号节点计数在走");
     ai_free(ai);
 }
 
@@ -253,7 +253,7 @@ static size_t tp_sense_conflict(Patch *p, TokenPool *pool, PatchOut *out, size_t
     (void)p;
     if (cap == 0) return 0;
     out[0].tok = pool_token_intern(pool, "补丁_信号");
-    out[0].neg = 1;                    /* 和好补丁对同一个 Token 唱反调 */
+    out[0].neg = 1;                    /* 和好补丁对同一个符号节点唱反调 */
     out[0].w = 1.0f;
     return 1;
 }
@@ -281,13 +281,13 @@ static void test_patches(void) {
     PatchOut out[8];
     size_t n = patch_sense_all(ai, out, 8);
     ok(n == 1 && out[0].tok && has_token(ai, "补丁_信号"), "感知：补丁输出被收集");
-    ok(micro_patch_sense(ai) == 1, "注入：补丁 Token 进了这一轮的上下文");
+    ok(micro_patch_sense(ai) == 1, "注入：补丁符号节点进了这一轮的上下文");
     {
         char tname[64];
         snprintf(tname, sizeof tname, "[时刻:%llu]",
                  (unsigned long long)ai->pool->current_tick);
         Token *now = pool_find(ai->pool, tname);
-        ok(now && micro_has_edge(now, out[0].tok), "注入的 Token 挂到了当前时刻（参与关联学习）");
+        ok(now && micro_has_edge(now, out[0].tok), "注入的符号节点挂到了当前时刻（参与关联学习）");
     }
     /* 容量为 1 时只可能收 1 条 —— 补丁不能越界写 */
     ok(patch_sense_all(ai, out, 1) == 1, "容量为 1 时最多收 1 条（越界输出被截断）");
@@ -301,7 +301,7 @@ static void test_patches(void) {
     ok(has_token(ai, "[提醒:补丁异常已停用:坏补丁]"), "停用时留下提醒（元认知管外设）");
     ok(good.enabled == 1, "坏补丁停用**不影响**好补丁");
 
-    /* 冲突：两个补丁对同一个 Token 一个说有、一个说没有 */
+    /* 冲突：两个补丁对同一个符号节点一个说有、一个说没有 */
     Patch conf; memset(&conf, 0, sizeof conf);
     conf.name = "冲突补丁"; conf.kind = PATCH_SENSE; conf.sense = tp_sense_conflict;
     (void)patch_register(r, &conf, ai->pool, NULL);

@@ -39,7 +39,7 @@ bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # 会话：`::notepad off` 钉住流水线模式（环境变量强开草稿时也不影响本套的断言）
 run() { { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; cat "$1"; } | ./aip --model model.bin > "$2" 2>&1 || true; }
 # 日志里按顺序取第 n 个 `Token=N`（第 1 个是启动时的 [统计]，最后一个在退出时）
-ntok() { sed -n 's/^\[统计\] Token=\([0-9]*\).*/\1/p' "$1" | sed -n "${2}p"; }
+ntok() { sed -n 's/^\[统计\] 符号节点=\([0-9]*\).*/\1/p' "$1" | sed -n "${2}p"; }
 
 echo "== ① 默认关：错名字被静默吞掉（与今天逐字节相同） =="
 cat > base_in.txt <<'EOF'
@@ -51,7 +51,7 @@ cat > base_in.txt <<'EOF'
 EOF
 run base_in.txt base.log
 if [ -z "${AIP_ASMCHECK:-}" ]; then
-    grep -qF '[执行了 2 个 token]' base.log \
+    grep -qF '[执行了 2 个符号节点]' base.log \
         && ok "默认关：「::asm [原语:连结] 猫」 照旧执行（不校验、不报错）" \
         || bad "默认关的执行" "$(grep -m2 '执行了\|校验' base.log)"
     t1=$(ntok base.log 2); t2=$(ntok base.log 3)
@@ -67,7 +67,7 @@ else
     grep -qF '未知原语名：`[原语:连结]`' base.log && grep -qF '[校验] 没过' base.log \
         && ok "AIP_ASMCHECK=1（反向测量）：启动即开，第一个程序就被拦下" \
         || bad "反向测量 AIP_ASMCHECK" "$(grep -m3 '校验\|执行了' base.log)"
-    grep -qF '[执行了 2 个 token]' base.log \
+    grep -qF '[执行了 2 个符号节点]' base.log \
         && bad "反向测量：默认值断言没跳过（不该执行却执行了）" "$(grep -m1 '执行了' base.log)" \
         || ok "AIP_ASMCHECK=1：默认值断言按规矩跳过（行为与默认跑法**故意不同**）"
 fi
@@ -128,7 +128,7 @@ t1=$(ntok chk.log 2); t2=$(ntok chk.log 3)
 [ -n "$t1" ] && [ -n "$t2" ] && [ "$t2" -eq "$t1" ] \
     && ok "② 干跑**不 intern**：拒了一串错名字之后 Token 数一个不涨（$t1 → $t2）" \
     || bad "干跑不 intern" "Token $t1 → $t2"
-if grep -qF '[执行了 2 个 token]' chk.log; then bad "没过却执行了" "$(grep -m2 '执行了' chk.log)"
+if grep -qF '[执行了 2 个符号节点]' chk.log; then bad "没过却执行了" "$(grep -m2 '执行了' chk.log)"
 else ok "④ 没过**就不执行**（日志里根本没有 「执行了 2 个 token」）"; fi
 if grep -A6 -F '[拒绝甲]' chk.log | grep -q '拒绝乙'; then
     bad "没过却动了图" "$(grep -A6 -F '[拒绝甲]' chk.log | head -7)"
@@ -150,7 +150,7 @@ t3=$(ntok chk.log 4)
     && ok "过了的程序真的建了 Token（$t2 → $t3：校验甲/乙/丙/丁/戊）" \
     || bad "执行后的 Token 数" "$t2 → $t3"
 if [ -z "${AIP_ASMCHECK:-}" ]; then
-    grep -qF '[执行了 3 个 token]' chk.log && grep -qF '原语干跑校验 = 关' chk.log \
+    grep -qF '[执行了 3 个符号节点]' chk.log && grep -qF '原语干跑校验 = 关' chk.log \
         && ok "「::asm check off」 之后回到默认（错名字又被吞掉、照旧执行）" \
         || bad "check off" "$(grep -m3 '干跑校验\|连捷\|执行了' chk.log)"
 fi
@@ -185,7 +185,7 @@ EOF
 grep -qF '未知原语名：`[原语:连结]`' env.log \
     && ok "AIP_ASMCHECK=1 启动即开（第一个程序就被拦）" \
     || bad "AIP_ASMCHECK" "$(grep -m2 '校验\|执行了' env.log)"
-grep -qF '[校验] 通过：5 个词' env.log && grep -qF '[执行了 5 个 token]' env.log \
+grep -qF '[校验] 通过：5 个词' env.log && grep -qF '[执行了 5 个符号节点]' env.log \
     && ok "同一会话里合法程序照旧跑（开了校验 ≠ 不能用）" \
     || bad "合法程序" "$(grep -m3 '校验\|执行' env.log)"
 

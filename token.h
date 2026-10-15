@@ -1,6 +1,13 @@
 /* token.h — 单头文件关联机 v12
  *
- * 符号层：Token / 边 / hits / mem_state
+ * **术语（§6.127）**：图里的那个东西**对外一律叫「符号节点」** —— 输出、帮助、
+ * 文档、注释里都是这个词（用户要求改称）。C 标识符**保持历史名** `Token` / `token_*`
+ * / `TOKEN_*`：它们是类型名、函数名和存档里早就有的字段名，全量改名只换来
+ * 一次几万处的机械 diff，风险（改漏/改错、`codes/` 镜像与旧文档对不上）远大于收益。
+ * 读代码时的对照：`Token` = 符号节点；`token.h` = 符号层；`ai_tokenize` = 分词器
+ * （它切出来的是**词**，intern 之后才成为符号节点）。
+ *
+ * 符号层：符号节点 / 边 / hits / mem_state
  * 亚符号层：VSA 超向量 + 绑定/解绑/捆绑 + 视角树绑定
  */
 #ifndef TOKEN_H
@@ -31,6 +38,12 @@
 
 #define TOKEN_SEQ_NONE ((uint32_t)-1)
 #define TOKEN_ID_NONE  ((uint32_t)-1)
+
+/* 一个词名最多缓存多少个「字符」（§6.127 的字符切分缓存，见 Token.ch_p）。
+ * 16 对"词"来说绰绰有余；超长的名字走 255 哨兵、现场切，行为不变。 */
+#ifndef TOKEN_CH_MAX
+#define TOKEN_CH_MAX 16
+#endif
 
 typedef struct Token           Token;
 typedef struct TokenPool       TokenPool;
@@ -102,7 +115,7 @@ static inline const char *assoc_role_name(uint8_t role) {
  *
  * 用户 2026-10-10 讨论后拍板：**"过程边 vs 共现边"用 role 标记**（四选一里的那一个）。
  * 这一版做的是 §6.56 五步走的 **①+②**：
- *   ① 一个"过程" = 一个**根 Token**（`[过程:名字]`，在内部命名空间里）+ 从它出去的边（结构）；
+ *   ① 一个"过程" = 一个**根符号节点**（`[过程:名字]`，在内部命名空间里）+ 从它出去的边（结构）；
  *   ② 控制流记号挂在**动作槽**上（和 `[前提]`/`[因果]` 同一套做法，判据是精确名字比较）：
  *      `[步骤:N]` 第几步 / `[调用]` 这一步是"叫别人/别处" / `[回边]` 回到前面某一步。
  * 边用 `ASSOC_ROLE_PROCESS` 标成**过程边** ⇒ 查询与推理能把"过程"与"共现"一眼分开
@@ -133,7 +146,7 @@ static inline const char *assoc_role_name(uint8_t role) {
  * 0 = 无话题（seed / generated 那些通用共现语料）。 */
 #define ASSOC_TOPIC_NONE 0u
 
-/* 句尾模式：这个 Token 后面**还有几个词**这个句子就结束了。
+/* 句尾模式：这个符号节点后面**还有几个词**这个句子就结束了。
  * 用来在生成时知道「该收尾了」—— 只看有没有 [对话:结束] 是不够的，
  * 那条边经常选不中，句子就会顺着共现边一直漂。
  *   0 = 没标记
@@ -179,7 +192,7 @@ struct AssocEntry {
      * 它原来占每条边 64 字节（8 个指针 + 2 个计数 = sizeof 的一半），
      * 而实测出厂模型 41138 条边里**一条带语境的都没有**（用户 2026-10-07 拍板「历史遗留可以删」）。
      * 条件本身没丢，只是从"边上的字段"搬成了"图里的节点 + 动作槽上的标记"：
-     *   · 前提：`A —[前提]→ P → B`（P 是**普通 token**，`[前提]` 挂在动作槽上）→ edge_premise_polarity()
+     *   · 前提：`A —[前提]→ P → B`（P 是**普通符号节点**，`[前提]` 挂在动作槽上）→ edge_premise_polarity()
      *   · 因果猜想：动作槽上的 `[因果]` → edge_is_causal_guess()
      * 于是"联想"这条路上**没有任何条件**（用户原话：联想本来不依赖前提），
      * 只有逻辑/思维层按上面两个判据决定用不用。 */
@@ -242,31 +255,51 @@ struct Token {
     int8_t     *emb;
     Token      *perspective_of;
     Token      *next_in_time;
+    /* **缓存复核队列**（§6.127）：只有"身上挂着推论边（role=推论）"的词才进这条链。
+     * 加它的原因见 think.h 的 think_revalidate_caches()：那一趟原来**每轮扫全图**
+     * （出厂模型 1229 词 / 41338 边 ⇒ 每轮 4 万次边访问），而真正要复核的边只有几十条。
+     * 两个字段都落在结构体原有的对齐空隙里 ⇒ sizeof(符号节点) 不变，存档布局也不动
+     * （model_io 是逐字段写的，不是整块 memcpy）。 */
+    Token      *cache_next;     /* 队列里的后继（只在 cache_q 置位时有效） */
+    uint8_t     cache_q;        /* 已经在这条队列里了（去重用的） */
+    /* **名字的字符切分缓存**（§6.127）：`name` 一旦 intern 就不再变，而
+     * "把名字切成 UTF-8 字符"这一步是**每次检索的头号开销**（`gprof`：字符 bigram
+     * 项占全轮 76% 的 CPU，出厂模型每轮 1.3 万次调用 ⇒ 每轮把库里 4000 多条句子的
+     * 名字逐字节重切一遍）。切一次存下来，按名字指针读回即可。
+     * `n_ch == 0` = 还没切过；`n_ch == 255` = 名字超过 TOKEN_CH_MAX 个字符，
+     * 故意不再缓存（退回现场切，行为与以前逐字节相同）。
+     * 这是 **name 的纯派生值** ⇒ 不进存档、不占格式（`name` 一改就重算）。 */
+    uint8_t     n_ch;
+    uint8_t     ch_len[TOKEN_CH_MAX];
+    const char *ch_p[TOKEN_CH_MAX];
+    uint32_t    ch_sig;         /* 名字里出现过哪些**字符**（32 位位图，纯派生）
+                                 * —— 只用来给字符 bigram 打分做**精确预筛**：
+                                 * 两边位图不相交 ⇒ 一个字符都不共享 ⇒ 分数必然是 0。 */
 };
 
-/* ============================ 前提 token（淘汰「语境」后的表示） ============================
+/* ============================ 前提符号节点（淘汰「语境」后的表示） ============================
  *
- * 用户的澄清（原话）：「联想本来不依赖前提，可以正常联想；前提 token 可以被正常联想到，
- * 但是**逻辑会知道这两个之间的前提 token 是什么**，并且可以被正常处理。」
+ * 用户的澄清（原话）：「联想本来不依赖前提，可以正常联想；前提符号节点可以被正常联想到，
+ * 但是**逻辑会知道这两个之间的前提符号节点是什么**，并且可以被正常处理。」
  *
  * 所以一条「有前提的连结」在图上长这样：
  *
- *     A —[前提]→ P → B          （P 是**普通 token**；`[前提]` 是行为 token，挂在 A→P 的**动作槽**上）
+ *     A —[前提]→ P → B          （P 是**普通符号节点**；`[前提]` 是行为符号节点，挂在 A→P 的**动作槽**上）
  *
  * 三条性质：
  *   ① **联想照走**：A→P→B 都是普通边，别处不因为「有前提」而被挡住；
- *   ② **前提能被正常联想到**：P 就是普通 token（可以是被说出来的词），
+ *   ② **前提能被正常联想到**：P 就是普通符号节点（可以是被说出来的词），
  *      它自己有关系、有共现，谁也不特殊对待它；
  *   ③ **逻辑知道前提是什么**：`token_premise_between(A,B)` 直接答出 P（可多个）——
  *      条件不再藏在边的字段里，而是**图里的节点 + 边上的标记**。
  *
  * 旧的「语境」（AssocEntry.subs/subs_not）由此**退役**：先是没有创建者（2026-10-07 上午），
  * 然后连字段一起删掉（模型 v10；旧文件仍读得回来，见 docs/语境退役-前提token.md）。
- * 注意 `[前提]` 是**标记**（行为 token），不是「前提 token」本身 ——
- * 前提 token 是它指向的那个普通词。 */
+ * 注意 `[前提]` 是**标记**（行为符号节点），不是「前提符号节点」本身 ——
+ * 前提符号节点是它指向的那个普通词。 */
 #define AI_PREMISE_MARK     "[前提]"      /* 条件：P **在**注意窗口里 */
 #define AI_PREMISE_NOT_MARK "[前提不]"    /* 条件：P **不在**注意窗口里（旧 subs_not 的替代） */
-/* 因果猜想的行为 token（也挂在**动作槽**上）—— 名字只有这一处：
+/* 因果猜想的行为符号节点（也挂在**动作槽**上）—— 名字只有这一处：
  * ai.h 的 `ai->causal` 也用它 intern，判据也只有这一个（edge_is_causal_guess）。 */
 #define AI_CAUSAL_MARK      "[因果]"
 
@@ -328,7 +361,7 @@ static inline int token_has_premise_link(const Token *from) {
     return 0;
 }
 
-/* **逻辑问的那句话**：A 与 B 之间的前提 token 是什么（带**极性**）？
+/* **逻辑问的那句话**：A 与 B 之间的前提符号节点是什么（带**极性**）？
  * 顺着 A —[前提]/[前提不]→ P → B 找；pol 里写 +1（要 P 在）/ -1（要 P 不在）。
  * 返回条数（一件事可以有多个前提）。 */
 static inline size_t token_premises(const Token *a, const Token *b,
@@ -607,6 +640,11 @@ struct PerspectiveNode {
 struct TokenPool {
     Token     **tokens;
     size_t      count, cap;
+    /* **池子的序号**（§6.127）：每个 pool_new 领一个**全局单调递增**的号。
+     * 用途：给"跨调用的备忘"当一个不受 malloc 地址复用影响的身份 ——
+     * 工具里连着建两个脑子，`AI*`/`TokenPool*` 很可能落在**同一块地址**上，
+     * 光比指针会串味（实测过：按指针比"永远不命中"，反过来又可能"命中错了"）。 */
+    uint64_t    serial;
     Token      *unknowing;
     MeaningFree meaning_free;
     NameEntry **buckets;
@@ -620,7 +658,35 @@ struct TokenPool {
     PerspectiveNode  *perspective_cur;
     PerspectiveNode **perspective_pool;
     size_t            perspective_n, perspective_cap;
+
+    /* **缓存复核候选队列**（§6.127）：见 Token.cache_next 的注释。
+     * `cache_seeded`：读盘/新建之后的**第一趟**要全图播一次种（存档里带的推论边不在队列里），
+     * 播过之后就一直靠写入时入队，不再扫全图。 */
+    Token            *cache_head;
+    size_t            n_cache_queued;
+    uint8_t           cache_seeded;
 };
+
+/* ---- 缓存复核队列（§6.127）--------------------------------------------------
+ * 只有一个不变式要守：**图上每一条推论边，其起点词必须进过队列**。
+ * 三条写入路径都调 token_cache_enqueue（见 token_tag_full / micro.h 的
+ * MOD_TAG_DERIVED / agent.h 的两处），读盘那一路由 cache_seeded 的首趟全图播种兜住。 */
+static inline void token_cache_enqueue(Token *t) {
+    if (!t || !t->owner || t->cache_q) return;
+    t->cache_q = 1;
+    t->cache_next = t->owner->cache_head;
+    t->owner->cache_head = t;
+    t->owner->n_cache_queued++;
+}
+/* 把整条队列**取走**（头指针交出去并清空）：调用方逐条处理，处理完再决定要不要
+ * 重新入队（活下来的缓存要接着复核 ⇒ 重新入队到**下一轮**那一条链上）。
+ * 这样"取走—处理—重新入队"不会在本轮内自激（新链不是本轮正在走的那条）。 */
+static inline Token *token_cache_take(TokenPool *p) {
+    Token *h = p->cache_head;
+    p->cache_head = NULL;
+    p->n_cache_queued = 0;
+    return h;
+}
 
 /* ============================ VSA 核心 ============================ */
 
@@ -702,8 +768,10 @@ static inline void pool_hash_insert(TokenPool *p, Token *t) {
 /* ============================ 池 ============================ */
 
 static inline TokenPool *pool_new(void) {
+    static uint64_t g_pool_serial = 0;
     TokenPool *p = (TokenPool *)calloc(1, sizeof(TokenPool));
     if (!p) return NULL;
+    p->serial = ++g_pool_serial;
     p->perspective_root = (PerspectiveNode *)calloc(1, sizeof(PerspectiveNode));
     if (!p->perspective_root) { free(p); return NULL; }
     p->perspective_root->who = NULL;
@@ -901,6 +969,16 @@ static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     e->rel = 0;                     /* 不是关系边 */
     e->nrel = 0;
     e->dyn = 0;
+    /* **时刻集合必须显式清零**（§6.127 抓到的老 bug）：这两个字段原来没初始化，
+     * 而边表是 `realloc` 出来的 ⇒ 新建边的 `n_tset`/`tset[]` 是**堆里的垃圾**。
+     * 后果不是"崩"而是更阴的两条：
+     *   ① 垃圾 `n_tset` 恰好 ≤4 时，这条边凭空"在某个 tick 被观察到过"——
+     *      「同时/先后」的判断被污染（而 `>4` 时才在 token_touch_entry 里被钳掉）；
+     *   ② **存档不确定**：换一个结构体大小/分配顺序，垃圾就变，`model.bin` 跟着变
+     *      （实测：只给符号节点加了字段，同一段 100 轮会话存出来 1009 字节不同 ——
+     *       逐条比图却**完全一样**，就是这个字段在作怪）。 */
+    e->n_tset = 0;
+    memset(e->tset, 0, sizeof e->tset);
     t->count++;
     return 0;
 }
@@ -986,6 +1064,7 @@ static inline int assoc_credibility(const AssocEntry *e, uint64_t now_tick) {
 static inline int token_tag_full(Token *a, Token *b, uint8_t role,
                                  uint8_t topic, uint8_t pattern, uint32_t bump) {
     if (!a || !b || a == b) return -1;
+    if (role == ASSOC_ROLE_DERIVED) token_cache_enqueue(a);   /* §6.127：推论边的起点要进复核队列 */
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
         if (e->main != b || !edge_is_plain(e)) continue;

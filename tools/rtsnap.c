@@ -1,4 +1,4 @@
-/* tools/rtdiff.c — 找出「存盘再读之后哪条边/哪个 Token 变了」
+/* tools/rtdiff.c — 找出「存盘再读之后哪条边/哪个符号节点变了」
  *
  * 用法: ./build_rtdiff model.bin
  * 内部：load → 快照 → save → load → 快照 → 逐条比对。
@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
                (unsigned long long)e2[i].birth, (unsigned long long)e2[i].touch);
         shown++;
     }
-    if (!shown) printf("  逐条一致（那差异在 Token 层，不在边层）\n");
+    if (!shown) printf("  逐条一致（那差异在符号节点层，不在边层）\n");
     free(e1); free(e2); ai_free(a2);
     return 0;
 }
