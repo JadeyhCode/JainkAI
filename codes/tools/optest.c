@@ -1895,11 +1895,16 @@ static void test_rel_first_order(void) {
             int guessed = strstr(out, "大概") != NULL;
             int proved  = strstr(out, "继承") != NULL;
             if (rf == 0) {
-                if (mode == 0)
-                    snprintf(msg, sizeof msg, "老顺序·%s：规则能证 ⇒ 给证明（无同类可抢）", cases[mode]);
+                /* ⚠ §6.133 起这条断言**改了**：老顺序下 mode==1（继承+类比）以前是
+                 * `guessed`（联想**抢答**，把能证出来的答案盖掉）—— 那是 bug，不是特性。
+                 * 现在兜底也**过验证器**，而验证器对 DEFAULT 有一关是"知识库里推得出来就别猜"
+                 * ⇒ 老顺序下也不再抢答：两种顺序**结果一致**。这里就把"一致"钉住。 */
+                if (mode == 2)
+                    snprintf(msg, sizeof msg, "老顺序·%s：规则答不了 ⇒ 联想照旧答「大概」", cases[mode]);
                 else
-                    snprintf(msg, sizeof msg, "老顺序·%s：**联想抢答**（这正是要修的）", cases[mode]);
-                ok(mode == 0 ? proved && !guessed : guessed, msg);
+                    snprintf(msg, sizeof msg,
+                             "老顺序·%s：**不再抢答**（§6.133：兜底也过验证器，能证就不猜）", cases[mode]);
+                ok(mode == 2 ? guessed : (proved && !guessed), msg);
             } else {
                 if (mode == 0 || mode == 1)
                     snprintf(msg, sizeof msg, "新顺序·%s：**证明优先**，不再被「大概」盖掉", cases[mode]);
@@ -3246,6 +3251,53 @@ static void test_score_memo(void) {
     ai_free(ai);
 }
 
+/* §6.133 **「猜」只有一条路**：找依据 → 建链 → **过验证器** → 渲染 → 记账（一处）。
+ * 以前答复层与兜底各写一遍，判据/验证/记账分家 —— §6.123 原因①留下的尾巴。
+ * 这一节钉住：两种依据都能答、**能证就不猜**（不再抢答）、记账只在一条路上、
+ * 以及"结论重推不出来"那道闸的二号例外**只对已验证的猜测步**成立（不是免检）。 */
+static void test_one_guess_path(void) {
+    printf("== ⓾ 「猜」只有一条路 + 结论闸的二号例外（§6.133） ==\n");
+    AI *ai = ai_new();
+    ai->rel_analogy = 1; ai->rel_remember = 1;
+    Token *sup = T(ai, "类T"), *a = T(ai, "甲T"), *b = T(ai, "乙T"), *o = T(ai, "冬眠T");
+    (void)ai_write_rel(ai, b, sup, REL_IS_A, 0, AI_WSRC_RELATION);
+    (void)ai_write_rel(ai, a, sup, REL_IS_A, 0, AI_WSRC_RELATION);
+    (void)ai_write_rel(ai, b, o, REL_CAN, 0, AI_WSRC_RELATION);
+    char line[THINK_WHY], resp[512];
+    float conf = 0;
+    Derivation d;
+    der_reset(&d);
+    line[0] = 0; resp[0] = 0;
+    size_t mem0 = ai->n_rel_guess_mem;
+    int got = agent_guess_answer(ai, a, REL_CAN, o, 0, AGENT_GUESS_SIBLING,
+                                 &d, line, sizeof line, resp, sizeof resp, &conf);
+    ok(got == 1, "同类互推（这一侧的依据集合）答得出来");
+    ok(strstr(resp, "大概") && strstr(resp, "类比"), "措辞照旧：大概 + 明说是类比");
+    ok(d.guessed == 1 && d.gaps == 0, "链标成「推测」且**缺口 0**（过了验证器）");
+    ok(ai->n_rel_guess_mem == mem0 + 1, "记账只有一处：猜出来的结论被记进「记忆」");
+    ok(conf > 0.0f && conf < 0.6f, "把握压低（按猜测环数算）");
+    /* **能证就不猜**：结论独立可推时，DEFAULT 那一关会拒（"其实知识库里有"）⇒ 不答「大概」 */
+    (void)ai_write_rel(ai, sup, o, REL_CAN, 0, AI_WSRC_RELATION);   /* 继承就能证出来了 */
+    der_reset(&d);
+    resp[0] = 0;
+    ok(agent_guess_answer(ai, a, REL_CAN, o, 0, AGENT_GUESS_SIBLING,
+                          &d, line, sizeof line, resp, sizeof resp, &conf) == 0,
+       "**能证就不猜**：知识库里推得出来 ⇒ 这条不答「大概」（这正是「不再抢答」的根）");
+    /* 结论闸的二号例外**只对已验证的猜测步**成立 */
+    {
+        Derivation d2;
+        der_reset(&d2);
+        d2.has_claim = 1;
+        der_goal(&d2, b, REL_CAN, o);                 /* b 会 o 是观测事实 */
+        der_default(&d2, b, T(ai, "毫不相干"), REL_CAN, o, 0, +1);   /* sim=0 ⇒ 这一环验不过 */
+        der_fact(&d2, T(ai, "毫不相干"), REL_CAN, o, 0, +1);         /* 依据也不知道 ⇒ 也验不过 */
+        der_conclude(&d2, +1, 45);
+        int g2 = der_verify(ai, &d2);
+        ok(g2 > 0, "猜测步**没验过**时二号例外不生效（照样报缺口，不是免检）");
+    }
+    ai_free(ai);
+}
+
 static void test_lease_gate_tiers(void) {
     printf("== ㉓ 知识租约 / 写入分级闸门 / 前提第三档 ==\n");
     AI *ai = ai_new();
@@ -3383,6 +3435,7 @@ int main(void) {
     test_premise_tiers();
     test_alias_and_posterior();
     test_lease_gate_tiers();
+    test_one_guess_path();
     test_score_memo();
     test_memory_chain();
     test_thin_pursuit();

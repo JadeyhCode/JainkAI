@@ -164,6 +164,95 @@ static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
     ai->n_rel_guess_mem++;
 }
 
+/* §6.133 **「猜」只有一条路**：找依据 → 建推导链 → **过验证器** → 渲染 → 记账。
+ *
+ * 以前是两套各自实现的"类比"：
+ *   · 答复层那条（`agent_answer_relation_inner` 的 `rel_guess` 分支）：有验证器、有链、走 `der_say`；
+ *   · 兜底那条（`agent_analogy_fallback`）：只看"兄弟"，**不过验证器**、措辞手写、置信度手写。
+ * 两条路的判据、门槛、记账各写一遍 —— §6.123 原因①留下的就是这个不一致（谁先跑谁说了算）。
+ * 现在合成一个函数，两边都调它：判据一处、验证一处、把握一处（按猜测环数衰减）。
+ *
+ * 两种依据（措辞不同是**信息**，不是重复）：
+ *   ① `rel_guess`：最近邻 / 结构相似（`emb` 余弦 + 关系骨架）—— 走 `der_say`，
+ *      链上写「依据词 ≈（n% 像）≈> 宾语」；
+ *   ② `rel_sibling_with`：**同类互推**（同一个上位下的兄弟有这条关系）—— 结构相似度当 `sim`
+ *      喂给验证器（不够近就会被拒），措辞明说「同类里谁 也 R B（类比，不是直接知识）」。
+ * 返回 1 = 答了（`resp`/`out_conf` 已填，cot 与账都已记）；0 = 没猜出来（调用方照旧说不知道）。 */
+static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int neg, int truth);
+
+#define AGENT_GUESS_NEIGHBOR 1   /* 允许：最近邻 / 结构相似（rel_guess） */
+#define AGENT_GUESS_SIBLING  2   /* 允许：同类互推（兄弟有这条关系） */
+
+static inline int agent_guess_answer(AI *ai, Token *A, uint8_t rid, Token *B, int want_neg,
+                                     int kinds,
+                                     Derivation *d, char *line, size_t linecap,
+                                     char *resp, size_t respcap, float *out_conf) {
+    if (!ai || !A || !B || rid == 0 || !d || !resp || respcap == 0) return 0;
+    if (!(kinds & (AGENT_GUESS_NEIGHBOR | AGENT_GUESS_SIBLING))) return 0;
+    /* ---- ① 最近邻 / 结构相似 ---- */
+    Proof gpf;
+    memset(&gpf, 0, sizeof gpf);
+    if ((kinds & AGENT_GUESS_NEIGHBOR) && rel_guess(ai, A, rid, B, &gpf)) {
+        Token *src = (gpf.n >= 2 && gpf.step[1].tok) ? gpf.step[1].tok : A;
+        int pol = (gpf.n >= 1) ? (gpf.step[gpf.n - 1].neg ? -1 : +1) : +1;
+        int sim = (gpf.n >= 2) ? gpf.step[1].sim : 0;
+        der_reset(d);
+        d->has_claim = 1;
+        der_goal(d, A, rid, B);
+        der_default(d, A, src, rid, B, sim, pol);
+        der_fact(d, src, rid, B, pol < 0 ? 1 : 0, pol);
+        der_conclude(d, pol, (int)(ai_guess_conf(1) * 100.0f + 0.5f));
+        ai->n_der++;
+        if (der_verify(ai, d) == 0) {
+            der_chain_text(ai, d, line, linecap);
+            cot_push(ai, COT_INFER, 1, 45,
+                     "类比推测（知识库里没有，借最像的那个词；已验证推测合法）", line);
+            ai->n_cot++;
+            der_say(ai, d, ai->der_style, resp, respcap);
+            agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
+            agent_guess_remember(ai, A, rid, B, src);      /* 猜出来的结论记进"记忆"（一处） */
+            if (out_conf) *out_conf = ai_guess_conf(1);
+            return 1;
+        }
+    }
+    /* ---- ② 同类互推（兄弟有这条关系）---- */
+    if (!(kinds & AGENT_GUESS_SIBLING)) return 0;
+    const Token *sup = NULL;
+    const Token *sib = rel_sibling_with(ai, A, rid, B, &sup);
+    if (!sib) return 0;
+    size_t common = 0;
+    int sim = rel_struct_sim(A, sib, &common);
+    /* ⚠ **兄弟这条证据直接给到结构门槛分** —— 与 `rel_guess` 里对 `sib0` 的处理**同一个约定**
+     * （rel.h：「兄弟这条证据：直接给到结构门槛分，不再要求共同邻居 ≥3」）。
+     * 不这么做的话，刚够得上"同一个上位下的兄弟"的词会卡在相似度上被拒，
+     * 而那条证据本来就不靠相似度 —— 实测：卡掉之后 ㊵ 那条兜底整条失效（4 项红）。
+     * 取 max 是为了不把真的算出来的更高分压下去。 */
+    if (sim < REL_STRUCT_MIN_PCT) sim = REL_STRUCT_MIN_PCT;
+    int pol = rel_direct(sib, rid, B) ? +1 : -1;
+    der_reset(d);
+    d->has_claim = 1;
+    der_goal(d, A, rid, B);
+    der_default(d, A, (Token *)sib, rid, B, sim, pol);
+    der_fact(d, (Token *)sib, rid, B, pol < 0 ? 1 : 0, pol);
+    der_conclude(d, pol, (int)(ai_guess_conf(1) * 100.0f + 0.5f));
+    ai->n_der++;
+    if (der_verify(ai, d) != 0) return 0;                  /* ⚠ 这一条以前**没有**验证器 */
+    der_chain_text(ai, d, line, linecap);
+    cot_push(ai, COT_INFER, 1, 45,
+             "同类互推（同一个上位下的兄弟有这条关系；类比，不是直接知识）", line);
+    ai->n_cot++;
+    snprintf(resp, respcap,
+             "大概 —— 同类里 %.48s 也 %.12s %.48s（%.48s；**类比**，不是直接知识）",
+             sib->name ? sib->name : "?",
+             rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?",
+             B->name ? B->name : "?",
+             sup && sup->name ? sup->name : "?");
+    agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
+    agent_guess_remember(ai, A, rid, B, sib);
+    if (out_conf) *out_conf = ai_guess_conf(1);
+    return 1;
+}
+
 static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n, float *out_conf) {
     if (!ai || !ai->rel_analogy || !words || n < 3 || n > 6) return NULL;
     const char *aw = NULL, *bw = NULL, *rw = NULL;
@@ -176,25 +265,21 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
     Token *A = pool_find(ai->pool, aw);
     Token *B = pool_find(ai->pool, bw);
     if (!A || !B) return NULL;
-    char buf[256];
-    /* 判据在 rel.h 的 `rel_sibling_with()`（**一处放**：思维层也用同一个） */
-    const Token *sup = NULL;
-    const Token *sib = rel_sibling_with(ai, A, rid, B, &sup);
-    if (sib) {
-        snprintf(buf, sizeof buf,
-                 "大概 —— 同类里 %s 也 %s %s（%s 和 %s 都 属于 %s ；**类比**，不是直接知识）",
-                 sib->name ? sib->name : "?", words[1], B->name ? B->name : "?",
-                 A->name ? A->name : "?", sib->name ? sib->name : "?",
-                 sup && sup->name ? sup->name : "?");
-        if (out_conf) *out_conf = 0.45f;
-        /* §6.125：把这条**猜出来的结论**记下来（默认关）—— 这样下一个问题能拿它当中转，
-         * 而不是每次都从零再猜一遍。记的是"猜测"，不是知识。 */
-        agent_guess_remember(ai, A, rid, B, sib);
-        char *r = (char *)malloc(strlen(buf) + 1);
-        if (r) memcpy(r, buf, strlen(buf) + 1);
-        return r;
-    }
-    return NULL;
+    if (rel_direct(A, rid, B) || rel_direct_neg(A, rid, B)) return NULL;   /* 已经知道就不猜 */
+    /* §6.133：**和答复层那条走同一个函数**。这一侧的**依据集合**保持原样（只同类互推），
+     * 变的是：① 现在也**过验证器**（以前不过）；② 把握按猜测环数算；③ 记账只有一处。 */
+    Derivation d;
+    der_reset(&d);
+    char line[THINK_WHY], buf[THINK_CONCL];
+    line[0] = 0; buf[0] = 0;
+    float conf = 0.0f;
+    if (!agent_guess_answer(ai, A, rid, B, 0, AGENT_GUESS_SIBLING,
+                            &d, line, sizeof line, buf, sizeof buf, &conf))
+        return NULL;
+    if (out_conf) *out_conf = conf;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
 }
 
 /* 步骤一：用户**陈述**了一条关系事实吗？是就当场学进图里（并写进模型）。
@@ -782,36 +867,22 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         }
     }
 
-    /* 未知 → 类比推测（明确标注），同样先构造再验证 */
-    der_reset(d);
-    d->has_claim = 1;
-    /* §6.117-①：**用一个新的 Proof**，别复用前面 `rel_solve` 那两个调用留下的那个
-     * （实测：同一个 pf 上 guess 拿不到；换新 Proof 就好了 —— 脏状态是元凶）。 */
-    Proof gpf;
-    memset(&gpf, 0, sizeof gpf);
-    if (rel_guess(ai, A, rid, B, &gpf)) {
-        /* 推测链的形状（rel_guess 给的 Proof 是 [A, 依据词, B]）：
-         *   目标 → 推测（A 借 依据词 的意见）→ 事实（依据词确实知道这件事）→ 结论
-         * 验证器会独立查：知识库里确实没有、相似度够、依据词确实有态度。 */
-        Token *src = (gpf.n >= 2 && gpf.step[1].tok) ? gpf.step[1].tok : A;
-        int pol = (gpf.n >= 1) ? (gpf.step[gpf.n - 1].neg ? -1 : +1) : +1;
-        int sim = (gpf.n >= 2) ? gpf.step[1].sim : 0;
-        der_goal(d, A, rid, B);
-        der_default(d, A, src, rid, B, sim, pol);
-        der_fact(d, src, rid, B, pol < 0 ? 1 : 0, pol);
-        der_conclude(d, pol, 45);
-        ai->n_der++;
-        if (der_verify(ai, d) == 0) {
-            der_chain_text(ai, d, line, sizeof line);
-            cot_push(ai, COT_INFER, 1, 45,
-                     "类比推测（知识库里没有，借最像的那个词；已验证推测合法）", line);
-            ai->n_cot++;
-            der_say(ai, d, ai->der_style, resp0, sizeof resp0);
-            agent_hypo_cache(ai, A, rid, B, is_neg ? 1 : 0, d->truth);   /* §6.118 同上 */
+    /* 未知 → 类比推测（明确标注）。§6.133：**和兜底那条走同一个函数** ——
+     * 找依据（最近邻/结构相似，退一步同类互推）→ 建链 → **过验证器** → 渲染 → 记账。
+     * 以前这一支与 `agent_analogy_fallback` 各写一遍，判据/记账分家（§6.123 原因①的尾巴）。 */
+    {
+        der_reset(d);
+        d->has_claim = 1;
+        float gc = 0.45f;
+        char gresp[512];
+        gresp[0] = 0;
+        if (agent_guess_answer(ai, A, rid, B, is_neg ? 1 : 0,
+                               AGENT_GUESS_NEIGHBOR | AGENT_GUESS_SIBLING,
+                               d, line, sizeof line, gresp, sizeof gresp, &gc)) {
             ai->n_rel_guess++;
-            if (out_conf) *out_conf = 0.45f;
-            char *r = (char *)malloc(strlen(resp0) + 1);
-            if (r) memcpy(r, resp0, strlen(resp0) + 1);
+            if (out_conf) *out_conf = gc;
+            char *r = (char *)malloc(strlen(gresp) + 1);
+            if (r) memcpy(r, gresp, strlen(gresp) + 1);
             return r;
         }
     }

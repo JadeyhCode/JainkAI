@@ -384,8 +384,22 @@ static inline int der_verify(AI *ai, Derivation *d) {
                 }
             }
             if (pf.status == 0) {
-                der_gap(d, "结论重推不出来");
-                d->gaps++;
+                /* §6.133 例外二（**同类互推 / 最近邻**）：链里有一环是**已验证的 DEFAULT**
+                 * （= 明确标出来的"猜"）时，独立重推**本来就该失败** —— 那正是"猜"的定义。
+                 * 所以判据不是"免检"，而是：① 那一环已经过了 DEFAULT 自己那三条检查
+                 * （知识库里确实没有 / 依据够近 / 依据确实有态度）；② 整条链其余各环都验过
+                 * （gaps==0 才走到这里）；③ 这样一来**必须**把结论标成 guessed ⇒
+                 * 渲染成"大概…（其中一环是推测的）"，而且**进不了沉淀**
+                 * （think 的沉淀闸要求 `!guessed`）—— 于是它永远不会变成"知道的"。
+                 * §6.123 原因① 说的就是这道闸对"猜"太严：严到只有**记忆**那一支能过，
+                 * 现场类比（含同类互推）全被拒 ⇒ 只剩不过验证器的兜底那条路能答。 */
+                int carried_by_guess = 0;
+                for (size_t i = 0; i < d->n; ++i)
+                    if (d->step[i].kind == DER_DEFAULT && d->step[i].verified) {
+                        carried_by_guess = 1; break;
+                    }
+                if (carried_by_guess) d->guessed = 1;
+                else { der_gap(d, "结论重推不出来"); d->gaps++; }
             }
         }
     }
