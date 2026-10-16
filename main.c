@@ -1627,8 +1627,12 @@ int main(int argc, char **argv) {
                 else if (arg && *arg) { printf("[用法] ::selfgoal [on|off|now]\n"); continue; }
                 printf("[目标自建 = %s]  自己立过 %zu 个\n",
                        think_selfgoal_on() ? "开" : "关（默认）", tt->n_selfmade);
-                printf("  判据：`recent_misses` >= %d 且边数 < %d 的词（每 %d 个 tick 看一次）\n",
-                       AI_SELFGOAL_MISSES, AI_SELFGOAL_THIN, AI_SELFGOAL_EVERY);
+                printf("  判据（两臂，都要边数 < %d，每 %d 个 tick 看一次）：\n",
+                       AI_SELFGOAL_THIN, AI_SELFGOAL_EVERY);
+                printf("    ① 没底：`recent_misses` >= %d（更具体；出厂模型上是死的，长会话才有）\n",
+                       AI_SELFGOAL_MISSES);
+                printf("    ② 常用但薄：命中合计 >= %d（实测出厂模型 84 个候选（阈值 32；8 时 252 个））\n",
+                       AI_SELFGOAL_HITS);
                 printf("  自跟：每轮重试 + ::idle 挑一条来想 + 够得着就问用户一句；\n");
                 printf("  自闭：比立目标时多了边 ⇒ 想通（老路径 born_count=0 ⇒ 与原来逐比特相同）。\n");
                 printf("  挂着的目标看 `::pending`（自己立的会标出来）。\n");

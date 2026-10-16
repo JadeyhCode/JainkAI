@@ -3051,6 +3051,35 @@ static void test_self_goal(void) {
     ThinkOpen *o3 = think_open_find(t, thin2, NULL, 0, 0);
     ok(got >= 1 && o3 != NULL, "装载恢复：单词语标 [自问:薄词乙] 挂回议程（原来会被跳过）");
     ok(o3 && o3->selfmade == 1, "恢复回来的那条也标成「自己立的」");
+    /* §6.134 **第二条判据：常用但薄** —— 为什么加：`recent_misses` 那条在出厂模型上是**死的**
+     * （实测 1198 个符号节点里一个都没有），而"边少但用得多"的词有 252 个（实测）。
+     * ⚠ 用**一个新的脑子**测：同一个脑子里前面那些"薄词甲"还带着 recent_misses=7，
+     * 一定会先被第一臂挑走 —— 那样测到的不是这一臂（第一版就是这么红的）。 */
+    {
+        AI *a2 = ai_new();
+        Think *t2 = think_of(a2);
+        Token *oth2 = T(a2, "陪衬子"), *busy = T(a2, "常用词子");
+        (void)token_observe_pair(busy, oth2);
+        busy->recent_misses = 0;                       /* 明确：**没有**"没底"信号 */
+        for (int k = 0; k < AI_SELFGOAL_HITS; ++k) busy->assocs[0].hits++;
+        think_set_selfgoal(1);
+        t2->selfgoal_seen = 0; t2->selfgoal_last = 0;
+        ok(think_selfgoal(a2) == 1, "第一臂为 0 也照样能立目标（第二臂：常用但薄）");
+        ThinkOpen *ob = think_open_find(t2, busy, NULL, 0, 0);
+        ok(ob && ob->selfmade == 1, "立起来的正是「常用词子」那条，且标着自己立的");
+        Token *rare = T(a2, "冷门词丑");
+        (void)token_observe_pair(rare, oth2);
+        rare->recent_misses = 0;
+        rare->assocs[0].hits = 1;                      /* 边少、命中少 ⇒ 两臂都不满足 */
+        ThinkOpen *ob2 = think_open_find(t2, busy, NULL, 0, 0);
+        if (ob2) think_open_done(t2, ob2);
+        /* ⚠ 光撤掉目标不够：`busy` 自己还是候选，下一趟会**再立一条**（第一版就这么红的）。
+         * 要测"没人用就不立"，得把两个词的命中都压到门槛以下。 */
+        busy->assocs[0].hits = 1;
+        t2->selfgoal_seen = 0; t2->selfgoal_last = 0;
+        ok(think_selfgoal(a2) == 0, "边少但**没人用** ⇒ 不立目标（不刷屏）");
+        ai_free(a2);
+    }
     /* 「（未知）」占位词不算要弄懂的东西（否则会立一个"弄懂（未知）"的傻目标） */
     Token *unkk = ai->pool->unknowing;
     if (unkk) {

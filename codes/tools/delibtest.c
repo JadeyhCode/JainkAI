@@ -60,6 +60,21 @@ static size_t count_rel_edges(AI *ai) {
 }
 static int has_token(AI *ai, const char *name) { return pool_find(ai->pool, name) != NULL; }
 
+/* §6.134：「常用但薄」开着时，AI 会**自己**立目标 ⇒ 议程上多出 `selfmade` 的那几条。
+ * 这两条断言量的是"**我们问的**那条挂上了 / 想通了"，所以把"自己立的"数出来从
+ * 期望值里扣掉 —— 默认档（`selfmade` 恒为 0）断言一个字不放松。 */
+static size_t n_selfmade_open(const Think *t) {
+    size_t n = 0;
+    for (size_t i = 0; i < THINK_MAX_OPEN; ++i)
+        if (t->open[i].active && t->open[i].selfmade) n++;
+    return n;
+}
+static int open_has_text(const Think *t, const char *needle) {
+    for (size_t i = 0; i < THINK_MAX_OPEN; ++i)
+        if (t->open[i].active && strstr(t->open[i].text, needle)) return 1;
+    return 0;
+}
+
 /* 造一个「猫 属于 动物、动物 有 毛」的小知识库 */
 static AI *mini(void) {
     AI *ai = tnew();
@@ -203,7 +218,8 @@ static void test_idle_think(void) {
     prep(ai, w, 4);
     think_run(ai, w, 4);
     think_settle(ai);                  /* 这一轮会把没想通的问题挂起来（[自问:…]） */
-    ok(t->n_open == 1, "前置：挂了一个没想通的问题");
+    ok(open_has_text(t, "跳舞") && t->n_open == 1 + n_selfmade_open(t),
+       "前置：挂了一个没想通的问题");
     ok(think_idle(ai) == 0 && t->n_idle == 0, "默认关（idle_every=0）：什么都不做");
     t->idle_every = 1;
     ai->pool->current_tick++;          /* 空轮也会推进 tick（agent_step 开头那一下） */
@@ -430,7 +446,8 @@ static void test_crossturn(void) {
     /* 现在学到了：猫 会 跳舞 */
     (void)token_tag_rel(T(ai, "猫"), T(ai, "跳舞"), REL_CAN, REL_BOOST);
     think_settle(ai);
-    ok(t->n_open == 0 && t->n_resolved == 1, "收尾时拿新知识重试 → 想通了");
+    ok(t->n_resolved == 1 && t->n_open == n_selfmade_open(t),
+       "收尾时拿新知识重试 → 想通了");
     ok(t->mention_pending == 1 && t->mention_text[0], "记下「等下要说一句」");
     ok(strstr(t->mention_text, "现在 我 知道 了") != NULL, "要说的话里有「现在我知道了」");
 

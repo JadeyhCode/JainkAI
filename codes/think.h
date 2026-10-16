@@ -2213,6 +2213,19 @@ static inline void think_open_done(Think *t, ThinkOpen *o) {
 #ifndef AI_SELFGOAL_THIN
 #define AI_SELFGOAL_THIN 6       /* 边数到这个数就不算"薄"了（有东西可依） */
 #endif
+/* §6.134 **第二条判据：常用但薄**。
+ * 为什么加：`recent_misses` 那条在**出厂模型上是死的** —— 实测 1198 个符号节点里
+ * `recent_misses ≥ 4` 的一个都没有（它要靠同一个词被反复"没底"才涨，只出现在长会话里）。
+ * 而"边少但用得多"的词有现成的：实测边数 < 6 且命中合计 ≥ 8 的有 **252** 个（≥16 的 113 个、
+ * ≥32 的 84 个），最典型的那个是「整理」（命中 2768 次、边只有 4 条）——**用得最多、知道得最少**，
+ * 这正是"我想弄懂它"该盯的东西。两臂都留着：没底那条更具体，命中那条更广。 */
+#ifndef AI_SELFGOAL_HITS
+#define AI_SELFGOAL_HITS 32      /* 命中合计到这个数才算"常用"。阈值只决定**候选集**大小
+                                  * （实测 8→252、16→113、32→84 个），不决定第一枪：
+                                  * 排序取命中最多的那个，只要阈值 ≤ 2768 就还是「整理」。
+                                  * 取 32 是保守档：长会话里能立出来的目标种类更少、不刷屏；
+                                  * 一条会话里每 20 个 tick 才看一次，所以短会话照样只多一条。 */
+#endif
 
 /* -1 = 还没定过；0 = 关（默认）；1 = 开。环境变量与 `::selfgoal on` 都写这一个。 */
 static int g_think_selfgoal = -1;
@@ -2245,10 +2258,16 @@ static inline size_t think_selfgoal(AI *ai) {
         if (w->name[0] == '[') continue;             /* 内部记号不算「要弄懂的东西」 */
         if (w == ai->pool->unknowing) continue;      /* 那个「（未知）」占位词不是真词 */
         if (strcmp(w->name, TOKEN_UNKNOWING_NAME) == 0) continue;
-        if (w->recent_misses < AI_SELFGOAL_MISSES) continue;
-        if (w->count >= AI_SELFGOAL_THIN) continue;
+        if (w->count >= AI_SELFGOAL_THIN) continue;        /* 不薄：有东西可依，不用管 */
+        int missy = (w->recent_misses >= AI_SELFGOAL_MISSES);
+        uint32_t hits = token_hits_total(w);
+        if (!missy && hits < AI_SELFGOAL_HITS) continue;   /* 两臂都不满足 */
         if (think_open_find(t, w, NULL, 0, 0)) continue;   /* 已经挂着了 */
-        if (!best || w->recent_misses > best->recent_misses) best = w;
+        if (!best) { best = w; continue; }
+        /* 排序：**没底**那条更具体 ⇒ 优先；同为没底/同为常用时取命中多的 */
+        int bm = (best->recent_misses >= AI_SELFGOAL_MISSES);
+        if (missy != bm) { if (missy) best = w; }
+        else if (hits > token_hits_total(best)) best = w;
     }
     if (!best) return 0;                             /* 没有缺口：这一轮不立目标（不硬凑） */
 
@@ -2257,9 +2276,15 @@ static inline size_t think_selfgoal(AI *ai) {
     o->selfmade = 1;
     t->n_selfmade++;
     char note[THINK_WHY];
-    snprintf(note, sizeof note,
-             "「%s」我一开口就没底（最近 %u 次），可它只连了 %zu 条边 —— 自己立个目标弄懂它",
-             best->name, (unsigned)best->recent_misses, best->count);
+    if (best->recent_misses >= AI_SELFGOAL_MISSES)
+        snprintf(note, sizeof note,
+                 "「%s」我一开口就没底（最近 %u 次），可它只连了 %zu 条边 —— 自己立个目标弄懂它",
+                 best->name, (unsigned)best->recent_misses, best->count);
+    else
+        snprintf(note, sizeof note,
+                 "「%s」我用了 %zu 次，可它只连了 %zu 条边 —— 用得最多、知道得最少，"
+                 "自己立个目标弄懂它",
+                 best->name, (size_t)token_hits_total(best), best->count);
     think_step(t, TH_ASK, 1, 35, "自建目标", note);
     /* 落一个可辨识的节点：**和用户问出来的那条走同一套**（意图队列 + 安全内核 + 预算） */
     if (!t->learn_off && !micro_of(ai)->safe.mod_off) {

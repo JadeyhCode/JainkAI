@@ -33,6 +33,11 @@ cp "$MODEL" model.bin
 for f in frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done
 
 pass=0; fail=0
+# §6.134：「常用但薄」是**第二个**目标来源 —— `AIP_SELFGOAL=1` 时，AI 会从自己的
+# 状态里自己立一个目标（出厂模型上挑中的是「整理」：命中最多而边最少）。
+# 于是 ::pending 上的条数比默认多 1。反向测量时按这个**确切的**偏移断言，
+# 默认档的断言一个字都不放松（SGX 不是"跳过整条"，是"多算那一条自己立的"）。
+SGX=0; [ x"$AIP_SELFGOAL" = x1 ] && SGX=1
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
 # 每条断言都从**干净的 model.bin** 起跑，免得前一句学到的知识污染后一句
@@ -62,7 +67,7 @@ grep -q '结论=不成立' o3 && ok "结论=不成立（猫 不会 唱歌）" ||
 echo "== 3. 诚实 + 挂问题 + 思维改脑走受审通道 =="
 run '猫 会 跳舞 吗\n::delib\n::pending\n::mod\n' o4
 grep -qE '停止原因：推不出来|停止原因：原地打转' o4 && ok "没知识就写明推不下去" || bad "停因" "$(grep '停止原因' o4)"
-grep -q '还挂着 1 个' o4 && ok "把想不通的问题挂起来（跨轮接着想）" || bad "挂问题" "$(grep -A3 '未解问题' o4)"
+grep -q "还挂着 $((1+SGX)) 个" o4 && ok "把想不通的问题挂起来（跨轮接着想）" || bad "挂问题" "$(grep -A3 '未解问题' o4)"
 grep -q '加符号节点 \[自问:猫_会_跳舞_吗\].*思维:自问' o4 \
     && ok "自问节点经**意图队列**落地（审计里看得见来源）" || bad "受审通道" "$(grep -A4 '最近应用' o4)"
 
@@ -79,7 +84,15 @@ grep -q '猫 --\[有\]--> 毛（推出来的，可撤）' o5 \
 echo "== 5. 跨轮想通：教会它 → 归零 → 下一轮补一句 =="
 run '猫 会 跳舞 吗\n猫 会 跳舞\n::pending\n::delib\n' o6
 grep -q '记下 了' o6 && ok "教会它了（关系层现场学）" || bad "教学" "$(grep 'AI >' o6)"
-grep -q '没有挂着的' o6 && ok "旧问题被想通了（挂 → 0）" || bad "想通" "$(grep '未解问题' o6)"
+# 「旧问题被想通」的判据：**我们教的那条**从议程上消失。默认档再要求议程整个空掉
+# （没有别的来源）；自己立目标开着时议程上还剩它自己立的那条，与这条无关。
+if grep -q -- '- 猫 会 跳舞 吗' o6; then
+    bad "想通" "$(grep '未解问题' o6)"
+elif [ "$SGX" = 0 ] && ! grep -q '没有挂着的' o6; then
+    bad "想通" "$(grep '未解问题' o6)"
+else
+    ok "旧问题被想通了（挂 → 0）"
+fi
 grep -q '跨轮想通' o6 && ok "痕上记着「跨轮想通」" || bad "跨轮痕" "$(grep '跨轮' o6)"
 grep -qE '想通 1' o6 && ok "想通计数在走" || bad "想通计数" "$(grep '未解问题' o6)"
 
@@ -107,7 +120,7 @@ run '::thinkbudget 1\n猫 会 唱歌 吗\n::delib\n' o11
 grep -q '步数预算用完' o11 && ok "::thinkbudget 1 → 停因=步数预算用完" || bad "预算" "$(grep '停止原因' o11)"
 run '::thinklearn off\n猫 会 跳舞 吗\n::mod\n::pending\n' o12
 grep -q '新符号节点 0' o12 && ok "::thinklearn off → 不落自问节点（改不了脑）" || bad "thinklearn off" "$(grep '应用 ' o12)"
-grep -q '还挂着 1 个' o12 && ok "但问题照样挂（想还是照想）" || bad "照想" "$(grep '未解问题' o12)"
+grep -q "还挂着 $((1+SGX)) 个" o12 && ok "但问题照样挂（想还是照想）" || bad "照想" "$(grep '未解问题' o12)"
 
 echo "== 8. 未解问题持久化：关掉再打开还记得没想通的事（**不动存档格式**） =="
 # 靠的是随图存盘的 [自问:…] 标记：装载时扫一遍，把问题重新挂回议程。
@@ -115,12 +128,12 @@ run '猫 会 跳舞 吗
 ::pending
 ::save pslot
 ' o13
-grep -q '还挂着 1 个' o13 && ok "先挂一个想不通的问题（[自问:…] 经审计落地）" \
+grep -q "还挂着 $((1+SGX)) 个" o13 && ok "先挂一个想不通的问题（[自问:…] 经审计落地）" \
     || bad "挂问题" "$(grep '未解问题' o13 | head -2)"
 [ -s pslot ] && ok "存盘成功" || bad "存盘" "$(tail -2 o13)"
 mv pslot m.bin
 printf '::pending\n::quit\n' | ./aip --model m.bin > o14 2>&1 || true
-grep -q '还挂着 1 个' o14 && ok "重载后问题还在（不用升格式、不用重训）" \
+grep -q "还挂着 $((1+SGX)) 个" o14 && ok "重载后问题还在（不用升格式、不用重训）" \
     || bad "重载恢复" "$(grep '未解问题' o14 | head -3)"
 grep -q -- '- 猫 会 跳舞 吗' o14 && ok "恢复出来的问句**完整**（自问名字的预算从 ~38 提到 ~86 字节）" \
     || bad "问句被截断" "$(grep -A1 '还挂着' o14 | head -2)"
@@ -202,7 +215,7 @@ fi
 # 开着那一侧：挂一个想不通的问题 → 三轮没人说话 → 它自己挑来想（而且**只读**）
 run '猫 会 跳舞 吗\n::pending\n::stats\n::idle on\n\n\n\n::stats\n::delib\n::idle\n\n::idle off\n\n::idle\n' o21
 grep -q '空闲思考 = 开' o21 && ok "::idle on 打开了" || bad "idle on" "$(grep -m1 '空闲思考 =' o21)"
-grep -q '还挂着 1 个' o21 && ok "前置：有一个没想通的问题挂着" || bad "前置" "$(grep -m2 '未解问题' o21)"
+grep -q "还挂着 $((1+SGX)) 个" o21 && ok "前置：有一个没想通的问题挂着" || bad "前置" "$(grep -m2 '未解问题' o21)"
 grep -q '空闲思考：自己挑的' o21 && ok "痕里能看到「它自己挑了一个没想通的问题在想」" \
     || bad "空闲痕" "$(grep -m3 '空闲\|挑' o21)"
 grep -q '没人说话，我自己挑了一个没想通的问题来想：猫 会 跳舞 吗' o21 \
