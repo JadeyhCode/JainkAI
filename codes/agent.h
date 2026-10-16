@@ -54,10 +54,88 @@ static inline int agent_open_slot_word(const char *w) {
                  strcmp(w, "啥") == 0);
 }
 
+/* §6.145 **先量后改**：把 12 种"开放式关系问句"喂进去，只有 3 种接上了（`A R 什么` /
+ * `什么 R B` / 尾巴挂"吗"）；漏掉的里**四成是填充词/问法外壳**：
+ *   「猫 **到底** 属于 什么」「**请问** 猫 属于 什么」「猫 **究竟** 属于 什么 呢」
+ *   「**其实** 猫 属于 什么」「**我 想 知道** 猫 属于 什么」
+ * 这一层只干一件事：把这些**外壳**剥掉再走原来的形状判定。剥完还是原来的形状才接，
+ * 所以"剥错了"最多是**不接**（退回流水线），不会答错。
+ *
+ * 有意**不**把 `我`/`想` 当通用填充词：`我 喜欢 什么` 里 `我` 是**主语**，
+ * 一滤就把可答的问句滤成不可答 —— 所以只剥**写死的几个外壳**，不做通用过滤。 */
+/* 把 `w[0..take)` **连起来**（不加空格）写进 `dst` —— 分词器把「到底」切成「到」「底」
+ * 的时候，只有这样比才认得出填充词（同一个坑：合写否定 §6.69 / 情态 §6.74③ 都踩过）。 */
+static inline size_t agent_open_join(char *const *w, size_t take, char *dst, size_t cap) {
+    size_t L = 0;
+    if (cap) dst[0] = 0;
+    for (size_t i = 0; i < take; ++i) {
+        for (const char *s = w[i]; s && *s; ++s) {
+            if (L + 1 >= cap) return L;
+            dst[L++] = *s;
+        }
+    }
+    if (cap) dst[L < cap ? L : cap - 1] = 0;
+    return L;
+}
+
+/* 前缀外壳：`我 想 知道` / `我 想知道` / `请问` / `问 一下` / `麻烦` / `你 知道`。
+ * 返回该剥掉几个词（0 = 不是外壳）。 */
+static inline size_t agent_open_shell_len(char *const *w, size_t n) {
+    static const char *const shells[] = { "我想知道", "请问", "问一下", "麻烦你", "麻烦",
+                                          "你知道", NULL };
+    for (size_t take = (n < 3 ? n : 3); take >= 1; --take) {
+        char j[32];
+        agent_open_join(w, take, j, sizeof j);
+        for (size_t k = 0; shells[k]; ++k)
+            if (strcmp(j, shells[k]) == 0) return take;
+    }
+    return 0;
+}
+
+/* 填充词：`到底/究竟/其实/那么/大概/也许/一下/倒是`（同样按**连写**比）。
+ * 返回该跳过几个词（0 = 不是填充词）。 */
+static inline size_t agent_open_filler_len(char *const *w, size_t n) {
+    static const char *const fills[] = { "到底", "究竟", "其实", "那么", "大概", "也许",
+                                         "一下", "倒是", NULL };
+    for (size_t take = (n < 2 ? n : 2); take >= 1; --take) {
+        char j[32];
+        agent_open_join(w, take, j, sizeof j);
+        for (size_t k = 0; fills[k]; ++k)
+            if (strcmp(j, fills[k]) == 0) return take;
+    }
+    return 0;
+}
+
+static inline size_t agent_open_strip_shell(char *const *words, size_t n,
+                                            char **out, size_t cap) {
+    if (!words || !out) return 0;
+    size_t i = 0;
+    for (int round = 0; round < 2; ++round) {          /* 最多剥两层外壳 */
+        size_t got = agent_open_shell_len(words + i, n - i);
+        if (got == 0) break;
+        i += got;
+    }
+    size_t k = 0;
+    while (i < n) {
+        size_t skip = agent_open_filler_len(words + i, n - i);
+        if (skip) { i += skip; continue; }
+        if (k >= cap) return 0;                        /* 装不下就不接（不截断着猜）*/
+        out[k++] = words[i++];
+    }
+    return k;
+}
+
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
-    if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 5) return NULL;
+    if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 8) return NULL;
+    /* §6.145 剥掉问法外壳（填充词/前缀）——剥完再按原来的形状判定 */
+    char *stripped[16];
+    {
+        size_t sn = agent_open_strip_shell(words, n, stripped, sizeof stripped / sizeof stripped[0]);
+        if (sn == 0 || sn > 5) return NULL;
+        words = stripped; n = sn;
+    }
     if (ai_has_question_word(words, n)) { /* 问句里除了占位词还有别的疑问词 ⇒ 不是这条路 */ }
     /* 形状一：`A R 什么`（3 词；4/5 词时允许尾巴上挂"呢/吗"） */
     size_t last = n;

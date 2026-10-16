@@ -2550,6 +2550,39 @@ static void test_open_relation(void) {
       char *a3 = agent_open_relation(ai, w, 3, &c);
       ok(a3 && strstr(a3, "没 记 过") != NULL, "图里没记过 ⇒ 明说「没记过」（不编）");
       free(a3); }
+    /* §6.145 填充词 / 问法外壳：**先量后改** —— 12 种问法里原来只有 3 种接上，
+     * 漏掉的四成是外壳（到底/请问/究竟/其实/我想知道）。剥壳只在**认得出**时做。 */
+    { char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      char *a4 = agent_open_relation(ai, w, 4, &c);
+      ok(a4 && strstr(a4, "开动物") != NULL, "「开猫 **到底** 属于 什么」⇒ 剥掉填充词照样答");
+      free(a4); }
+    { char *w[5] = {(char *)"开猫", (char *)"到", (char *)"底", (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      char *a4b = agent_open_relation(ai, w, 5, &c);
+      ok(a4b && strstr(a4b, "开动物") != NULL,
+         "分词器把「到底」切成 到+底 也认（**连写匹配**，不是只比单个词）");
+      free(a4b); }
+    { char *w[6] = {(char *)"我", (char *)"想", (char *)"知道", (char *)"开猫",
+                    (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      char *a5 = agent_open_relation(ai, w, 6, &c);
+      ok(a5 && strstr(a5, "开动物") != NULL, "「我 想 知道 …」⇒ 剥掉前缀外壳（6 个词也接）");
+      free(a5); }
+    { char *w[4] = {(char *)"请问", (char *)"谁", (char *)"属于", (char *)"开动物"};
+      float c = 0.0f;
+      char *a6 = agent_open_relation(ai, w, 4, &c);
+      ok(a6 && strstr(a6, "开猫") && strstr(a6, "开狗"), "反向那条也认外壳：`请问 谁 属于 开动物`");
+      free(a6); }
+    { char *w[5] = {(char *)"开猫", (char *)"真的", (char *)"属于", (char *)"什么", (char *)"呢"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 5, &c) == NULL,
+         "不是写死的填充词 ⇒ **不接**（退回流水线；剥壳只在认得出时做）"); }
+    { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
+      char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 4, &c) == NULL, "开关关着：带外壳的也一个字都不接");
+      ai->rel_open = 1; }
     ai_free(ai);
 }
 
