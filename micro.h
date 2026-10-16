@@ -209,6 +209,11 @@ static inline int micro_token_reserved(const Token *t) {
  * 所以给它开一个专用前缀，其余 '[' 前缀照旧一律拒绝。 */
 #define MICRO_NEW_TOKEN_PREFIX "[新概念:"
 #define MICRO_ASK_TOKEN_PREFIX "[自问:"
+/* §6.143 元认知提醒的节点前缀。**收进内部命名空间**（下面 `micro_internal_ns`）之后，
+ * `[提醒:…]` 就不再算"协议骨架" ⇒ 它跟「我」之间那条边**可以过统一通道**（受审 + 记账 + 审计）。
+ * 不这么做的话：`micro_endpoint_reserved()` 判真 ⇒ 命中 K6 的静态例外 ⇒ 永远直写
+ * （外部审计点名的 P1-2 就是这一处）。 */
+#define MICRO_REMIND_TOKEN_PREFIX "[提醒:"
 /* **临时符号节点（草稿纸）**：只在会话里活着的中间节点 —— 例如「在这两个词之间插一个
  * 符号节点，让它们不直连、经它中转」时那个中转节点。它**能参与边**，但**不存盘**、
  * 没人引用时会被回收（见 model_io.h 的跳过规则与 MOD_REMOVE_TOKEN）。
@@ -244,7 +249,7 @@ static inline int micro_internal_ns(const char *name) {
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
                                       MICRO_CODE_TOKEN_PREFIX, MICRO_EXEC_TOKEN_PREFIX,
-                                      MICRO_TOKEN_PROC_PREFIX,
+                                      MICRO_TOKEN_PROC_PREFIX, MICRO_REMIND_TOKEN_PREFIX,
                                       MICRO_REVOKE_TOKEN_PREFIX, NULL };
     if (!name) return 0;
     /* `[前提]` 是**行为符号节点（标记）**：挂在边的动作槽上，表示「那一端是前提」。
@@ -955,13 +960,19 @@ static inline void micro_remind(AI *ai, MicroRemind kind, const char *who) {
     mk->meta.remind_at[kind] = step;
     mk->meta.n_reminders[kind]++;
     char nm[96];
-    if (who && who[0]) snprintf(nm, sizeof nm, "[提醒:%s:%s]", MICRO_REMIND_NAME[kind], who);
-    else               snprintf(nm, sizeof nm, "[提醒:%s]", MICRO_REMIND_NAME[kind]);
+    if (who && who[0])
+        snprintf(nm, sizeof nm, MICRO_REMIND_TOKEN_PREFIX "%s:%s]", MICRO_REMIND_NAME[kind], who);
+    else
+        snprintf(nm, sizeof nm, MICRO_REMIND_TOKEN_PREFIX "%s]", MICRO_REMIND_NAME[kind]);
     /* 用 intern 而不是 pool_token：pool_token 是「创建」（允许同名重复），
      * 提醒要是每次冷却到点就多一个同名节点，图会被刷烂。 */
     Token *t = pool_token_intern(ai->pool, nm);
     if (t && ai->self) {
-        token_add_assoc_unique(ai->self, t);
+        /* §6.143 `remind_route`（默认**关**）：开着时这条**自撰写入**走统一通道
+         * （受审 + 记进自撰账 + 进审计），与想象/内部对话（§6.77）同一条路。
+         * 关着时**一个字都不变**：还是直写（今天的行为）。 */
+        if (ai->remind_route) (void)ai_write_assoc(ai, ai->self, t, AI_WSRC_INNER);
+        else                  token_add_assoc_unique(ai->self, t);
         token_touch(t);
     }
 }

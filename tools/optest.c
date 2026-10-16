@@ -3562,6 +3562,56 @@ static void test_narrate(void) {
     ai_free(ai);
 }
 
+/* == ⓯ 元认知提醒的写入：默认直写 / 开了走统一通道（§6.143，外部审计 P1-2） ==
+ * `micro_remind` 把 `[提醒:…]` 挂在「我」身上 —— 那是**自撰**，以前绕过安全内核直接改边表。 */
+static void test_remind_route(void) {
+    printf("== ⓯ 元认知提醒：默认直写 / 开了受审（§6.143） ==\n");
+    {   /* 默认（开关关）：与今天逐字节相同 —— 直写、立刻在图上、**不记**自撰账 */
+        AI *ai = ai_new();
+        ai->remind_route = 0;            /* C 级测试**自己钉这一位**（不跟 AIP_REMINDROUTE 走）*/
+        size_t w0 = ai->writes[AI_WSRC_INNER];
+        micro_remind(ai, MICRO_REMIND_THINK_STALL, NULL);
+        Token *rn = pool_find(ai->pool, MICRO_REMIND_TOKEN_PREFIX "思维原地打转]");
+        ok(rn != NULL && micro_has_edge(ai->self, rn), "默认（关）：照旧**直写**，提醒节点立刻在图上");
+        ok(ai->writes[AI_WSRC_INNER] == w0, "默认（关）：**不记**自撰账（一条路都不多加）");
+        ai_free(ai);
+    }
+    {   /* 开着：提成意图 ⇒ 记进账、等安全点才落地 */
+        AI *ai = ai_new();
+        ai->route_writes = 1; ai->remind_route = 1;
+        size_t w0 = ai->writes[AI_WSRC_INNER];
+        micro_remind(ai, MICRO_REMIND_THINK_STALL, NULL);
+        Token *rn = pool_find(ai->pool, MICRO_REMIND_TOKEN_PREFIX "思维原地打转]");
+        ok(ai->writes[AI_WSRC_INNER] == w0 + 1, "开着：走了统一通道 ⇒ **记进自撰账**");
+        ok(rn != NULL && micro_has_edge(ai->self, rn),
+           "开着：当场**审查 + 应用**（`micro_try` 就是这个语义）⇒ 边在，而且进过审计");
+        ok(micro_of(ai)->safe.n_allowed >= 1, "开着：内核的「允许」计数走了一格（真的过了受审通道）");
+        ai_free(ai);
+    }
+    {   /* **这一对才是重点**：内核**冻结**时 ——
+         * 直写那条照样落（P1-2 的形状：绕过内核）；路由那条被 review 拦住、写不进去。 */
+        AI *ai = ai_new();
+        ai->route_writes = 1; ai->remind_route = 0;
+        micro_of(ai)->safe.freeze = 1;                   /* 安全内核：冻结 */
+        micro_remind(ai, MICRO_REMIND_THINK_OPEN, NULL);
+        Token *d1 = pool_find(ai->pool, MICRO_REMIND_TOKEN_PREFIX "未解问题太多]");
+        ok(d1 != NULL && micro_has_edge(ai->self, d1),
+           "**冻结时直写照样落** —— 这就是 P1-2 的形状（绕过安全内核）");
+        ai_free(ai);
+    }
+    {
+        AI *ai = ai_new();
+        ai->route_writes = 1; ai->remind_route = 1;
+        micro_of(ai)->safe.freeze = 1;                   /* 同样冻结，但走路由 */
+        micro_remind(ai, MICRO_REMIND_THINK_OPEN, NULL);
+        Token *d2 = pool_find(ai->pool, MICRO_REMIND_TOKEN_PREFIX "未解问题太多]");
+        ok(d2 != NULL && !micro_has_edge(ai->self, d2),
+           "**冻结 + 开了路由** ⇒ 提醒边**写不进去**（这才是「受审」的意思）");
+        ok(micro_of(ai)->safe.n_denied >= 1, "而且拒绝进了内核的账（理由 = 冻结）");
+        ai_free(ai);
+    }
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3629,6 +3679,7 @@ int main(void) {
     test_activate_inert();
     test_dirty_guard();
     test_narrate();
+    test_remind_route();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }

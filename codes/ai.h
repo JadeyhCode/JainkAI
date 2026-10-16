@@ -725,6 +725,10 @@ typedef struct {
     /* **指代消解最小版**（② 档，默认 0 = 关）：记"最近提到的那个谁"，
      * 于是「他 觉得 猫 会 飞 吗」里的**他/她/它**能指回那个人（而不是掉流水线）。 */
     int    pron_last;
+    /* §6.143 **元认知提醒的写入也受审**（默认 0 = 关）：开着时 `[提醒:…]` 那条边走
+     * `ai_write_assoc`（统一通道）；关着时照旧直写。原因是外部审计点名的 P1-2：
+     * `micro_remind` 一直在直接改「我」的边表（它挂在 `ai->self` 上，是**自撰**，不是观测）。 */
+    int    remind_route;
     /* **写入闸门：分层判据**（② 档，默认 0 = 关）：实测 imp 落在 0.587~0.725，
      * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
      * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
@@ -1478,6 +1482,8 @@ static inline void ai_switches_init(AI *ai) {
     ai->rel_open = 0;                /* 触发接求解（开放式关系问句）：默认**关** */
     { const char *ro = getenv("AIP_RELOPEN"); if (ro && ro[0] == '1') ai->rel_open = 1; }
     ai->pron_last = 0;               /* 指代消解最小版：默认**关** */
+    ai->remind_route = 0;            /* §6.143 提醒写入受审：默认**关**（反向测量：AIP_REMINDROUTE=1）*/
+    { const char *rr = getenv("AIP_REMINDROUTE"); if (rr && rr[0] == '1') ai->remind_route = 1; }
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }
