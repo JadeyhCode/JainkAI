@@ -201,10 +201,12 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
          * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
          * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
          * 所以这条看护是这一轮才补的（见 optest ㊲ 的"垫 80 个词再查"）。
-         * 改成扫**整个池子**（4096 只是防超大池子），输出仍只列前 4 个；
-         * 这条路默认关、一次一问，扫一遍是 0.1 ms 量级。 */
+         * §6.150 再把那个"防超大池子"的 4096 **也拿掉**：扫**整个池子**，扫了多少**记进
+         * `n_scan_tokens`**（§6.128 的规矩：全图扫描必须记账 —— 这样"反查是不是变慢了"
+         * 有数字可查，而不是靠一个拍的上限去赌）。输出仍只列前 4 个（够了就提前停，
+         * 记账记的是**真走过的**词数）。 */
         size_t scanned = 0;
-        for (size_t i = 0; i < ai->pool->count && hits < 4 && scanned < 4096; ++i) {
+        for (size_t i = 0; i < ai->pool->count && hits < 4; ++i) {
             Token *t = ai->pool->tokens[i];
             if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
             scanned++;
@@ -215,6 +217,7 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         }
         if (hits == 0) snprintf(buf + off, sizeof buf - off, "图里 没 记 过（不 编）");
         else if (hits >= 4) snprintf(buf + off, sizeof buf - off, " 等（只列前几个）");
+        ai->n_scan_tokens += scanned;          /* §6.150：全图扫描记账（§6.126/§6.128 的规矩）*/
         if (out_conf) *out_conf = hits ? 0.8f : 0.4f;
         char *r = (char *)malloc(strlen(buf) + 1);
         if (r) memcpy(r, buf, strlen(buf) + 1);

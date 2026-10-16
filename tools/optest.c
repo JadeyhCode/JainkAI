@@ -2627,6 +2627,17 @@ static void test_open_relation(void) {
       ok(r && strstr(r, "晚车") != NULL, "第 64 个内容词**之后**的答案也查得到（反查扫整个池子）");
       free(r);
       ai_free(b2); }
+    /* §6.150 反查扫全池 ⇒ **必须记账**（§6.128 的规矩：全图扫描要有数字可查）*/
+    { AI *b3 = ai_new();
+      b3->rel_open = 1; b3->rel_off = 0;
+      Token *bb = T(b3, "记车类");
+      (void)token_tag_rel(T(b3, "记车"), bb, REL_IS_A, REL_BOOST);
+      size_t s0 = b3->n_scan_tokens;
+      char *w[3] = {(char *)"什么", (char *)"属于", (char *)"记车类"};
+      char *r = agent_open_relation(b3, w, 3, NULL);
+      ok(r && b3->n_scan_tokens > s0, "反查扫了全池 ⇒ **记进 n_scan_tokens**（全图扫描要记账）");
+      free(r);
+      ai_free(b3); }
     { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
       char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
       float c = 0.0f;
