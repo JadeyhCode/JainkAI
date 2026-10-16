@@ -2596,8 +2596,11 @@ static void test_lexicon(void) {
     }
     { FILE *f = fopen("lexicon_test.txt", "wb");
       if (f) { fputs("# 注释行\n泡茶\n步骤\n", f); fclose(f); } }
+    /* §6.144：断言写成**增量**（`before + 2`）—— 仓库现在自带一份 `lexicon.txt`
+     * （四个别名词），沙箱也会把它拷进来 ⇒ 绝对条数会随环境变，增量才是这条要钉的东西。 */
+    size_t lex_before = ai->lex_n;
     ai_lexicon_load(ai, "lexicon_test.txt");
-    ok(ai->lex_n == 2, "`ai_lexicon_load` 读了 2 个词（注释/空行不算）");
+    ok(ai->lex_n == lex_before + 2, "`ai_lexicon_load` 把文件里的 2 个词加了进去（注释/空行不算）");
     ok(ai_lex_extra_has(ai, "泡茶") && !ai_lex_extra_has(ai, "喝茶"), "查得到泡茶、查不到喝茶");
     { size_t n = 0;
       char **t = ai_tokenize(ai, "泡茶步骤", &n);
@@ -2965,7 +2968,24 @@ static void test_alias_and_posterior(void) {
     ok(rel_alias_id("害怕") == 0,
        "「害怕」**有意不收**（frames.txt 里有一条 [帧:害怕X吗] 会跟关系层抢话，见 docs）");
     ok(rel_id_of(ai, "喜爱", 1) == REL_LIKE,
-       "「喜爱」在**别名表**里也归到「喜欢」（但它现在会被分词器切开，所以实际走不到）");
+       "「喜爱」在**别名表**里也归到「喜欢」");
+    /* §6.144 **别名可达**：别名只对"分词器不切开的词"有效 ⇒ 靠 `lexicon.txt` 保整词。
+     * 这里现写一份临时词表，证明机制是通的（别指望 CWD 里一定有那个文件）。 */
+    {
+        const char *lex = "/tmp/aip_lex_144.txt";
+        FILE *lf = fopen(lex, "w");
+        if (lf) { fprintf(lf, "喜爱\n喜好\n惧怕\n具有\n"); fclose(lf); }
+        AI *a2 = ai_new();
+        ai_lexicon_load(a2, lex);
+        size_t n = 0;
+        char **w = ai_tokenize(a2, "喜爱", &n);
+        ok(n == 1 && w && strcmp(w[0], "喜爱") == 0,
+           "词表里有「喜爱」⇒ 分词器**按整词切**（不再拆成 喜+爱，别名这才走得到）");
+        ai_free_words(w, n);
+        ok(rel_id_of(a2, "喜爱", 0) == REL_LIKE && rel_id_of(a2, "惧怕", 0) == REL_FEAR,
+           "整词保住之后：别名表把 喜爱→喜欢、惧怕→怕 都归一（核心关系，不是动态谓语）");
+        ai_free(a2);
+    }
     ok(rel_id_of(ai, "怕", 0) == REL_FEAR, "核心表里的词照旧");
     uint8_t dyn = rel_id_of(ai, "念叨", 1);
     ok(dyn >= REL_DYN_BASE, "没收录的说法仍走**动态关系**（表不是封闭的）");

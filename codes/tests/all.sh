@@ -138,7 +138,9 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
     cp "$ROOT/build_aip" "$SB/build_aip"
     # 套件里 `sh "$ROOT/tests/prebuilt.sh" aip …` 复制的就是这一份（不再各编 16 s）
     AIP_PREBUILT="$SB/build_aip"; export AIP_PREBUILT
-    for f in frames.txt relations.txt; do
+    # §6.144：`lexicon.txt` 也带进沙箱 —— 它是**数据入口**（分词按整词切），
+    # 仓库自带的那份只多四个别名词（惧怕/喜爱/喜好/具有），没有别的副作用。
+    for f in frames.txt relations.txt lexicon.txt; do
         if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$SB/$f"; fi
     done
     cd "$SB"
