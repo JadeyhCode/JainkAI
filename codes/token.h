@@ -1621,6 +1621,15 @@ struct ActivateCtx {
     size_t        n, cap;
     float         decay, cutoff;
     size_t        max_depth;
+    /* §6.135 **访问上限**（0 = 不限，默认 —— 所有既有调用方一个字都不变）。
+     * 为什么必须要有：`act_seen()` 只看**当前这条 DFS 路径**（返回时 `a->n--`），
+     * 所以同一个符号节点可以被**不同路径反复激活** ⇒ 代价随深度**指数增长**。
+     * 实测（出厂模型，深度/每个词）：深度 2 = 14.9 ms、深度 3 = **1648 ms** ——
+     * 再深一档就是小时级。睡眠那条路用的是**深度 6**，于是它实际上**永远跑不完**。
+     * 上限到了就停止扩散（确定性：同样的输入走同样的前缀，可复现）。 */
+    size_t        max_visits;
+    size_t        n_visits;             /* 这次激活已经访问过几个（含重复路径）*/
+    size_t        n_cut;                /* 因为上限被截断的次数（诊断用）*/
     TokenVisitFn  on_visit;
     void         *user;
     Token        *trigger_self;
@@ -1661,6 +1670,8 @@ static inline void token_activate(Token *t, Token *const *ctx, size_t n_ctx,
     if (depth > a->max_depth) return;
     if (energy < a->cutoff) return;
     if (act_seen(a, t)) return;
+    if (a->max_visits && a->n_visits >= a->max_visits) { a->n_cut++; return; }   /* §6.135 上限 */
+    a->n_visits++;
     if (act_push(a, t) != 0) return;
     token_touch(t);
     if (a->on_visit) a->on_visit(t, depth, energy, a->user);
@@ -1686,6 +1697,8 @@ static inline void token_activate_action(Token *t, Token *const *ctx,
     if (!t || !a) return;
     if (depth > a->max_depth) return;
     if (energy < a->cutoff) return;
+    if (a->max_visits && a->n_visits >= a->max_visits) { a->n_cut++; return; }   /* §6.135 上限 */
+    a->n_visits++;
     if (a->on_visit) a->on_visit(t, depth, energy, a->user);
     size_t reach = token_reach(t, energy);
     float next_e = energy * a->decay;

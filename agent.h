@@ -2103,6 +2103,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     AI *ai = a->brain;
     ai->pool->current_tick++;
     a->cycle++;
+    /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
+    uint64_t seg_t = ai_seg_mark(ai);
     /* §6.119：每轮开头复查一遍条件缓存 —— 假设撤了、而无条件也推得出来的，就**升格**（摘前提）。 */
     ai_hypo_cache_sweep(ai);
     /* 驱动参与决策（默认关）：先把驱动量折算成这一轮的参数修正，再走后面的流程。 */
@@ -2116,6 +2118,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->cutoff = (c < 0.01f) ? 0.01f : (c > 0.30f ? 0.30f : c);
     }
 
+    ai_seg_lap(ai, AI_SEG_HEAD, &seg_t);
     /* 感知 */
     size_t n;
     /* §6.120：**逐字模式**（默认关）时不分词 —— 先顺序接地，再把字符当"词"；
@@ -2131,6 +2134,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 所以逐字模式只用**最近 32 个字**（顺序仍然是接地的顺序）；分词器那条路不受影响。
      * ⚠ 只能在这里挪 `words`：`words_alloc` 必须still 指向**原始**数组（下面 free 用它）。 */
     if (ai->char_stream && n > 32) { words += (n - 32); n = 32; }
+    ai_seg_lap(ai, AI_SEG_TOK, &seg_t);
     if (!words || n == 0) {
         /* **没人说话的这一轮**：N4 的空闲思考（默认关）自己从 `[自问:…]` 里挑一个
          * 没想通的问题来想。它**只读**（不提议意图、不沉淀、不动图，见 think.h 的
@@ -2147,11 +2151,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (th->trace[k].why[0]) say = th->trace[k].why;
             if (say) {
                 snprintf(out, out_cap, "（空闲时想到的）%s", say);
+                ai_seg_lap(ai, AI_SEG_THINK, &seg_t);   /* 空轮：剩下的都算「思维」（think_idle）*/
                 ai_free_words(words_alloc, n_alloc);
                 return strlen(out);
             }
         }
         snprintf(out, out_cap, "……");
+        ai_seg_lap(ai, AI_SEG_THINK, &seg_t);
         ai_free_words(words_alloc, n_alloc);
         return strlen(out);
     }
@@ -2213,9 +2219,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * **没挂补丁时这里是空转** —— 内核不依赖任何补丁。 */
     micro_patch_sense(ai);
 
+    ai_seg_lap(ai, AI_SEG_LEARN, &seg_t);
     /* 内部对话 + 想象 */
     ai_inner_dialogue(ai);
+    ai_seg_lap(ai, AI_SEG_INNER, &seg_t);
     ai_imagine(ai);
+    ai_seg_lap(ai, AI_SEG_IMAGINE, &seg_t);
 
     /* 生成 */
     Token *seed = pool_token_intern(ai->pool, words[n - 1]);
@@ -2239,6 +2248,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     float conf = 0.5f;
     char *resp = NULL;
 
+    ai_seg_lap(ai, AI_SEG_GEN, &seg_t);
     /* ---- 思维链：这一轮从「读入」开始记 ---- */
     cot_reset(ai);
     ai->view_who = NULL;      /* 视角是「问法」的修饰，每轮开头清掉 */
@@ -2286,6 +2296,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
     }
 
+    ai_seg_lap(ai, AI_SEG_THINK, &seg_t);
     /* ---- 关系层（L2）----
      * 顺序：先看是不是在**陈述事实**（那就学下来），再看是不是在**问关系**
      * （那就推理回答）。两条都在联想之后 —— 先想一遍，再动确定性推理。 */
@@ -2363,6 +2374,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (an) { free(resp); resp = an; conf = rc; }
     }
 
+    ai_seg_lap(ai, AI_SEG_REL, &seg_t);
     /* ---- 整句检索优先 ----
      * 把用户输入和语料里存下来的「输入句」比，找到最像的那条，
      * 直接把它对应的「回复句」整句吐出来。匹配够好就不走逐词游走了。 */
@@ -2572,6 +2584,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
         }
     }
+    ai_seg_lap(ai, AI_SEG_LOOKUP, &seg_t);
     /* 收尾：把最终说出口的话记进链里，链到此闭合。 */
     {
         char note[80];
@@ -2669,6 +2682,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* 时间推进 */
     ai_timeline_advance(ai);
 
+    ai_seg_lap(ai, AI_SEG_TAIL, &seg_t);
     /* ---- 微内核安全点 ----
      * 一轮的**唯一**结构修改入口：补丁动作先做（它看的是刚说出去的话），
      * 然后自修改走「提议 → 安全内核审查 → 应用 + 记账 → 元认知」。
@@ -2726,6 +2740,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         else if (pr == -1) out[0] = 0;          /* 补丁明确说：这一轮不说话 */
     }
 
+    ai_seg_lap(ai, AI_SEG_KERNEL, &seg_t);
     /* 维护 */
     ai->turns++;
     if (ai->consolidate_every && (ai->turns % ai->consolidate_every) == 0) {
@@ -2744,6 +2759,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai_sleep_begin(ai);
     if (ai_sleep_pending(ai)) ai_sleep_step(ai);
 
+    ai_seg_lap(ai, AI_SEG_MAINT, &seg_t);
     /* 漂移 / 诊断 / 叙事 */
     if (ai->drift_sample_every && (ai->turns % ai->drift_sample_every) == 0)
         ai_drift_sample(ai);
@@ -2766,6 +2782,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
     }
 
+    ai_seg_lap(ai, AI_SEG_NARR, &seg_t);
     free(resp);
     ai_free_words(words_alloc, n_alloc);
     ai->view_who = NULL;      /* 视角只对这一轮有效 */

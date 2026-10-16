@@ -449,7 +449,11 @@ static void train_corpus_batch(AI *ai, const char *path, size_t interval) {
             if (!t || t->is_garbage) continue;
             ActivateCtx act;
             activate_ctx_init(&act, 0.9f, 0.1f, 6);
+            act.max_visits = ai->sleep_max_visits ? ai->sleep_max_visits : AI_SLEEP_MAX_VISITS;
+            /* §6.135：没有这个上限，这条回放（深度 6）永远跑不完 */
             token_activate_from(t, NULL, 0, 0.9f, &act);
+            ai->n_sleep_visits += act.n_visits;
+            ai->n_sleep_cuts   += act.n_cut;
             activate_ctx_free(&act);
         }
         ai->n_sleeps++;

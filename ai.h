@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>       /* §6.135 分段计时用 clock_gettime */
 
 /* 游走跟踪（::wtrace）：把每条候选的路径按**名字**打出来。
  * 名字而不是指针 —— 就是为了能跨进程 diff。 */
@@ -89,8 +90,43 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
 #define AI_CAUSAL_MIN_HITS 3    /* 协变几次才升格（参数，要调就调这里） */
 #define AI_CAUSAL_HITS_CAP 8    /* 重复计数上限：防止反复出现把它刷成「事实」 */
 
+/* §6.135 睡眠回放的**访问上限**（默认值；`ai->sleep_max_visits` 可以按脑子改，看护要用）。
+ * 理由：`act_seen()` 只看当前 DFS 路径 ⇒ 同一节点被不同路径反复激活 ⇒ 代价随深度指数增长。
+ * 实测（出厂模型，每个词的激活耗时）：深度 2 = 14.9 ms、深度 3 = **1648 ms**；睡眠用**深度 6**，
+ * 于是它实际上**永远跑不完**（`roundbench` 默认 200 轮卡死 5 分钟以上没动静）。
+ * 取 20000：睡眠仍能扩散到几千个节点（深度 3 那次的访问量就在这个量级），但每一步都有硬顶。
+ * 实测代价（出厂模型，一次完整睡眠 = 32 个词）：640000 次访问 / 47223 次截断、约 **0.6 s**。 */
+#define AI_SLEEP_MAX_VISITS 20000
+
 /* 话题票：某话题下「出现过哪些词」。生成时用输入词投票选话题。 */
 typedef struct { Token *seen[192]; size_t n; uint32_t votes; } AITopic;
+
+/* §6.135 **每轮分段计时**（默认关，`AIP_SEGTIME=1`）—— 度量钩子，不进业务逻辑。
+ * 为什么要自己量：§6.132 之后每轮 ~1.94 ms，但 gprof 只看得见 `main`
+ * （`agent_step` 在 `main.c` 里是内联的），`perf` 在本机被 `perf_event_paranoid=4` 挡住。
+ * 口径 = `agent_step` 的 11 个**自然段**（段名见 `AI_SEG_NAMES`），`ai_seg_lap()` 
+ * 逐段累加纳秒与次数。关着时每个 lap 只多一条可预测分支（行为逐字节不变）。 */
+enum {
+    AI_SEG_HEAD = 0,   /* 条件缓存复查 + 驱动折算 */
+    AI_SEG_TOK,        /* 分词 + 接地（`ai_tokenize`/逐字模式） */
+    AI_SEG_LEARN,      /* 反馈/他者/反事实/因果/预测逐对 + 内生状态 + [时刻:] 链 + 焦点 */
+    AI_SEG_INNER,      /* 内部对话（`ai_inner_dialogue`）*/
+    AI_SEG_IMAGINE,    /* 想象（`ai_imagine`）*/
+    AI_SEG_GEN,        /* 生成种子/焦点 + 话题投票（`ai_detect_topic`）*/
+    AI_SEG_THINK,      /* COT 开头 + 思维循环（前段）+ 自由联想 */
+    AI_SEG_REL,        /* 关系层（L2）：陈述即学、问关系即推、类比兜底 */
+    AI_SEG_LOOKUP,     /* 整句检索优先（含帧 / 逐词游走兜底） */
+    AI_SEG_TAIL,       /* 收尾留痕 + 元认知/表达模式 + 接管输出 + 自举 + 时间推进 */
+    AI_SEG_KERNEL,     /* 微内核安全点 + 对话触发 + 过程 + 输出侧补丁 */
+    AI_SEG_MAINT,      /* 维护：巩固 / GC / 睡眠 */
+    AI_SEG_NARR,       /* 漂移 / 诊断 / 叙事 + 释放 */
+    AI_SEG_N
+};
+static const char *const AI_SEG_NAMES[AI_SEG_N] = {
+    "头（缓存复查+驱动）", "分词+接地", "学习+内生+时刻链+焦点", "内部对话", "想象",
+    "生成+话题投票", "思维前段+自由联想", "关系层(L2)", "整句检索", "收尾+元认知+输出+自举",
+    "内核安全点+触发+补丁", "维护(巩固/GC/睡眠)", "漂移/诊断/叙事"
+};
 
 
 /* 「我不知道」的说法池。
@@ -707,6 +743,9 @@ typedef struct {
      * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
     size_t n_scan_tokens;
     size_t n_scan_edges;
+    /* §6.135 分段计时的累加器（只在 `AIP_SEGTIME=1` 时被写；段名见 `AI_SEG_NAMES`）。 */
+    uint64_t seg_ns[AI_SEG_N];
+    uint32_t seg_hits[AI_SEG_N];
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -857,6 +896,12 @@ typedef struct {
     float      last_confidence_at_output;
 
     size_t n_surprises, n_abstractions, n_sleeps;
+    /* §6.135 睡眠激活的账（诊断用）：一共访问了多少节点 / 有多少次被上限截断。
+     * 加它的理由：睡眠那条路以前**永远跑不完**，没有任何数字能看出来它跑到哪儿了。 */
+    size_t n_sleep_visits, n_sleep_cuts;
+    /* 睡眠回放的访问上限（默认 `AI_SLEEP_MAX_VISITS`）。做成字段是为了**可看护**：
+     * 看护可以把上限压到 5，用一个小图证明"到顶就停"（不用真造一个指数爆炸的图）。 */
+    size_t sleep_max_visits;
     size_t n_gc_deleted_edges, n_gc_deleted_tokens;
     size_t n_credit_events, n_expr_learned, n_counterfactual;
     /* 因果猜想：见过多少条（第一次见到就算）与其中多少升格成「可信的猜想」。
@@ -885,6 +930,28 @@ typedef struct {
      * 想通之后落地的只有那些经安全内核审查过的符号节点/边。 */
     void  *think;
 } AI;
+
+/* ---- §6.135 分段计时（默认关；`AIP_SEGTIME=1` 才真的读表）----
+ * 用法就是一对：`uint64_t t = ai_seg_mark(ai);` 开头，每个段尾 `ai_seg_lap(ai, 段, &t);`。
+ * 环境变量只读一次（和别处的开关同一个口径：第一次调用缓存下来）。 */
+static inline int ai_seg_on(void) {
+    static int cached = -1;
+    if (cached < 0) { const char *e = getenv("AIP_SEGTIME"); cached = (e && *e == '1') ? 1 : 0; }
+    return cached;
+}
+static inline uint64_t ai_seg_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+static inline uint64_t ai_seg_mark(const AI *ai) { (void)ai; return ai_seg_on() ? ai_seg_now() : 0; }
+static inline void ai_seg_lap(AI *ai, int seg, uint64_t *t) {
+    if (!ai_seg_on() || seg < 0 || seg >= AI_SEG_N) return;
+    uint64_t n = ai_seg_now();
+    ai->seg_ns[seg] += n - *t;
+    ai->seg_hits[seg]++;
+    *t = n;
+}
 
 /* ---- 思维链的写入接口（要等 AI 结构定义完才能放在这里）---- */
 /* 定长拷贝（截断是设计的一部分，所以自己写，别惹那两个编译警告） */
@@ -1407,6 +1474,7 @@ static inline AI *ai_new(void) {
     ai->energy = 1.0f; ai->decay = 0.7f; ai->cutoff = 0.05f;
     ai->max_gen = 6;
     ai->consolidate_every = 50; ai->decay_factor = 0.98f;
+    ai->sleep_max_visits = AI_SLEEP_MAX_VISITS;   /* §6.135：睡眠回放的访问上限（看护可改小） */
 
     ai->gc.gc_min_age = 3000; ai->gc.gc_time_scale = 1000;
     ai->gc.gc_upgrade_rate = 0.15f; ai->gc.gc_interval = 100;
@@ -3600,6 +3668,7 @@ static inline void ai_form_abstractions(AI *ai) {
 
 /* ============================ 睡眠（增量） ============================ */
 
+
 static inline void ai_sleep_begin(AI *ai) {
     if (!ai || ai->sleep_target > 0) return;
     size_t n = ai->trace_n < 32 ? ai->trace_n : 32;
@@ -3616,7 +3685,10 @@ static inline void ai_sleep_step(AI *ai) {
         if (t && !t->is_garbage) {
             ActivateCtx act;
             activate_ctx_init(&act, 0.9f, 0.1f, 6);
+            act.max_visits = ai->sleep_max_visits ? ai->sleep_max_visits : AI_SLEEP_MAX_VISITS;
             token_activate_from(t, NULL, 0, 0.9f, &act);
+            ai->n_sleep_visits += act.n_visits;
+            ai->n_sleep_cuts   += act.n_cut;
             activate_ctx_free(&act);
         }
         return;
@@ -4431,9 +4503,10 @@ static inline void ai_stats(const AI *ai) {
     printf("       已学=%zu  轮次=%zu  已删符号节点=%zu  已删边=%zu\n",
            ai->n_learned, ai->turns,
            ai->n_gc_deleted_tokens, ai->n_gc_deleted_edges);
-    printf("       惊讶=%zu  抽象=%zu  睡眠=%zu  轨迹=%zu  睡眠中=%d\n",
+    printf("       惊讶=%zu  抽象=%zu  睡眠=%zu  轨迹=%zu  睡眠中=%d  睡眠激活访问=%zu 截断=%zu（上限 %d）\n",
            ai->n_surprises, ai->n_abstractions, ai->n_sleeps,
-           ai->trace_n, ai_sleep_pending(ai));
+           ai->trace_n, ai_sleep_pending(ai),
+           ai->n_sleep_visits, ai->n_sleep_cuts, AI_SLEEP_MAX_VISITS);
     printf("       信用=%zu  表达自举=%zu  反事实=%zu  因果=%zu(升格%zu)\n",
            ai->n_credit_events, ai->n_expr_learned, ai->n_counterfactual,
            ai->n_causal_seen, ai->n_causal_promoted);

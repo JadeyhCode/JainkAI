@@ -90,6 +90,23 @@ int main(int argc, char **argv) {
            ai->n_sc_call ? 100.0 * (double)(ai->n_sc_call - ai->n_sc_miss) / (double)ai->n_sc_call : 0.0);
     printf("  维护开关：GC 每 %zu 轮、巩固每 %zu 轮、睡眠每 %zu 轮、缓存复核每轮\n",
            ai->gc.gc_interval, ai->consolidate_every, ai->sleep_every);
+    printf("  睡眠激活（§6.135）：访问 %zu 个 / 上限截断 %zu 次（上限 %d）\n",
+           ai->n_sleep_visits, ai->n_sleep_cuts, AI_SLEEP_MAX_VISITS);
+    /* §6.135 分段计时：`AIP_SEGTIME=1` 才有一张非零的表（关着时全是 0，别打出来骗人）。 */
+    if (ai_seg_on()) {
+        uint64_t tot = 0;
+        for (int s = 0; s < AI_SEG_N; ++s) tot += ai->seg_ns[s];
+        printf("  分段计时（AIP_SEGTIME=1）：合计 %.3f ms/轮\n",
+               tot / 1e6 / (double)rounds);
+        for (int s = 0; s < AI_SEG_N; ++s) {
+            if (!ai->seg_hits[s]) continue;
+            printf("    %-24s %8.3f ms/轮  %5.1f%%  每次 %.1f µs（%u 次）\n",
+                   AI_SEG_NAMES[s], ai->seg_ns[s] / 1e6 / (double)rounds,
+                   tot ? 100.0 * (double)ai->seg_ns[s] / (double)tot : 0.0,
+                   (double)ai->seg_ns[s] / 1e3 / (double)ai->seg_hits[s],
+                   ai->seg_hits[s]);
+        }
+    }
     if (getenv("AIP_ROUNDBENCH_TSV")) {
         FILE *f = fopen(getenv("AIP_ROUNDBENCH_TSV"), "a");
         if (f) {

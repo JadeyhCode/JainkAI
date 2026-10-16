@@ -3406,6 +3406,46 @@ static void test_lease_gate_tiers(void) {
     ai_free(ai);
 }
 
+/* == ⓫ 激活的访问上限 + 睡眠真的会停下来（§6.135） ==
+ * 为什么要有：`act_seen()` 只看**当前这条 DFS 路径**（返回时 `a->n--`），所以同一个符号节点
+ * 会被不同路径反复激活 ⇒ 代价随深度**指数增长**。实测（出厂模型，每个词的激活耗时）：
+ * 深度 2 = 14.9 ms、深度 3 = **1648 ms**；而睡眠回放用的是**深度 6** ⇒ 它实际上**永远跑不完**
+ * （`roundbench` 默认 200 轮实测卡死 5 分钟以上）。这里用一个多路径小图 + 一个小上限，
+ * 证明"到顶就停"，**不用**真造一个指数爆炸的图（那种测试自己就会挂）。 */
+static void test_activation_budget(void) {
+    printf("== ⓫ 激活访问上限 + 睡眠会停下来（§6.135） ==\n");
+    AI *ai = ai_new();
+    /* a→b→d / a→c→d / b→c：同一节点会被多条路径摸到 */
+    Token *a = T(ai, "上限A"), *b = T(ai, "上限B"), *c = T(ai, "上限C"), *d = T(ai, "上限D");
+    (void)token_observe_pair(a, b); (void)token_observe_pair(a, c);
+    (void)token_observe_pair(b, c); (void)token_observe_pair(b, d);
+    (void)token_observe_pair(c, d);
+    /* ① 不限（`0` = 所有既有调用方的老行为）：路径照走 */
+    ActivateCtx unlimited;
+    activate_ctx_init(&unlimited, 0.9f, 0.05f, 6);
+    token_activate_from(a, NULL, 0, 1.0f, &unlimited);
+    size_t free_visits = unlimited.n_visits;
+    activate_ctx_free(&unlimited);
+    ok(free_visits >= 4 && unlimited.n_cut == 0,
+       "默认（max_visits=0）**逐字不变**：路径全走、一次都不截断");
+    /* ② 上限 3：到顶就停，而且记了账 */
+    ActivateCtx lim;
+    activate_ctx_init(&lim, 0.9f, 0.05f, 6);
+    lim.max_visits = 3;
+    token_activate_from(a, NULL, 0, 1.0f, &lim);
+    ok(lim.n_visits == 3 && lim.n_cut > 0, "给了上限就**正好停在上限**（并记 n_cut）");
+    activate_ctx_free(&lim);
+    /* ③ 睡眠那条路**真的用上了**上限（把上限压到 2，跑一步睡眠） */
+    ai->sleep_max_visits = 2;
+    ai->trace_n = 0;
+    ai_push_trace(ai, a);
+    ai_sleep_begin(ai);
+    ok(ai_sleep_pending(ai) && ai->sleep_max_visits == 2, "睡眠：轨迹挂上、上限已就位");
+    ai_sleep_step(ai);
+    ok(ai->n_sleep_visits <= 2, "睡眠一步**没超过上限**（老代码在这一步指数爆炸）");
+    ai_free(ai);
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3469,6 +3509,7 @@ int main(void) {
     test_memory_chain();
     test_thin_pursuit();
     test_self_goal();
+    test_activation_budget();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }
