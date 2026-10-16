@@ -197,8 +197,14 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         size_t off = 0, hits = 0;
         off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
                                 words[sl2], words[sl2 + 1]);
+        /* §6.149 **先量后改**：`scanned < 64` 会让"第 64 个内容词之后"的答案**永远查不到**。
+         * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
+         * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
+         * 所以这条看护是这一轮才补的（见 optest ㊲ 的"垫 80 个词再查"）。
+         * 改成扫**整个池子**（4096 只是防超大池子），输出仍只列前 4 个；
+         * 这条路默认关、一次一问，扫一遍是 0.1 ms 量级。 */
         size_t scanned = 0;
-        for (size_t i = 0; i < ai->pool->count && hits < 4 && scanned < 64; ++i) {
+        for (size_t i = 0; i < ai->pool->count && hits < 4 && scanned < 4096; ++i) {
             Token *t = ai->pool->tokens[i];
             if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
             scanned++;

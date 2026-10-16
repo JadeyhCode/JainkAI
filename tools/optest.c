@@ -2613,6 +2613,20 @@ static void test_open_relation(void) {
       float c = 0.0f;
       ok(agent_open_relation(ai, w, 3, &c) == NULL,
          "光一个「哪」**不算**占位词（写死的表里没有它 ⇒ 不接，不乱猜）"); }
+    /* §6.149 反查必须扫**整个池子**：旧上限 `scanned < 64` 会让"第 64 个内容词之后"的答案
+     * 永远查不到（出厂模型实测：「什么 属于 车」漏掉 火车/汽车 —— 它们在第 1045 个内容词）。
+     * 这里造 80 个垫词把答案推到 64 之后，再查一次。 */
+    { AI *b2 = ai_new();
+      for (int i = 0; i < 80; ++i) { char nm[24]; snprintf(nm, sizeof nm, "填词%d", i); (void)T(b2, nm); }
+      Token *late = T(b2, "晚车"), *lateb = T(b2, "晚车类");
+      (void)token_tag_rel(late, lateb, REL_IS_A, REL_BOOST);
+      b2->rel_open = 1; b2->rel_off = 0;
+      char *w[3] = {(char *)"什么", (char *)"属于", (char *)"晚车类"};
+      float c = 0.0f;
+      char *r = agent_open_relation(b2, w, 3, &c);
+      ok(r && strstr(r, "晚车") != NULL, "第 64 个内容词**之后**的答案也查得到（反查扫整个池子）");
+      free(r);
+      ai_free(b2); }
     { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
       char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
       float c = 0.0f;
