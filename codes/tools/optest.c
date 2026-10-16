@@ -2638,6 +2638,29 @@ static void test_open_relation(void) {
       ok(r && b3->n_scan_tokens > s0, "反查扫了全池 ⇒ **记进 n_scan_tokens**（全图扫描要记账）");
       free(r);
       ai_free(b3); }
+    /* §6.151 带类别的反查：`哪些 <类别> R B` —— 候选项必须是那个类别的一员。
+     * 先量到**正例**才做（出厂模型：「哪些 动物 在 天上」= 鸟；不滤的话还有太阳/月亮/星星）。 */
+    { AI *b4 = ai_new();
+      b4->rel_open = 1; b4->rel_off = 0;
+      Token *an = T(b4, "类动物"), *bird = T(b4, "类鸟"), *sun = T(b4, "类太阳"), *sky = T(b4, "类天上");
+      (void)token_tag_rel(bird, an, REL_IS_A, REL_BOOST);
+      (void)token_tag_rel(bird, sky, REL_AT, REL_BOOST);
+      (void)token_tag_rel(sun, sky, REL_AT, REL_BOOST);
+      float c = 0.0f;
+      char *w1[5] = {(char *)"哪", (char *)"些", (char *)"类动物", (char *)"在", (char *)"类天上"};
+      char *r1 = agent_open_relation(b4, w1, 5, &c);
+      ok(r1 && strstr(r1, "类鸟") && !strstr(r1, "类太阳"),
+         "`哪些 <类别> R B`：只列**属于该类别**的（不是那个类别的被滤掉）");
+      ok(r1 && strstr(r1, "只算 类动物") != NULL, "回话写明**只算了哪个类别**（不假装是全量）");
+      free(r1);
+      char *w2[3] = {(char *)"什么", (char *)"在", (char *)"类天上"};
+      char *r2 = agent_open_relation(b4, w2, 3, &c);
+      ok(r2 && strstr(r2, "类鸟") && strstr(r2, "类太阳"), "不带类别的同一条反查：两个都在（对照组）");
+      free(r2);
+      char *w3[5] = {(char *)"哪", (char *)"些", (char *)"没这类别", (char *)"在", (char *)"类天上"};
+      ok(agent_open_relation(b4, w3, 5, &c) == NULL,
+         "类别词不在图里 ⇒ **不接**（不退化、不猜）");
+      ai_free(b4); }
     { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
       char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
       float c = 0.0f;

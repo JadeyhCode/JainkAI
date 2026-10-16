@@ -189,14 +189,25 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     }
     /* 形状二：`什么/谁 R B`（反向扫；上限 64 个候选，避免大池子上太慢） */
     size_t sl2 = agent_open_slot_len(words, last);
-    if (sl2 && last == sl2 + 2) {
-        uint8_t rid = rel_id_of(ai, words[sl2], 0);
-        Token *b = pool_find(ai->pool, words[sl2 + 1]);
+    /* §6.151 **带类别的反查**：`哪些 <类别> R B`（「哪些 动物 在 天上」）——
+     * 先量到出厂模型里**有正例**（是动物的：鸟；不是的：太阳…共 4 个）⇒ 值得做。
+     * 做法：候选必须是 `t 属于 <类别>`（直边）。**不做**"理解成 `什么 R B` 再全列"——
+     * 那会把不是动物的东西也列出来，是**误导**（宁可少答、不可答错）。 */
+    int has_cat = 0;
+    if (sl2 && last == sl2 + 3) has_cat = 1;
+    if (sl2 && (last == sl2 + 2 || has_cat)) {
+        const char *catw = has_cat ? words[sl2] : NULL;
+        Token *cat = catw ? pool_find(ai->pool, catw) : NULL;
+        if (has_cat && !cat) return NULL;               /* 类别词不在图里 ⇒ 不接（不猜）*/
+        uint8_t rid = rel_id_of(ai, words[sl2 + (has_cat ? 1 : 0)], 0);
+        Token *b = pool_find(ai->pool, words[sl2 + (has_cat ? 2 : 1)]);
         if (rid == 0 || !b) return NULL;
         char buf[256];
         size_t off = 0, hits = 0;
-        off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
-                                words[sl2], words[sl2 + 1]);
+        if (cat) off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 （只算 %s） ： ",
+                                         words[sl2 + 1], words[sl2 + 2], catw);
+        else     off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
+                                         words[sl2], words[sl2 + 1]);
         /* §6.149 **先量后改**：`scanned < 64` 会让"第 64 个内容词之后"的答案**永远查不到**。
          * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
          * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
@@ -211,6 +222,7 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
             if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
             scanned++;
             if (rel_direct(t, rid, b) == 0) continue;          /* 只认肯定那档 */
+            if (cat && rel_direct(t, REL_IS_A, cat) == 0) continue;   /* §6.151 类别过滤 */
             off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
                                     hits ? " 、 " : "", t->name);
             hits++;
