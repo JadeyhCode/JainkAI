@@ -4548,6 +4548,74 @@ static inline int ai_eval_parse_num(const char *s, long *out) {
 }
 
 /* 认 `<数字> <算符> <数字>` 并真算一遍。返回 1 = 算出来了（*out 是真值），0 = 判不了。 */
+/* §6.142 **算术表达式**（默认关的求值层里那一步"浮点/算术"）：只认 数、+ - * / 和括号。
+ * 认不出就返回 0（判不了）—— 求值层的老规矩：**绝不默认成立**。
+ * 有意**不认**科学计数法（`1e3` 仍旧判不了，看护里钉着）—— 那会把「1e3」这种
+ * 图上真出现过的名字当成数，形状判断反而变糊。 */
+typedef struct { const char *p; int ok; } AiEvalCur;
+static inline void ai_eval_skip(AiEvalCur *c) { while (*c->p == ' ') c->p++; }
+static inline double ai_eval_expr(AiEvalCur *c);
+static inline double ai_eval_factor(AiEvalCur *c) {
+    ai_eval_skip(c);
+    int neg = 0;
+    while (*c->p == '+' || *c->p == '-') { if (*c->p == '-') neg = !neg; c->p++; ai_eval_skip(c); }
+    if (*c->p == '(') {
+        c->p++;
+        double v = ai_eval_expr(c);
+        ai_eval_skip(c);
+        if (*c->p != ')') { c->ok = 0; return 0; }
+        c->p++;
+        return neg ? -v : v;
+    }
+    const char *st = c->p;
+    int any = 0;
+    while (*c->p >= '0' && *c->p <= '9') { c->p++; any = 1; }
+    if (*c->p == '.') { c->p++; while (*c->p >= '0' && *c->p <= '9') { c->p++; any = 1; } }
+    if (!any) { c->ok = 0; return 0; }
+    size_t n = (size_t)(c->p - st);
+    char buf[40];
+    if (n >= sizeof buf) { c->ok = 0; return 0; }
+    memcpy(buf, st, n); buf[n] = 0;
+    double v = strtod(buf, NULL);
+    return neg ? -v : v;
+}
+static inline double ai_eval_term(AiEvalCur *c) {
+    double v = ai_eval_factor(c);
+    for (;;) {
+        ai_eval_skip(c);
+        char op = *c->p;
+        if (op != '*' && op != '/') break;
+        c->p++;
+        double r = ai_eval_factor(c);
+        if (!c->ok) return 0;
+        if (op == '*') v *= r;
+        else { if (r == 0.0) { c->ok = 0; return 0; } v /= r; }   /* 除以 0 ⇒ 判不了 */
+    }
+    return v;
+}
+static inline double ai_eval_expr(AiEvalCur *c) {
+    double v = ai_eval_term(c);
+    for (;;) {
+        ai_eval_skip(c);
+        char op = *c->p;
+        if (op != '+' && op != '-') break;
+        c->p++;
+        double r = ai_eval_term(c);
+        if (!c->ok) return 0;
+        v = (op == '+') ? v + r : v - r;
+    }
+    return v;
+}
+static inline int ai_eval_parse_expr(const char *s, double *out) {
+    if (!s || !*s || !out) return 0;
+    AiEvalCur c = { s, 1 };
+    double v = ai_eval_expr(&c);
+    ai_eval_skip(&c);
+    if (!c.ok || *c.p) return 0;          /* 尾巴还有东西 ⇒ 不是纯表达式 */
+    *out = v;
+    return 1;
+}
+
 static inline int ai_eval_cmp(const char *expr, int *out) {
     if (!expr || !expr[0] || !out) return 0;
     static const char *const ops[] = { "<=", ">=", "==", "!=", "<", ">", NULL };
@@ -4559,14 +4627,29 @@ static inline int ai_eval_cmp(const char *expr, int *out) {
         char lhs[48];
         memcpy(lhs, expr, l); lhs[l] = 0;
         const char *rhs = at + strlen(ops[i]);
-        long a = 0, b = 0;
-        if (!ai_eval_parse_num(lhs, &a) || !ai_eval_parse_num(rhs, &b)) continue;
-        if (strcmp(ops[i], "<")  == 0) *out = (a <  b);
-        else if (strcmp(ops[i], ">")  == 0) *out = (a >  b);
-        else if (strcmp(ops[i], "<=") == 0) *out = (a <= b);
-        else if (strcmp(ops[i], ">=") == 0) *out = (a >= b);
-        else if (strcmp(ops[i], "==") == 0) *out = (a == b);
-        else                                *out = (a != b);
+        /* 两边**都是纯整数**时走整数那条路（逐位精确，大整数也不会被 double 吃掉）；
+         * 否则走 §6.142 的算术表达式（浮点 + + - * / 括号）。两条都认不出 ⇒ 判不了。 */
+        long ia = 0, ib = 0;
+        double da = 0, db = 0;
+        int is_int = 0;
+        if (ai_eval_parse_num(lhs, &ia) && ai_eval_parse_num(rhs, &ib)) {
+            is_int = 1; da = (double)ia; db = (double)ib;
+        } else if (ai_eval_parse_expr(lhs, &da) && ai_eval_parse_expr(rhs, &db)) {
+            is_int = 0;
+        } else {
+            continue;
+        }
+        if (strcmp(ops[i], "<")  == 0) *out = is_int ? (ia <  ib) : (da <  db);
+        else if (strcmp(ops[i], ">")  == 0) *out = is_int ? (ia >  ib) : (da >  db);
+        else if (strcmp(ops[i], "<=") == 0) *out = is_int ? (ia <= ib) : (da <= db);
+        else if (strcmp(ops[i], ">=") == 0) *out = is_int ? (ia >= ib) : (da >= db);
+        else {
+            /* 浮点相等用**相对容差**（判的是"这个说法成立吗"，不是逐位相等）：
+             * 于是 `0.1+0.2==0.3` 成立（IEEE 下逐位比会得到假）。 */
+            int eq = is_int ? (ia == ib)
+                            : (fabs(da - db) <= 1e-9 * (1.0 + fabs(da) + fabs(db)));
+            *out = (strcmp(ops[i], "==") == 0) ? eq : !eq;
+        }
         return 1;
     }
     return 0;                             /* 认不出形状 ⇒ 判不了（绝不默认成立） */
