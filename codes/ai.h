@@ -3146,6 +3146,35 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
 static inline int ai_pair_cb_slice(AI *ai, size_t i,
                                    const char *const **c, const uint8_t **l, size_t *n);
 
+/* §6.146 **查询侧的 IDF 权重备忘**（纯性能，行为零改动）：一句话要对几千条库句打分，
+ * 而"查询词的 IDF 权重"和"查询侧权重和 wa"**每条库句都重算一遍**是白搭。
+ * 实测（出厂模型 6701 条）：一对要查 `an + bn` ≈ 9.6 次 idf（其中 `bn` 次是给 `wb` 的，
+ * 而 `wb` **从来没被用过** —— 见下面 `ai_sent_score_cov_ex` 里的注释）。
+ * 键 = 池序号 + 查询词指针序列 + idf 表（长度/指针都比，idf 重建就作废）。 */
+static float        g_qidf[64];
+static const Token *g_qidf_tok[64];
+static size_t       g_qidf_n;
+static float        g_qidf_wa;
+static size_t       g_qidf_idf_n;
+static const float *g_qidf_idf;
+
+static inline void ai_qidf_prep(const AI *ai, Token *const *a, size_t an) {
+    if (!ai || !a || an == 0 || an > 64) { g_qidf_n = 0; return; }
+    if (g_qidf_n == an && g_qidf_idf == ai->idf && g_qidf_idf_n == ai->idf_n &&
+        memcmp(g_qidf_tok, a, an * sizeof *a) == 0)
+        return;                                   /* 还是那句查询 ⇒ 直接用 */
+    float wa = 0.0f;
+    for (size_t i = 0; i < an; ++i) {
+        g_qidf[i] = ai_idf_of(ai, a[i]);
+        wa += g_qidf[i];
+        g_qidf_tok[i] = a[i];
+    }
+    g_qidf_n = an;
+    g_qidf_wa = wa;
+    g_qidf_idf = ai->idf;
+    g_qidf_idf_n = ai->idf_n;
+}
+
 /* §6.140 按**库句号**打分：字符那一项走缓存切片（§6.136/§6.140 的库句缓存）。
  * 拿到切片就完全不用碰库句的符号节点；没拿到（分配失败等）退回老路。 */
 static inline int ai_sent_score_pair(AI *ai, Token *const *a, size_t an, size_t pi, int *out_cov) {
@@ -3155,16 +3184,18 @@ static inline int ai_sent_score_pair(AI *ai, Token *const *a, size_t an, size_t 
     Token *const *b = (Token *const *)p->in;
     size_t bn = p->in_n;
     if (an == 0 || bn == 0) return 0;
-    float wa = 0.0f, wi = 0.0f;
+    /* §6.146 一趟算出 wi 与 inter（以前是两趟），而且查询权重走备忘、**不再碰 idf**；
+     * `wb`（库句那一侧的权重和）本来就没被任何判据用 —— 顺手不再算。 */
+    ai_qidf_prep(ai, a, an);
+    float wa = g_qidf_wa, wi = 0.0f;
+    size_t inter = 0;
     for (size_t i = 0; i < an; ++i) {
-        float w = ai_idf_of(ai, a[i]);
-        wa += w;
-        for (size_t j = 0; j < bn; ++j) if (a[i] == b[j]) { wi += w; break; }
+        int hit = 0;
+        for (size_t j = 0; j < bn; ++j)
+            if (a[i] == b[j]) { hit = 1; break; }
+        if (hit) { wi += g_qidf[i]; inter++; }
     }
     int cov = (wa > 0.0f) ? (int)(100.0f * wi / wa) : 0;
-    size_t inter = 0;
-    for (size_t i = 0; i < an; ++i)
-        for (size_t j = 0; j < bn; ++j) if (a[i] == b[j]) { inter++; break; }
     int dice = (int)((inter * 200) / (an + bn));
     const char *const *cc = NULL; const uint8_t *ll = NULL; size_t nn = 0;
     int bg;
@@ -3189,6 +3220,9 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
                                     Token *const *b, size_t bn, int *out_cov) {
     if (out_cov) *out_cov = 0;
     if (an == 0 || bn == 0) return 0;
+    /* ⚠ 这一份是**参考实现**（optest 的"行 vs 逐条对拍"拿它当基准）：故意保持"笨而直白"。
+     * 里面的 `wb` 确实没被用到（`cov` 只用 wa/wi）—— 别顺手删：留着一份**不共享**的实现，
+     * 对拍才有意义（§6.146 的性能改动只动行那条路）。 */
     float wa = 0.0f, wb = 0.0f, wi = 0.0f;
     for (size_t i = 0; i < an; ++i) {
         float w = ai_idf_of(ai, a[i]);
