@@ -49,20 +49,6 @@ static inline void agent_revise_name(char *dst, size_t cap, const char *a, int n
  *   · `A R 什么/谁`     ⇒ 正向查 `rel_neighbors(a, rid)`；
  *   · `什么/谁 R B`     ⇒ **反向**扫一遍（谁有 `R` 边指向 B），上限 64 个符号节点。
  * 默认关（`AIP_RELOPEN=1` / `::rel open on`）：关着时这些话照旧走流水线（逐字节相同）。 */
-static inline int agent_open_slot_word(const char *w) {
-    return w && (strcmp(w, "什么") == 0 || strcmp(w, "谁") == 0 || strcmp(w, "哪些") == 0 ||
-                 strcmp(w, "啥") == 0);
-}
-
-/* §6.145 **先量后改**：把 12 种"开放式关系问句"喂进去，只有 3 种接上了（`A R 什么` /
- * `什么 R B` / 尾巴挂"吗"）；漏掉的里**四成是填充词/问法外壳**：
- *   「猫 **到底** 属于 什么」「**请问** 猫 属于 什么」「猫 **究竟** 属于 什么 呢」
- *   「**其实** 猫 属于 什么」「**我 想 知道** 猫 属于 什么」
- * 这一层只干一件事：把这些**外壳**剥掉再走原来的形状判定。剥完还是原来的形状才接，
- * 所以"剥错了"最多是**不接**（退回流水线），不会答错。
- *
- * 有意**不**把 `我`/`想` 当通用填充词：`我 喜欢 什么` 里 `我` 是**主语**，
- * 一滤就把可答的问句滤成不可答 —— 所以只剥**写死的几个外壳**，不做通用过滤。 */
 /* 把 `w[0..take)` **连起来**（不加空格）写进 `dst` —— 分词器把「到底」切成「到」「底」
  * 的时候，只有这样比才认得出填充词（同一个坑：合写否定 §6.69 / 情态 §6.74③ 都踩过）。 */
 static inline size_t agent_open_join(char *const *w, size_t take, char *dst, size_t cap) {
@@ -78,6 +64,35 @@ static inline size_t agent_open_join(char *const *w, size_t take, char *dst, siz
     return L;
 }
 
+static inline int agent_open_slot_word(const char *w) {
+    return w && (strcmp(w, "什么") == 0 || strcmp(w, "谁") == 0 || strcmp(w, "哪些") == 0 ||
+                 strcmp(w, "啥") == 0);
+}
+
+/* §6.148 **占位词也可能是两个词**：分词器会把「哪些」「哪种」「哪个」切开
+ * （实测「哪些 属于 动物」整句掉流水线，而「谁 属于 动物」能答）。
+ * 所以跟填充词一样按**连写**比 —— 返回占位短语占几个词（1 或 2），0 = 这儿不是占位词。 */
+static inline size_t agent_open_slot_len(char *const *w, size_t n) {
+    static const char *const slots[] = { "什么", "谁", "哪些", "啥", "哪种", "哪个",
+                                         "哪一个", "哪一位", NULL };
+    for (size_t take = (n < 2 ? n : 2); take >= 1; --take) {
+        char j[32];
+        agent_open_join(w, take, j, sizeof j);
+        for (size_t k = 0; slots[k]; ++k)
+            if (strcmp(j, slots[k]) == 0) return take;
+    }
+    return 0;
+}
+
+/* §6.145 **先量后改**：把 12 种"开放式关系问句"喂进去，只有 3 种接上了（`A R 什么` /
+ * `什么 R B` / 尾巴挂"吗"）；漏掉的里**四成是填充词/问法外壳**：
+ *   「猫 **到底** 属于 什么」「**请问** 猫 属于 什么」「猫 **究竟** 属于 什么 呢」
+ *   「**其实** 猫 属于 什么」「**我 想 知道** 猫 属于 什么」
+ * 这一层只干一件事：把这些**外壳**剥掉再走原来的形状判定。剥完还是原来的形状才接，
+ * 所以"剥错了"最多是**不接**（退回流水线），不会答错。
+ *
+ * 有意**不**把 `我`/`想` 当通用填充词：`我 喜欢 什么` 里 `我` 是**主语**，
+ * 一滤就把可答的问句滤成不可答 —— 所以只剥**写死的几个外壳**，不做通用过滤。 */
 /* 前缀外壳：`我 想 知道` / `我 想知道` / `请问` / `问 一下` / `麻烦` / `你 知道`。
  * 返回该剥掉几个词（0 = 不是外壳）。 */
 static inline size_t agent_open_shell_len(char *const *w, size_t n) {
@@ -143,8 +158,9 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     size_t last = n;
     while (last > 0 && (strcmp(words[last - 1], "呢") == 0 || strcmp(words[last - 1], "吗") == 0))
         last--;
-    if ((last == 3 || last == 4) && agent_open_slot_word(words[2])) {
-        const char *hint = (last == 4) ? words[3] : NULL;      /* 类别提示（可为空）*/
+    size_t sl1 = (last >= 3) ? agent_open_slot_len(words + 2, last - 2) : 0;
+    if (sl1 && (last == 2 + sl1 || last == 2 + sl1 + 1)) {
+        const char *hint = (last == 2 + sl1 + 1) ? words[2 + sl1] : NULL;   /* 类别提示（可为空）*/
         Token *a = pool_find(ai->pool, words[0]);
         uint8_t rid = rel_id_of(ai, words[1], 0);
         if (!a || rid == 0) return NULL;
@@ -172,14 +188,15 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         return r;
     }
     /* 形状二：`什么/谁 R B`（反向扫；上限 64 个候选，避免大池子上太慢） */
-    if (last == 3 && agent_open_slot_word(words[0])) {
-        uint8_t rid = rel_id_of(ai, words[1], 0);
-        Token *b = pool_find(ai->pool, words[2]);
+    size_t sl2 = agent_open_slot_len(words, last);
+    if (sl2 && last == sl2 + 2) {
+        uint8_t rid = rel_id_of(ai, words[sl2], 0);
+        Token *b = pool_find(ai->pool, words[sl2 + 1]);
         if (rid == 0 || !b) return NULL;
         char buf[256];
         size_t off = 0, hits = 0;
         off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
-                                words[1], words[2]);
+                                words[sl2], words[sl2 + 1]);
         size_t scanned = 0;
         for (size_t i = 0; i < ai->pool->count && hits < 4 && scanned < 64; ++i) {
             Token *t = ai->pool->tokens[i];

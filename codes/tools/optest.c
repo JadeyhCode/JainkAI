@@ -2593,6 +2593,26 @@ static void test_open_relation(void) {
       float c = 0.0f;
       ok(agent_open_relation(ai, w, 4, &c) == NULL,
          "第 3 个词**不是**占位词 ⇒ 不接（不是「四个词就乱接」）"); }
+    /* §6.148 占位词被分词器切开（哪些/哪种/哪个）—— 跟填充词一样按**连写**比 */
+    { char *w[4] = {(char *)"开猫", (char *)"属于", (char *)"哪", (char *)"种"};
+      float c = 0.0f;
+      char *a9 = agent_open_relation(ai, w, 4, &c);
+      ok(a9 && strstr(a9, "开动物") != NULL, "「开猫 属于 哪 种」（「哪种」被切开）⇒ 照样答");
+      free(a9); }
+    { char *w[4] = {(char *)"哪", (char *)"些", (char *)"属于", (char *)"开动物"};
+      float c = 0.0f;
+      char *a10 = agent_open_relation(ai, w, 4, &c);
+      ok(a10 && strstr(a10, "开猫") && strstr(a10, "开狗"), "反向也认：「哪 些 属于 开动物」");
+      free(a10); }
+    { char *w[5] = {(char *)"开猫", (char *)"属于", (char *)"哪", (char *)"种", (char *)"类开"};
+      float c = 0.0f;
+      char *a11 = agent_open_relation(ai, w, 5, &c);
+      ok(a11 && strstr(a11, "开动物") != NULL, "两词占位 + 类别提示也能答");
+      free(a11); }
+    { char *w[3] = {(char *)"开猫", (char *)"属于", (char *)"哪"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 3, &c) == NULL,
+         "光一个「哪」**不算**占位词（写死的表里没有它 ⇒ 不接，不乱猜）"); }
     { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
       char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
       float c = 0.0f;
