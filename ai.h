@@ -796,6 +796,14 @@ typedef struct {
     uint64_t *cb_bits;
     size_t    cb_cap, cb_n;
     size_t    n_cb_fill;          /* 记账：一共算过几条库句的位图（应该≈pairs_n，不是每轮）*/
+    /* §6.140 连**字符切片**一起缓存：位图 + 切片一次算好，之后每轮连 `token_name_chars`
+     * 都不用调（实测那一趟切分占"活下来那些条"的一半时间）。两条 blob 分开存
+     * （指针 8 B/字符、长度 1 B/字符；出厂模型 51527 个字符 ≈ 464 KB），
+     * 偏移按库句号索引（`cb_off[i]`..`cb_off[i+1]`）。同样只进内存、不进存档。 */
+    uint32_t    *cb_off;          /* 长度 cb_cap + 1 */
+    const char **cb_ptr;
+    uint8_t     *cb_len;
+    size_t       cb_chused, cb_chcap;
     /* **全图扫描的账**（§6.126）：维护类活动（GC / 缓存复核 / 巩固）每轮走了多少词、多少边。
      * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
     size_t n_scan_tokens;
@@ -1621,6 +1629,7 @@ static inline void ai_free(AI *ai) {
     free(ai->trace);
     free(ai->sc_memo); free(ai->sc_cov);      /* §6.132 打分备忘（calloc 起家，可能是 NULL） */
     free(ai->cb_bits);                        /* §6.136 库句字符集位图（同上，可能是 NULL）*/
+    free(ai->cb_off); free(ai->cb_ptr); free(ai->cb_len);   /* §6.140 库句字符切片 */
     free(ai->last_output);
     free(ai->last_skipped);
     free(ai->pairs);
@@ -3046,16 +3055,36 @@ static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an
     return 0;
 }
 
+/* `AIP_CHARBG=0` 把字符这一项整条关掉（只做性能标定，不改默认行为）。 */
+static inline int ai_charbg_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("AIP_CHARBG"); on = (e && *e == '0') ? 0 : 1; }
+    return on;
+}
+
+/* §6.140 这一项的比较核心：两边都是**展平的字符列表**（谁摊平的无所谓）。
+ * 名字叫 bigram，其实是**逐字符**：a 的每个字符（**最后一个除外**）在 b 里（**最后一个除外**）
+ * 出现过就算一个 inter —— 这个口径是 §6.136 实测出来的，改它就是改分数（要单独一轮 + A/B）。 */
+static inline int ai_cb_core(const char *const *ca, const uint8_t *la_, size_t na,
+                             const char *const *cb, const uint8_t *lb_, size_t nb) {
+    size_t inter = 0, tot_a = 0, tot_b = 0;
+    for (size_t i = 0; i + 1 < na; ++i) {
+        tot_a++;
+        for (size_t j = 0; j + 1 < nb; ++j) {
+            if (la_[i] == lb_[j] && ai_ch_eq(ca[i], cb[j], la_[i])) { inter++; break; }
+        }
+    }
+    for (size_t j = 0; j + 1 < nb; ++j) tot_b++;
+    size_t tot = tot_a + tot_b;
+    return tot ? (int)((inter * 200) / tot) : 0;   /* 0..100 */
+}
+
 /* 字符 bigram 重合度：Dice。抓「怎么说」相似而词不完全一样的情况
  * （「你平常做什么」对「你平时做什么」词重叠只有一半，字符几乎全同）。 */
 static inline int ai_char_bigram_score(uint64_t serial,
                                        Token *const *a, size_t an,
                                        Token *const *b, size_t bn) {
-    /* A/B 开关（默认 on）：`AIP_CHARBG=0` 把这一项整条关掉，用来量它在总分里到底占多少。
-     * 只做性能标定用，不改默认行为。 */
-    static int on = -1;
-    if (on < 0) { const char *e = getenv("AIP_CHARBG"); on = (e && *e == '0') ? 0 : 1; }
-    if (!on) return 0;
+    if (!ai_charbg_on()) return 0;      /* `AIP_CHARBG=0`：整条关掉（只做标定）*/
     enum { MAXC = 96 };
     const char *cb[MAXC];
     uint8_t lb_[MAXC];
@@ -3077,16 +3106,19 @@ static inline int ai_char_bigram_score(uint64_t serial,
         for (size_t j = 0; j < bn; ++j) sb |= token_name_sig(b[j]);
         if ((g_charq.sig & sb) == 0) return 0;
     }
-    size_t inter = 0, tot_a = 0, tot_b = 0;
-    for (size_t i = 0; i + 1 < na; ++i) {
-        tot_a++;
-        for (size_t j = 0; j + 1 < nb; ++j) {
-            if (la_[i] == lb_[j] && ai_ch_eq(ca[i], cb[j], la_[i])) { inter++; break; }
-        }
-    }
-    for (size_t j = 0; j + 1 < nb; ++j) tot_b++;
-    size_t tot = tot_a + tot_b;
-    return tot ? (int)((inter * 200) / tot) : 0;   /* 0..100 */
+    return ai_cb_core(ca, la_, na, cb, lb_, nb);
+}
+
+/* §6.140 用**缓存好的库句字符切片**算这一项（不再摊平、不再碰库句的符号节点）。
+ * 调用方（`ai_sent_score_row`）已经用 256 位字符集位图证明过"两边至少共享一个字符"，
+ * 所以 §6.127 那张 32 位 `ch_sig` 预筛在这里是**冗余**的（共享字符 ⇒ 两张位图都命中）。 */
+static inline int ai_char_bigram_score_cached(uint64_t serial, Token *const *a, size_t an,
+                                              const char *const *cb, const uint8_t *lb_, size_t nb) {
+    if (!ai_charbg_on()) return 0;
+    (void)ai_char_query_prep(serial, a, an);         /* 查询侧备忘（与老路同一个键）*/
+    size_t na = g_charq.nc;
+    if (na < 2 || nb < 2) return 0;
+    return ai_cb_core(g_charq.c, g_charq.l, na, cb, lb_, nb);
 }
 
 /* 输入句与库里的输入句有多像 —— 三路信号合成：
@@ -3098,6 +3130,40 @@ static inline int ai_char_bigram_score(uint64_t serial,
  * 结果 0..100。 */
 static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
                                     Token *const *b, size_t bn, int *out_cov);
+
+static inline int ai_pair_cb_slice(AI *ai, size_t i,
+                                   const char *const **c, const uint8_t **l, size_t *n);
+
+/* §6.140 按**库句号**打分：字符那一项走缓存切片（§6.136/§6.140 的库句缓存）。
+ * 拿到切片就完全不用碰库句的符号节点；没拿到（分配失败等）退回老路。 */
+static inline int ai_sent_score_pair(AI *ai, Token *const *a, size_t an, size_t pi, int *out_cov) {
+    if (out_cov) *out_cov = 0;
+    if (!ai || pi >= ai->pairs_n) return 0;
+    const AISentPair *p = &ai->pairs[pi];
+    Token *const *b = (Token *const *)p->in;
+    size_t bn = p->in_n;
+    if (an == 0 || bn == 0) return 0;
+    float wa = 0.0f, wi = 0.0f;
+    for (size_t i = 0; i < an; ++i) {
+        float w = ai_idf_of(ai, a[i]);
+        wa += w;
+        for (size_t j = 0; j < bn; ++j) if (a[i] == b[j]) { wi += w; break; }
+    }
+    int cov = (wa > 0.0f) ? (int)(100.0f * wi / wa) : 0;
+    size_t inter = 0;
+    for (size_t i = 0; i < an; ++i)
+        for (size_t j = 0; j < bn; ++j) if (a[i] == b[j]) { inter++; break; }
+    int dice = (int)((inter * 200) / (an + bn));
+    const char *const *cc = NULL; const uint8_t *ll = NULL; size_t nn = 0;
+    int bg;
+    if (ai_pair_cb_slice(ai, pi, &cc, &ll, &nn))
+        bg = ai_char_bigram_score_cached(ai->pool ? ai->pool->serial : 0, a, an, cc, ll, nn);
+    else bg = ai_char_bigram_score(ai->pool ? ai->pool->serial : 0, a, an, b, bn);
+    int sc = (cov * 55 + bg * 30 + dice * 15) / 100;
+    if (sc > 100) sc = 100;
+    if (out_cov) *out_cov = cov;
+    return sc;
+}
 
 static inline int ai_sent_score(AI *ai, Token *const *a, size_t an,
                                 Token *const *b, size_t bn) {
@@ -3148,8 +3214,19 @@ static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i) {
             if (!nb) return NULL;
             ai->cb_bits = nb; ai->cb_cap = ncap;
         }
+        /* 切片那两条 blob 的容量一起保证（每包多留 256 条 × 96 字符的空间，够用很久）*/
+        if (ai->cb_chcap < ai->pairs_n * 8 + 512) {
+            size_t ncap = ai->pairs_n * 16 + 2048;
+            uint32_t *no = (uint32_t *)realloc(ai->cb_off, (ncap + 1) * sizeof *no);
+            const char **np = (const char **)realloc(ai->cb_ptr, ncap * sizeof *np);
+            uint8_t *nl = (uint8_t *)realloc(ai->cb_len, ncap * sizeof *nl);
+            if (!no || !np || !nl) { free(no); free(np); free(nl); return NULL; }
+            ai->cb_off = no; ai->cb_ptr = np; ai->cb_len = nl; ai->cb_chcap = ncap;
+        }
+        if (!ai->cb_off) { /* 没分到偏移表：老路照走（返回位图，切片那侧返回 0）*/ }
         enum { MAXC = 96 };
         const char *cb[MAXC]; uint8_t lb_[MAXC];
+        if (ai->cb_off && ai->cb_chused == 0) ai->cb_off[0] = 0;
         for (; ai->cb_n <= i; ++ai->cb_n) {
             const AISentPair *p = &ai->pairs[ai->cb_n];
             size_t bn = 0;
@@ -3158,10 +3235,37 @@ static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i) {
             uint64_t *dst = ai->cb_bits + ai->cb_n * AI_CB_WORDS;
             memset(dst, 0, AI_CB_WORDS * sizeof *dst);
             ai_cb_fill(dst, cb, lb_, bn);
+            if (ai->cb_off) {
+                while (ai->cb_chused + bn > ai->cb_chcap) {      /* 不够就翻倍（切片不失效）*/
+                    size_t ncap = ai->cb_chcap * 2 + 1024;
+                    const char **np = (const char **)realloc(ai->cb_ptr, ncap * sizeof *np);
+                    uint8_t *nl = (uint8_t *)realloc(ai->cb_len, ncap * sizeof *nl);
+                    uint32_t *no = (uint32_t *)realloc(ai->cb_off, (ncap + 1) * sizeof *no);
+                    if (!np || !nl || !no) { free(np); free(nl); free(no); ai->cb_off = NULL; break; }
+                    ai->cb_ptr = np; ai->cb_len = nl; ai->cb_off = no; ai->cb_chcap = ncap;
+                }
+                if (ai->cb_off) {
+                    for (size_t k = 0; k < bn; ++k) { ai->cb_ptr[ai->cb_chused] = cb[k]; ai->cb_len[ai->cb_chused] = lb_[k]; ai->cb_chused++; }
+                    ai->cb_off[ai->cb_n + 1] = (uint32_t)ai->cb_chused;
+                }
+            }
             ai->n_cb_fill++;
         }
     }
     return ai->cb_bits + i * AI_CB_WORDS;
+}
+
+/* §6.140 取第 i 条库句的**字符切片**（先在位图那条路上懒补好）。
+ * 返回 1 = 拿到了（`c`/`l`/`n` 是展平的字符列表）；0 = 没有缓存（调用方走老路）。 */
+static inline int ai_pair_cb_slice(AI *ai, size_t i,
+                                   const char *const **c, const uint8_t **l, size_t *n) {
+    if (!ai || i >= ai->pairs_n) return 0;
+    if (i >= ai->cb_n) { const uint64_t *b = ai_pair_cb_bits(ai, i); if (!b) return 0; }
+    if (!ai->cb_off || i + 1 > ai->cb_n) return 0;
+    size_t a = ai->cb_off[i], z = ai->cb_off[i + 1];
+    if (z > ai->cb_chused) return 0;
+    *c = ai->cb_ptr + a; *l = ai->cb_len + a; *n = z - a;
+    return 1;
 }
 
 /* §6.132：把"查询句 vs 每条库句"的分数量**一轮只算一遍**，两个检索循环共用。
@@ -3198,9 +3302,8 @@ static inline const int *ai_sent_score_row(AI *ai, Token *const *words, size_t n
                 ai->sc_cov[i] = 0;
                 continue;
             }
-            const AISentPair *p = &ai->pairs[i];
             int cv = 0;
-            ai->sc_memo[i] = ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
+            ai->sc_memo[i] = ai_sent_score_pair(ai, words, n, i, &cv);   /* §6.140：走缓存切片 */
             ai->sc_cov[i] = cv;
         }
         ai->sc_tick = tick;
