@@ -2578,6 +2578,21 @@ static void test_open_relation(void) {
       float c = 0.0f;
       ok(agent_open_relation(ai, w, 5, &c) == NULL,
          "不是写死的填充词 ⇒ **不接**（退回流水线；剥壳只在认得出时做）"); }
+    /* §6.147 `A R 什么 <类别>`（尾巴上的名词是**类别提示**，不影响问什么） */
+    { char *w[4] = {(char *)"开猫", (char *)"属于", (char *)"什么", (char *)"类开"};
+      float c = 0.0f;
+      char *a7 = agent_open_relation(ai, w, 4, &c);
+      ok(a7 && strstr(a7, "开动物") != NULL, "「开猫 属于 什么 <类别>」⇒ 照样答（提示词不影响答案）");
+      free(a7); }
+    { char *w[4] = {(char *)"开猫", (char *)"吃", (char *)"什么", (char *)"类开"};
+      float c = 0.0f;
+      char *a8 = agent_open_relation(ai, w, 4, &c);
+      ok(a8 && strstr(a8, "什么 类开") != NULL, "没记过时：类别提示**原样带回**话里（不丢用户的词）");
+      free(a8); }
+    { char *w[4] = {(char *)"开猫", (char *)"属于", (char *)"开动物", (char *)"吗"};
+      float c = 0.0f;
+      ok(agent_open_relation(ai, w, 4, &c) == NULL,
+         "第 3 个词**不是**占位词 ⇒ 不接（不是「四个词就乱接」）"); }
     { ai->rel_open = 0;                       /* 关着时连壳都不剥（保证"关着零行为"）*/
       char *w[4] = {(char *)"开猫", (char *)"到底", (char *)"属于", (char *)"什么"};
       float c = 0.0f;

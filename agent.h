@@ -137,11 +137,14 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         words = stripped; n = sn;
     }
     if (ai_has_question_word(words, n)) { /* 问句里除了占位词还有别的疑问词 ⇒ 不是这条路 */ }
-    /* 形状一：`A R 什么`（3 词；4/5 词时允许尾巴上挂"呢/吗"） */
+    /* 形状一：`A R 什么`（3 词；4/5 词时允许尾巴上挂"呢/吗"）
+     * §6.147 先量后加：`A R 什么 <名词>`（「猫 属于 什么 动物」）以前**整句掉流水线** ——
+     * 尾巴上那个名词是**类别提示**，不影响该问什么 ⇒ 照形状一答，提示词原样带回话里。 */
     size_t last = n;
     while (last > 0 && (strcmp(words[last - 1], "呢") == 0 || strcmp(words[last - 1], "吗") == 0))
         last--;
-    if (last == 3 && agent_open_slot_word(words[2])) {
+    if ((last == 3 || last == 4) && agent_open_slot_word(words[2])) {
+        const char *hint = (last == 4) ? words[3] : NULL;      /* 类别提示（可为空）*/
         Token *a = pool_find(ai->pool, words[0]);
         uint8_t rid = rel_id_of(ai, words[1], 0);
         if (!a || rid == 0) return NULL;
@@ -154,7 +157,9 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         off += (size_t)snprintf(buf + off, sizeof buf - off, "我 记 的 是 ： %s %s ",
                                 a->name ? a->name : "?", words[1]);
         if (got == 0) {
-            snprintf(buf + off, sizeof buf - off, "什么 ， 图里 没 记 过（不 编）");
+            /* §6.147：带类别提示时把提示原样带回这句里（「… 属于 什么 动物 ， 图里 没 记 过」）*/
+            if (hint) snprintf(buf + off, sizeof buf - off, "什么 %s ， 图里 没 记 过（不 编）", hint);
+            else      snprintf(buf + off, sizeof buf - off, "什么 ， 图里 没 记 过（不 编）");
         } else {
             for (size_t i = 0; i < got && i < 4; ++i)
                 off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
