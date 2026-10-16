@@ -2798,22 +2798,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai_drift_sample(ai);
     if (ai->turns % 300 == 0)
         ai_diagnose(ai);
-    if (ai->narrate_every && (ai->turns % ai->narrate_every) == 0) {
-        char *narr = ai_narrate(ai, 5);
-        if (narr) {
-            size_t nn;
-            char **nw = ai_tokenize(ai, narr, &nn);
-            if (nw && nn > 0) {
-                for (size_t i = 0; i < nn; ++i) {
-                    Token *t = pool_token_intern(ai->pool, nw[i]);
-                    (void)ai_write_assoc(ai, ai->self, t, AI_WSRC_INNER);
-                }
-            }
-            ai_free_words(nw, nn);
-            free(narr);
-            ai->n_narrations++;
-        }
-    }
+    if (ai->narrate_every && (ai->turns % ai->narrate_every) == 0)
+        (void)ai_narrate_apply(ai);            /* §6.141：与 `::narrate now` 同一处实现 */
 
     ai_seg_lap(ai, AI_SEG_NARR, &seg_t);
     free(resp);

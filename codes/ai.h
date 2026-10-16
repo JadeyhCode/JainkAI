@@ -958,6 +958,12 @@ typedef struct {
     float  inner_dialogue_gain;
     size_t n_inner_dialogues;
     size_t narrate_every, n_narrations;
+    /* §6.141 **让叙事/漂移显形**：这两件事到轮次就会跑，但以前只在 `::stats` 里留**计数**，
+     * 内容一个字都看不到 ⇒ 等于"悄悄发生"。这里把**最近一次**的文本/条数留下来（只进内存），
+     * `::narrate` / `::drift` 能当场打出来，也能 `now` 触发一次。 */
+    char   narr_last[256];
+    size_t narr_last_turn;
+    size_t n_drift_last;
     size_t drift_sample_every, n_drifts_detected;
 
     DiagState diag;
@@ -4590,6 +4596,10 @@ static inline void ai_drift_sample(AI *ai) {
 
 /* ============================ 叙事 ============================ */
 
+/* §6.141 跑一次叙事并**落地**（写进图 + 记账 + 留最近一次给 `::narrate` 看）。
+ * 周期性那条（`agent_step` 维护段）与 `::narrate now` 共用这一处 —— 一份判据两处用。 */
+static inline int ai_narrate_apply(AI *ai);
+
 static inline char *ai_narrate(AI *ai, size_t n_recent) {
     if (!ai || ai->timeline_n == 0) return NULL;
     size_t cap = 512, len = 0;
@@ -4607,6 +4617,10 @@ static inline char *ai_narrate(AI *ai, size_t n_recent) {
         for (size_t j = 0; j < t->count; ++j) {
             Token *m = t->assocs[j].main;
             if (!m || !m->name || m->name[0] == '[') continue;
+            /* §6.141 **别把叙事说成"我最近在想 我"**：每个 `[时刻:]` 都挂着「我」（自指边），
+             * 而它命中数最高 ⇒ 以前叙事几乎永远只输出「我」。跳过自指与自环，
+             * 让叙事说**它那一刻在想什么**（焦点词）。 */
+            if (m == ai->self || m == t) continue;
             uint32_t h = t->assocs[j].hits;
             if (h >= best_h) { best_h = h; focus = m; }
         }
@@ -4624,6 +4638,27 @@ static inline char *ai_narrate(AI *ai, size_t n_recent) {
         strcat(buf, "。");
     }
     return buf;
+}
+
+/* §6.141 跑一次叙事并落地（写进图 + 记账 + 留最近一次）。返回 1 = 真的说了一段。 */
+static inline int ai_narrate_apply(AI *ai) {
+    if (!ai) return 0;
+    char *narr = ai_narrate(ai, 5);
+    if (!narr) { ai->narr_last[0] = 0; return 0; }
+    snprintf(ai->narr_last, sizeof ai->narr_last, "%s", narr);   /* 有界拷贝（别用 strcpy）*/
+    ai->narr_last_turn = ai->turns;
+    size_t nn = 0;
+    char **nw = ai_tokenize(ai, narr, &nn);
+    if (nw && nn > 0) {
+        for (size_t i = 0; i < nn; ++i) {
+            Token *t = pool_token_intern(ai->pool, nw[i]);
+            (void)ai_write_assoc(ai, ai->self, t, AI_WSRC_INNER);
+        }
+    }
+    ai_free_words(nw, nn);
+    free(narr);
+    ai->n_narrations++;
+    return 1;
 }
 
 /* ============================ 诊断 ============================ */

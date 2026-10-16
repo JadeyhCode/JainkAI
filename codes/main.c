@@ -582,6 +582,8 @@ typedef enum {
     CMD_IDLE,               /* N4：空闲思考（只读；自己从 [自问:…] 里挑一个问题） */
     CMD_SELFGOAL,           /* §6.129 目标自建（从「我自己老没底」里立目标；默认关） */
     CMD_DIRTY,              /* §6.139 脏思考检查器（输出连续重复 ⇒ 截停；默认开） */
+    CMD_NARRATE,            /* §6.141 叙事：看最近一次 / `now` 当场来一次（显形） */
+    CMD_DRIFT,              /* §6.141 漂移：看计数与最近一次 / `now` 当场采一次 */
     CMD_THINKREDO,          /* N3：回溯 + 在线修订（默认关） */
     CMD_MOD,
     CMD_SAFE,
@@ -800,6 +802,16 @@ static const CmdDef CMDS[] = {
       "① 同一个词连着 >= 3 次；② 连续两段完全相同的片段（周期 2~8 个词，如「你好 吗 你好 吗」）。\n"
       "只截不改写（前面干净的部分留着），并在痕里记一条 `脏思考：重复输出，强制停`。\n"
       "::dirty off|on 关/开（`AIP_DIRTY=0` 一样）｜不给参数看状态与截停次数", CMD_DIRTY },
+    { "narrate", NULL, 1, "时间 / 他者 / 叙事",
+      "**叙事**（§6.141）：把最近几段「我在想什么」串成一段话，写进图（挂在 `ai->self` 上）。\n"
+      "周期性那条每 `narrate_every`(500) 轮跑一次；这里能**当场**看/跑：\n"
+      "::narrate      看最近一次叙事（哪个轮次、说了什么）与累计次数\n"
+      "::narrate now  当场跑一次（与周期性那条同一处实现，走统一写入通道）", CMD_NARRATE },
+    { "drift", NULL, 1, "内生状态 / 情绪",
+      "**漂移**（§6.141）：按 VSA 余弦比「这个词的表示和上一版差多少」，>0.30 记一个 `[漂移:…]`\n"
+      "（挂在 `ai->self` 上，自撰写入走统一通道）。周期性那条每 `drift_sample_every`(200) 轮跑一次。\n"
+      "::drift      看累计探测数 / 最近一次采到几个\n"
+      "::drift now  当场采一次（跑完报这一次探到几个）", CMD_DRIFT },
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加符号节点|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
@@ -1623,6 +1635,48 @@ int main(int argc, char **argv) {
                 printf("  只在**没人说话的那一轮**跑（空输入）；只从 [自问:…] 里挑，**只读**：\n");
                 printf("  不提议意图、不沉淀、不动图，也不进睡眠/巩固/衰减那些账。\n");
                 printf("  想看它挑了啥：`::delib` 的痕里有一条「空闲思考：自己挑的」。\n");
+                continue;
+            }
+            case CMD_NARRATE: {
+                /* §6.141 叙事显形：看最近一次 / now 当场来一次。 */
+                const char *arg = (cmd[7] == ' ') ? cmd + 8 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "now")) {
+                    int got = ai_narrate_apply(a->brain);
+                    if (got) printf("[叙事] 现在说一段（第 %zu 轮）：%s\n",
+                                    a->brain->narr_last_turn, a->brain->narr_last);
+                    else     printf("[叙事] 这次没串出来（时间线上还没有「在想什么」——多聊几轮再试）\n");
+                } else if (arg && *arg) { printf("[用法] ::narrate [now]\n"); continue; }
+                else {
+                    printf("[叙事 = 每 %zu 轮一次]  累计 %zu 次\n",
+                           a->brain->narrate_every, a->brain->n_narrations);
+                    if (a->brain->narr_last[0])
+                        printf("  最近一次（第 %zu 轮）：%s\n", a->brain->narr_last_turn,
+                               a->brain->narr_last);
+                    else
+                        printf("  还没说过（周期性那条要 %zu 轮；想现在看就 `::narrate now`）\n",
+                               a->brain->narrate_every);
+                }
+                continue;
+            }
+            case CMD_DRIFT: {
+                /* §6.141 漂移显形：看计数 / now 当场采一次。 */
+                const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "now")) {
+                    size_t before = a->brain->n_drifts_detected;
+                    ai_drift_sample(a->brain);
+                    a->brain->n_drift_last = a->brain->n_drifts_detected - before;
+                    printf("[漂移] 现场采一次：这次探到 %zu 个（累计 %zu）\n",
+                           a->brain->n_drift_last, a->brain->n_drifts_detected);
+                } else if (arg && *arg) { printf("[用法] ::drift [now]\n"); continue; }
+                else {
+                    printf("[漂移 = 每 %zu 轮采一次]  累计探到 %zu 个",
+                           a->brain->drift_sample_every, a->brain->n_drifts_detected);
+                    if (a->brain->n_drift_last) printf("  最近一次 %zu 个", a->brain->n_drift_last);
+                    printf("\n");
+                    printf("  判据：表示（VSA）和上一版余弦差 > 0.30 ⇒ 记 `[漂移:词]` 挂到「我」名下\n");
+                }
                 continue;
             }
             case CMD_DIRTY: {

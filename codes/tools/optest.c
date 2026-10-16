@@ -3534,6 +3534,26 @@ static void test_dirty_guard(void) {
     }
 }
 
+/* == ⓮ 叙事显形 + 别只说「我」（§6.141） ==
+ * 以前 `::stats` 只有计数，内容一个字看不到；而且叙事几乎永远输出「我最近在想 我」
+ * （每个 [时刻:] 都挂着自指边，命中最高）。 */
+static void test_narrate(void) {
+    printf("== ⓮ 叙事：显形 + 说的是「在想什么」（§6.141） ==\n");
+    AI *ai = ai_new();
+    Token *cat = T(ai, "猫"), *now = T(ai, "[时刻:1]");
+    (void)token_add_assoc_unique(now, cat);
+    (void)token_add_assoc_unique(now, ai->self);   /* 自指边**最后加** ⇒ 命中并列时它本来会赢 */
+    ai->timeline[0] = now; ai->timeline_n = 1; ai->timeline_head = 1;
+    int got = ai_narrate_apply(ai);
+    ok(got == 1 && ai->narr_last[0] != 0, "跑一次叙事：文本留下来了（`::narrate` 看得到）");
+    ok(strstr(ai->narr_last, "我最近在想") != NULL, "措辞照旧（没改渲染）");
+    ok(strstr(ai->narr_last, "猫") != NULL, "说的是**它在想什么**（猫）");
+    ok(strstr(ai->narr_last, "我，然后") == NULL && strstr(ai->narr_last, "在想 我") == NULL,
+       "**没有**退化成「我最近在想 我」（跳过自指边）");
+    ok(ai->n_narrations == 1 && ai->narr_last_turn == ai->turns, "记账：累计 1 次 + 记了轮次");
+    ai_free(ai);
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3600,6 +3620,7 @@ int main(void) {
     test_activation_budget();
     test_activate_inert();
     test_dirty_guard();
+    test_narrate();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }
