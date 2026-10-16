@@ -3454,6 +3454,42 @@ static void test_activation_budget(void) {
     ai_free(ai);
 }
 
+/* == ⓬ 语言层 `激活` 原语现在是**惰性**的（§6.137，这是个**绊线**） ==
+ * §6.135 我登记过"同一类指数爆炸还剩一处没修：语言层 `激活` 用深度 16"。
+ * 这一轮去核，发现**它现在根本不动**：唯一造 `Interp` 的入口是 `token_run_ctx()`，
+ * 它写的是 `Interp ip = {0}` ⇒ `ctx == NULL`、`energy == 0`，而 `token_activate()` 的
+ * 第一道闸就是 `energy < cutoff(0.05) ⇒ return`。
+ * ⚠ 这条断言是**绊线**：谁把 `ctx/energy` 接上（那正是这条分支的用法），这里会立刻变红
+ * —— 那时要同时设 `act.max_visits`（见 token_lang.h 里 PK_ACTIVATE 的注释与 §6.135）。 */
+static void test_activate_inert(void) {
+    printf("== ⓬ 语言层 `激活`：现在一动不动（§6.137；接线前先读绊线说明） ==\n");
+    AI *ai = ai_new();
+    /* 多路径小图（和 ⓫ 同一形状）：这样上限 3 会**真的**撞到（只有 a→b→c 一条链时
+     * 访问数正好 3，一次都截断不到 —— 第一版就是这么红的）。 */
+    Token *a = T(ai, "激活甲"), *b = T(ai, "激活乙"), *c = T(ai, "激活丙"), *d = T(ai, "激活丁");
+    (void)token_observe_pair(a, b); (void)token_observe_pair(a, c);
+    (void)token_observe_pair(b, c); (void)token_observe_pair(b, d);
+    (void)token_observe_pair(c, d);
+    uint64_t h0 = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) h0 += token_hits_total(ai->pool->tokens[i]);
+    const char *names[2] = { "激活甲", PRIM_ACTIVATE };
+    token_run_names_ctx(ai->pool, names, 2, NULL, NULL);       /* 和 CLI 同一条入口 */
+    uint64_t h1 = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) h1 += token_hits_total(ai->pool->tokens[i]);
+    ok(h0 == h1, "按现在的入口跑 `激活`：触摸计数**一动不动**（energy=0 < 门槛、ctx=NULL）");
+    /* 同一段代码，把 ctx/energy 接上（原语的另一条分支）：证明"如果接上"它真会扩散，
+     * 而 `max_visits` 顶得住 —— 将来接线的人别忘了设它。 */
+    ActivateCtx act;
+    activate_ctx_init(&act, 0.7f, 0.05f, 16);
+    act.max_visits = 3;
+    Token *ctx[1] = { b };
+    token_activate_from(a, ctx, 1, 1.0f, &act);
+    ok(act.n_visits == 3 && act.n_cut > 0,
+       "真接上之后：`max_visits` 照样顶得住（深度 16 的口径，深度 4 实测已 26 s）");
+    activate_ctx_free(&act);
+    ai_free(ai);
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3518,6 +3554,7 @@ int main(void) {
     test_thin_pursuit();
     test_self_goal();
     test_activation_budget();
+    test_activate_inert();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }

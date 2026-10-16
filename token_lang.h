@@ -471,6 +471,15 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         break;
 
     case PK_ACTIVATE: {
+        /* §6.137 **这条原语现在是惰性的**（实测，不是推测）：唯一造 `Interp` 的入口
+         * `token_run_ctx()` 写的是 `Interp ip = {0}` ⇒ `ctx == NULL`、`energy == 0.0f`，
+         * 而 `token_activate()` 第一道闸就是 `energy < cutoff(0.05) ⇒ return`。
+         * 实测：跑一遍 `X [原语:激活]`，全池触摸计数**一个字节都没动**。
+         * ⚠ **如果将来有人把 `ip.ctx` / `ip.energy` 接上**（这条分支就是为那种用法写的），
+         * 一定要同时设 `act.max_visits` —— `act_seen()` 只看当前 DFS 路径，深度一大代价
+         * 就**指数爆炸**：实测（energy=1.0）深度 2 = 11.9 ms / 21910 次访问、
+         * 深度 3 = 670 ms / 175 万次、深度 4 = **26 s** / 9477 万次。
+         * 上限机制在 §6.135（`ActivateCtx.max_visits`，看护在 optest ⓫/⓬）。 */
         Token *x = interp_top(ip);
         if (x && ip->ctx) {
             ActivateCtx act;
