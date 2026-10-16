@@ -581,6 +581,7 @@ typedef enum {
     CMD_THINKOBJ,           /* N1：思考对象（`[思考:N]`，内存对象 + 复核） */
     CMD_IDLE,               /* N4：空闲思考（只读；自己从 [自问:…] 里挑一个问题） */
     CMD_SELFGOAL,           /* §6.129 目标自建（从「我自己老没底」里立目标；默认关） */
+    CMD_DIRTY,              /* §6.139 脏思考检查器（输出连续重复 ⇒ 截停；默认开） */
     CMD_THINKREDO,          /* N3：回溯 + 在线修订（默认关） */
     CMD_MOD,
     CMD_SAFE,
@@ -794,6 +795,11 @@ static const CmdDef CMDS[] = {
       "挂上之后走既有两条自跟路（每轮重试 / ::idle 挑一条来想）+ 够得着就问用户一句；\n"
       "自闭环路也是既有的：比立目标时**多了边** ⇒ 想通；试够 ⇒ 停下；放久 ⇒ 过期。\n"
       "::selfgoal on|off|now（now = 立刻看一次，不等节流）｜不给参数看状态", CMD_SELFGOAL },
+    { "dirty", NULL, 1, "思维（议程 / 跨轮未解问题 / 元认知看思维）",
+      "**脏思考检查器**（§6.139，默认**开**）：说出口的话**连续重复**就当场截停 ——\n"
+      "① 同一个词连着 >= 3 次；② 连续两段完全相同的片段（周期 2~8 个词，如「你好 吗 你好 吗」）。\n"
+      "只截不改写（前面干净的部分留着），并在痕里记一条 `脏思考：重复输出，强制停`。\n"
+      "::dirty off|on 关/开（`AIP_DIRTY=0` 一样）｜不给参数看状态与截停次数", CMD_DIRTY },
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加符号节点|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
@@ -1617,6 +1623,21 @@ int main(int argc, char **argv) {
                 printf("  只在**没人说话的那一轮**跑（空输入）；只从 [自问:…] 里挑，**只读**：\n");
                 printf("  不提议意图、不沉淀、不动图，也不进睡眠/巩固/衰减那些账。\n");
                 printf("  想看它挑了啥：`::delib` 的痕里有一条「空闲思考：自己挑的」。\n");
+                continue;
+            }
+            case CMD_DIRTY: {
+                /* §6.139 脏思考检查器：开关 + 状态。 */
+                const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && !strcmp(arg, "on"))       a->brain->dirty_guard = 1;
+                else if (arg && !strcmp(arg, "off")) a->brain->dirty_guard = 0;
+                else if (arg && *arg) { printf("[用法] ::dirty [on|off]\n"); continue; }
+                printf("[脏思考检查器 = %s]  截停过 %zu 次 / 共截掉 %zu 个词\n",
+                       a->brain->dirty_guard ? "开（默认）" : "关", a->brain->n_dirty_stops,
+                       a->brain->n_dirty_words);
+                printf("  判据：① 同一个词连着 >= %d 次；② 连续两段完全相同的片段（周期 2~%d 个词）\n",
+                       AI_DIRTY_RUN, AI_DIRTY_PERIOD);
+                printf("  动作：**截停**（只截不改写）+ 痕里记一条 + 元认知提醒「输出在重复（脏思考）」\n");
                 continue;
             }
             case CMD_SELFGOAL: {

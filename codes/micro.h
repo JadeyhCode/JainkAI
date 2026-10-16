@@ -182,13 +182,14 @@ typedef enum {
     MICRO_REMIND_THINK_STALL,    /* 思维在原地打转 */
     MICRO_REMIND_THINK_OPEN,     /* 想不通的问题挂得太多 */
     MICRO_REMIND_THINK_CONFLICT, /* 知识自相矛盾（正反都能推出来） */
+    MICRO_REMIND_DIRTY_REPEAT,   /* §6.139 说出口的话在重复（脏思考，已截停） */
     MICRO_REMIND_N
 } MicroRemind;
 
 static const char *const MICRO_REMIND_NAME[MICRO_REMIND_N] = {
     "自修改过热", "已冻结", "提案多被否", "已关小提案",
     "补丁异常已停用", "补丁沉默", "补丁信号冲突", "池子触顶",
-    "思维原地打转", "未解问题太多", "知识自相矛盾",
+    "思维原地打转", "未解问题太多", "知识自相矛盾", "输出在重复（脏思考）",
 };
 
 /* ============================ 小工具 ============================ */

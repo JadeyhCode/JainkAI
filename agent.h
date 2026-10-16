@@ -2096,6 +2096,34 @@ static inline void agent_free(Agent *a) {
     free(a);
 }
 
+/* §6.139 脏思考检查器的**动作**：截停 + 记账 + 痕 + 元认知提醒。
+ * 抽成函数是为了**可测**（optest 直接喂字符串看它截到哪儿、账怎么记）。
+ * 返回 1 = 真的截了；`kind_out` 拿到判据（1 词级 / 2 句级）。 */
+static inline int ai_dirty_apply(AI *ai, char *out, size_t cap, size_t *kind_out) {
+    if (kind_out) *kind_out = 0;
+    if (!ai || !out || cap == 0 || !ai->dirty_guard) return 0;
+    size_t before = 0;
+    for (const char *p = out; *p; ) { while (*p == ' ') p++; if (!*p) break; before++; while (*p && *p != ' ') p++; }
+    size_t dk = 0;
+    size_t cut = ai_dirty_cut(out, &dk);
+    if (cut == 0) return 0;
+    while (cut > 0 && out[cut - 1] == ' ') cut--;     /* 别留下悬空的空格 */
+    out[cut] = 0;
+    size_t after = 0;
+    for (const char *p = out; *p; ) { while (*p == ' ') p++; if (!*p) break; after++; while (*p && *p != ' ') p++; }
+    if (before > after) ai->n_dirty_words += before - after;
+    ai->n_dirty_stops++;
+    if (!out[0]) snprintf(out, cap, "……");            /* 整句都被截光：只回省略号 */
+    if (kind_out) *kind_out = dk;
+    char dwhy[THINK_WHY];
+    snprintf(dwhy, sizeof dwhy, "%s：连着重复，说到那儿就停（截掉 %zu 个词）",
+             dk == 1 ? "同一个词连着说" : "同一句话连着说", before - after);
+    cot_push(ai, COT_DONE, 0, 0, "脏思考：重复输出，强制停", dwhy);
+    ai->n_cot++;
+    micro_remind(ai, MICRO_REMIND_DIRTY_REPEAT, NULL);
+    return 1;
+}
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -2739,6 +2767,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (pr == 1)       snprintf(out, out_cap, "%s", pout);
         else if (pr == -1) out[0] = 0;          /* 补丁明确说：这一轮不说话 */
     }
+
+    /* §6.139 **脏思考检查器**：说出口的话连续重复词/句 ⇒ 当场截停（强制停止）。
+     * 放在**所有输出决策之后**（含输出侧补丁）—— 这样哪条路说的都要过这一关。
+     * 只截**说出去的话**：`resp` / 自举学到的东西照旧（它想的是那些，用户看到的是截过的）。 */
+    (void)ai_dirty_apply(ai, out, out_cap, NULL);
 
     ai_seg_lap(ai, AI_SEG_KERNEL, &seg_t);
     /* 维护 */

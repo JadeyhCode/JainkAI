@@ -98,6 +98,54 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
  * 实测代价（出厂模型，一次完整睡眠 = 32 个词）：640000 次访问 / 47223 次截断、约 **0.6 s**。 */
 #define AI_SLEEP_MAX_VISITS 20000
 
+/* §6.139 **脏思考检查器**（用户点名要的）：说出口的话**连续重复**就当场截停。
+ * 判据（都在**输出**这一层，按空格切词，只看前 `AI_DIRTY_MAXW` 个词）：
+ *   ① **词级**：同一个词连着出现 >= `AI_DIRTY_RUN` 次 ⇒ 从**第二次**那里截（前面留一份）；
+ *   ② **句级**：连续两段**完全相同**的片段（周期 2..`AI_DIRTY_PERIOD` 个词）
+ *      —— 「你好 吗 你好 吗」⇒ 从第二段开头截。
+ * 两条取**最早**的截点。只**截**不改写：前面干净的部分留着；截光了调用方回「……」。
+ * 为什么要有它：思维循环里已经有"原地打转"（**步数**没推进，见 think.h），
+ * 但那是**过程**；"说出口的话在重复"这条以前**没有**看护。 */
+#define AI_DIRTY_RUN     3
+#define AI_DIRTY_PERIOD  8
+#define AI_DIRTY_MAXW    64
+typedef struct { size_t off, len; } AiDirtyWord;
+
+/* 返回该从哪里截（0 = 没脏）。`kind_out`：1 = 词级连重，2 = 句级周期重复。 */
+static inline size_t ai_dirty_cut(const char *out, size_t *kind_out) {
+    if (kind_out) *kind_out = 0;
+    if (!out) return 0;
+    AiDirtyWord w[AI_DIRTY_MAXW];
+    size_t n = 0;
+    for (const char *p = out; *p && n < AI_DIRTY_MAXW; ) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *st = p;
+        while (*p && *p != ' ') p++;
+        w[n].off = (size_t)(st - out); w[n].len = (size_t)(p - st); n++;
+    }
+    if (n < 2) return 0;
+    size_t cut = 0;
+    for (size_t i = 0; i + 2 < n; ++i) {                 /* ① 词级连重 */
+        if (w[i].len == w[i + 1].len && w[i+1].len == w[i+2].len &&
+            memcmp(out + w[i].off, out + w[i+1].off, w[i].len) == 0 &&
+            memcmp(out + w[i].off, out + w[i+2].off, w[i].len) == 0) {
+            cut = w[i + 1].off; if (kind_out) *kind_out = 1; break;
+        }
+    }
+    for (size_t pd = 2; pd <= AI_DIRTY_PERIOD && !cut; ++pd) {   /* ② 句级周期重复 */
+        for (size_t i = 0; i + 2 * pd <= n; ++i) {
+            int same = 1;
+            for (size_t k = 0; k < pd; ++k) {
+                if (w[i+k].len != w[i+pd+k].len ||
+                    memcmp(out + w[i+k].off, out + w[i+pd+k].off, w[i+k].len) != 0) { same = 0; break; }
+            }
+            if (same) { cut = w[i + pd].off; if (kind_out) *kind_out = 2; break; }
+        }
+    }
+    return cut;
+}
+
 /* 话题票：某话题下「出现过哪些词」。生成时用输入词投票选话题。 */
 typedef struct { Token *seen[192]; size_t n; uint32_t votes; } AITopic;
 
@@ -755,6 +803,11 @@ typedef struct {
     /* §6.135 分段计时的累加器（只在 `AIP_SEGTIME=1` 时被写；段名见 `AI_SEG_NAMES`）。 */
     uint64_t seg_ns[AI_SEG_N];
     uint32_t seg_hits[AI_SEG_N];
+    /* §6.139 脏思考检查器（默认**开**，用户点名要"强制停止"）：输出里连续重复词/句就截停。
+     * `AIP_DIRTY=0` 或 `::dirty off` 退回。 */
+    int    dirty_guard;
+    size_t n_dirty_stops;      /* 截停过几次 */
+    size_t n_dirty_words;      /* 一共截掉了多少个词（诊断用） */
     /* **N4 空闲思考主动说话**（A1，默认 0 = 关）：没人说话的那一轮，如果 `think_idle`
      * 想出了东西（痕里新增了一步），就把它**说出来**（带"空闲时想到的"标记），而不是只回"……"。 */
     int    idle_speak;
@@ -1358,6 +1411,11 @@ static inline void ai_switches_init(AI *ai) {
      * 想回到"只有关系事实受审"的老行为：`AIP_ROUTE=0`（显式关）—— 两个方向都能测。 */
     ai->route_writes = 1;
     ai->drive_on = 0;
+    /* §6.139 脏思考检查器默认**开**（用户明确要"重复就强制停"）；`AIP_DIRTY=0` 退回。 */
+    ai->dirty_guard = 1;
+    { const char *dg = getenv("AIP_DIRTY");
+      if (dg && dg[0] == '0') ai->dirty_guard = 0;
+      else if (dg && dg[0] == '1') ai->dirty_guard = 1; }
     ai->act_on = 0;                  /* 外部执行 + 写文件：默认**关**（action.h 层） */
     ai->asm_check_on = 0;            /* 原语程序干跑校验：默认**关**（token_lang.h） */
     ai->lex_ascii = 0;               /* ASCII 代码词法接进代码通道：默认**关**（lex.h） */

@@ -3490,6 +3490,50 @@ static void test_activate_inert(void) {
     ai_free(ai);
 }
 
+/* == ⓭ 脏思考检查器：连续重复的词/句 ⇒ 截停（§6.139，用户点名要的） ==
+ * 只有"过程"被看过（think.h 的原地打转），"说出口的话在重复"以前没人看。 */
+static void test_dirty_guard(void) {
+    printf("== ⓭ 脏思考检查器：连续重复的词/句 ⇒ 截停（§6.139） ==\n");
+    size_t k = 9;
+    ok(ai_dirty_cut("我 想 学 画画", &k) == 0 && k == 0, "干净的话：一个字都不截");
+    ok(ai_dirty_cut("", &k) == 0, "空串也不截");
+    /* 「我 我 我 我 想」：字节 我=3B —— 词偏移 0/4/8/12/16，从**第二次**那里截 ⇒ 4 */
+    ok(ai_dirty_cut("我 我 我 我 想", &k) == 4 && k == 1, "同一个词连着 4 次：从第二次截（词级）");
+    /* 「你 你」只有两次：**不误杀**（自然强调留着） */
+    ok(ai_dirty_cut("你 你", &k) == 0, "连着两个不算脏（不误杀）");
+    /* 「你好 吗 你好 吗 你」：周期 2 的重复，从第二段开头截 */
+    ok(ai_dirty_cut("你好 吗 你好 吗 你", &k) == 11 && k == 2, "整句连着重复：从第二句开头截（句级）");
+    /* 「猫 会 猫 会 猫 会」：周期 2 的循环 */
+    ok(ai_dirty_cut("猫 会 猫 会 猫 会", &k) == 8 && k == 2, "两词循环也认（周期 2）");
+    /* 动作：截停 + 记账 + 只留前面干净的 */
+    {
+        AI *ai = ai_new();
+        /* 默认值断言：`AIP_DIRTY=0`（反向测量）时按规矩**改成钉反向**，不然整包假红。
+         * 下面测**动作**时自己把这一位钉成 1（C 级测试不跟 env 走 —— ⑱ 那条同一个坑）。 */
+        {
+            const char *dg = getenv("AIP_DIRTY");
+            if (dg && dg[0] == '0')
+                ok(ai->dirty_guard == 0, "AIP_DIRTY=0（反向测量）：默认值断言按规矩钉反向");
+            else
+                ok(ai->dirty_guard == 1, "默认**开**（用户要「重复就强制停」）");
+        }
+        ai->dirty_guard = 1;
+        char o[256];
+        snprintf(o, sizeof o, "%s", "我 想 学 画画 我 想 学 画画 我 想");
+        size_t kk = 0;
+        int cut = ai_dirty_apply(ai, o, sizeof o, &kk);
+        ok(cut == 1 && strcmp(o, "我 想 学 画画") == 0, "动作：截到重复开始处，前面干净的部分留着");
+        ok(kk == 2, "判据记的是**句级**（周期 4 的整句重复）");
+        ok(ai->n_dirty_stops == 1 && ai->n_dirty_words >= 4, "账：截停 1 次 + 记了截掉多少词");
+        /* 关掉就不管 */
+        ai->dirty_guard = 0;
+        snprintf(o, sizeof o, "%s", "猫 猫 猫 猫");
+        ok(ai_dirty_apply(ai, o, sizeof o, NULL) == 0 && strcmp(o, "猫 猫 猫 猫") == 0,
+           "`::dirty off` 之后一个字都不动");
+        ai_free(ai);
+    }
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3555,6 +3599,7 @@ int main(void) {
     test_self_goal();
     test_activation_budget();
     test_activate_inert();
+    test_dirty_guard();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }
