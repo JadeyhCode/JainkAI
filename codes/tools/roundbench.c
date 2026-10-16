@@ -88,6 +88,8 @@ int main(int argc, char **argv) {
     printf("   打分备忘（§6.132）：查 %zu 次 / 真重算 %zu 次（%.0f%% 命中）\n",
            ai->n_sc_call, ai->n_sc_miss,
            ai->n_sc_call ? 100.0 * (double)(ai->n_sc_call - ai->n_sc_miss) / (double)ai->n_sc_call : 0.0);
+    printf("   库句字符集位图（§6.136）：懒补过 %zu 条 / 库 %zu 条（**只补一次**，不是每轮）\n",
+           ai->n_cb_fill, ai->pairs_n);
     printf("  维护开关：GC 每 %zu 轮、巩固每 %zu 轮、睡眠每 %zu 轮、缓存复核每轮\n",
            ai->gc.gc_interval, ai->consolidate_every, ai->sleep_every);
     printf("  睡眠激活（§6.135）：访问 %zu 个 / 上限截断 %zu 次（上限 %d）\n",

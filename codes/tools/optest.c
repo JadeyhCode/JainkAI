@@ -3277,6 +3277,14 @@ static void test_score_memo(void) {
     ai->pool->current_tick++;
     (void)ai_sent_score_row(ai, q, 3, NULL);
     ok(ai->n_sc_miss == miss3 + 1, "跨到下一個 tick ⇒ 作废（一轮一份）");
+    /* §6.136 库句字符集位图：① 只打一次（懒补到 pairs_n，不是每轮重打）；
+     * ② 位图不相交那条**精确判 0**（与逐条算一致，上面已经对拍过）；③ 共享字符的没被误杀。 */
+    ok(ai->n_cb_fill == ai->pairs_n, "库句位图**只打一次**（懒补到 pairs_n，不是每轮重打）");
+    {
+        const int *r4 = ai_sent_score_row(ai, q, 3, &cov);
+        ok(r4 && r4[1] == 0 && cov[1] == 0, "字符集不相交的库句：精确判 0（没有漏算）");
+        ok(r4 && r4[0] > 0, "共享字符的库句**没被误杀**（分数照旧 > 0）");
+    }
     ai_free(ai);
 }
 

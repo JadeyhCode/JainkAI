@@ -739,6 +739,15 @@ typedef struct {
     size_t    sc_qn;
     int       sc_valid;
     size_t    n_sc_call, n_sc_miss;   /* §6.132 记账：查了备忘几次 / 其中真重算几次 */
+    /* §6.136 **库句侧的「字符集位图」缓存**（每条 256 bit = 32 字节；出厂模型 6701 条
+     * ≈ 214 KB）。为什么有用：一趟全扫要摸 6701 条库句，每条都得先切字符、再打位图 ——
+     * 库句**不会变**，这些劳动每轮白做。缓存之后绝大多数条只要一次 32 字节的 AND。
+     * 判据**精确**（见 ai_sent_score_row 里的预筛）：字符集不相交 ⇒ 一个词都不共享
+     * ⇒ cov=0、dice=0，且按现在的实现（逐字符比）字符项也是 0 ⇒ sc 必然是 0。
+     * 库句只增不减（`ai_sent_add` 追加；装盘时 `pairs_n=0` 重建）⇒ 按 `cb_n` **懒补**。 */
+    uint64_t *cb_bits;
+    size_t    cb_cap, cb_n;
+    size_t    n_cb_fill;          /* 记账：一共算过几条库句的位图（应该≈pairs_n，不是每轮）*/
     /* **全图扫描的账**（§6.126）：维护类活动（GC / 缓存复核 / 巩固）每轮走了多少词、多少边。
      * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
     size_t n_scan_tokens;
@@ -1553,6 +1562,7 @@ static inline void ai_free(AI *ai) {
     pool_free(ai->pool);
     free(ai->trace);
     free(ai->sc_memo); free(ai->sc_cov);      /* §6.132 打分备忘（calloc 起家，可能是 NULL） */
+    free(ai->cb_bits);                        /* §6.136 库句字符集位图（同上，可能是 NULL）*/
     free(ai->last_output);
     free(ai->last_skipped);
     free(ai->pairs);
@@ -2930,6 +2940,23 @@ static inline int ai_ch_eq(const char *x, const char *y, uint8_t l) {
  * 键是**内容**（符号节点指针序列）+ 脑 + 池子 —— 调用方每次传的是两块**不同的临时数组**
  * （内容相同），按指针比会一次都不命中（这一点是量出来的）；而带上 `ai`/`pool`
  * 是为了防"同一块内存被另一个脑子复用"（工具里连着建两个 AI 时真的会撞地址）。 */
+/* §6.136 **字符集位图**（256 bit）：把一个字符（`ch`，长 `l`）打进位图。
+ * 比 §6.127 那张 32 位的 `ch_sig` 细 8 倍 —— 实测放行率因此从 61~70% 掉到 ~17%。 */
+enum { AI_CB_WORDS = 4 };        /* 256 bit */
+static inline void ai_cb_set(uint64_t *bits, const char *ch, uint8_t l) {
+    uint32_t h = 2166136261u;
+    for (uint8_t k = 0; k < l; ++k) { h ^= (uint8_t)ch[k]; h *= 16777619u; }
+    uint32_t b = h & 255u;
+    bits[b >> 6] |= 1ull << (b & 63);
+}
+static inline void ai_cb_fill(uint64_t *bits, const char *const *c, const uint8_t *l, size_t nc) {
+    for (size_t i = 0; i < nc; ++i) ai_cb_set(bits, c[i], l[i]);
+}
+static inline int ai_cb_any(const uint64_t *x, const uint64_t *y) {
+    for (int i = 0; i < AI_CB_WORDS; ++i) if (x[i] & y[i]) return 1;
+    return 0;
+}
+
 typedef struct {
     uint64_t     serial;    /* pool 的序号（不受 malloc 地址复用影响） */
     const Token *tok[64];
@@ -2937,6 +2964,7 @@ typedef struct {
     const char  *c[96];
     uint8_t      l[96];
     uint32_t     sig;
+    uint64_t     cbits[AI_CB_WORDS];  /* §6.136 查询侧 256 位字符集位图（切一次、几千次复用）*/
 } AiCharQueryMemo;
 static AiCharQueryMemo g_charq;
 
@@ -2955,6 +2983,8 @@ static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an
         sig |= token_name_sig(a[i]);
     }
     g_charq.nc = nc; g_charq.sig = sig;
+    memset(g_charq.cbits, 0, sizeof g_charq.cbits);      /* §6.136：查询侧 256 位字符集位图 */
+    ai_cb_fill(g_charq.cbits, g_charq.c, g_charq.l, nc);
     return 0;
 }
 
@@ -3047,6 +3077,35 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
 /* 完整的话题判定：词表票 + 整句相似度票，同场竞争。
  * 词表投票只要命中一个词就得分，会把真正的意图压掉；
  * 整句相似度是更精确的信号，必须能翻盘（「早上好」就是靠它定到问候话题的）。 */
+/* §6.136 取第 i 条库句的**字符集位图**（懒补：库里新加的句子在这里第一次被打出来）。
+ * 库句只增不减、`in` 写入后不变 ⇒ 打一次就够；`cb_n > pairs_n` 那个守卫是防
+ * "往一个旧脑子里重新装盘"。 */
+static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i) {
+    if (!ai || i >= ai->pairs_n) return NULL;
+    if (ai->cb_n > ai->pairs_n) ai->cb_n = 0;              /* 库被重建过 ⇒ 缓存作废 */
+    if (i >= ai->cb_n) {
+        if (ai->cb_cap < ai->pairs_n) {
+            size_t ncap = ai->pairs_n + 256;
+            uint64_t *nb = (uint64_t *)realloc(ai->cb_bits, ncap * AI_CB_WORDS * sizeof *nb);
+            if (!nb) return NULL;
+            ai->cb_bits = nb; ai->cb_cap = ncap;
+        }
+        enum { MAXC = 96 };
+        const char *cb[MAXC]; uint8_t lb_[MAXC];
+        for (; ai->cb_n <= i; ++ai->cb_n) {
+            const AISentPair *p = &ai->pairs[ai->cb_n];
+            size_t bn = 0;
+            for (size_t j = 0; j < p->in_n && bn + 8 < MAXC; ++j)
+                bn += token_name_chars(p->in[j], cb + bn, lb_ + bn, MAXC - bn);
+            uint64_t *dst = ai->cb_bits + ai->cb_n * AI_CB_WORDS;
+            memset(dst, 0, AI_CB_WORDS * sizeof *dst);
+            ai_cb_fill(dst, cb, lb_, bn);
+            ai->n_cb_fill++;
+        }
+    }
+    return ai->cb_bits + i * AI_CB_WORDS;
+}
+
 /* §6.132：把"查询句 vs 每条库句"的分数量**一轮只算一遍**，两个检索循环共用。
  * 返回分数数组（长度 = ai->pairs_n），`out_cov` 拿到覆盖率数组；失败返回 NULL。 */
 static inline const int *ai_sent_score_row(AI *ai, Token *const *words, size_t n,
@@ -3068,7 +3127,19 @@ static inline const int *ai_sent_score_row(AI *ai, Token *const *words, size_t n
             free(ai->sc_memo); free(ai->sc_cov);
             ai->sc_memo = a; ai->sc_cov = b; ai->sc_cap = ncap;
         }
+        /* §6.136 **先过位图、再碰库句**：这一步只读那块 32 字节/条的位图（214 KB，能进 L2），
+         * 字符集不相交的条**根本不去摸 `pairs[i]`**（那条 520 字节的结构体是这一趟的主要内存
+         * 流量）。判据**精确**：一个字符都不共享 ⇒ 两边一个词都不共享 ⇒ cov=0、dice=0，
+         * 而字符项按现在的实现（逐字符比）也必然是 0 ⇒ sc=(0+0+0)/100=0、cov=0 ——
+         * 与逐条算出来的**完全一样**。位图碰撞只会让预筛放行（多算一次），不改分数。 */
+        (void)ai_char_query_prep(ai->pool ? ai->pool->serial : 0, words, n);
         for (size_t i = 0; i < ai->pairs_n; ++i) {
+            const uint64_t *cbv = ai_pair_cb_bits(ai, i);
+            if (cbv && !ai_cb_any(g_charq.cbits, cbv)) {
+                ai->sc_memo[i] = 0;
+                ai->sc_cov[i] = 0;
+                continue;
+            }
             const AISentPair *p = &ai->pairs[i];
             int cv = 0;
             ai->sc_memo[i] = ai_sent_score_cov(ai, words, n, p->in, p->in_n, &cv);
