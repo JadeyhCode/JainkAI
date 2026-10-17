@@ -1540,8 +1540,14 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rn = getenv("AIP_RELNAT"); if (rn && rn[0] == '1') ai->rel_nat = 1; }
     ai->nat_coin = 0;                /* §6.173 默认**关**（反向测量：AIP_NATCOIN=1）*/
     { const char *nc = getenv("AIP_NATCOIN"); if (nc && nc[0] == '1') ai->nat_coin = 1; }
-    ai->askback = 0;                 /* §6.168 默认**关**（反向测量：AIP_ASKBACK=1）*/
-    { const char *ak = getenv("AIP_ASKBACK"); if (ak && ak[0] == '1') ai->askback = 1; }
+    /* §6.202 **追问回话默认翻成开**：它说「没把握」之后，你回一句「会/不会/对/不对」
+     * 就当教学写进图；给了确定答案之后，回「不对」就改口。以前默认关 ⇒ 这条路等于不存在。
+     * 翻之前先修了两处（`::thinklearn off` 时不落标记、空行不作废追问），
+     * 反向整包 `AIP_ASKBACK=1` 41/41 绿了才翻。退回老行为：`AIP_ASKBACK=0` 或 `::askback off`。 */
+    ai->askback = 1;                 /* §6.168 起默认关；§6.202 起**默认开** */
+    { const char *ak = getenv("AIP_ASKBACK");
+      if (ak && ak[0] == '1') ai->askback = 1;
+      else if (ak && ak[0] == '0') ai->askback = 0; }
     ai->ask_pending = 0;
     ai->ask_restored = 0;
     ai->ask_mark[0] = 0;

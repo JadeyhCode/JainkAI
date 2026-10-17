@@ -1009,6 +1009,10 @@ static inline void agent_ask_persist(AI *ai) {
     if (!ai || !ai->pool || !ai->ask_pending) return;
     Micro *mk = micro_of(ai);
     if (!mk || mk->safe.mod_off) return;
+    /* §6.202 `::thinklearn off` 的承诺是"思维的结果不改脑"。`[追问:…]` 标记**也是改脑**
+     * （多一个符号节点）—— 反向整包实测：开着 askback 时这条断言红（新符号节点 1≠0）。
+     * 所以思维被要求不改脑时，**别落标记**（pending 仍留内存，存盘就丢，可接受）。 */
+    if (think_of(ai) && think_of(ai)->learn_off) return;
     const char *rn = rel_name_of(ai, ai->ask_rid);
     if (!rn) return;
     if (strchr(ai->ask_a, '|') || strchr(ai->ask_b, '|') || strchr(rn, '|')) return;
@@ -1016,6 +1020,16 @@ static inline void agent_ask_persist(AI *ai) {
     int n = snprintf(nm, sizeof nm, MICRO_PENDING_TOKEN_PREFIX "%d|%d|%d|%s|%s|%s]",
                      ai->ask_kind, ai->ask_neg, ai->ask_fact_neg, rn, ai->ask_a, ai->ask_b);
     if (n <= 0 || (size_t)n >= sizeof nm) return;
+    /* §6.202 **同一个追问已经挂着活标记 ⇒ 复用它**（别再造一个）。
+     * 空闲思考会把同一个没想通的问题反复重挂；每造一个新标记就得把旧标记标垃圾
+     * ⇒ 图里"垃圾 +1、边 -1"，"空闲是只读"这条就被破坏（反向整包实测红在这里）。 */
+    {
+        Token *old = pool_find(ai->pool, nm);
+        if (old && !old->is_garbage) {
+            snprintf(ai->ask_mark, sizeof ai->ask_mark, "%s", nm);
+            return;
+        }
+    }
     ModIntent in;
     memset(&in, 0, sizeof in);
     in.type = MOD_ADD_TOKEN;
@@ -2697,7 +2711,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* §6.168 追问回话：上一轮我说"推不出来"的那个问句，这一轮用户只回
      * 「会/对/不 会/不 对」⇒ 当教学写进图。说了别的话 ⇒ 这条追问作废（只等一轮）。 */
     if (!ai->ask_restored) agent_ask_restore(ai);   /* §6.188：载入后的第一轮接回追问 */
-    if (ai->ask_pending) {
+    /* §6.202 **空输入不算回话**：空闲思考/空行也会走这里，以前会把挂着的追问直接作废
+     * （`agent_ask_drop` ⇒ 标记标垃圾、边 -1）⇒ "空闲是只读"被破坏（反向整包红在这里）。
+     * 空行只是"没人说话"，追问继续挂着。 */
+    int empty_turn = 1;
+    for (const char *q = input; q && *q; ++q)
+        if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') { empty_turn = 0; break; }
+    if (ai->ask_pending && !empty_turn) {
         if (ai->askback) {
             /* kind 1 = 我没把握（回一句就教）；kind 2 = 我给了确定答案（回「不对」就改口） */
             int done = (ai->ask_kind == 2) ? agent_correct_reply(ai, input, out, out_cap)
