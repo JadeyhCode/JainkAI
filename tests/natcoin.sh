@@ -82,10 +82,18 @@ printf '%s\n' "$r" | grep -q "对 ， 企鹅 -\[会\]-> 游泳" \
     || chk "再问 ⇒ 对" 0 "$r"
 
 echo "⑤ 垃圾守卫：我 在 学校 学习 不许拼出 学校学习"
+# §6.219 之后这句子会走**地点块**学成「我 在 学校」（另一条路，不是造词）——
+# 这一节盯的是**造词**别拼出「学校学习」，所以判据改成"学的东西必须是地点块"。
 out=$(run 1 "我 在 学校 学习" "::rel 我")
-printf '%s\n' "$out" | reps | grep -q "记下 了" \
-    && chk "「我 在 学校 学习」不该学" 0 "$(printf '%s\n' "$out" | reps | head -1)" \
-    || chk "「我 在 学校 学习」没被学" 1
+if [ "${AIP_LOCATIVE:-1}" = "0" ]; then
+    printf '%s\n' "$out" | reps | grep -q "记下 了" \
+        && chk "（AIP_LOCATIVE=0）地点块关着 ⇒ 这句不该学" 0 \
+        || chk "（AIP_LOCATIVE=0）地点块关着 ⇒ 这句不学" 1
+else
+printf '%s\n' "$out" | reps | grep -q "记下 了 ： 我 在 学校" \
+    && chk "学的是地点块「我 在 学校」" 1 \
+    || chk "学的是地点块「我 在 学校」" 0 "$(printf '%s\n' "$out" | reps | head -1)"
+fi
 printf '%s\n' "$out" | grep -q "学校学习" \
     && chk "图里没有「学校学习」" 0 \
     || chk "图里没有「学校学习」" 1

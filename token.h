@@ -713,6 +713,18 @@ static inline void pool_rev_add(TokenPool *p, Token *dst, uint32_t src_id,
     p->rev_n = (size_t)idx + 1;
 }
 
+/* §6.214 桶里有没有**任何一条** (rid, neg)（判"这个词是不是认得的宾语"，不关心 src）。*/
+static inline int pool_rev_any(const TokenPool *p, const Token *dst, uint32_t rid, int neg) {
+    if (!p || !dst) return 0;
+    for (uint32_t e = dst->rev_head; e; e = p->rev_next[e - 1]) {
+        uint32_t meta = p->rev_meta[e - 1];
+        if ((uint32_t)(meta & 0x7FFFu) != (rid & 0x7FFFu)) continue;
+        if (((meta & 0x8000u) != 0) != (neg != 0)) continue;
+        return 1;
+    }
+    return 0;
+}
+
 /* §6.214 桶里有没有 (src, rid, neg) 这一条（`::revcheck` 用）。*/
 static inline int pool_rev_has(const TokenPool *p, const Token *dst, uint32_t src_id,
                                uint32_t rid, int neg) {

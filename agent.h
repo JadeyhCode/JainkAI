@@ -519,16 +519,39 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
         if (!strcmp(words[i], "不") || !strcmp(words[i], "没") || !strcmp(words[i], "没有")) return NULL;
     }
     size_t at = n;
-    for (size_t i = 2; i + 1 < n; ++i) if (!strcmp(words[i], "在")) { at = i; break; }
-    /* 只认 **`A V 在 B`**（在 前面至少还有一个动词/谓词，地点在句尾）——
-     * `A 在 B V`（`我 在 学校 学习`）里"地点到哪儿结束"没有词典判不了，**不猜**。 */
-    if (at == n || at < 2) return NULL;
+    for (size_t i = 1; i + 1 < n; ++i) if (!strcmp(words[i], "在")) { at = i; break; }
+    if (at == n || at + 1 >= n) return NULL;
     /* 地点后缀（「桌子 上」）说明宾语不是一个完整地点 ⇒ 不猜 */
     static const char *suf[] = {"上", "里", "下", "中", "外", "前", "后", "旁边", NULL};
     for (size_t k = 0; suf[k]; ++k) if (!strcmp(words[n - 1], suf[k])) return NULL;
-    /* 地点 = `在` 后面所有词**拼起来**（分词常把「北京」切成 北/京）*/
+    /* 地点边界怎么定（§6.219）：
+     * ① `A V 在 B`（`在` 前有谓词、地点在句尾）⇒ 地点 = 后面所有词**拼起来**
+     *    （分词常把「北京」切成 北/京）；
+     * ② `A 在 B V`（`在` 紧跟在主语后面）⇒ 没有词典，改用**图里认不认得这个地点**：
+     *    从长到短试「B = 后面 k 个词拼起来」，第一个**在图里、且反查桶里有「在」条目**
+     *    的就当地点（`我 在 学校 学习` ⇒ 学校；「学校学习」图里没有）。认不出就**不猜**。 */
     char bl[32]; size_t bl_n = 0;
-    for (size_t i = at + 1; i < n; ++i) {
+    size_t b_end = n;               /* 地点最后一个 token 的下标 + 1 */
+    if (at >= 2) {
+        b_end = n;
+    } else {
+        b_end = 0;
+        for (size_t k = n; k > at + 1; --k) {
+            char cand[32]; size_t cl = 0; int ok = 1;
+            for (size_t i = at + 1; i < k; ++i) {
+                size_t wl = strlen(words[i]);
+                if (cl + wl + 1 >= sizeof cand) { ok = 0; break; }
+                memcpy(cand + cl, words[i], wl); cl += wl;
+            }
+            if (!ok || cl == 0) continue;
+            cand[cl] = 0;
+            Token *ct = pool_find(ai->pool, cand);
+            if (!ct) continue;
+            if (pool_rev_any(ai->pool, ct, REL_AT, 0)) { b_end = k; break; }
+        }
+        if (b_end == 0) return NULL;      /* 边界认不出 ⇒ 不猜 */
+    }
+    for (size_t i = at + 1; i < b_end; ++i) {
         size_t wl = strlen(words[i]);
         if (bl_n + wl + 1 >= sizeof bl) return NULL;
         memcpy(bl + bl_n, words[i], wl); bl_n += wl;
@@ -560,8 +583,9 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     ai->n_rel_learned++;
     /* 把"没记"的那部分如实说出来（A、`在`、地点之外还有词就说） */
     char dropped[64]; size_t dl = 0; dropped[0] = 0;
-    for (size_t i = 0; i < at; ++i) {
-        if (i == 0) continue;
+    for (size_t i = 0; i < n; ++i) {
+        if (i == 0 || i == at) continue;
+        if (i >= at + 1 && i < b_end) continue;      /* 地点那一段不算"没记" */
         size_t wl = strlen(words[i]);
         if (dl + wl + 2 >= sizeof dropped) break;
         if (dl) dropped[dl++] = ' ';

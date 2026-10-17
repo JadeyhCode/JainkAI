@@ -208,6 +208,23 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 我 在 �
     || chk "换完再问" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 fi
 
+echo "⑰ §6.219 「A 在 B V」：地点边界靠"图里认不认得"（学校 认得 ⇒ 学校，不认得就不猜）"
+if [ "${AIP_LOCATIVE:-1}" = "0" ]; then
+    echo "  （AIP_LOCATIVE=0：反向测量，跳过这一节）"
+else
+out=$(run "我 住 在 北京" "我 在 学校 学习" "我 在 哪")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "记下 了 ： 我 在 学校" \
+    && chk "「我 在 学校 学习」⇒ 学成 我 在 学校（学习那半句说明没记）" 1 \
+    || chk "「我 在 学校 学习」" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 我 在 学校" \
+    && chk "接着「我 在 哪」⇒ 学校" 1 \
+    || chk "接着「我 在 哪」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "我 在 学校 学习")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 在 学校学习" \
+    && chk "地点边界不许贪（不能是「学校学习」）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "地点边界不许贪（不能是「学校学习」）" 1
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
