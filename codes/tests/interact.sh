@@ -278,6 +278,24 @@ n=$(printf '%s\n' "$out" | reps | grep -c "嗯 ， 好" || true)
 [ "$n" -eq 3 ] && chk "单字肯定（能/会/可以）⇒「嗯，好」，不再出词串" 1 \
     || chk "单字肯定" 0 "$(printf '%s\n' "$out" | reps | head -2)"
 
+echo "㉒ §6.239 并列主语「A 和 B 都 R C」：学两条、问两边"
+out=$(run "猫 和 狗 都 是 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ， 猫 和 狗 都 是 动物" \
+    && chk "两边都知道 ⇒ 对" 1 \
+    || chk "两边都知道 ⇒ 对" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 和 桌子 都 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对 ： 猫 不 会 飞" \
+    && chk "一边已知为假 ⇒ 不 对（并指出是哪边）" 1 \
+    || chk "一边已知为假 ⇒ 不 对" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "考拉 和 熊猫 都 是 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定" \
+    && chk "两边都不知道 ⇒ 明说「只知一边」" 1 \
+    || chk "两边都不知道" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 和 狗 都 是 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 和 狗 都 是 动物" \
+    && chk "陈述 ⇒ 拆成两条学" 1 \
+    || chk "陈述 ⇒ 拆成两条学" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

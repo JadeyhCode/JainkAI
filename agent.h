@@ -671,6 +671,82 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     return r;
 }
 
+/* §6.239 **「A 和 B 都 R C」**（并列主语）：学的时候拆成两条，问的时候两边都查。
+ * 实测 `猫 和 狗 都 是 动物 吗` 以前掉兜底（「这个我 不 太 懂」）—— 并列主语没接住。 */
+static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *out_is_q,
+                                    float *out_conf) {
+    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    size_t last = n;
+    int is_q = 0;
+    while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
+        last--; is_q = 1;
+    }
+    /* 形状：`<A…> 和 <B…> [都] R <C…>`（三段都允许被分词切碎后拼回来）*/
+    if (last < 4) return NULL;
+    size_t p = 0;
+    for (size_t i = 1; i < last; ++i)
+        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与")) { p = i; break; }
+    if (!p) return NULL;
+    size_t d = 0;
+    for (size_t i = p + 1; i + 1 < last; ++i) if (!strcmp(words[i], "都")) { d = i; break; }
+    size_t ri = (d ? d + 1 : p + 1);
+    if (ri + 1 > last) return NULL;
+    char aw[32], bw[32], cw[32];
+    size_t al = 0, bl = 0, cl = 0;
+    for (size_t i = 0; i < p; ++i) {
+        size_t wl = strlen(words[i]);
+        if (al + wl + 1 >= sizeof aw) return NULL;
+        memcpy(aw + al, words[i], wl); al += wl;
+    }
+    aw[al] = 0;
+    for (size_t i = p + 1; i < (d ? d : p + 1); ++i) {
+        size_t wl = strlen(words[i]);
+        if (bl + wl + 1 >= sizeof bw) return NULL;
+        memcpy(bw + bl, words[i], wl); bl += wl;
+    }
+    bw[bl] = 0;
+    for (size_t i = ri + 1; i < last; ++i) {
+        size_t wl = strlen(words[i]);
+        if (cl + wl + 1 >= sizeof cw) return NULL;
+        memcpy(cw + cl, words[i], wl); cl += wl;
+    }
+    cw[cl] = 0;
+    if (!al || !bl || !cl) return NULL;
+    const char *rw = words[ri];
+    if (!agent_subj_ok(aw) || !agent_subj_ok(bw)) return NULL;
+    if (!agent_obj_ok(cw)) return NULL;
+    uint8_t rid = rel_id_of(ai, rw, 0);
+    if (!rid && strcmp(rw, "是") == 0) rid = REL_IS_A;
+    if (!rid) return NULL;
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw), *C = pool_find(ai->pool, cw);
+    char buf[224];
+    if (!is_q) {
+        if (!C) return NULL;
+        if (!A && !B) return NULL;
+        if (A) (void)ai_write_rel(ai, A, C, rid, 0, AI_WSRC_RELATION);
+        if (B) (void)ai_write_rel(ai, B, C, rid, 0, AI_WSRC_RELATION);
+        ai->n_rel_learned++;
+        snprintf(buf, sizeof buf, "记下 了 ： %s 和 %s 都 %s %s", aw, bw, rw, cw);
+        if (out_conf) *out_conf = 0.75f;
+    } else {
+        if (!C) return NULL;
+        int na = A ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
+        int nb = B ? (rel_direct(B, rid, C) ? 1 : (rel_direct_neg(B, rid, C) ? -1 : 0)) : 0;
+        if (na == 1 && nb == 1)
+            snprintf(buf, sizeof buf, "对 ， %s 和 %s 都 %s %s", aw, bw, rw, cw);
+        else if (na == -1 || nb == -1)
+            snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", (na == -1) ? aw : bw, rw, cw);
+        else
+            snprintf(buf, sizeof buf, "我 不 确定 ： %s 和 %s 里 我 只 知道 一边（%s %s）",
+                     aw, bw, rw, cw);
+        if (out_conf) *out_conf = (na == 1 && nb == 1) ? 0.85f : 0.5f;
+    }
+    if (out_is_q) *out_is_q = is_q;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                                         float *out_conf) {
     if (!ai || ai->rel_off || !words || n < 3 || n > 6) return NULL;
@@ -3439,6 +3515,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_belief(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    if (!resp) {
+        float rc = 0.5f;
+        int cq = 0;
+        resp = agent_conj_both(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {
