@@ -61,6 +61,7 @@ segmentation|sh tests/segmentation.sh
 hypothesis|sh tests/hypothesis.sh
 # 现场造词：没见过的复合词造成 Token 并现场接线（本机实测 3.6s）
 coining|sh tests/coining.sh
+teach|sh tests/teach.sh
 # 验证器自身的测试：伪造/非法/断链/假依据必须被拒（本机实测 3.6s）
 dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin > ctest.log 2>&1; rc=$?; tail -12 ctest.log; [ "$rc" -eq 0 ]
 # 反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化（本机实测 3.2s）

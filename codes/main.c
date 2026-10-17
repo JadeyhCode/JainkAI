@@ -569,6 +569,7 @@ typedef enum {
     CMD_LEX,                /* ASCII 代码词法：看一眼切成哪些符号节点 + 往返判据 */
     CMD_ASCII,              /* 把代码词法接进代码通道（默认关） */
     CMD_LEARN,
+    CMD_TEACH,               /* §6.159 显式教学：教一条关系事实（允许新词，当场造词） */
     CMD_EDGES,
     CMD_QUIT,
     CMD_DELIB,
@@ -760,6 +761,11 @@ static const CmdDef CMDS[] = {
       "「ASCII 逐字保留 ✓/✗」（写出去的字节词法层有没有改过一个）。关着时输出逐字节同今天", CMD_ASCII },
     { "learn", NULL, 2, "基本",
       "按共现学一句普通文本", CMD_LEARN },
+    { "teach", "<主语> <关系词> <宾语>", CARG_REQ, "基本",
+      "**教它一条关系事实**（互动学习的显式入口）：`::teach 麒麟 属于 神兽`。\n"
+      "和「直接说一句 `A R B`」的区别：那条路要求**每个词都已在词表里**（新词会被切开、学不到）；\n"
+      "这条会**当场造词**（造出来的词立刻能整词识别，并随模型存盘）。\n"
+      "关系词不认识就登记成**动态关系**；否定写成 `::teach 猫 不 属于 植物`。", CMD_TEACH },
     { "edges", NULL, 2, "基本",
       "列出某个符号节点的所有边（含 hits/状态；标出推出来的缓存）", CMD_EDGES },
     { "quit", "exit", 0, "基本",
@@ -3721,6 +3727,49 @@ int main(int argc, char **argv) {
                 const char *src = (cmd[5] == ' ') ? cmd + 6 : NULL;
                 while (src && *src == ' ') src++;
                 if (src && *src) { ai_learn_text(a->brain, src); printf("[学了一句]\n"); }
+                continue;
+            }
+            case CMD_TEACH: {
+                /* §6.159 **显式教学**：比"直接说一句 A R B"多两件事 ——
+                 * ① 词不在词表里就当场造（`pool_token_intern`），造出来的词立刻能整词识别
+                 *    （分词器是"池内最长匹配"），并随模型存盘；
+                 * ② 关系词不认识就登记成动态关系（`rel_id_of(..., allow_new=1)`）。
+                 * 为什么需要它：实测「麒麟 属于 神兽」这类**含新词**的教法整句掉降级答复 ——
+                 * 分词把新词切碎，关系层就没法成事实。 */
+                const char *src = (cmd[5] == ' ') ? cmd + 6 : NULL;
+                while (src && *src == ' ') src++;
+                char t[4][64];
+                int nt = 0, neg = 0;
+                for (const char *q = src; q && *q && nt < 4; ) {
+                    while (*q == ' ') q++;
+                    if (!*q) break;
+                    size_t k = 0;
+                    while (*q && *q != ' ' && k + 1 < sizeof t[0]) t[nt][k++] = *q++;
+                    t[nt][k] = 0;
+                    if (k) nt++;
+                }
+                const char *A = NULL, *R = NULL, *B = NULL;
+                if (nt == 3) { A = t[0]; R = t[1]; B = t[2]; }
+                else if (nt == 4 && strcmp(t[1], "不") == 0) { A = t[0]; R = t[2]; B = t[3]; neg = 1; }
+                if (!A || !*A || !R || !*R || !B || !*B) {
+                    printf("[用法] ::teach <主语> <关系词> <宾语>（否定：<主语> 不 <关系词> <宾语>）\n");
+                    continue;
+                }
+                if (!a->brain) { printf("[教 不了] 没有脑子\n"); continue; }
+                size_t before = a->brain->pool->count;
+                Token *ta = pool_token_intern(a->brain->pool, A);
+                Token *tb = pool_token_intern(a->brain->pool, B);
+                if (!ta || !tb) { printf("[教 不了] 造词失败（词太长或池满）\n"); continue; }
+                uint8_t rid = rel_id_of(a->brain, R, 1);
+                if (rid == 0) { printf("[教 不了] 认不出关系词：%s\n", R); continue; }
+                int w = ai_write_rel(a->brain, ta, tb, rid, neg, AI_WSRC_RELATION);
+                if (w != 0) { printf("[教 不了] 写入被拦（::safe 里能看理由）\n"); continue; }
+                size_t made = a->brain->pool->count - before;
+                a->brain->n_rel_learned++;
+                printf("[教 会 了] %s %s%s %s\n", ta->name, neg ? "不 " : "",
+                       rel_name_of(a->brain, rid), tb->name);
+                if (made)
+                    printf("            当场造词 %zu 个（已进词表：以后能整词识别，也会随模型存盘）\n", made);
                 continue;
             }
             case CMD_QUIT: {
