@@ -1556,8 +1556,14 @@ static inline void ai_switches_init(AI *ai) {
     ai->pron_last = 0;               /* 指代消解最小版：默认**关** */
     ai->remind_route = 0;            /* §6.143 提醒写入受审：默认**关**（反向测量：AIP_REMINDROUTE=1）*/
     { const char *rr = getenv("AIP_REMINDROUTE"); if (rr && rr[0] == '1') ai->remind_route = 1; }
-    ai->rel_nat = 0;                 /* §6.161 默认**关**（反向测量：AIP_RELNAT=1）*/
-    { const char *rn = getenv("AIP_RELNAT"); if (rn && rn[0] == '1') ai->rel_nat = 1; }
+    /* §6.233 **自然说法默认翻成开**：`鸟 能 飞 吗`、`猫 是 一种 动物`（陈述与问句两边一致）——
+     * 以前默认关 ⇒ 这些最常见的说法要么答"不确定"、要么学不进。
+     * 反向整包 `AIP_RELNAT=1` 早就绿了、A/B 也逐字节相同，才翻的。
+     * 退回老行为：`AIP_RELNAT=0` 或 `::relnat off`。 */
+    ai->rel_nat = 1;
+    { const char *rn = getenv("AIP_RELNAT");
+      if (rn && rn[0] == '1') ai->rel_nat = 1;
+      else if (rn && rn[0] == '0') ai->rel_nat = 0; }
     ai->nat_coin = 0;                /* §6.173 默认**关**（反向测量：AIP_NATCOIN=1）*/
     { const char *nc = getenv("AIP_NATCOIN"); if (nc && nc[0] == '1') ai->nat_coin = 1; }
     /* §6.202 **追问回话默认翻成开**：它说「没把握」之后，你回一句「会/不会/对/不对」

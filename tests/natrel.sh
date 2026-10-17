@@ -28,8 +28,8 @@ run() {
 }
 ans() { sed -n 's/.*AI > //p' | head -1; }
 
-echo "① 关着（默认）：还是老答案（不动既有行为）"
-ENVV=""
+echo "① 关着（::relnat off / AIP_RELNAT=0）：还是老答案（不动既有行为）"
+ENVV="AIP_RELNAT=0"
 r=$(run "::char off" "鸟 能 飞 吗" | ans)
 case "$r" in *"不 确定"*) chk "关着：鸟 能 飞 吗 ⇒「不 确定」（老行为）" 1 ;;
                  *)      chk "关着：鸟 能 飞 吗 ⇒「不 确定」" 0 "$r" ;; esac
@@ -54,7 +54,7 @@ case "$r" in *"不 对"*) chk "鸟 不 能 飞 吗 ⇒ 不 对（纠正：鸟会
                  *)      chk "鸟 不 能 飞 吗 ⇒ 不 对" 0 "$r" ;; esac
 
 echo "④b 量词（§6.163）：是 一种 X —— 关着不动、开着才剥"
-ENVV=""
+ENVV="AIP_RELNAT=0"
 r=$(run "::char off" "猫 是 一种 动物 吗" | ans)
 case "$r" in *"不 太 懂"*) chk "关着：猫 是 一种 动物 吗 ⇒「不 太 懂」（老行为）" 1 ;;
                  *)          chk "关着：猫 是 一种 动物 吗 ⇒「不 太 懂」" 0 "$r" ;; esac
@@ -77,7 +77,7 @@ case "$r" in *"对"*"属于"*) chk "开着：猫 是 一 只 动物 吗 ⇒ 对�
                    *)        chk "开着：猫 是 一 只 动物 吗 ⇒ 对" 0 "$r" ;; esac
 r=$(run "::char off" "猫 是 两 只 动物 吗" | ans)
 case "$r" in *"对"*) chk "开着：猫 是 两 只 动物 吗 ⇒ 对" 1 ;; *) chk "开着：猫 是 两 只 动物 吗 ⇒ 对" 0 "$r" ;; esac
-ENVV=""
+ENVV="AIP_RELNAT=0"
 r=$(run "::char off" "猫 是 一 只 动物 吗" | ans)
 case "$r" in *"不 太 懂"*) chk "关着：猫 是 一 只 动物 吗 ⇒「不 太 懂」（老行为）" 1 ;;
                  *)          chk "关着：猫 是 一 只 动物 吗 ⇒「不 太 懂」" 0 "$r" ;; esac
@@ -88,11 +88,11 @@ case "$r" in *"--\["*) chk "你 能 来 吗 **没有** 被当成关系断言" 0 
                  *)     chk "你 能 来 吗 没被当成关系断言（$r）" 1 ;; esac
 
 # §6.232 `::relnat on|off`：以前只有环境变量能开，用户当场没法开
-ENVV=""
+ENVV="AIP_RELNAT=0"
 out=$(run "::relnat on" "猫 是 一种 动物 吗" "::relnat off" "猫 是 一种 动物 吗")
 printf '%s\n' "$out" | grep -q "自然说法 = 开" && chk "::relnat on 真的开了" 1 || chk "::relnat on" 0
 printf '%s\n' "$out" | grep -q "对 ， 猫 -\[属于\]-> 动物" && chk "开着：量词剥掉（对）" 1 || chk "开着：量词剥掉" 0
 printf '%s\n' "$out" | grep -q "自然说法 = 关（默认）" && chk "::relnat off 关得回去" 1 || chk "::relnat off" 0
 
-[ "$fail" -eq 0 ] && { echo "PASS natrel（能/可以 → 会：默认关、开着才生效、两边一致、不误伤）"; exit 0; }
+[ "$fail" -eq 0 ] && { echo "PASS natrel（能/可以 → 会：默认开、::relnat off 可退、两边一致、不误伤）"; exit 0; }
 echo "FAIL natrel"; exit 1
