@@ -254,6 +254,20 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 在 �
     && chk "正常地点照旧学得进" 1 \
     || chk "正常地点照旧学得进" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "⑳ §6.229 主语不能是别的虚词（代词/指示词除外）"
+out=$(run "很 属于 猫" "了 在 家里" "很 叫 小明")
+printf '%s\n' "$out" | grep -q "记下 了 ：" \
+    && chk "虚词当主语（很/了）⇒ 不学" 0 "$(printf '%s\n' "$out" | grep -a "记下 了 ：" | head -1)" \
+    || chk "虚词当主语（很/了）⇒ 不学" 1
+out=$(run "::rel open on" "这 属于 猫" "什么 属于 猫")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 这 属于 猫" \
+    && chk "指示词当主语照旧可以（这 属于 猫）" 1 \
+    || chk "指示词当主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "很 属于 猫" "::rel open on" "什么 属于 猫")
+printf '%s\n' "$out" | grep -q "属于 猫 的 有 ： 很" \
+    && chk "垃圾主语没有进图（什么 属于 猫 不该答 很）" 0 "$(printf '%s\n' "$out" | grep -a "属于 猫 的 有")" \
+    || chk "垃圾主语没有进图" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

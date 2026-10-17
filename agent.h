@@ -524,6 +524,20 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
 /* 步骤一：用户**陈述**了一条关系事实吗？是就当场学进图里（并写进模型）。
  * 支持肯定（`猫 属于 动物`）和否定（`猫 不 会 飞`）两种陈述。
  * 返回要说的确认话（调用方 free），不是陈述就返回 NULL。 */
+/* §6.229 **主语位置的虚词守卫**：代词/指示词可以当主语，**别的虚词不行**。
+ * 实测漏洞：`很 属于 猫` 学进去了（`什么 属于 猫` 会答「很」）、`了 在 家里` 也学进去了。
+ * 为什么不能直接 `fr_is_func(主语)`：代词和指示词本来就在虚词表里（§6.228 的教训）。 */
+static inline int agent_subj_ok(const char *w) {
+    if (!w || !w[0]) return 0;
+    static const char *ok_subj[] = {
+        "我", "你", "您", "他", "她", "它", "我们", "你们", "他们",
+        "这", "那", "这个", "那个", "这些", "那些", "这里", "那里", "大家", "自己",
+        NULL
+    };
+    for (size_t i = 0; ok_subj[i]; ++i) if (strcmp(w, ok_subj[i]) == 0) return 1;
+    return !fr_is_func(w);
+}
+
 /* §6.218 **「A V 在 B」/「A 在 B V」里的地点事实**：
  * 实测 `我 住 北京` 学得进（动态关系 住），但 `我 住 在 北京`、`我 在 学校 学习` **整句掉兜底**
  * （答出「学习 小 的 那 我 空 吧」这种词串）。地点是 `在 B` 这一块，先把**它**学下来：
@@ -579,6 +593,7 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     /* §6.227 **地点不能是虚词**：实测 `我 住 在 很` 会学成 `我 在 很`（"很"当地点）。
      * 虚词表只有一处（frame.h 的 FR_FUNC + FR_PARTICLES），与 §6.226 同源。 */
     if (fr_is_func(bl)) return NULL;
+    if (!agent_subj_ok(words[0])) return NULL;     /* §6.229 `了 在 家里` 不该学 */
     Token *A = pool_token_intern(ai->pool, words[0]);
     Token *B = pool_token_intern(ai->pool, bl);
     if (!A || !B || A == B) return NULL;
@@ -693,6 +708,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * 实测（出厂模型）：不查这一遍，`这个 东西 多 少 钱` 会被学成
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
+    if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
@@ -860,6 +876,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     /* §6.227 **虚词不当宾语**（`我 住 在 很` 会学成 `我住 在 很`）+ **代词不能跟别的词拼成主语**
      * （`我 住 在 …` 的主语是 我+住 两截 ⇒ 拼出来的「我住」是垃圾词）。 */
     if (fr_is_func(B)) return NULL;
+    if (!agent_subj_ok(words[0])) return NULL;   /* §6.229 主语不能是别的虚词（很/了/的…）*/
     {
         static const char *pron[] = {"我", "你", "您", "他", "她", "它", "我们", "你们", "他们", NULL};
         int subj_pron = 0;
@@ -1056,6 +1073,7 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
     if (is_q) return NULL;                     /* 「如果…吗」不是设假设 */
     /* §6.228 宾语/谓语是虚词就不设假设（`如果 猫 属于 很`）。主语同理不查（可以是代词）。 */
     if (fr_is_func(bw)) return NULL;
+    if (!agent_subj_ok(aw)) return NULL;          /* §6.229 `如果 很 属于 猫` 不该设 */
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
@@ -1785,6 +1803,7 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
      * `他 说 我 拥有 猫` 的主语是代词 我，查了会把这条（合理的）看法也挡掉，
      * belief 的"同义改写"断言当场红。 */
     if (fr_is_func(bw)) return NULL;
+    if (!agent_subj_ok(aw)) return NULL;          /* §6.229 `他 以为 很 属于 猫` 不该记 */
     Token *who = pool_token_intern(ai->pool, words[0]);
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
