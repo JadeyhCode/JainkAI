@@ -1480,7 +1480,10 @@ int main(int argc, char **argv) {
             loaded = 1;
             printf("[已加载模型 %s]\n", model_path);
         } else {
-            fprintf(stderr, "[加载失败 %s —— 退到最小种子]\n", model_path);
+            if (!file_exists(model_path))
+                fprintf(stderr, "[加载失败 %s：文件不存在 —— 退到最小种子]\n", model_path);
+            else
+                fprintf(stderr, "[加载失败 %s：格式不认识或内容损坏 —— 退到最小种子]\n", model_path);
         }
     }
     if (!corpus && !loaded) {
@@ -2171,7 +2174,15 @@ int main(int argc, char **argv) {
                     printf("[已加载模型 %s]\n", path);
                     ai_stats(a->brain);
                 } else {
-                    printf("[加载失败 %s]\n", path);
+                    /* §6.187 **失败要说清是哪一种**：上一轮我拿一个载入失败的存档试
+                     * `::load`，输出里先看到启动时那句「[已加载模型 model.bin]」，
+                     * 差点以为"::load 静默退回默认模型"（其实失败那行在后面）。
+                     * 两种失败原因分开说，省得下一个人再误判。 */
+                    if (!file_exists(path))
+                        printf("[加载失败 %s：文件不存在（还在用原来的模型）]\n", path);
+                    else
+                        printf("[加载失败 %s：格式不认识或内容损坏（版本/字节对不上）——"
+                               "还在用原来的模型]\n", path);
                 }
                 continue;
             }

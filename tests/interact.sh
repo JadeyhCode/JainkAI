@@ -118,6 +118,21 @@ printf '%s\n' "$out" | nth 5 | grep -q "不 对 ， 猫 -\[不 有\]-> 毛" \
 printf '%s\n' "$out" | nth 6 | grep -q "对 ， 恐龙" \
     && chk "重载后 恐龙 会 飞 还在" 1 || chk "重载后 恐龙" 0 "$(printf '%s\n' "$out" | nth 6)"
 
+echo "⑩ 载入失败要说清原因（文件不存在 / 格式不认），并且不影响原来的模型"
+printf 'not-a-model' > "$TMP/bad.bin"
+out=$(run "::load $TMP/nonexist.bin" "猫 属于 动物 吗" | grep -a "加载失败" || true)
+printf '%s\n' "$out" | grep -q "文件不存在" \
+    && chk "缺文件 ⇒「文件不存在」" 1 \
+    || chk "缺文件 ⇒「文件不存在」" 0 "$out"
+out=$(run "::load $TMP/bad.bin" "猫 属于 动物 吗")
+printf '%s\n' "$out" | grep -a "加载失败" | grep -q "格式不认识" \
+    && chk "坏文件 ⇒「格式不认识」" 1 \
+    || chk "坏文件 ⇒「格式不认识」" 0 "$(printf '%s\n' "$out" | grep -a "加载失败")"
+r=$(printf '%s\n' "$out" | nth 1)
+printf '%s\n' "$r" | grep -q "对 ， 猫 -\[属于\]-> 动物" \
+    && chk "载入失败后原来的模型照常答" 1 \
+    || chk "载入失败后原来的模型照常答" 0 "$r"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
