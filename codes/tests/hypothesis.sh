@@ -87,6 +87,12 @@ r=$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | head -1)
 case "$r" in *"不过"*) chk "不冲突时不该乱报冲突" 0 ;;
              *) chk "不冲突时不乱报冲突（$r）" 1 ;; esac
 
+# §6.228 虚词不当主语/宾语：`如果 猫 属于 很` 不该进假设层
+out=$(run "如果 猫 属于 很" "::hypo")
+printf '%s\n' "$out" | grep -aq "当前 0 层 / 0 条" \
+    && chk "内容成不了句（很）⇒ 不设假设" 1 \
+    || chk "内容成不了句（很）⇒ 不设假设" 0 "$(printf '%s\n' "$out" | grep -a "假设层" | tail -1)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS hypothesis（假设世界：可推 / 不越界 / 能外推 / 不进图 / 冲突如实说）" \
                   || { echo "FAIL hypothesis"; exit 1; }

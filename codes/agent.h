@@ -1054,6 +1054,8 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
     if (!rel_parse(ai, words + off, n - off, jbuf, sizeof jbuf, &aw, &rid,
                    &is_neg, &bw, &is_q, &rw, 0)) return NULL;
     if (is_q) return NULL;                     /* 「如果…吗」不是设假设 */
+    /* §6.228 宾语/谓语是虚词就不设假设（`如果 猫 属于 很`）。主语同理不查（可以是代词）。 */
+    if (fr_is_func(bw)) return NULL;
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
@@ -1779,6 +1781,10 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
     if (!rel_parse(ai, words + 2, n - 2, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
                    &bw, &is_q, &rw, 0)) return NULL;
     if (is_q) return NULL;
+    /* §6.228 **宾语/谓语是虚词就不记**（`他 以为 猫 属于 很`）。⚠ 主语不查：
+     * `他 说 我 拥有 猫` 的主语是代词 我，查了会把这条（合理的）看法也挡掉，
+     * belief 的"同义改写"断言当场红。 */
+    if (fr_is_func(bw)) return NULL;
     Token *who = pool_token_intern(ai->pool, words[0]);
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);

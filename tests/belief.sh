@@ -251,5 +251,11 @@ printf '%s\n' "$out" | grep -aq '在 甲 看来' \
 printf '%s\n' "$out" | grep -aq '假设' && printf '%s\n' "$out" | grep -aq '这 是 他 的 看法' \
     && chk "答的是**他的看法**（假设下 + 明说不是我的知识）" 1 || chk "归属清楚" 0
 
+# §6.228 虚词不当主语/宾语：`他 以为 猫 属于 很` 不该被记成"他的看法"
+out=$(run "他 以为 猫 属于 很" "::others")
+printf '%s\n' "$out" | grep -aq "记下 了 ：" \
+    && chk "内容成不了句（很）⇒ 不记成他的看法" 0 "$(printf '%s\n' "$out" | grep -a "记下 了 ：" | head -1)" \
+    || chk "内容成不了句（很）⇒ 不记成他的看法" 1
+
 [ "$fail" -eq 0 ] && echo "PASS belief（归属 + 来源监控 + 可信度跨重启 + 他者视角多层合并/四态 + 复数主语进回答路径）" \
                   || { echo "FAIL belief"; exit 1; }
