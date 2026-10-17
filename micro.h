@@ -3383,8 +3383,12 @@ static inline void safety_report(const AI *ai) {
         printf("\n");
         printf("               写入闸门拦下 %zu 条（::wgate on 时，AI 自己想出来的东西不够分量不沉淀）\n",
                ai->n_write_blocked);
-        printf("               路由=%s（打开时**关系事实** + **非观测的共现写入**（内部对话/想象…）\n",
-               ai->route_writes ? "开" : "关（默认）");
+        /* §6.180 措辞按**实际默认**写：`route_writes` 从 §6.92 起默认就是**开**
+         * （以前这里只写"开/关（默认）"，读起来像"默认关"）。 */
+        printf("               路由=%s %s\n", ai->route_writes ? "开" : "关",
+               ai->route_writes ? "（默认；§6.92 翻的 ⇒ AIP_ROUTE=0 / ::safe route off 退回直写）"
+                                : "（关着 = 都直写；AIP_ROUTE=1 / ::safe route on 打开）");
+        printf("               开时走受审通道的是：**关系事实** + **非观测的共现写入**（内部对话/想象…）\n");
         printf("               都改走受审通道。**两类刻意直写**：① 感知共现（它带 hits/pattern/topic\n");
         printf("               这些观测细节，转成意图会丢信息，而且是知识的来源）；② 端点落在**协议骨架**\n");
         printf("               里的写入（[时刻:…] 这类名字 —— 内核按规矩不接「改保留符号节点」，而时间链是内核\n");
