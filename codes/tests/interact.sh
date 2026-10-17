@@ -296,6 +296,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 和 狗 �
     && chk "陈述 ⇒ 拆成两条学" 1 \
     || chk "陈述 ⇒ 拆成两条学" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉓ §6.240 并列宾语「A R B1 和 B2」（含顿号）"
+out=$(run "我 喜欢 猫 和 狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 喜欢 猫 和 狗" \
+    && chk "陈述 ⇒ 拆成两条学" 1 \
+    || chk "陈述 ⇒ 拆成两条学" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "我 喜欢 猫 和 狗" "我 喜欢 猫 和 狗 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 我 喜欢 猫 和 狗" \
+    && chk "问句 ⇒ 两边都知道就答「对」" 1 \
+    || chk "问句 ⇒ 对" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫 吃 鱼 和 石头 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定" \
+    && chk "一边不知道 ⇒ 明说「只知一边」" 1 \
+    || chk "一边不知道" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "我 喜欢 猫 、 狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 喜欢 猫 和 狗" \
+    && chk "顿号也算并列" 1 \
+    || chk "顿号也算并列" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

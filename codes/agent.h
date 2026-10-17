@@ -685,7 +685,8 @@ static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *o
     if (last < 4) return NULL;
     size_t p = 0;
     for (size_t i = 1; i < last; ++i)
-        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与")) { p = i; break; }
+        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
+            !strcmp(words[i], "、")) { p = i; break; }
     if (!p) return NULL;
     size_t d = 0;
     for (size_t i = p + 1; i + 1 < last; ++i) if (!strcmp(words[i], "都")) { d = i; break; }
@@ -740,6 +741,70 @@ static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *o
             snprintf(buf, sizeof buf, "我 不 确定 ： %s 和 %s 里 我 只 知道 一边（%s %s）",
                      aw, bw, rw, cw);
         if (out_conf) *out_conf = (na == 1 && nb == 1) ? 0.85f : 0.5f;
+    }
+    if (out_is_q) *out_is_q = is_q;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
+/* §6.240 **并列宾语「A R B1 和 B2」**：实测 `我 喜欢 猫 和 狗` 以前掉流水线
+ * （答出「狗 睡觉 吗 喜欢 地 事情 点」）。与 §6.239 对称：学的时候拆两条、问的时候两边查。 */
+static inline char *agent_conj_obj(AI *ai, char *const *words, size_t n, int *out_is_q,
+                                   float *out_conf) {
+    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    size_t last = n;
+    int is_q = 0;
+    while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
+        last--; is_q = 1;
+    }
+    if (last < 4) return NULL;
+    uint8_t rid = rel_id_of(ai, words[1], 0);          /* 关系词固定在第二个 */
+    if (!rid) return NULL;
+    size_t p = 0;
+    for (size_t i = 2; i + 1 < last; ++i)
+        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
+            !strcmp(words[i], "、")) { p = i; break; }
+    if (!p) return NULL;
+    const char *aw = words[0];
+    if (!agent_subj_ok(aw)) return NULL;
+    char bw[32], cw[32];
+    size_t bl = 0, cl = 0;
+    for (size_t i = 2; i < p; ++i) {
+        size_t wl = strlen(words[i]);
+        if (bl + wl + 1 >= sizeof bw) return NULL;
+        memcpy(bw + bl, words[i], wl); bl += wl;
+    }
+    bw[bl] = 0;
+    for (size_t i = p + 1; i < last; ++i) {
+        size_t wl = strlen(words[i]);
+        if (cl + wl + 1 >= sizeof cw) return NULL;
+        memcpy(cw + cl, words[i], wl); cl += wl;
+    }
+    cw[cl] = 0;
+    if (!bl || !cl) return NULL;
+    if (!agent_obj_ok(bw) || !agent_obj_ok(cw)) return NULL;
+    const char *rw = words[1];
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw), *C = pool_find(ai->pool, cw);
+    char buf[224];
+    if (!is_q) {
+        if (!A || (!B && !C)) return NULL;
+        if (B == A || C == A) return NULL;        /* §6.240b 自己和自己不成关系（`猫 属于 猫、狗`）*/
+        if (B) (void)ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION);
+        if (C) (void)ai_write_rel(ai, A, C, rid, 0, AI_WSRC_RELATION);
+        ai->n_rel_learned++;
+        snprintf(buf, sizeof buf, "记下 了 ： %s %s %s 和 %s", aw, rw, bw, cw);
+        if (out_conf) *out_conf = 0.75f;
+    } else {
+        int nb = B ? (rel_direct(A, rid, B) ? 1 : (rel_direct_neg(A, rid, B) ? -1 : 0)) : 0;
+        int nc = C ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
+        if (nb == 1 && nc == 1)
+            snprintf(buf, sizeof buf, "对 ， %s %s %s 和 %s", aw, rw, bw, cw);
+        else if (nb == -1 || nc == -1)
+            snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", aw, rw, (nb == -1) ? bw : cw);
+        else
+            snprintf(buf, sizeof buf, "我 不 确定 ： %s %s 的 那 两 个 里 我 只 知道 一边", aw, rw);
+        if (out_conf) *out_conf = (nb == 1 && nc == 1) ? 0.85f : 0.5f;
     }
     if (out_is_q) *out_is_q = is_q;
     char *r = (char *)malloc(strlen(buf) + 1);
@@ -813,6 +878,8 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
+    if (strstr(bw, "、")) return NULL;        /* §6.240b 顿号并列走 conj 那条，别学成「猫、狗」
+                                               * （顿号是 UTF-8 多字节，必须用 strstr，不是 strchr）*/
     if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
@@ -3521,6 +3588,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         float rc = 0.5f;
         int cq = 0;
         resp = agent_conj_both(ai, words, n, &cq, &rc);
+        if (resp) conf = rc;
+        if (!resp) resp = agent_conj_obj(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {
