@@ -538,6 +538,20 @@ static inline int agent_subj_ok(const char *w) {
     return !fr_is_func(w);
 }
 
+/* §6.229b **宾语位置的虚词守卫**（与 agent_subj_ok 一对）。
+ * 实测漏洞：`猫 属于 很`、`我 在 很`（3 词走核心关系那条）会被学进去 ——
+ * §6.226 的宾语守卫只加在**动态谓语**分支里，核心关系那条没查。
+ * 允许表里放"本身就是地点/方位"的虚词（`猫 在 这里` 是正常的）。 */
+static inline int agent_obj_ok(const char *w) {
+    if (!w || !w[0]) return 0;
+    static const char *ok_obj[] = {
+        "这里", "那里", "这儿", "那儿", "上面", "下面", "里面", "外面",
+        "前面", "后面", "旁边", "附近", NULL
+    };
+    for (size_t i = 0; ok_obj[i]; ++i) if (strcmp(w, ok_obj[i]) == 0) return 1;
+    return !fr_is_func(w);
+}
+
 /* §6.218 **「A V 在 B」/「A 在 B V」里的地点事实**：
  * 实测 `我 住 北京` 学得进（动态关系 住），但 `我 住 在 北京`、`我 在 学校 学习` **整句掉兜底**
  * （答出「学习 小 的 那 我 空 吧」这种词串）。地点是 `在 B` 这一块，先把**它**学下来：
@@ -709,6 +723,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
+    if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;

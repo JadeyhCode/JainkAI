@@ -125,9 +125,38 @@ printf '%s\n' "$line" | grep -q "^（问的是 考拉）" \
     && chk "类比答复以「（问的是 考拉）」开头" 1 \
     || chk "类比答复以「（问的是 考拉）」开头" 0 "$line"
 
+echo "⑤ §6.229b 虚词守卫矩阵：五个学习入口 × 三个位置，垃圾说法一律不学"
+{
+    printf '::load %s\n::natcoin on\n' "$MODEL"
+    # 主语位 / 谓语位 / 宾语位 各一条（挑最容易被学进去的形状）
+    printf '很 叫 小明\n'          # 关系·主语位
+    printf '猫 了 狗\n'            # 关系·谓语位
+    printf '猫 属于 很\n'          # 关系·宾语位（核心关系）
+    printf '了 在 家里\n'          # 地点·主语位
+    printf '我 在 很\n'            # 地点·宾语位
+    printf '他 以为 猫 属于 很\n'  # 看法·宾语位
+    printf '如果 猫 属于 很\n'     # 假设·宾语位
+    printf '::quit\n'
+} > "$TMP/mx.txt"
+timeout 300 "$BIN" < "$TMP/mx.txt" > "$TMP/mx.out" 2>&1 || true
+n_learn=$(grep -ac "记下 了 ：" "$TMP/mx.out" || true)
+[ "$n_learn" -eq 0 ] && chk "七条垃圾说法一条都没学（记下 了 出现 $n_learn 次）" 1 \
+    || chk "七条垃圾说法一条都没学" 0 "$(grep -a "记下 了 ：" "$TMP/mx.out" | head -1)"
+grep -aq "就 当 猫 属于 很" "$TMP/mx.out" \
+    && chk "垃圾假设也没进假设层" 0 || chk "垃圾假设也没进假设层" 1
+# 正例：正常地点照旧学（防止守卫把正常路径也堵了）
+{
+    printf '::load %s\n猫 在 这里\n' "$MODEL"
+    printf '::quit\n'
+} > "$TMP/mx2.txt"
+timeout 300 "$BIN" < "$TMP/mx2.txt" > "$TMP/mx2.out" 2>&1 || true
+grep -aq "记下 了 ： 猫 在 这里" "$TMP/mx2.out" \
+    && chk "正例照旧（猫 在 这里 学得进）" 1 \
+    || chk "正例照旧（猫 在 这里）" 0 "$(grep -a '记下 了' "$TMP/mx2.out" | head -1)"
+
 rm -rf "$TMP"
 if [ "$fail" -ne 0 ]; then
     echo "FAIL consistency（教→问→存盘→重载 的端到端自洽）"
     exit 1
 fi
-echo "PASS consistency（14 条教→问全对；存盘重载 6/6；继承 3/3；类比点到被问的词）"
+echo "PASS consistency（教→问 14/14；存盘重载 6/6；继承 3/3；类比点到被问的词；守卫矩阵全拒）"
