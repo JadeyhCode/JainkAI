@@ -1525,8 +1525,14 @@ static inline void ai_switches_init(AI *ai) {
     { const char *en = getenv("AIP_EVALNUM"); if (en && en[0] == '1') ai->eval_num = 1; }
     ai->other_weak_up = 0;           /* 他者上位降权：默认**关** */
     { const char *ow = getenv("AIP_OTHERWEAK"); if (ow && ow[0] == '1') ai->other_weak_up = 1; }
-    ai->rel_open = 0;                /* 触发接求解（开放式关系问句）：默认**关** */
-    { const char *ro = getenv("AIP_RELOPEN"); if (ro && ro[0] == '1') ai->rel_open = 1; }
+    /* §6.200 **触发接求解（开放式关系问句）默认翻成开**：`猫 属于 什么` / `谁 会 飞` /
+     * `哪些 动物 会 飞` 这些"缺一端"的问句，以前掉「我不太懂」；开着会从图里查出来，
+     * 查不到时说「图里 没 记 过（不 编）」。**反向测量**（`AIP_RELOPEN=1` 整包 41/41）绿了才翻的。
+     * 想回到老行为：`AIP_RELOPEN=0` 或 `::rel open off`。 */
+    ai->rel_open = 1;
+    { const char *ro = getenv("AIP_RELOPEN");
+      if (ro && ro[0] == '1') ai->rel_open = 1;
+      else if (ro && ro[0] == '0') ai->rel_open = 0; }
     ai->pron_last = 0;               /* 指代消解最小版：默认**关** */
     ai->remind_route = 0;            /* §6.143 提醒写入受审：默认**关**（反向测量：AIP_REMINDROUTE=1）*/
     { const char *rr = getenv("AIP_REMINDROUTE"); if (rr && rr[0] == '1') ai->remind_route = 1; }
