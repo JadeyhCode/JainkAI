@@ -771,6 +771,68 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
 
 /* §6.240 **并列宾语「A R B1 和 B2」**：实测 `我 喜欢 猫 和 狗` 以前掉流水线
  * （答出「狗 睡觉 吗 喜欢 地 事情 点」）。与 §6.239 对称：学的时候拆两条、问的时候两边查。 */
+/* §6.245 **选择问句「A R B1 或 B2 吗」**：选择不是并列，不能拆成两条学；
+ * 但问的时候可以**分别查**：只要有一边成立就答「对」并说清是哪边。 */
+static inline char *agent_or_ask(AI *ai, char *const *words, size_t n, int *out_is_q,
+                                 float *out_conf) {
+    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    size_t last = n;
+    int is_q = 0;
+    while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
+        last--; is_q = 1;
+    }
+    if (last < 5) return NULL;
+    /* 选择问句的判据：带「吗/呢」或用了「还是」。**「或」不带「吗」不一定是问句**
+     * （`我 喜欢 猫 或 狗` 是陈述，不能按问句答 —— 实测就是这么错的）。 */
+    uint8_t rid = rel_id_of(ai, words[1], 0);
+    if (!rid) return NULL;
+    size_t p = 0;
+    for (size_t i = 2; i + 1 < last; ++i) {
+        if (!strcmp(words[i], "或") || !strcmp(words[i], "或者") ||
+            !strcmp(words[i], "还是")) {
+            p = i;
+            if (!strcmp(words[i], "还是")) is_q = 1;       /* 「还是」本身即问句标记 */
+            break;
+        }
+    }
+    if (!p || !is_q) return NULL;
+    const char *aw = words[0];
+    if (!agent_subj_ok(aw)) return NULL;
+    char bw[32], cw[32];
+    size_t bl = 0, cl = 0;
+    for (size_t i = 2; i < p; ++i) {
+        size_t wl = strlen(words[i]);
+        if (bl + wl + 1 >= sizeof bw) return NULL;
+        memcpy(bw + bl, words[i], wl); bl += wl;
+    }
+    bw[bl] = 0;
+    for (size_t i = p + 1; i < last; ++i) {
+        size_t wl = strlen(words[i]);
+        if (cl + wl + 1 >= sizeof cw) return NULL;
+        memcpy(cw + cl, words[i], wl); cl += wl;
+    }
+    cw[cl] = 0;
+    if (!bl || !cl) return NULL;
+    if (!agent_obj_ok(bw) || !agent_obj_ok(cw)) return NULL;
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw), *C = pool_find(ai->pool, cw);
+    int vb = B ? (rel_direct(A, rid, B) ? 1 : (rel_direct_neg(A, rid, B) ? -1 : 0)) : 0;
+    int vc = C ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
+    char buf[200];
+    if (vb == 1)
+        snprintf(buf, sizeof buf, "对 ： %s %s %s（不 是 %s）", aw, words[1], bw, cw);
+    else if (vc == 1)
+        snprintf(buf, sizeof buf, "对 ： %s %s %s（不 是 %s）", aw, words[1], cw, bw);
+    else if (vb == -1 && vc == -1)
+        snprintf(buf, sizeof buf, "都 不 对 ： %s 既 不 %s %s 也 不 %s %s", aw, words[1], bw, words[1], cw);
+    else
+        snprintf(buf, sizeof buf, "我 不 确定 你 指 哪 个 ： %s %s %s / %s", aw, words[1], bw, cw);
+    if (out_conf) *out_conf = (vb == 1 || vc == 1) ? 0.8f : 0.45f;
+    if (out_is_q) *out_is_q = 1;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_is_q,
                                    float *out_conf) {
     if (!ai || ai->rel_off || !w0 || n0 < 5) return NULL;
@@ -936,6 +998,9 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     /* §6.240b/§6.244 并列走 conj 那条，别学成「猫、狗」「猫以及狗」这种 blob
      * （顿号是 UTF-8 多字节，必须用 strstr，不是 strchr）*/
     if (strstr(bw, "、") || strstr(bw, "以及")) return NULL;
+    /* §6.245 **选择不是并列**：`我 喜欢 猫 或 狗` 不能学成「猫或狗」一个宾语 ——
+     * 并列（都成立）与选择（二选一）是**两种语义**，混着学会答错。选择句一律不学。 */
+    if (strstr(bw, "或")) return NULL;
     if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
@@ -1104,6 +1169,8 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     /* §6.227 **虚词不当宾语**（`我 住 在 很` 会学成 `我住 在 很`）+ **代词不能跟别的词拼成主语**
      * （`我 住 在 …` 的主语是 我+住 两截 ⇒ 拼出来的「我住」是垃圾词）。 */
     if (fr_is_func(B)) return NULL;
+    /* §6.245 并列/选择词留在宾语里 ⇒ 那是"两个东西"，不是一个新词（`猫或狗`/`猫、狗`）*/
+    if (strstr(B, "或") || strstr(B, "、") || strstr(B, "以及")) return NULL;
     if (!agent_subj_ok(words[0])) return NULL;   /* §6.229 主语不能是别的虚词（很/了/的…）*/
     /* §6.231 **多词那一侧不许混进虚词**：`猫 很 属于 动物` 会拼成「猫很」（副词当主语的一部分）。
      * 以前只挡"代词 + 别的词"（我住），漏了副词/助词（猫很、很好、猫的…）。
@@ -3743,6 +3810,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         resp = agent_conj_both(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
         if (!resp) resp = agent_conj_obj(ai, words, n, &cq, &rc);
+        if (resp) conf = rc;
+        if (!resp) resp = agent_or_ask(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {

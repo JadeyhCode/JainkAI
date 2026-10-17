@@ -373,6 +373,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
     && chk "宾语里带「以及」不学成 blob" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "宾语里带「以及」不学成 blob" 1
 
+echo "㉗ §6.245 选择不是并列：不学、问句分别查"
+out=$(run "我 喜欢 猫 或 狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
+    && chk "陈述里带「或」⇒ 不学（选择不能当并列）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "陈述里带「或」⇒ 不学" 1
+out=$(run "猫 属于 动物 或 植物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ： 猫 属于 动物" \
+    && chk "选择问句「或」⇒ 分别查，答对并说清哪边" 1 \
+    || chk "选择问句「或」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 属于 动物 还是 植物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ： 猫 属于 动物" \
+    && chk "「还是」（不带吗）也算问句" 1 \
+    || chk "「还是」问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 属于 鱼 或 植物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定 你 指 哪 个" \
+    && chk "两边都不确定 ⇒ 明说" 1 \
+    || chk "两边都不确定" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
