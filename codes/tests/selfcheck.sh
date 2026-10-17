@@ -196,9 +196,47 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑧ 文档里写的 \「::命令\」必须在命令表里（改名/删命令时文档会指空）=="
+_tmp2=$(mktemp -d)
+# 前面**不能紧挨标识符**：`Interp::stmt_start` 这种 C++ 作用域不是命令（§6.197 踩过）
+{ grep -rhoE "(^|[^A-Za-z0-9_])::[a-z_0-9]+" docs/*.md README.md CHANGELOG.md 2>/dev/null || true; } \
+    | sed -E 's/.*::([a-z_0-9]+)/\1/' | sort -u > "$_tmp2/doc"
+# 名字与别名分开抽：表项形如 { "name", alias|NULL, arg, group, help, CMD }
+{
+    grep -oE '^[[:space:]]*\{ "[a-z_0-9]+"' main.c 2>/dev/null | sed -E 's/.*"([a-z_0-9]+)"/\1/' || true
+    grep -oE '^[[:space:]]*\{ "[a-z_0-9]+", "[a-z_0-9]+"' main.c 2>/dev/null | sed -E 's/.*, "([a-z_0-9]+)"/\1/' || true
+} | sort -u > "$_tmp2/real"
+# 白名单：历史名（改名前的）/ 示例 / 文档里明确说"没有这个命令"的
+# 白名单（每条都写清为什么）：
+#   affect / aidump —— 改名前的历史名（文档里明说"改名为 drive.h / 已移除"）
+#   forget          —— 旧文里写的旧命令（现为 ::gc）
+#   note            —— `::note 删` 指的是**补丁操作**，不是元命令
+#   pron            —— 旧文写作 `::pron last`（现为 `::others pron`；历史小节点不动）
+#   lease / prune / relx / x / xxx —— 文档里明确说"没有这个命令"或纯示例
+cat > "$_tmp2/ok" <<'OK'
+affect
+aidump
+forget
+lease
+note
+pron
+prune
+relx
+x
+xxx
+OK
+orp=$(comm -23 "$_tmp2/doc" "$_tmp2/real" | comm -23 - "$_tmp2/ok" || true)
+if [ -n "$orp" ]; then
+    say FAIL "文档里引用了命令表里没有的命令：$(printf '%s ' $orp)"
+    bad=1
+else
+    say OK "文档里 $(wc -l < "$_tmp2/doc" | tr -d ' ') 个 ::命令 引用都在命令表里（或白名单里）"
+fi
+rm -rf "$_tmp2"
+
 echo
 if [ "$bad" -eq 0 ]; then
-    echo "PASS selfcheck（看护的看护：清单/脚本/文档引用的 7 类坑都没踩）"
+    echo "PASS selfcheck（看护的看护：清单/脚本/文档引用的 8 类坑都没踩）"
 else
     echo "FAIL selfcheck（上面列的问题会让整包汇总骗人，先修它们）"
     exit 1
