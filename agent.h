@@ -541,17 +541,26 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     /* 找第一个**已知核心关系词**（不调用 allow_new ⇒ 绝不登记新谓语） */
     size_t ri = 0;
     uint8_t rid = 0;
+    int neg = 0, neg_sep = 0;
     for (size_t i = 1; i + 1 < n; ++i) {
         uint8_t id = rel_id_of(ai, words[i], 0);
         if (id && id < REL_DYN_BASE) { ri = i; rid = id; break; }
+        /* §6.173c **合写否定**（`不是`/`不会`/`不属于`）：分词器把它切成**一个**词，
+         * 那就用 `rel_merged_neg_id`（与两词写法共用同一份声明）认出来；
+         * 否定已经含在这个词里了，措辞别再补一个「不」。 */
+        uint8_t mid = 0;
+        if (rel_merged_neg_id(words[i], &mid) && mid && mid < REL_DYN_BASE) {
+            ri = i; rid = mid; neg = 1; break;
+        }
     }
     if (!ri) return NULL;
-    /* §6.173b **否定**：关系词**紧前面**那个 `不`/`没` 才是否定（`企鹅 不 属于 鸟`）；
+    /* §6.173b **两词否定**：关系词**紧前面**那个 `不`/`没` 才是否定（`企鹅 不 属于 鸟`）；
      * 主语在它前面结束。别处的 `不`/`没` 要靠下面的虚词守卫拦（`rel_one_cjk` 不认虚词）。 */
-    int neg = 0;
-    if (ri >= 2 && (strcmp(words[ri - 1], "不") == 0 || strcmp(words[ri - 1], "没") == 0))
-        neg = 1;
-    size_t na = ri - (size_t)neg, nb = n - ri - 1;
+    if (!neg && ri >= 2 &&
+        (strcmp(words[ri - 1], "不") == 0 || strcmp(words[ri - 1], "没") == 0)) {
+        neg = 1; neg_sep = 1;
+    }
+    size_t na = ri - (size_t)neg_sep, nb = n - ri - 1;
     if (na < 1 || na > 2 || nb < 1 || nb > 2) return NULL;
     /* 每个词：单字实词，或池里已有的整词。
      * **拼词只许用单字**：多字词当"一个词"用，不许和别的词再拼 ——
@@ -559,7 +568,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
      * `我 --[在]--> 学校学习` 这种垃圾符号节点，正是项目记过的那个坑。 */
     for (size_t i = 0; i < n; ++i) {
         if (i == ri) continue;
-        if (neg && i == ri - 1) continue;            /* 那个 `不`/`没` 已经算进 neg，不再当主语词 */
+        if (neg_sep && i == ri - 1) continue;        /* 那个 `不`/`没` 已经算进 neg，不再当主语词 */
         size_t side_n = (i < ri) ? na : nb;          /* 这一边有几个词 */
         int single = rel_one_cjk(words[i]);
         int whole  = pool_find(ai->pool, words[i]) != NULL;
@@ -591,7 +600,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     ai->n_learned++;
     char resp0[192];
     snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s（新词当场造）",
-             ta->name, neg ? "不 " : "", words[ri], tb->name);
+             ta->name, neg_sep ? "不 " : "", words[ri], tb->name);
     cot_push(ai, COT_LEARN, 1, 80, "自然说法里含新词：当场造词 + 学一条核心关系", resp0);
     ai->n_cot++;
     if (out_conf) *out_conf = 0.7f;

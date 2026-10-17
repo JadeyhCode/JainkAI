@@ -133,6 +133,16 @@ printf '%s\n' "$out" | grep -q "自然说法里的新词 = 开" \
     && chk "命令回显状态" 1 \
     || chk "命令回显状态" 0
 
+echo "⑪ 合写否定：「企鹅 不是 鸟」也认（否定已经在词里，措辞别再补一个「不」）"
+out=$(run 1 "企鹅 不是 鸟" "企鹅 属于 鸟 吗")
+printf '%s\n' "$out" | ans | grep -q "记下 了 ： 企鹅 不是 鸟" \
+    && chk "记下 了 ： 企鹅 不是 鸟" 1 \
+    || chk "记下 了 ： 企鹅 不是 鸟" 0 "$(printf '%s\n' "$out" | ans)"
+r=$(printf '%s\n' "$out" | reps | sed -n 2p)
+printf '%s\n' "$r" | grep -q "不 对 ， 企鹅 -\[不 属于\]-> 鸟" \
+    && chk "存成否定（问肯定的 ⇒ 不 对）" 1 \
+    || chk "存成否定" 0 "$r"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL natcoin（自然说法里的新词）"
     exit 1
