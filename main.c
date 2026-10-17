@@ -540,6 +540,7 @@ typedef enum {
     CMD_WHY,
     CMD_RELINFER,
     CMD_RELNAT,
+    CMD_SEGREPORT,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
     CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
     CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
@@ -669,6 +670,9 @@ static const CmdDef CMDS[] = {
       CMD_REL },
     { "why", NULL, 2, "基本",
       "问 A 关系 B 成不成立，并打出推导路径", CMD_WHY },
+    { "segreport", NULL, 0, "调试/诊断",
+      "打印 `AIP_SEGTIME=1` 收集到的 11 段耗时（段名 / 次数 / 总毫秒 / 均毫秒）——\n"
+      "以前**只收集不打印**，钩子形同虚设", CMD_SEGREPORT },
     { "relnat", "on|off", CARG_OPT, "基本",
       "自然说法（默认关，§6.232）：`能/可以` 归到会、`是 一种 X` 剥量词；\n"
       "以前只有环境变量能开（AIP_RELNAT=1），用户当场没法开", CMD_RELNAT },
@@ -2884,6 +2888,24 @@ int main(int argc, char **argv) {
                        : "开放（知识库里没写就是不知道，默认）");
                 printf("  开放：推不出否定时说「不知道」；否定靠**公理**（比如「属于」独占）。\n");
                 printf("  闭合：「没写就是假」，答得快但会自信地说错。\n");
+                continue;
+            }
+            case CMD_SEGREPORT: {
+                /* §6.236 `AIP_SEGTIME=1` 一直在**收集** `seg_ns/seg_hits`，却**没有任何出口** ——
+                 * 想量热点时只能看到 0 行输出（实测白找了两轮）。这里补一个打印口。 */
+                AI *B = a->brain;
+                printf("[分段耗时]（AIP_SEGTIME=%s）\n",
+                       ai_seg_on() ? "开" : "关（数据全是 0）");
+                double total = 0.0;
+                for (int i = 0; i < AI_SEG_N; ++i) total += (double)B->seg_ns[i] / 1e6;
+                for (int i = 0; i < AI_SEG_N; ++i) {
+                    double ms = (double)B->seg_ns[i] / 1e6;
+                    uint32_t h = B->seg_hits[i];
+                    printf("  %-10s 次数 %-8u 总 %8.1f ms  均 %7.3f ms  （占 %.1f%%）\n",
+                           AI_SEG_NAMES[i], h, ms, h ? ms / (double)h : 0.0,
+                           total > 0 ? ms * 100.0 / total : 0.0);
+                }
+                printf("  合计 %.1f ms\n", total);
                 continue;
             }
             case CMD_REVCHECK: {
