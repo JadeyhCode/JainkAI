@@ -996,18 +996,82 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
 /* §6.168 **记下这个问句**（等用户下一轮回话）。
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
-static inline void agent_askback_arm(AI *ai, const Token *A, uint8_t rid,
-                                     int is_neg, const Token *B, int as_other,
-                                     int kind, int fact_neg) {
-    if (!ai || !ai->askback || as_other) return;
-    if (!A || !B || !A->name || !B->name || rid == 0) return;
-    snprintf(ai->ask_a, sizeof ai->ask_a, "%s", A->name);
-    snprintf(ai->ask_b, sizeof ai->ask_b, "%s", B->name);
+static inline void agent_askback_arm_name(AI *ai, const char *a, uint8_t rid,
+                                         int is_neg, const char *b,
+                                         int kind, int fact_neg) {
+    if (!ai || !ai->askback || !a || !b || !a[0] || !b[0] || rid == 0) return;
+    snprintf(ai->ask_a, sizeof ai->ask_a, "%s", a);
+    snprintf(ai->ask_b, sizeof ai->ask_b, "%s", b);
     ai->ask_rid = rid;
     ai->ask_neg = (uint8_t)(is_neg ? 1 : 0);
     ai->ask_kind = (kind == 2) ? 2 : 1;
     ai->ask_fact_neg = (uint8_t)(fact_neg ? 1 : 0);
     ai->ask_pending = 1;
+}
+/* §6.174 **问句里含新词**（`恐龙 会 飞 吗`）：关系层解析不了（主语被切成 恐/龙），
+ * 于是连追问都不会挂 —— 用户回一句「不 会」也白说。
+ * 这里用与 §6.173 **同一套守卫**切出 (A,R,B)，只**挂追问**、**不当场造词**：
+ * 造词留到用户回话确认的时候（`agent_askback_reply` 里 intern）——问句上不写图。
+ * 两边都在词池里 ⇒ 不挂（关系层本该处理，别抢）。 */
+static inline void agent_ask_new_word_arm(AI *ai, char *const *words, size_t n) {
+    if (!ai || !ai->askback || !words || n < 4 || n > 7) return;
+    if (!rel_is_qmark(words[n - 1])) return;
+    size_t last = n - 1;
+    if (last < 3) return;
+    if (ai_has_question_word(words, last)) return;   /* `什么/谁` 那种是开放问句，另走一条路 */
+    for (size_t i = 0; i < last; ++i)
+        if (!words[i] || !words[i][0] || words[i][0] == '[') return;
+    size_t ri = 0;
+    uint8_t rid = 0;
+    int neg = 0, neg_sep = 0;
+    for (size_t i = 1; i + 1 < last; ++i) {
+        uint8_t id = rel_id_of(ai, words[i], 0);
+        if (id && id < REL_DYN_BASE) { ri = i; rid = id; break; }
+        uint8_t mid = 0;
+        if (rel_merged_neg_id(words[i], &mid) && mid && mid < REL_DYN_BASE) {
+            ri = i; rid = mid; neg = 1; break;       /* 合写否定：不是/不会 */
+        }
+    }
+    if (!ri) return;
+    if (!neg && ri >= 2 &&
+        (strcmp(words[ri - 1], "不") == 0 || strcmp(words[ri - 1], "没") == 0)) {
+        neg = 1; neg_sep = 1;
+    }
+    size_t na = ri - (size_t)neg_sep, nb = last - ri - 1;
+    if (na < 1 || na > 2 || nb < 1 || nb > 2) return;
+    for (size_t i = 0; i < last; ++i) {
+        if (i == ri || (neg_sep && i == ri - 1)) continue;
+        size_t side_n = (i < ri) ? na : nb;
+        int single = rel_one_cjk(words[i]);
+        int whole  = pool_find(ai->pool, words[i]) != NULL;
+        if (!single && !whole) return;
+        if (!single && side_n > 1) return;
+    }
+    char A[64], B[64];
+    size_t oa = 0, ob = 0;
+    for (size_t i = 0; i < na; ++i) {
+        size_t l = strlen(words[i]);
+        if (oa + l + 1 >= sizeof A) return;
+        memcpy(A + oa, words[i], l); oa += l;
+    }
+    A[oa] = 0;
+    for (size_t i = 0; i < nb; ++i) {
+        size_t l = strlen(words[ri + 1 + i]);
+        if (ob + l + 1 >= sizeof B) return;
+        memcpy(B + ob, words[ri + 1 + i], l); ob += l;
+    }
+    B[ob] = 0;
+    if (!A[0] || !B[0] || strcmp(A, B) == 0) return;
+    if (pool_find(ai->pool, A) && pool_find(ai->pool, B)) return;
+    agent_askback_arm_name(ai, A, rid, neg, B, 1, neg);
+}
+
+static inline void agent_askback_arm(AI *ai, const Token *A, uint8_t rid,
+                                     int is_neg, const Token *B, int as_other,
+                                     int kind, int fact_neg) {
+    if (!ai || !ai->askback || as_other) return;
+    if (!A || !B || !A->name || !B->name || rid == 0) return;
+    agent_askback_arm_name(ai, A->name, rid, is_neg, B->name, kind, fact_neg);
 }
 
 static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size_t n,
@@ -2419,10 +2483,14 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     ai_free_words(w, n);
     if (junk || (!yes && !no)) return 0;
 
+    /* §6.174 问句里可能是**新词**（`恐龙 会 飞 吗`）：当时只挂了追问、没造词；
+     * 用户现在回话确认了 ⇒ 到**写路径**上再造词（与 `::teach` 同一个口径）。 */
     Token *A = pool_find(ai->pool, ai->ask_a);
     Token *B = pool_find(ai->pool, ai->ask_b);
     uint8_t rid = ai->ask_rid;
     ai->ask_pending = 0;                /* 这条追问用过就没了（无论成不成） */
+    if (!A && ai->ask_a[0] && strlen(ai->ask_a) <= 12) A = pool_token_intern(ai->pool, ai->ask_a);
+    if (!B && ai->ask_b[0] && strlen(ai->ask_b) <= 12) B = pool_token_intern(ai->pool, ai->ask_b);
     if (!A || !B || rid == 0) return 0;
     /* §6.172b 极性**以我断言的那条为准**（猜测/确定答案都可能是否定），
      * 不是以问句为准 —— 回「对」等于确认我刚才说的那句。 */
@@ -2813,6 +2881,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
         }
     }
+
+    /* §6.174 问句里含新词：关系层解析不了 ⇒ 至少**挂一条追问**（用户回话时再造词+学）。 */
+    if (!resp && ai->askback) agent_ask_new_word_arm(ai, words, n);
 
     /* §6.124 **先链后联想**（默认关）：确定性推理（上面那条）答不上来 / 只答"不确定"时，
      * 才轮到"同类互推"的**大概**答案。这样"证明过的答案"不会被"猜的答案"抢掉 ——

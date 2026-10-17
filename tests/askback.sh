@@ -212,6 +212,24 @@ printf '%s\n' "$out" | grep -q "丢掉了挂着的追问" \
     && chk "clear 回显状态" 1 \
     || chk "clear 回显状态" 0
 
+echo "⑲ §6.174 问句里含新词（恐龙 会 飞 吗）：回一句就造词 + 学"
+out=$(run 1 "恐龙 会 飞 吗" "会" "恐龙 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "记下 了 ： 恐龙 会 飞" \
+    && chk "回「会」⇒ 造词 + 记成肯定" 1 \
+    || chk "回「会」⇒ 造词 + 记成肯定" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "对 ， 恐龙 -\[会\]-> 飞" \
+    && chk "再问 ⇒ 对" 1 \
+    || chk "再问 ⇒ 对" 0 "$a"
+out=$(run 1 "恐龙 会 飞 吗" "不 会" "恐龙 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "记下 了 ： 恐龙 不 会 飞" \
+    && chk "回「不 会」⇒ 记成否定" 1 \
+    || chk "回「不 会」⇒ 记成否定" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run 0 "恐龙 会 飞 吗" "会" "恐龙 会 飞 吗")
+printf '%s\n' "$out" | reps | grep -q "记下 了" \
+    && chk "关着时不造词不学" 0 "$(printf '%s\n' "$out" | reps | grep "记下 了")" \
+    || chk "关着时不造词不学" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
