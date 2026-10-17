@@ -2363,7 +2363,10 @@ static inline void think_settle(AI *ai) {
             think_step(t, TH_LEARN, 1, 80, "跨轮想通", note);
             t->mention_pending = 1;
             snprintf(t->mention_text, sizeof t->mention_text,
-                     "你 上次 问 的 %s，现在 我 知道 了 ： %s %s %s %s",
+                     /* §6.176 否定占位是空串时别再留一个空格：原来格式是
+                      * "%s %s %s %s"（四个参数都带空位）⇒ 肯定句会说成「鲸鱼  会 游泳」
+                      * （两个空格）。改成"否定连空格一起给"。 */
+                     "你 上次 问 的 %s，现在 我 知道 了 ： %s %s%s %s",
                      o->text,
                      o->subj && o->subj->name ? o->subj->name : "?",
                      o->want_neg ? "不 " : "",
@@ -2778,7 +2781,7 @@ static inline int think_idle(AI *ai) {
                      pick->text, t->concl_text[0] ? t->concl_text : "有 依据 了");
         } else {
             snprintf(t->mention_text, sizeof t->mention_text,
-                     "你 上次 问 的 %s，我 自己 又 想 了 想 ： %s %s %s %s",
+                     "你 上次 问 的 %s，我 自己 又 想 了 想 ： %s %s%s %s",
                      pick->text,
                      pick->subj && pick->subj->name ? pick->subj->name : "?",
                      pick->want_neg ? "不 " : "",
