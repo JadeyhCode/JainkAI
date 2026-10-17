@@ -125,6 +125,11 @@ static inline int mr_ids(MReader *r, TokenPool *p, Token ***arr, size_t *ncap, s
  * （v10：边的语境字段已删，所以这里只看 main/action 两端。） */
 static inline int mio_edge_saved(const AssocEntry *e) {
     if (!e) return 0;
+    /* §6.185 **没有名字的端点是"临时叠加"**（`ai_imagine` 用 `pool_token(pool,NULL,NULL)`
+     * 造的概念节点）：它的边**不存盘**。§6.175 把这类边的写入改成了直写（不进受审通道），
+     * 副作用是它们开始被存下来 —— 实测 100 轮多 10 条 `我 → (无名)` 的边（42026 → 42036）。
+     * 存它等于把"临时叠加"写进知识，而且每 100 轮 +10 条会无界增长 ⇒ 这里一并跳过。 */
+    if (!e->main || !e->main->name || !e->main->name[0]) return 0;
     if (token_is_temp(e->main) || token_is_temp(e->action)) return 0;
     return 1;
 }
