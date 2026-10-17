@@ -66,6 +66,15 @@ printf '%s\n' "$out" | grep -aq "我 记 的 是 ： 月亮 喵 鱼" \
 printf '%s\n' "$out" | grep -aq "喵 鱼 的 有 ： 月亮" \
     && chk "反查 谁 喵 鱼 ⇒ 月亮" 1 || chk "反查 谁 喵 鱼" 0
 
+echo "④c 否定反查（§6.166）：谁 不 R B 不许把 不 当类别"
+out=$(run "::char off" "::rel open on" "::teach 龙 不 会 唱歌" "谁 不 会 唱歌" "谁 会 唱歌")
+printf '%s\n' "$out" | grep -aq "不 会 唱歌 的 有 ： 龙" \
+    && chk "谁 不 会 唱歌 ⇒「不 会 唱歌 的 有 ： 龙」" 1 \
+    || chk "谁 不 会 唱歌 ⇒ 列出龙" 0 "$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | tr '\n' ' ')"
+printf '%s\n' "$out" | grep -aq "（只算 不）" \
+    && chk "没有把「不」当类别（不出现（只算 不））" 0 \
+    || chk "没有把「不」当类别" 1
+
 echo "⑤ 存档重载：教过的（含新词）还在"
 run "::char off" "::teach 麒麟 属于 神兽" "::save $TMP/t1.bin" > /dev/null
 r=$(run "::load $TMP/t1.bin" "::char off" "麒麟 属于 神兽 吗" | ans)

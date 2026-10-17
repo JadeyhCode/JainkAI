@@ -1113,7 +1113,17 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || !edge_is_plain(e)) continue;
+        if (e->main != b) continue;
+        /* §6.170 **观测/教学压过"记忆里的猜测"**：猜出来的结论只是笔记（`[类比:依据]`），
+         * 用户教了 / 观测到了同一条事实，就该把它**升格成知识** ——
+         * 以前这里只是 `continue`（跳过非普通边），于是教完再问还一直显示「·猜」，
+         * 实测：`狗 会 唱歌 吗`（先猜一次）→ `::teach 狗 会 唱歌` → 再问仍是「会·猜」。 */
+        if (edge_is_guess(e)) {
+            e->action = NULL;
+            e->rel = 0; e->nrel = 0;
+            e->role = ASSOC_ROLE_NONE;
+        }
+        if (!edge_is_plain(e)) continue;      /* 因果猜想/前提链接照旧跳过 */
         /* **观测压过缓存**：这条边若是以前推出来沉淀的，而现在来了观测
          * （不管说的是同一件事还是它的反面），先把缓存**整个撤掉**再落观测。
          * 理由：同一条边上不混两种来源 —— 混了之后
@@ -1148,7 +1158,13 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
-        if (e->main != b || !edge_is_plain(e)) continue;
+        if (e->main != b) continue;
+        if (edge_is_guess(e)) {              /* §6.170 同 token_tag_rel：猜测升格成观测 */
+            e->action = NULL;
+            e->rel = 0; e->nrel = 0;
+            e->role = ASSOC_ROLE_NONE;
+        }
+        if (!edge_is_plain(e)) continue;
         /* 同 token_tag_rel：观测进来时先把这条边上的缓存整个撤掉 */
         if (e->role == ASSOC_ROLE_DERIVED) {
             e->rel = 0; e->nrel = 0;

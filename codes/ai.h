@@ -15,6 +15,14 @@
 #ifndef AI_H
 #define AI_H
 
+/* §6.169 **软件版本号**（用户 2026-10-17 定的：0.01）。
+ * 唯一出处 —— 启动横幅、`::help`、README 都从这一个宏取。
+ * ⚠ 它**不是**存档格式版本：二进制兼容看 `model_io.h` 的 `MODEL_VERSION`（现在是 v13），
+ * 两个别混（一个是"哪一版程序"，一个是"哪一版文件格式"）。 */
+#ifndef AIP_VERSION
+#define AIP_VERSION "0.01"
+#endif
+
 #include "token.h"
 #include <stdlib.h>
 #include <string.h>
@@ -49,10 +57,30 @@ static inline int ai_is_question_word(const char *w) {
         if (strcmp(w, AI_QUESTION_WORDS[i]) == 0) return 1;
     return 0;
 }
+/* §6.171 **词里含疑问词**也算问句 —— 分词器会把「多少钱」合成**一个**词，
+ * 而整词匹配看不出它是个问句。实测（出厂模型）：`这个 东西 多 少 钱`
+ * 被当成事实学进去，图里多了一条 `这个 --[东西]--> 多少钱`（谓语是「东西」！）。
+ *
+ * 只对**实疑问词**做包含匹配；语气词（吗/呢/么/吧）与单字「几」只认整词 ——
+ * 否则「酒吧」「茶几」这种词会被误判成问句（宁可不学，也别错学；但也别把正常词挡了）。 */
+static const char *const AI_QUESTION_SUBSTR[] = {
+    "什么", "怎么", "为什么", "多少", "如何", "干什么",
+    "是不是", "有没有", "对不对", "好不好", NULL
+};
+static inline int ai_token_has_question_word(const char *w) {
+    if (!w || !w[0]) return 0;
+    if (ai_is_question_word(w)) return 1;
+    /* 最短的实疑问词是 2 个汉字（6 字节）—— 单字词在上面整词那一关就已经排除了，
+     * 这里直接返回，省掉每个词 10 次 strstr（这条函数在热路径上，量得到开销）。 */
+    if (strlen(w) < 6) return 0;
+    for (size_t i = 0; AI_QUESTION_SUBSTR[i]; ++i)
+        if (strstr(w, AI_QUESTION_SUBSTR[i])) return 1;
+    return 0;
+}
 /* 这句话里有没有疑问词（有一个就算问句） */
 static inline int ai_has_question_word(char *const *words, size_t n) {
     for (size_t i = 0; i < n; ++i)
-        if (ai_is_question_word(words[i])) return 1;
+        if (ai_token_has_question_word(words[i])) return 1;
     return 0;
 }
 /* ============================ 参数区（ai.h 这一层的上界） ============================
@@ -730,6 +758,16 @@ typedef struct {
      * `micro_remind` 一直在直接改「我」的边表（它挂在 `ai->self` 上，是**自撰**，不是观测）。 */
     int    remind_route;
     int    rel_nat;                 /* §6.161 关系层认「自然说法」：能/可以 → 会（默认**关**）*/
+    /* §6.168 **追问回话**（默认 0 = 关）：上一轮我对着一个闭合问句说"推不出来"，
+     * 把 (A,R,B,neg) 记在下面；这一轮用户只回「会/对/不会/不对」⇒ 当成教学写进图。
+     * 为什么值得做：用户原话「主要的知识获取途径还要是互动」——
+     * 现在的互动是"我说一句它学一句"（陈述），**问句答不上来这条就没下文了**。
+     * 只在**它自己说推不出来**时才记（不靠答复文本里的"不确定"去猜，那是检索来的句子）。 */
+    int    askback;
+    int    ask_pending;
+    char   ask_a[64], ask_b[64];
+    uint8_t ask_rid;
+    uint8_t ask_neg;
     /* **写入闸门：分层判据**（② 档，默认 0 = 关）：实测 imp 落在 0.587~0.725，
      * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
      * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
@@ -1487,6 +1525,12 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rr = getenv("AIP_REMINDROUTE"); if (rr && rr[0] == '1') ai->remind_route = 1; }
     ai->rel_nat = 0;                 /* §6.161 默认**关**（反向测量：AIP_RELNAT=1）*/
     { const char *rn = getenv("AIP_RELNAT"); if (rn && rn[0] == '1') ai->rel_nat = 1; }
+    ai->askback = 0;                 /* §6.168 默认**关**（反向测量：AIP_ASKBACK=1）*/
+    { const char *ak = getenv("AIP_ASKBACK"); if (ak && ak[0] == '1') ai->askback = 1; }
+    ai->ask_pending = 0;
+    ai->ask_a[0] = ai->ask_b[0] = 0;
+    ai->ask_rid = 0;
+    ai->ask_neg = 0;
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }

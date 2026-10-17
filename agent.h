@@ -189,25 +189,32 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     }
     /* 形状二：`什么/谁 R B`（反向扫；上限 64 个候选，避免大池子上太慢） */
     size_t sl2 = agent_open_slot_len(words, last);
+    /* §6.166 **否定反查**：`谁 不 R B`（「谁 不 会 唱歌」）。以前 `不` 会被当成**类别词**
+     * （`哪些 动物 ...` 那一档的形状刚好也合），于是回答变成「… （只算 不） ： 图里 没 记 过」。
+     * 这里把 `不` 认成否定，再用**否定边**去扫。 */
+    int oq_neg = 0;
+    if (sl2 && sl2 < last && strcmp(words[sl2], "不") == 0) { oq_neg = 1; }
     /* §6.151 **带类别的反查**：`哪些 <类别> R B`（「哪些 动物 在 天上」）——
      * 先量到出厂模型里**有正例**（是动物的：鸟；不是的：太阳…共 4 个）⇒ 值得做。
      * 做法：候选必须是 `t 属于 <类别>`（直边）。**不做**"理解成 `什么 R B` 再全列"——
      * 那会把不是动物的东西也列出来，是**误导**（宁可少答、不可答错）。 */
+    size_t base = sl2 + (size_t)oq_neg;                /* 关系词的位置（跳过 不）*/
     int has_cat = 0;
-    if (sl2 && last == sl2 + 3) has_cat = 1;
-    if (sl2 && (last == sl2 + 2 || has_cat)) {
-        const char *catw = has_cat ? words[sl2] : NULL;
+    if (sl2 && last == base + 2) has_cat = 0;
+    else if (sl2 && last == base + 3) has_cat = 1;
+    if (sl2 && (last == base + 2 || has_cat)) {
+        const char *catw = has_cat ? words[base] : NULL;
         Token *cat = catw ? pool_find(ai->pool, catw) : NULL;
         if (has_cat && !cat) return NULL;               /* 类别词不在图里 ⇒ 不接（不猜）*/
-        uint8_t rid = rel_id_of(ai, words[sl2 + (has_cat ? 1 : 0)], 0);
-        Token *b = pool_find(ai->pool, words[sl2 + (has_cat ? 2 : 1)]);
+        uint8_t rid = rel_id_of(ai, words[base + (has_cat ? 1 : 0)], 0);
+        Token *b = pool_find(ai->pool, words[base + (has_cat ? 2 : 1)]);
         if (rid == 0 || !b) return NULL;
         char buf[256];
         size_t off = 0, hits = 0;
-        if (cat) off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 （只算 %s） ： ",
-                                         words[sl2 + 1], words[sl2 + 2], catw);
-        else     off += (size_t)snprintf(buf + off, sizeof buf - off, "%s %s 的 有 ： ",
-                                         words[sl2], words[sl2 + 1]);
+        if (cat) off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 （只算 %s） ： ",
+                                         oq_neg ? "不 " : "", words[base + 1], words[base + 2], catw);
+        else     off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 ： ",
+                                         oq_neg ? "不 " : "", words[base], words[base + 1]);
         /* §6.149 **先量后改**：`scanned < 64` 会让"第 64 个内容词之后"的答案**永远查不到**。
          * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
          * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
@@ -221,7 +228,9 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
             Token *t = ai->pool->tokens[i];
             if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
             scanned++;
-            if (rel_direct(t, rid, b) == 0) continue;          /* 只认肯定那档 */
+            /* §6.166：`谁 不 R B` 扫**否定边**；其余扫肯定那档 */
+            if (oq_neg) { if (rel_direct_neg(t, rid, b) == 0) continue; }
+            else        { if (rel_direct(t, rid, b) == 0) continue; }
             if (cat && rel_direct(t, REL_IS_A, cat) == 0) continue;   /* §6.151 类别过滤 */
             off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
                                     hits ? " 、 " : "", t->name);
@@ -426,6 +435,11 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     if (!rel_parse(ai, words, n, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
                    &bw, &is_q, &rw, 1)) return NULL;
     if (is_q) return NULL;
+    /* §6.171 分词会把「多少钱」拆成 多/少/钱，整词检查在拆开时看不出是问句；
+     * `rel_parse` 会把这些单字**拼回整词**当宾语，所以拼回来之后再查一遍。
+     * 实测（出厂模型）：不查这一遍，`这个 东西 多 少 钱` 会被学成
+     * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
+    if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
@@ -886,6 +900,20 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
     }
 }
 
+/* §6.168 **记下这个问句**（等用户下一轮回话）。
+ * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
+ * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
+static inline void agent_askback_arm(AI *ai, const Token *A, uint8_t rid,
+                                     int is_neg, const Token *B, int as_other) {
+    if (!ai || !ai->askback || as_other) return;
+    if (!A || !B || !A->name || !B->name || rid == 0) return;
+    snprintf(ai->ask_a, sizeof ai->ask_a, "%s", A->name);
+    snprintf(ai->ask_b, sizeof ai->ask_b, "%s", B->name);
+    ai->ask_rid = rid;
+    ai->ask_neg = (uint8_t)(is_neg ? 1 : 0);
+    ai->ask_pending = 1;
+}
+
 static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size_t n,
                                                float *out_conf, int as_other) {
     if (!ai || ai->rel_off || !words || n < 4 || n > 7) return NULL;
@@ -980,6 +1008,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                 ai->n_cot++;
                 der_say(ai, d, ai->der_style, resp0, sizeof resp0);
                 ai->n_rel_guess++;
+                agent_askback_arm(ai, A, rid, is_neg, B, as_other);   /* §6.168 */
                 if (out_conf) *out_conf = mconf;
                 char *r = (char *)malloc(strlen(resp0) + 1);
                 if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -1001,6 +1030,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                                AGENT_GUESS_NEIGHBOR | AGENT_GUESS_SIBLING,
                                d, line, sizeof line, gresp, sizeof gresp, &gc)) {
             ai->n_rel_guess++;
+            agent_askback_arm(ai, A, rid, is_neg, B, as_other);       /* §6.168 猜的也记 */
             if (out_conf) *out_conf = gc;
             char *r = (char *)malloc(strlen(gresp) + 1);
             if (r) memcpy(r, gresp, strlen(gresp) + 1);
@@ -1051,6 +1081,11 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         if (r) memcpy(r, resp0, strlen(resp0) + 1);
         return r;
     }
+    /* §6.168：**我承认推不出来**的这一支，记下问句（等用户下一轮回话）。
+     * 判据放在这里而不是去认答复文本里的"不确定"：答复可能是检索来的句子
+     * （样例会话里就有一条「我 不 确定 X 会 不 会 Y」），拿文本当信号会误判。
+     * 只在 `as_other == 0`（不是"站在他立场"）时记：那条路是别人的信念。 */
+    agent_askback_arm(ai, A, rid, is_neg, B, as_other);
     return NULL;
 }
 
@@ -2245,6 +2280,54 @@ static inline int ai_dirty_apply(AI *ai, char *out, size_t cap, size_t *kind_out
     return 1;
 }
 
+/* §6.168 **追问回话 → 教学**。返回 1 = 这一轮被它接住（out 里就是答复）。
+ *
+ * 场景：上一轮用户问 `鲸鱼 会 游 吗`，关系层推不出来（并且**明确承认**了），
+ * 这一轮用户只回「会」/「不 会」/「对」/「不对」。
+ * 以前这条回话会掉进流水线，答出「会 怕 得 快 我 答 上」这种词串 —— 互动就断在这儿。
+ *
+ * 纪律：
+ *   - 只认**一两词的短回话**，且每个词都在白名单里（多余一个词就是别的话，不猜）；
+ *   - 学的是**上一轮那个问句**（A/R/B 都是当时解析出来的），不是从输入里重新解析 ——
+ *     回话里根本没有 A/B；
+ *   - 极性相乘：问「不 R」答「对」⇒ 记成 `不 R`；问「不 R」答「不」⇒ 记成 `R`；
+ *   - 写入走 `ai_write_rel`（统一通道，::safe 里能看理由），并记 `n_rel_learned`。
+ */
+static inline int agent_askback_reply(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !ai->ask_pending || !input || !out || cap == 0) return 0;
+    if (!ai->ask_a[0] || !ai->ask_b[0] || ai->ask_rid == 0) return 0;
+    size_t n = 0;
+    char **w = ai_tokenize(ai, input, &n);
+    if (!w) return 0;
+    int yes = 0, no = 0, junk = 0;
+    if (n < 1 || n > 2) junk = 1;
+    for (size_t i = 0; !junk && i < n; ++i) {
+        const char *t = w[i] ? w[i] : "";
+        if (!strcmp(t, "的") || !strcmp(t, "了") || !strcmp(t, "啊") ||
+            !strcmp(t, "呀") || !strcmp(t, "吧") || !strcmp(t, "呢")) continue;
+        if (!strcmp(t, "不") || !strcmp(t, "没") || !strcmp(t, "没有")) { no = 1; continue; }
+        if (!strcmp(t, "对") || !strcmp(t, "是")  || !strcmp(t, "会") ||
+            !strcmp(t, "能") || !strcmp(t, "可以") || !strcmp(t, "嗯") ||
+            !strcmp(t, "好") || !strcmp(t, "行")) { yes = 1; continue; }
+        junk = 1;                       /* 有别的词 ⇒ 不是短回话 */
+    }
+    ai_free_words(w, n);
+    if (junk || (!yes && !no)) return 0;
+
+    Token *A = pool_find(ai->pool, ai->ask_a);
+    Token *B = pool_find(ai->pool, ai->ask_b);
+    uint8_t rid = ai->ask_rid;
+    ai->ask_pending = 0;                /* 这条追问用过就没了（无论成不成） */
+    if (!A || !B || rid == 0) return 0;
+    int tneg = ai->ask_neg ^ (no ? 1 : 0);
+    if (ai_write_rel(ai, A, B, rid, tneg, AI_WSRC_RELATION) != 0) return 0;
+    ai->n_rel_learned++;
+    const char *rn = rel_name_of(ai, rid);
+    snprintf(out, cap, "好 ， 记下 了 ： %s %s%s %s（你 说 的）",
+             A->name, tneg ? "不 " : "", rn ? rn : "?", B->name);
+    return 1;
+}
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -2252,6 +2335,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     AI *ai = a->brain;
     ai->pool->current_tick++;
     a->cycle++;
+    /* §6.168 追问回话：上一轮我说"推不出来"的那个问句，这一轮用户只回
+     * 「会/对/不 会/不 对」⇒ 当教学写进图。说了别的话 ⇒ 这条追问作废（只等一轮）。 */
+    if (ai->ask_pending) {
+        if (ai->askback && agent_askback_reply(ai, input, out, out_cap)) {
+            ai->turns++;
+            return strlen(out);
+        }
+        ai->ask_pending = 0;
+    }
     /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
     uint64_t seg_t = ai_seg_mark(ai);
     /* §6.119：每轮开头复查一遍条件缓存 —— 假设撤了、而无条件也推得出来的，就**升格**（摘前提）。 */

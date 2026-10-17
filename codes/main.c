@@ -855,7 +855,8 @@ static const CmdDef *cmd_find(const char *name) {
 
 /* 帮助：**从表生成**（分组标题也是表的一列）。%M 换成默认模型文件名。 */
 static void cmd_help_print(void) {
-    printf("元命令（:: 与单个 : 都认）：共 %zu 条\n", sizeof CMDS / sizeof CMDS[0] - 1);
+    printf("小翼 v%s —— 元命令（:: 与单个 : 都认）：共 %zu 条\n",
+           AIP_VERSION, sizeof CMDS / sizeof CMDS[0] - 1);
     const char *group = NULL;
     for (size_t i = 0; CMDS[i].name; ++i) {
         const CmdDef *c = &CMDS[i];
@@ -1427,6 +1428,8 @@ static void cmd_asm_check(AI *ai, const char *arg) {
 }
 
 int main(int argc, char **argv) {
+    /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
+    printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
     const char *corpus = NULL;
     const char *model_path = DEFAULT_MODEL;
     const char *save_after_train = NULL;
