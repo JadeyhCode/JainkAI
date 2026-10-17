@@ -130,8 +130,59 @@ set -e
 n_ans=$(grep -ac "AI > " "$TMP/mut.out" || true)
 [ "$n_ans" -eq 120 ] && chk "120 行都答了（实得 $n_ans）" 1 || chk "120 行都答了（实得 $n_ans）" 0
 
+echo "⑤ 语法级变异：交换/复制/删词/插「不」/加「吗」/两句拼接（120 行）"
+awk -v N=120 'BEGIN{
+    S[1]="猫 属于 动物 吗"; S[2]="狗 会 唱歌 吗"; S[3]="鸟 会 飞"; S[4]="水 不 会 跑";
+    S[5]="企鹅 属于 鸟 吗"; S[6]="桌子 上 有 书"; S[7]="我 在 学校 学习"; S[8]="麒麟 属于 神兽";
+    S[9]="谁 不 会 唱歌"; S[10]="什么 属于 神兽"; S[11]="鲸鱼 属于 哺乳动物 吗"; S[12]="猫 有 毛 吗";
+    S[13]="你 能 来 吗"; S[14]="太阳 会 唱歌 吗"; S[15]="蝙蝠 不 属于 鸟"; S[16]="龙 会 飞 吗";
+    S[17]="手机 属于 工具 吗"; S[18]="不 不 不"; S[19]="吗 吗 吗"; S[20]="我 不 知道";
+    seed = 424242
+    for (i = 0; i < N; ++i) {
+        seed = (seed * 1103515245 + 12345) % 2147483648; sidx = 1 + int(seed / 2147483648 * 19.999)
+        n = split(S[sidx], w, " ")
+        seed = (seed * 1103515245 + 12345) % 2147483648; op = 1 + int(seed / 2147483648 * 6.999)
+        if (op == 1 && n >= 2) {
+            seed = (seed * 1103515245 + 12345) % 2147483648; a = 1 + int(seed / 2147483648 * (n-0.001))
+            seed = (seed * 1103515245 + 12345) % 2147483648; b = 1 + int(seed / 2147483648 * (n-0.001))
+            t = w[a]; w[a] = w[b]; w[b] = t
+        } else if (op == 2) {
+            seed = (seed * 1103515245 + 12345) % 2147483648; a = 1 + int(seed / 2147483648 * (n-0.001))
+            for (j = n + 1; j > a + 1; --j) w[j] = w[j-1]
+            w[a+1] = w[a]; n++
+        } else if (op == 3 && n >= 2) {
+            seed = (seed * 1103515245 + 12345) % 2147483648; a = 1 + int(seed / 2147483648 * (n-0.001))
+            for (j = a; j < n; ++j) w[j] = w[j+1]
+            n--
+        } else if (op == 4) {
+            seed = (seed * 1103515245 + 12345) % 2147483648; a = 1 + int(seed / 2147483648 * n)
+            for (j = n + 1; j > a; --j) w[j] = w[j-1]
+            w[a] = "不"; n++
+        } else if (op == 5) {
+            w[++n] = "吗"
+        } else {
+            seed = (seed * 1103515245 + 12345) % 2147483648; sidx2 = 1 + int(seed / 2147483648 * 19.999)
+            m = split(S[sidx2], v, " ")
+            for (j = 1; j <= m; ++j) w[++n] = v[j]
+        }
+        line = w[1]
+        for (j = 2; j <= n; ++j) line = line " " w[j]
+        print line
+    }
+}' > "$TMP/syn.txt"
+set +e
+timeout 300 "$BIN" "$MODEL" < "$TMP/syn.txt" > "$TMP/syn.out" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && chk "语法变异没崩（rc=0）" 1 || chk "语法变异没崩（rc=$rc）" 0
+n_ans=$(grep -ac "AI > " "$TMP/syn.out" || true)
+[ "$n_ans" -eq 120 ] && chk "120 行都答了（实得 $n_ans）" 1 || chk "120 行都答了（实得 $n_ans）" 0
+grep -aqE "\(null\)|%s|%zu|\[原语|MOD_|role=|edges=|pool\.count" "$TMP/syn.out" \
+    && chk "答复里没有内部记号漏出" 0 "$(grep -aE '\(null\)|%s|%zu|\[原语|MOD_|role=|edges=|pool\.count' "$TMP/syn.out" | head -1)" \
+    || chk "答复里没有内部记号漏出" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL fuzz（健壮性）"
     exit 1
 fi
-echo "PASS fuzz（120 随机句 + 8 病态 + 非法字节/长句 + 120 混合变异：不崩、都答）"
+echo "PASS fuzz（随机句 + 病态 + 非法字节 + 混合变异 + 语法变异：不崩、都答、不漏内部记号）"
