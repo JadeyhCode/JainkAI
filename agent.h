@@ -892,14 +892,15 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
      * （`我 住 在 …` 的主语是 我+住 两截 ⇒ 拼出来的「我住」是垃圾词）。 */
     if (fr_is_func(B)) return NULL;
     if (!agent_subj_ok(words[0])) return NULL;   /* §6.229 主语不能是别的虚词（很/了/的…）*/
-    {
-        static const char *pron[] = {"我", "你", "您", "他", "她", "它", "我们", "你们", "他们", NULL};
-        int subj_pron = 0;
+    /* §6.231 **多词那一侧不许混进虚词**：`猫 很 属于 动物` 会拼成「猫很」（副词当主语的一部分）。
+     * 以前只挡"代词 + 别的词"（我住），漏了副词/助词（猫很、很好、猫的…）。
+     * 单边只有一个词时不受此限（那个词由 agent_subj_ok / 宾语守卫管）。 */
+    if (na > 1)
         for (size_t i = 0; i < na; ++i)
-            for (size_t k = 0; pron[k]; ++k)
-                if (words[i] && strcmp(words[i], pron[k]) == 0) subj_pron = 1;
-        if (subj_pron && na > 1) return NULL;
-    }
+            if (fr_is_func(words[i])) return NULL;
+    if (nb > 1)
+        for (size_t i = 0; i < nb; ++i)
+            if (fr_is_func(words[ri + 1 + i])) return NULL;
     if (!pool_find(ai->pool, A) && strlen(A) > 12) return NULL;   /* 别造超长怪词 */
     if (!pool_find(ai->pool, B) && strlen(B) > 12) return NULL;
     Token *ta = pool_token_intern(ai->pool, A);

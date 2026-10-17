@@ -136,6 +136,7 @@ echo "⑤ §6.229b 虚词守卫矩阵：五个学习入口 × 三个位置，垃
     printf '我 在 很\n'            # 地点·宾语位
     printf '他 以为 猫 属于 很\n'  # 看法·宾语位
     printf '如果 猫 属于 很\n'     # 假设·宾语位
+    printf '猫 很 属于 动物\n'      # §6.231 多词主语里混进副词
     printf '::quit\n'
 } > "$TMP/mx.txt"
 timeout 300 "$BIN" < "$TMP/mx.txt" > "$TMP/mx.out" 2>&1 || true
