@@ -542,12 +542,16 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     size_t ri = 0;
     uint8_t rid = 0;
     for (size_t i = 1; i + 1 < n; ++i) {
-        if (strcmp(words[i], "不") == 0 || strcmp(words[i], "没") == 0) return NULL;
         uint8_t id = rel_id_of(ai, words[i], 0);
         if (id && id < REL_DYN_BASE) { ri = i; rid = id; break; }
     }
     if (!ri) return NULL;
-    size_t na = ri, nb = n - ri - 1;
+    /* §6.173b **否定**：关系词**紧前面**那个 `不`/`没` 才是否定（`企鹅 不 属于 鸟`）；
+     * 主语在它前面结束。别处的 `不`/`没` 要靠下面的虚词守卫拦（`rel_one_cjk` 不认虚词）。 */
+    int neg = 0;
+    if (ri >= 2 && (strcmp(words[ri - 1], "不") == 0 || strcmp(words[ri - 1], "没") == 0))
+        neg = 1;
+    size_t na = ri - (size_t)neg, nb = n - ri - 1;
     if (na < 1 || na > 2 || nb < 1 || nb > 2) return NULL;
     /* 每个词：单字实词，或池里已有的整词。
      * **拼词只许用单字**：多字词当"一个词"用，不许和别的词再拼 ——
@@ -555,6 +559,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
      * `我 --[在]--> 学校学习` 这种垃圾符号节点，正是项目记过的那个坑。 */
     for (size_t i = 0; i < n; ++i) {
         if (i == ri) continue;
+        if (neg && i == ri - 1) continue;            /* 那个 `不`/`没` 已经算进 neg，不再当主语词 */
         size_t side_n = (i < ri) ? na : nb;          /* 这一边有几个词 */
         int single = rel_one_cjk(words[i]);
         int whole  = pool_find(ai->pool, words[i]) != NULL;
@@ -581,12 +586,12 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     Token *ta = pool_token_intern(ai->pool, A);
     Token *tb = pool_token_intern(ai->pool, B);
     if (!ta || !tb || ta == tb) return NULL;
-    if (ai_write_rel(ai, ta, tb, rid, 0, AI_WSRC_RELATION) != 0) return NULL;
+    if (ai_write_rel(ai, ta, tb, rid, neg, AI_WSRC_RELATION) != 0) return NULL;
     ai->n_rel_learned++;
     ai->n_learned++;
     char resp0[192];
-    snprintf(resp0, sizeof resp0, "记下 了 ： %s %s %s（新词当场造）",
-             ta->name, words[ri], tb->name);
+    snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s（新词当场造）",
+             ta->name, neg ? "不 " : "", words[ri], tb->name);
     cot_push(ai, COT_LEARN, 1, 80, "自然说法里含新词：当场造词 + 学一条核心关系", resp0);
     ai->n_cot++;
     if (out_conf) *out_conf = 0.7f;

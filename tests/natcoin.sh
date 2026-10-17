@@ -96,11 +96,19 @@ printf '%s\n' "$out" | reps | grep -q "记下 了" \
     && chk "「桌子 上 有 书」不该学" 0 "$(printf '%s\n' "$out" | reps | head -1)" \
     || chk "「桌子 上 有 书」没被学" 1
 
-echo "⑦ 否定 + 新词：不认（登记在案的局限）"
-out=$(run 1 "企鹅 不 属于 鸟")
-printf '%s\n' "$out" | reps | grep -q "记下 了" \
-    && chk "否定 + 新词 不认（不猜）" 0 "$(printf '%s\n' "$out" | reps | head -1)" \
-    || chk "否定 + 新词 不认（不猜）" 1
+echo "⑦ 否定 + 新词：「企鹅 不 属于 鸟」⇒ 记成否定"
+out=$(run 1 "企鹅 不 属于 鸟" "企鹅 属于 鸟 吗" "企鹅 不 属于 鸟 吗")
+printf '%s\n' "$out" | ans | grep -q "记下 了 ： 企鹅 不 属于 鸟" \
+    && chk "否定陈述学成否定" 1 \
+    || chk "否定陈述学成否定" 0 "$(printf '%s\n' "$out" | ans)"
+r=$(printf '%s\n' "$out" | reps | sed -n 2p)
+printf '%s\n' "$r" | grep -q "不 对 ， 企鹅 -\[不 属于\]-> 鸟" \
+    && chk "问肯定的 ⇒ 不 对" 1 \
+    || chk "问肯定的 ⇒ 不 对" 0 "$r"
+r=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$r" | grep -q "对 ， 企鹅 -\[不 属于\]-> 鸟" \
+    && chk "问否定的 ⇒ 对" 1 \
+    || chk "问否定的 ⇒ 对" 0 "$r"
 
 echo "⑧ 存盘重载：造出来的词和事实都还在"
 run 1 "麒麟 属于 神兽" "::save $TMP/n1.bin" > /dev/null
