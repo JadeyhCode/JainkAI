@@ -993,6 +993,11 @@ typedef struct {
     /* §6.216 **上一句答复的原文**（用来"再说一遍"）：按词 token 拼回去会丢掉
      * `-[属于]->` 这种排版（实测），所以直接存最终字符串。只进内存。 */
     char   last_reply[256];
+    /* §6.217 **最近几轮"用户说了什么"**（环形，只进内存）：用来回答
+     * 「我们 刚才 聊 了 什么」/「我 刚才 说 了 什么」。
+     * 存**原文**（不做分词/拼接），这样回答里能原样复述用户的说法。 */
+    char   hist[6][128];
+    size_t hist_n, hist_head;
     Token **last_skipped;
     size_t last_skipped_n, last_skipped_cap;
 

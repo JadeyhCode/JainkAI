@@ -1133,6 +1133,32 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
 /* §6.168 **记下这个问句**（等用户下一轮回话）。
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
+/* §6.217 **「刚才聊了什么」**：列最近几轮**用户**说的话（原样）。 */
+static inline int agent_history_kind(const char *input) {
+    if (!input) return 0;
+    char j[80]; size_t jl = 0;
+    for (const char *q = input; *q && jl + 1 < sizeof j; ++q) {
+        if (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') continue;
+        j[jl++] = *q;
+    }
+    j[jl] = 0;
+    static const char *list[] = {"我们刚才聊了什么", "刚才聊了什么", "我们刚才说了什么",
+                                 "刚才说了什么", "我们聊了什么", NULL};
+    static const char *mine[] = {"我刚才说了什么", "我刚才说什么", "你记得我刚才说什么吗",
+                                 "我刚才说啥", NULL};
+    for (size_t i = 0; list[i]; ++i) if (strcmp(j, list[i]) == 0) return 1;
+    for (size_t i = 0; mine[i]; ++i) if (strcmp(j, mine[i]) == 0) return 2;
+    return 0;
+}
+
+static inline void agent_history_record(AI *ai, const char *input) {
+    if (!ai || !input || !input[0]) return;
+    size_t slot = ai->hist_head % 6;
+    snprintf(ai->hist[slot], sizeof ai->hist[slot], "%s", input);
+    ai->hist_head = (ai->hist_head + 1) % 6;
+    if (ai->hist_n < 6) ai->hist_n++;
+}
+
 /* §6.216 **「再说一遍」**：把上一句答复原样再说一次。
  * 它本来就记着上一句（`ai->last_output` 存的是**答复**的词），只是没有这个指令 ⇒
  * 实测 `再 说 一 遍` 掉进生成流水线，答出「遍 我 睡 很 问 你」。 */
@@ -2897,6 +2923,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     int empty_turn = 1;
     for (const char *q = input; q && *q; ++q)
         if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') { empty_turn = 0; break; }
+    /* §6.217 记"用户说了什么"——但**元问题本身不记**（「我刚才说了什么」不是内容，
+     * 记了就会答成"你刚才说的是这句问题本身"，实测踩过）。 */
+    if (!empty_turn && input && input[0] != ':' &&
+        !agent_history_kind(input) && !agent_repeat_request(input))
+        agent_history_record(ai, input);
     if (ai->ask_pending && !empty_turn) {
         if (ai->askback) {
             /* kind 1 = 我没把握（回一句就教）；kind 2 = 我给了确定答案（回「不对」就改口） */
@@ -2908,6 +2939,33 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
         }
         agent_ask_drop(ai);
+    }
+    /* §6.217 「刚才聊了什么 / 我刚才说了什么」：从最近几轮**用户原话**里答（不用生成）*/
+    {
+        int hk = agent_history_kind(input);
+        if (hk) {
+            if (hk == 2) {
+                if (ai->hist_n == 0) snprintf(out, out_cap, "你 还 没 说 过 什么");
+                else {
+                    size_t slot = (ai->hist_head + 6 - 1) % 6;
+                    snprintf(out, out_cap, "你 刚才 说 的 是 ： %s", ai->hist[slot]);
+                }
+            } else {
+                if (ai->hist_n == 0) snprintf(out, out_cap, "我们 还 没 聊 过 什么");
+                else {
+                    size_t off = (size_t)snprintf(out, out_cap, "刚才 我们 聊 了 ： ");
+                    size_t n_list = ai->hist_n < 3 ? ai->hist_n : 3;
+                    for (size_t k = 0; k < n_list && off + 1 < out_cap; ++k) {
+                        size_t idx = (ai->hist_head + 6 - n_list + k) % 6;
+                        off += (size_t)snprintf(out + off, out_cap - off, "%s%s",
+                                                k ? " ／ " : "", ai->hist[idx]);
+                        if (off >= out_cap) { out[out_cap - 1] = 0; break; }
+                    }
+                }
+            }
+            ai->turns++;
+            return strlen(out);
+        }
     }
     /* §6.216 「再说一遍」：原样重复上一句答复（不用生成） */
     if (!ai->ask_pending && agent_repeat_request(input)) {

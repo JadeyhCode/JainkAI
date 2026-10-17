@@ -179,6 +179,15 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 还 没 说 过 什么" \
     && chk "还没说过 ⇒ 明说「还没说过什么」" 1 \
     || chk "还没说过" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "⑮ §6.217 「刚才聊了什么 / 我刚才说了什么」"
+out=$(run "我 喜欢 猫" "猫 属于 动物 吗" "我 刚才 说 了 什么" "我们 刚才 聊 了 什么")
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "你 刚才 说 的 是 ： 猫 属于 动物 吗" \
+    && chk "「我 刚才 说 了 什么」⇒ 上一句用户原话（不是本句）" 1 \
+    || chk "「我 刚才 说 了 什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "我 喜欢 猫" \
+    && chk "「我们 刚才 聊 了 什么」⇒ 列出最近几轮" 1 \
+    || chk "「我们 刚才 聊 了 什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
