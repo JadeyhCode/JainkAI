@@ -7978,3 +7978,36 @@ Direct leak of 56 byte(s) in 28 object(s):
 - 泄漏修的是**帧模板加载**这一处；没做全量泄漏普查（`valgrind` 全跑代价大）。
 
 **证据**：41 套全绿（270 s）；100 轮存档与 post185 基线**逐字节相同**（这修的是内存，不改图）。
+## §6.191 全量生命周期泄漏普查：`::load` 每次泄 900 KB（帧库没还）
+
+**上一轮**只跑了"一轮对话"的 ASan；这轮把**生命周期**都跑一遍：
+`::load` → 开两个开关 → 教/问/纠正 → `::rel/::edges/::why/::der/::think/::stats`
+→ `::save` → `::load` 回来 → 再问。ASan 报：
+
+```
+Direct leak of 901520 byte(s) in 1 object(s):
+    #1 frames_load   frame_io.h:15
+    #2 ai_load_file  model_io.h:1066
+    #3 main          main.c:1476 / 2170
+```
+
+`frames_load()` 每次 calloc 一整个 `FrameSet`（出厂 frames.txt ≈ **900 KB**），
+而 `ai_free()` 只 free 了 AI 自己和 pool 等，**没还帧库** ⇒ 每 `::load` 一次泄 900 KB
+（连带的 257/56 字节是帧里 duup 的名字和槽位名）。对"反复 load 上下文"的用法是实打实的漏。
+
+**改法（一处 + 一个钩子）**：`frames_free` 在 `frame_io.h`（比 `ai.h` 晚包含），
+所以 `ai.h` 里放一个函数指针 `static void (*ai_frames_free)(AI *)`，`frames_load()` 第一次被调用时
+把它指向真正的实现；`ai_free()` 里有就调。**注**：只跑 `tools/` 里那些不碰帧库的探针时该指针为 NULL
+（行为不变、帧库本来也没加载）。
+
+**证据**：同一段生命周期在 ASan+UBSan+LeakSanitizer 下 **exit 0、无 SUMMARY、无 Direct leak**；
+120 条 fuzz 句同样干净。整包 **41/41**（273 s）；100 轮存档与 post185 基线**逐字节相同**
+（这修的是内存，不改图）。
+
+**局限**
+
+- 只把"帧库"这一个 900 KB 的对象补上了；`ai_free` 里**其他**自有分配（`think`/`micro` 内部的
+  子结构等）没有逐个核对 —— 这次 ASan 没报，是因为它们的根被 free 了（子结构没报"间接泄漏"
+  说明也被一并还了），但**没有系统性证明**。
+- `tools/` 里的探针如果没有经过 `frames_load`，`ai_frames_free` 是 NULL ⇒ 帧库（若加载过）
+  仍会泄；探针都是短命进程，不修。

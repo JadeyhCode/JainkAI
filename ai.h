@@ -1697,6 +1697,11 @@ static inline AI *ai_new(void) {
     return ai;
 }
 
+/* §6.191 `frames_free` 在 frame_io.h（本文件之后才包含）⇒ 这里留一个函数指针，
+ * main/tools 在包含完 frame_io.h 之后把它指向真正的实现（见 frame_io.h 末尾）。
+ * 不直接 #include 是为了保持"ai.h 不依赖 frame 层"这条包含顺序。 */
+static void (*ai_frames_free)(AI *ai) = NULL;
+
 static inline void ai_free(AI *ai) {
     if (!ai) return;
     for (size_t i = 0; i < ai->lex_n; ++i) free(ai->lex_extra[i]);
@@ -1714,6 +1719,10 @@ static inline void ai_free(AI *ai) {
     ai->idf = NULL;
     ai->idf_n = 0;
     free(ai->last_idea);
+    /* §6.191 **帧库也要还**：`frames_load` 每次 calloc 一整个 `FrameSet`（出厂 frames.txt
+     * ≈ 900 KB），以前 `ai_free` 只 free 了 AI 自己 ⇒ 每 `::load` 一次泄 900 KB。
+     * 这个函数在 frame_io.h（ai.h 之后才被包含）⇒ 这里用**前向声明**的那份（见文件上方）。 */
+    if (ai_frames_free) ai_frames_free(ai);
     for (size_t i = 0; i < ai->dynrel_n; ++i) free(ai->dynrel_name[i]);
     free(ai->micro);        /* 微内核状态；内建补丁用静态壳，没有别的分配 */
     free(ai->think);        /* 思维循环状态（议程/未解问题/痕迹） */
