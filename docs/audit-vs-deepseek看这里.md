@@ -8011,3 +8011,28 @@ Direct leak of 901520 byte(s) in 1 object(s):
   说明也被一并还了），但**没有系统性证明**。
 - `tools/` 里的探针如果没有经过 `frames_load`，`ai_frames_free` 是 NULL ⇒ 帧库（若加载过）
   仍会泄；探针都是短命进程，不修。
+## §6.192 把 ASan 复查做成一条命令（`tools/asan_check.sh`）
+
+§6.190/§6.191 两次泄漏都是**手工**搭 ASan 命令跑出来的；为了下次还能复查，做成脚本：
+
+```sh
+sh tools/asan_check.sh          # gcc，-O1 -g -fsanitize=address,undefined
+CC=clang sh tools/asan_check.sh # 换编译器
+```
+
+- **三组输入**：① 生命周期（load → 开关 → 教/问/纠正 → `::rel/::edges/::why/::der/::think/
+  ::stats/::teach/::world/::hypo/::prims/::lex/::help` → save → load 回来 → 再问）；
+  ② 120 条确定性随机句（与 `tests/fuzz.sh` 同一个种子/词表）；③ 病态输入（空行/空白/裸括号/
+  保留记号/600 词长句/300 字长词/连串不）。
+- **判据**：每组 rc=0，且输出里没有 `ERROR: AddressSanitizer` / `runtime error:` /
+  `SUMMARY: AddressSanitizer`（**泄漏也会打 SUMMARY**，所以这一条同时管泄漏）。
+- **故意不带 `-Werror`**：项目里有一批"故意的 `format-truncation` 截断"，`-O1`+sanitizer 下
+  会变成硬错误（§6.190 踩过）；脚本里 `-Wno-error` 并写了注释。
+- **本机没有 libasan/libubsan 时 SKIP**（返回 0，不假红）。
+
+**为什么不进常规整包**：构建 ≈10 s、跑三组 ≈几秒到几十秒（生命周期在 ASan 下明显变慢），
+而且"有泄漏就非零退出"在不同环境表现不同 —— 它是**按需复查**的工具，不是每次提交的门。
+
+**证据**：`sh tools/asan_check.sh` ⇒ 三组全 `[OK]`、`PASS`；`sh tests/selfcheck.sh` 也绿
+（新脚本在 `tools/`，不算套件，不破坏"清单与脚本对得上"）；41 套全绿（284 s）；
+100 轮存档与 post185 基线**逐字节相同**（只加脚本与文档）。
