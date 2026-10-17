@@ -268,6 +268,16 @@ printf '%s\n' "$out" | grep -q "属于 猫 的 有 ： 很" \
     && chk "垃圾主语没有进图（什么 属于 猫 不该答 很）" 0 "$(printf '%s\n' "$out" | grep -a "属于 猫 的 有")" \
     || chk "垃圾主语没有进图" 1
 
+echo "㉑ §6.234 量词问句归一 + 单字肯定别掉流水线"
+out=$(run "猫 是 一 种 什么" "猫 是 一 只 什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 记 的 是 ： 猫 属于 动物" \
+    && chk "「猫 是 一 种 什么」⇒ 按「属于 什么」答" 1 \
+    || chk "「猫 是 一 种 什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "能" "会" "可以")
+n=$(printf '%s\n' "$out" | reps | grep -c "嗯 ， 好" || true)
+[ "$n" -eq 3 ] && chk "单字肯定（能/会/可以）⇒「嗯，好」，不再出词串" 1 \
+    || chk "单字肯定" 0 "$(printf '%s\n' "$out" | reps | head -2)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

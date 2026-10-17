@@ -168,6 +168,20 @@ static inline int agent_norm_name_q(char *const *w, size_t n, char **nw, size_t 
             *out_n = 3; return 1;
         }
     }
+    /* ②b §6.234 `A 是 一 种/只/个 什么 [吗]` ⇒ `A 属于 什么`（量词问句）*/
+    {
+        size_t last2 = last;
+        if (last2 >= 5 && (!strcmp(w[1], "是")) && (!strcmp(w[last2 - 1], "什么"))) {
+            size_t q = last2 - 1;                    /* 什么 的位置 */
+            size_t c = q - 1;                        /* 量词/数词的位置 */
+            if (c >= 2 && (!strcmp(w[c], "种") || !strcmp(w[c], "只") ||
+                           !strcmp(w[c], "个") || !strcmp(w[c], "类") ||
+                           !strcmp(w[c], "种 类"))) {
+                nw[0] = w[0]; nw[1] = (char *)"属于"; nw[2] = (char *)"什么";
+                *out_n = 3; return 1;
+            }
+        }
+    }
     /* ③ `你/您 知道 A 的 名字 [吗]` ⇒ `A 叫 什么` */
     if (last == 5 && (!strcmp(w[0], "你") || !strcmp(w[0], "您")) && !strcmp(w[1], "知道") &&
         !strcmp(w[3], "的") && !strcmp(w[4], "名字")) {
@@ -1389,7 +1403,8 @@ static inline int agent_bare_reply(const char *input) {
     char *e = b + strlen(b); while (e > b && (e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
     if (!*b) return 0;
     static const char *yes[] = {"对", "是", "嗯", "好", "行", "好的", "是啊", "是的", "没错",
-                                "对 的", "可以", "嗯 嗯", "懂了", "明白", "明白了", "知道了", NULL};
+                                "对 的", "可以", "嗯 嗯", "懂了", "明白", "明白了", "知道了",
+                                "能", "会", "行 的", NULL};   /* §6.234：单字肯定也别掉流水线 */
     static const char *no[]  = {"不", "不是", "不对", "不会", "不能", "没", "没有", "不 对",
                                 "不 是", "不 会", "不 能", "没 有", "不 太 对",
                                 "不知道", NULL};
