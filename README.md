@@ -1,6 +1,7 @@
 # JainkAI
 
-**版本：v0.01**（`ai.h` 的 `AIP_VERSION` 是唯一出处；存档格式版本另算，见 `MODEL_VERSION`）
+**版本：v0.01**（`ai.h` 的 `AIP_VERSION` 是唯一出处；存档格式版本另算，见 `MODEL_VERSION`；
+对外变化记在 [`CHANGELOG.md`](CHANGELOG.md)）
 
 **一个用 C 写的「白箱 AI 内核」实验**：记忆是一张**图**（词＝节点、关系＝边），推理是**图上求解 + 验证**，
 思考是**逐步在图上走**，所有"改自己脑子"的动作都走一条
