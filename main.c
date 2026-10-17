@@ -2724,7 +2724,9 @@ int main(int argc, char **argv) {
                 if (*arg && strcmp(arg, "clear") == 0) {
                     /* 手动丢掉挂着的追问：不然只能靠"说一句别的话"让它作废 */
                     int had = a->brain->ask_pending;
-                    a->brain->ask_pending = 0;
+                    /* §6.188 之后必须走 `agent_ask_drop`：它会把对应的 `[追问:…]` 标记也标成垃圾，
+                     * 否则**存盘再载入**时那条追问会从标记里复活（手动 clear 就等于没 clear）。 */
+                    agent_ask_drop(a->brain);
                     printf("[%s]\n", had ? "丢掉了挂着的追问 —— 下一句不会再被当成回话"
                                           : "本来就没有挂着的追问");
                     continue;

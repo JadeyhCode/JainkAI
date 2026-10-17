@@ -266,6 +266,16 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了" \
     && chk "不会再被那句「不 对」教一次" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "不会再被那句「不 对」教一次" 1
 
+echo "㉓ 手动 clear 也要把标记清掉（否则存盘再载入会复活）"
+run 1 "狗 会 唱歌 吗" "::askback clear" "::save $TMP/pend3.bin" > /dev/null
+out=$(run 1 "::load $TMP/pend3.bin" "::askback" "不 对" "狗 会 唱歌 吗")
+printf '%s\n' "$out" | grep -q "没有挂着的追问" \
+    && chk "clear 之后重载没有挂着的追问" 1 \
+    || chk "clear 之后重载没有挂着的追问" 0 "$(printf '%s\n' "$out" | grep -a "挂着")"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了" \
+    && chk "clear 之后那句「不 对」不再教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "clear 之后那句「不 对」不再教" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
