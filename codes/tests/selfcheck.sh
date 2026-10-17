@@ -212,10 +212,12 @@ _tmp2=$(mktemp -d)
 #   forget          —— 旧文里写的旧命令（现为 ::gc）
 #   note            —— `::note 删` 指的是**补丁操作**，不是元命令
 #   pron            —— 旧文写作 `::pron last`（现为 `::others pron`；历史小节点不动）
+#   delo            —— §6.198 记录里**引用过这个错拼**（真命令是 ::delib）；记录本身不改
 #   lease / prune / relx / x / xxx —— 文档里明确说"没有这个命令"或纯示例
 cat > "$_tmp2/ok" <<'OK'
 affect
 aidump
+delo
 forget
 lease
 note

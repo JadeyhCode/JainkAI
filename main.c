@@ -2650,6 +2650,28 @@ int main(int argc, char **argv) {
                     }
                 }
                 if (!shown) printf("   （还没有）\n");
+                /* §6.199 **独占关系记了多个宾语 = 数据不一致**。学的时候没有拦
+                 * （`我 属于 动物` 之后再说 `我 是 小明` 会写成 `我 属于 小明`），
+                 * 这里至少让它**看得见** —— 白箱的意思是"不一致要能查出来"，不是"永远一致"。
+                 * 去重：`属于/是` 是同一个 id，别打两遍。 */
+                for (size_t k = 0; AI_RELS[k].name; ++k) {
+                    uint8_t rid = AI_RELS[k].id;
+                    int dup_id = 0;
+                    for (size_t q = 0; q < k; ++q)
+                        if (AI_RELS[q].id == rid) { dup_id = 1; break; }
+                    if (dup_id || !rel_is_excl(a->brain, rid)) continue;
+                    size_t nobj = 0;
+                    for (size_t i = 0; i < t->count; ++i) {
+                        const AssocEntry *e = &t->assocs[i];
+                        if (!e->main || !e->main->name) continue;
+                        if (e->role == ASSOC_ROLE_DERIVED) continue;   /* 推论不算观测 */
+                        if (e->rel & REL_BIT(rid)) nobj++;
+                    }
+                    if (nobj > 1)
+                        printf("   ⚠ 「%s」在数据里是**独占**关系，这里却记了 %zu 个宾语 —— "
+                               "学的时候没拦（§6.199）；要按独占用，先改口\n",
+                               AI_RELS[k].name, nobj);
+                }
                 continue;
             }
             case CMD_WHY: {
