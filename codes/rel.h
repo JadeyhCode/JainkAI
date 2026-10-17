@@ -1394,8 +1394,11 @@ static inline void proof_text(const AI *ai, const Proof *pf, char *out, size_t c
                 w = snprintf(out + off, cap - off, " -[%s%s]-> %s",
                              s->neg ? "不 " : "", rn, nm);
             } else {
-                w = snprintf(out + off, cap - off, " -[%s·%s]-> %s",
-                             rn, rel_via_name(s->via), nm);
+                /* §6.204 **极性也要打**：R9「缺前提 → 否定能力」推出来的那一步是**否定**，
+                 * 以前只打 `-[会·缺前提]-> 唱歌`（读起来像"猫会唱歌"）⇒ 报告"互相矛盾的依据"时
+                 * 另一条链看着跟正面一模一样（实测把自己都绕晕）。 */
+                w = snprintf(out + off, cap - off, " -[%s%s·%s]-> %s",
+                             s->neg ? "不 " : "", rn, rel_via_name(s->via), nm);
             }
         }
         if (w < 0 || (size_t)w >= cap - off) { off = cap - 1; break; }

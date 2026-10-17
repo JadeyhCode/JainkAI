@@ -279,7 +279,8 @@ else
 fi
 grep -q '依据：' o31 && ok "on：**依据（链）也带回来了**（规则名/链式渲染不再丢）" \
     || bad "on 模式的依据" "$(grep 'AI >' o31 | tail -2)"
-grep -q -- '-\[会' o31 && ok "链上看得见走的是哪条规则" \
+# §6.204：条件链现在**带极性**（`-[不 会·缺前提]->`），所以断言要认两种写法
+grep -qE -- '-\[(不 )?会' o31 && ok "链上看得见走的是哪条规则" \
     || bad "规则名" "$(grep 'AI >' o31 | tail -2)"
 # 没结论 + hold：按住不说（"控制什么时候发送"）
 run '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n::patch mount 记事本\n::patch op 记事本 模式 auto\n::notepad hold\n猫 会 跳舞 吗\n::delib\n' o32
