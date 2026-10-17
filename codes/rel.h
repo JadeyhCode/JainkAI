@@ -1433,6 +1433,27 @@ static inline int rel_is_classifier(const char *w) {
     return 0;
 }
 
+/* §6.164 **数词**（`一 只 猫` 里的 `一`）—— 和量词一起剥。只收最常见的几个。 */
+static inline int rel_is_numeral(const char *w) {
+    if (!w) return 0;
+    return !strcmp(w, "一") || !strcmp(w, "两") || !strcmp(w, "二") ||
+           !strcmp(w, "三") || !strcmp(w, "几") || !strcmp(w, "半");
+}
+
+/* §6.164 **`是/属于 + [数词] 量词 + 宾语`**：返回宾语真正的起点（没剥就返回 ri+1）。
+ * 形状判定和宾语拼装**共用这一处** —— 分开写迟早会不一致（§6.163 就是先只改了形状）。 */
+static inline size_t rel_obj_start(char *const *words, size_t last, size_t ri, int nat) {
+    size_t ob = ri + 1;
+    if (!nat || ob >= last) return ob;
+    if (strcmp(words[ri], "是") != 0 && strcmp(words[ri], "属于") != 0) return ob;
+    size_t k = ob;
+    if (k < last && rel_is_numeral(words[k])) ++k;
+    if (k < last && k > ob && rel_is_classifier(words[k])) return k + 1;   /* 数词 + 量词 */
+    if (k == ob && k < last && rel_is_classifier(words[k])) return k + 1;  /* 只有量词 */
+    return ob;
+}
+
+
 /* 先只验**形状**、完全不碰关系表：
  *   `<主语> [不] <谓语词> <宾语…> [吗]`，主语 1 个词、谓语 1 个词、
  *   宾语 1 个词或 2~4 个单字实词。
@@ -1449,13 +1470,9 @@ static inline int rel_shape_ok2(char *const *words, size_t n, int nat) {
     if (ri >= last) return 0;
     size_t nobj = last - ri - 1;
     if (nobj == 0) return 0;
-    size_t ob = ri + 1;                   /* 宾语起点 */
-    /* §6.163 `是/属于 + 量词 + 宾语`：剥掉量词再看（只在"自然说法"开关打开时） */
-    if (nat && nobj >= 2 && rel_is_classifier(words[ob]) &&
-        (strcmp(words[ri], "是") == 0 || strcmp(words[ri], "属于") == 0)) {
-        ob++;
-        nobj--;
-    }
+    /* §6.163/§6.164 `是/属于 + [数词] 量词 + 宾语`：剥掉再看（只在"自然说法"开关打开时）*/
+    size_t ob = rel_obj_start(words, last, ri, nat);
+    nobj = last - ob;
     if (nobj > 4) return 0;
     if (nobj == 1) return words[ob][0] != '[';
     for (size_t i = ob; i < last; ++i)
@@ -1549,12 +1566,8 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
 
     size_t nobj = last - ri - 1;
     if (nobj == 0) return 0;
-    size_t ob = ri + 1;                   /* §6.163 宾语起点（可能要跳过量词）*/
-    if (ai->rel_nat && nobj >= 2 && rel_is_classifier(words[ob]) &&
-        (strcmp(words[ri], "是") == 0 || strcmp(words[ri], "属于") == 0)) {
-        ob++;
-        nobj--;
-    }
+    size_t ob = rel_obj_start(words, last, ri, ai->rel_nat);   /* §6.163/§6.164 共用一处 */
+    nobj = last - ob;
     if (nobj == 1) {
         if (words[ob][0] == '[') return 0;
         if (bw) *bw = words[ob];
