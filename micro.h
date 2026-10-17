@@ -927,6 +927,12 @@ static inline Micro *micro_of(AI *ai) {
         mk->safe.max_new_tokens_step = 2;
         mk->safe.max_new_edges_step  = 8;
         mk->safe.max_edges_per_token = 512;
+        /* §6.175 **测量钩子**（只当初始默认，`AIP_EDGECAP=<n>` 覆盖；默认仍 512）。
+         * 为什么要它：会话图聊厚之后 `我` 的边数会越过 512（实测 674），
+         * 于是往 `我` 上写的自撰（想象/内部对话/自我提醒）全被安全内核拒。
+         * 这是**安全阀**不是 bug，但"上限该不该随图长"要先有数据再谈。 */
+        { const char *ec = getenv("AIP_EDGECAP");
+          if (ec && ec[0]) { long v = strtol(ec, NULL, 10); if (v > 0) mk->safe.max_edges_per_token = (int)v; } }
         mk->safe.max_patch_calls_step = 4;
         mk->safe.max_tokens_total    = 400000;
         /* mod_off / new_token_off / remove_off = 0：自修改默认开 */

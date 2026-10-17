@@ -5051,7 +5051,14 @@ static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
      * 打开时才去碰微内核状态，并且先看那条**静态例外**（见上面那段注释）。 */
     if (ai->route_writes) {
         Micro *mk = micro_of(ai);
-        if (mk && !mk->safe.mod_off &&
+        /* §6.175 **无名端点的边不走受审通道**：没有名字的符号节点是"临时叠加"
+         * （`ai_imagine` 用 `pool_token(pool,NULL,NULL)` 造的），它**不会存盘**
+         * （`mio_edge_saved` 跳过无名端点）⇒ 进审查只是白记预算/限额。
+         * 实测症状：`我` 的边数 674 > 上限 512 之后，每轮都多一条
+         * 「加边 我→(无名) 拒绝：边数触顶」—— 被拒的是本来就不存盘的东西，
+         * 却把"自我修改被拒"的噪声堆进 `::safe`。 */
+        int named = (a->name && a->name[0]) && (b->name && b->name[0]);
+        if (named && mk && !mk->safe.mod_off &&
             !micro_endpoint_reserved(a) && !micro_endpoint_reserved(b)) {
             int had = micro_has_edge(a, b);  /* 口径要和直写那条路一致（1=新加 / 0=已有） */
             ModIntent m;
