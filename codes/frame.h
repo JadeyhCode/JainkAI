@@ -676,7 +676,11 @@ static inline size_t fr_split_token(AI *ai, const Token *t, Token **out, size_t 
         unsigned char c = (unsigned char)*p;
         size_t cl = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2
                   : ((c & 0xF0) == 0xE0) ? 3 : 4;
-        if (cl > 4 || cl + 1 > sizeof buf) break;
+        /* §6.193 **截断/非法 UTF-8 不许越界读**：上面只按**首字节**猜长度，
+         * 而名字可能是半截序列（实测：2 字节的 `\xE7\x8C` 被当成 3 字节 ⇒ memcpy 读越界，
+         * ASan 报 heap-buffer-overflow）。剩下多少字节就最多读多少。 */
+        size_t rem = strlen(p);
+        if (cl > 4 || cl + 1 > sizeof buf || cl > rem) break;
         memcpy(buf, p, cl); buf[cl] = 0;
         Token *nt = pool_token_intern(ai->pool, buf);
         if (!nt) break;

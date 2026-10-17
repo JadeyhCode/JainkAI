@@ -8036,3 +8036,41 @@ CC=clang sh tools/asan_check.sh # 换编译器
 **证据**：`sh tools/asan_check.sh` ⇒ 三组全 `[OK]`、`PASS`；`sh tests/selfcheck.sh` 也绿
 （新脚本在 `tools/`，不算套件，不破坏"清单与脚本对得上"）；41 套全绿（284 s）；
 100 轮存档与 post185 基线**逐字节相同**（只加脚本与文档）。
+## §6.193 非法/截断 UTF-8 + 6 万字节长句：又逮到**两个越界写**
+
+§6.192 的 asan_check 跑的是"正常文本"。这轮补了一组**非法字节**（`\x80\x81`、`\xff`、
+半个汉字 `\xe7\x8c`、控制字符、6 万字节一行），ASan 立刻报了两个**真越界**：
+
+### ① `fr_split_token` 按首字节猜长度、读越界（heap-buffer-overflow）
+
+```
+READ of size 4 ... 0 bytes to the right of 2-byte region
+    #2 fr_split_token  frame.h:680
+    #3 fr_generate     frame.h:1079
+```
+
+它按**首字节**算 `cl`（3 字节汉字），然后 `memcpy(buf, p, cl)`；名字若是半截序列
+（`\xe7\x8c` 只有 2 字节）就多读 1 字节。修法：`cl > strlen(p)` 就停（剩余不够一个完整字符 ⇒ 不读）。
+
+### ② `ai_char_query_prep` 往 64 格的数组里写第 65 个（global-buffer-overflow）
+
+```
+runtime error: index 64 out of bounds for type 'Token *[64]'
+    #0 ai_char_query_prep  ai.h:3131
+```
+
+`tok[64]`，备忘命中那条判断里有 `an <= 64`，**填充循环没有** ⇒ 两万字的长句（词数 > 64）
+直接写越界。修法：统一 `lim = min(an, 64)`（字符集本来就只看前 64 个词）。
+
+### ③ 同族隐患也一起修了
+
+`think_utf8_clip`（think.h:456）是同一个"按首字节猜长度"的写法，源串若是半截序列同样会越界读
+（这次没炸是因为调用方的缓冲更大）。加了 `len > strlen(src+i)` 的保护。
+
+**验证**：修后同一组非法字节输入在 ASan/UBSan/LSan 下 **rc=0、无报告**；`session.bin`（厚图）
+跑同一套也干净。`tools/asan_check.sh` 加了第 4b 组（非法 UTF-8）；`tests/fuzz.sh` 加了 ③ 两条
+（普通二进制下钉"不崩"，7 条断言）。整包 **41/41**（279 s）；100 轮存档与 post185 基线**逐字节相同**。
+
+**局限**：这两处都只在**非法输入**下触发——正常用户打不出半截 UTF-8，但
+①终端/管道截断、②复制粘贴坏字节、③别的程序把我们当子进程喂数据，都可能产生；
+"/非法字节"这类输入没有穷举，只覆盖了上面几种。

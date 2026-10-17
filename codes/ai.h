@@ -3123,15 +3123,19 @@ static AiCharQueryMemo g_charq;
 
 /* 就绪之后：ca/la_/na/sig 是这次查询的字符切分 */
 static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an) {
-    enum { MAXC = 96 };
+    enum { MAXC = 96, MAXT = 64 };
+    /* §6.193 **长输入不许越界**：`tok[]` 只有 64 格，以前只在**备忘命中**那条判断里限了
+     * `an <= 64`，填充循环没有 ⇒ 一个 60 KB 的长句（两万字）直接写越界（ASan 报
+     * global-buffer-overflow）。这里统一按 `lim = min(an,64)` 处理（字符集本来就只看前 64 个词）。 */
+    size_t lim = an > (size_t)MAXT ? (size_t)MAXT : an;
     if (g_charq.serial == serial &&
-        g_charq.n == an && an <= 64 && memcmp(g_charq.tok, a, an * sizeof *a) == 0)
+        g_charq.n == lim && (lim == 0 || memcmp(g_charq.tok, a, lim * sizeof *a) == 0))
         return 1;
-    g_charq.serial = serial; g_charq.n = an;
-    for (size_t i = 0; i < an; ++i) g_charq.tok[i] = a[i];
+    g_charq.serial = serial; g_charq.n = lim;
+    for (size_t i = 0; i < lim; ++i) g_charq.tok[i] = a[i];
     size_t nc = 0;
     uint32_t sig = 0;
-    for (size_t i = 0; i < an && nc + 8 < MAXC; ++i) {
+    for (size_t i = 0; i < lim && nc + 8 < MAXC; ++i) {
         nc += token_name_chars(a[i], g_charq.c + nc, g_charq.l + nc, MAXC - nc);
         sig |= token_name_sig(a[i]);
     }

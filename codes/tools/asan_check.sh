@@ -35,9 +35,9 @@ if ! "$CC" -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer 
     exit 0
 fi
 
-echo "== 2/4 生命周期"
+echo "== 2/4 生命周期（模型：$MODEL）"
 cat > "$TMP/life.txt" <<'EOF'
-::load model.bin
+::load __MODEL__
 ::askback on
 ::natcoin on
 猫 属于 动物 吗
@@ -68,6 +68,7 @@ cat > "$TMP/life.txt" <<'EOF'
 ::help
 ::quit
 EOF
+sed -i "s|__MODEL__|$MODEL|" "$TMP/life.txt"
 
 echo "== 3/4 确定性随机句 120 条"
 awk -v N=120 'BEGIN{
@@ -102,6 +103,15 @@ echo "== 4/4 病态输入"
     awk 'BEGIN{s="";for(i=0;i<300;i++)s=s"猫";print s}'
 } > "$TMP/patho.txt"
 
+echo "== 4b/4 非法/截断 UTF-8（§6.193 的两个越界都靠这组发现）"
+{
+    printf '\200\201\202\377\376\n'        # 非法字节
+    printf '\347\214\n'                       # 截断的 UTF-8（「猫」的一半）
+    printf '\347\n'                             # 单字节
+    printf '\001\002\003\n'                   # 控制字符
+    awk 'BEGIN{s="";for(i=0;i<20000;i++)s=s"猫";print s}'   # 6 万字节一行
+} > "$TMP/bytes.txt"
+
 fail=0
 run_group() {
     name=$1; input=$2
@@ -123,6 +133,7 @@ run_group() {
 run_group "life"   "$TMP/life.txt"
 run_group "random" "$TMP/rnd.txt"
 run_group "patho"  "$TMP/patho.txt"
+run_group "bytes"  "$TMP/bytes.txt"
 
 if [ "$fail" -ne 0 ]; then
     echo "FAIL asan_check（看上面的报告；输出在 $TMP/*.out）"

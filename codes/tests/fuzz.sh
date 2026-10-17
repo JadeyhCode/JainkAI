@@ -81,8 +81,24 @@ set -e
 grep -aqE "Segmentation|Assertion|corrupt|stack smashing" "$TMP/patho.out" \
     && chk "病态输入输出干净" 0 || chk "病态输入输出干净" 1
 
+echo "③ 非法/截断 UTF-8 + 6 万字节长句（§6.193 的两个越界就是这组发现的）"
+{
+    printf '\200\201\202\377\376\n'
+    printf '\347\214\n'
+    printf '\347\n'
+    printf '\001\002\003\n'
+    awk 'BEGIN{s="";for(i=0;i<20000;i++)s=s"猫";print s}'
+} > "$TMP/bytes.txt"
+set +e
+timeout 300 "$BIN" "$MODEL" < "$TMP/bytes.txt" > "$TMP/bytes.out" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && chk "非法字节/长句也没崩（rc=0）" 1 || chk "非法字节/长句也没崩（rc=$rc）" 0
+grep -aqE "Segmentation|Assertion|corrupt|stack smashing" "$TMP/bytes.out" \
+    && chk "非法字节输出干净" 0 || chk "非法字节输出干净" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL fuzz（健壮性）"
     exit 1
 fi
-echo "PASS fuzz（120 条确定性随机句 + 8 条病态输入：不崩、都答）"
+echo "PASS fuzz（120 条确定性随机句 + 8 条病态输入 + 非法字节/长句：不崩、都答）"

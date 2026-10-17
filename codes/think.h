@@ -454,7 +454,9 @@ static inline void think_utf8_clip(char *dst, size_t cap, const char *src) {
     while (src[i] && i + 1 < cap) {
         unsigned char c = (unsigned char)src[i];
         size_t len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : 4;
-        if (i + len >= cap) break;
+        /* §6.193 同 `fr_split_token`：按首字节猜的长度不能超过**源串剩余**（半截 UTF-8 会越界读） */
+        size_t sl = strlen(src + i);
+        if (i + len >= cap || len > sl) break;
         memcpy(dst + i, src + i, len);
         i += len;
     }
