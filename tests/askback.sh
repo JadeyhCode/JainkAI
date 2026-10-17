@@ -181,6 +181,16 @@ printf '%s\n' "$out" | grep -q "没有这个符号节点" \
     && chk "关着时没有修正标记（老行为）" 1 \
     || chk "关着时没有修正标记" 0 "$(printf '%s\n' "$out" | grep "修正" | tail -1)"
 
+echo "⑯ ::askback on 命令也能开（不用环境变量）"
+out=$(run 0 "::askback on" "猫 属于 动物 吗" "不 对" "猫 属于 动物 吗")
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "不 对 ， 猫 -\[不 属于\]-> 动物" \
+    && chk "::askback on 之后纠正生效" 1 \
+    || chk "::askback on 之后纠正生效" 0 "$a"
+printf '%s\n' "$out" | grep -q "追问回话 = 开" \
+    && chk "命令回显状态" 1 \
+    || chk "命令回显状态" 0
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1

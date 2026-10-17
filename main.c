@@ -540,6 +540,7 @@ typedef enum {
     CMD_WHY,
     CMD_RELINFER,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
+    CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -669,6 +670,11 @@ static const CmdDef CMDS[] = {
       "关系层开关：推理 + 对话中现学知识（默认 on）", CMD_RELINFER },
     { "revise", NULL, 1, "基本",
       "改口语义：后说的观测替掉先说的对立极性（默认 on；off 回到旧语义做 A/B）", CMD_REVISE },
+    { "askback", "on|off", CARG_OPT, "基本",
+      "追问回话（默认关，§6.168/§6.172）：它说「没把握（只能猜/拿不准）」之后，\n"
+      "你回一句「会/不 会/对/不 对」就当教学写进图；\n"
+      "它答了确定答案、你说「不 对」就**改口**（并留一个 [修正:…] 标记）。\n"
+      "只等一轮、只认短回话（「你 说 的 不 对」也认）", CMD_ASKBACK },
     { "op", NULL, 1, "基本",
       "符号节点行为（图操作）：::op 看清单，::op <行为> <参数…> 跑一条（经安全内核）", CMD_OP },
     { "premise", NULL, 2, "基本",
@@ -2675,6 +2681,32 @@ int main(int argc, char **argv) {
                            w[0], w[1], w[2]);
                 }
                 free(dup);
+                continue;
+            }
+            case CMD_ASKBACK: {
+                /* §6.168/§6.172 **追问回话**：默认关（`AIP_ASKBACK=1` 也能开）。
+                 * 两种 pending：没把握（回一句就教）/ 确定答案（回「不 对」就改口）。 */
+                const char *arg = cmd;
+                while (*arg && *arg != ' ') arg++;
+                while (*arg == ' ') arg++;
+                if (*arg) {
+                    if (strcmp(arg, "on") == 0) a->brain->askback = 1;
+                    else if (strcmp(arg, "off") == 0) a->brain->askback = 0;
+                    else { printf("[用法] ::askback on|off\n"); continue; }
+                }
+                printf("[追问回话 = %s]（%s）\n", a->brain->askback ? "开" : "关（默认）",
+                       a->brain->askback
+                           ? "你回一句「会/不 会/对」我就记进图；你说「不 对」我就改口"
+                           : "老行为：追问的回话掉进流水线（要教用 ::teach，或开这个开关）");
+                if (a->brain->ask_pending)
+                    printf("  现在挂着一条追问：%s %s %s（%s）\n",
+                           a->brain->ask_a, a->brain->ask_neg ? "不" : "", a->brain->ask_b,
+                           a->brain->ask_kind == 2 ? "我给了确定答案，等你确认或纠正"
+                                                   : "我没把握，等你告诉我");
+                else
+                    printf("  现在没有挂着的追问。\n");
+                printf("  本次会话现场学到 %zu 条 / 改口 %zu 次。\n",
+                       a->brain->n_rel_learned, a->brain->n_revised);
                 continue;
             }
             case CMD_REVISE: {
