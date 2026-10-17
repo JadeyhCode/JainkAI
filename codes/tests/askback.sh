@@ -160,6 +160,17 @@ printf '%s\n' "$a" | grep -q "^对 ，" \
     && chk "再问 ⇒「对」" 1 \
     || chk "再问 ⇒「对」" 0 "$a"
 
+echo "⑭ 开：整句说法也认（你 说 的 不 对），但不替我认领别人的错（我 说 的 不 对）"
+out=$(run 1 "猫 属于 动物 吗" "你 说 的 不 对" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "改 过来 了 ： 猫 不 属于 动物" \
+    && chk "「你 说 的 不 对」⇒ 改口" 1 \
+    || chk "「你 说 的 不 对」⇒ 改口" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run 1 "猫 属于 动物 吗" "我 说 的 不 对" "猫 属于 动物 吗")
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "^对 ，" \
+    && chk "「我 说 的 不 对」不改我的图" 1 \
+    || chk "「我 说 的 不 对」不改我的图" 0 "$a"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1

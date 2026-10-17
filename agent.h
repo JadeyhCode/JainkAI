@@ -2376,6 +2376,22 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
     for (size_t i = 0; corr[i]; ++i) if (strcmp(j, corr[i]) == 0) { is_corr = 1; break; }
     if (!is_corr)
         for (size_t i = 0; conf[i]; ++i) if (strcmp(j, conf[i]) == 0) { is_conf = 1; break; }
+    /* §6.172c **整句说法**也认：`你 说 的 不 对` / `你 说 错 了`（语气词已剔掉）。
+     * 只认"你/您/这/那 + 纠正词"这个形状 —— `我 说 的 不 对`（用户说自己说错了）
+     * 不该拿来改**我的**知识，落空更安全。 */
+    if (!is_corr && !is_conf) {
+        size_t jl = strlen(j);
+        static const char *lead[] = {"你", "您", "这", "那", NULL};
+        for (size_t i = 0; !is_corr && lead[i]; ++i) {
+            size_t ll = strlen(lead[i]);
+            if (strncmp(j, lead[i], ll) != 0 || jl <= ll) continue;
+            for (size_t k = 0; !is_corr && corr[k]; ++k) {
+                size_t cl = strlen(corr[k]);
+                if (jl > cl && j[jl - cl - 1] == ' ' && strcmp(j + jl - cl, corr[k]) == 0)
+                    is_corr = 1;
+            }
+        }
+    }
     if (!is_corr && !is_conf) { ai->ask_pending = 0; return 0; }   /* 不是短回话：作废 */
     Token *A = pool_find(ai->pool, ai->ask_a);
     Token *B = pool_find(ai->pool, ai->ask_b);
