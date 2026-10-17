@@ -1029,6 +1029,15 @@ static inline void agent_ask_persist(AI *ai) {
     snprintf(ai->ask_mark, sizeof ai->ask_mark, "%s", nm);
 }
 
+/* 只把**上一条标记**标成垃圾（不动当前 pending）：kind=2 覆盖时用 —— 免得旧标记
+ * 在载入时被当成"还挂着的追问"（§6.201）。 */
+static inline void agent_ask_drop_mark_only(AI *ai) {
+    if (!ai || !ai->ask_mark[0]) return;
+    Token *m = pool_find(ai->pool, ai->ask_mark);
+    if (m) m->is_garbage = 1;
+    ai->ask_mark[0] = 0;
+}
+
 /* 丢掉 pending（无论成不成）：**标记标成垃圾**（不删节点 ⇒ id 连续），字段清干净。 */
 static inline void agent_ask_drop(AI *ai) {
     if (!ai) return;
@@ -1094,7 +1103,11 @@ static inline void agent_askback_arm_name(AI *ai, const char *a, uint8_t rid,
     ai->ask_fact_neg = (uint8_t)(fact_neg ? 1 : 0);
     ai->ask_pending = 1;
     ai->ask_mark[0] = 0;
-    agent_ask_persist(ai);              /* §6.188：落一个 [追问:…] 标记，存盘后可恢复 */
+    /* §6.201 **只有"我没把握"才落标记**（kind=1）。kind=2 是"我给了确定答案、等你确认/纠正"——
+     * 那种 pending **每个确定答案都会有一个**，落标记等于每次问答都往图里塞一个垃圾节点。
+     * kind=2 留在内存里（存盘丢了就丢了：下次重问一句即可）。 */
+    if (ai->ask_kind == 1) agent_ask_persist(ai);   /* §6.188 */
+    else                   agent_ask_drop_mark_only(ai);
 }
 /* §6.174 **问句里含新词**（`恐龙 会 飞 吗`）：关系层解析不了（主语被切成 恐/龙），
  * 于是连追问都不会挂 —— 用户回一句「不 会」也白说。

@@ -276,6 +276,16 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了" \
     && chk "clear 之后那句「不 对」不再教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "clear 之后那句「不 对」不再教" 1
 
+echo "㉔ §6.201 只有「我没把握」跨存盘；「我给了确定答案」那条不落标记（存盘就丢）"
+run 1 "猫 属于 动物 吗" "::save $TMP/k2.bin" > /dev/null
+out=$(run 1 "::load $TMP/k2.bin" "::askback" "对")
+printf '%s\n' "$out" | grep -q "没有挂着的追问" \
+    && chk "确定答案的 pending 不跨存盘（重载后没有）" 1 \
+    || chk "确定答案的 pending 不跨存盘" 0 "$(printf '%s\n' "$out" | grep -a "挂着")"
+printf '%s\n' "$out" | reps | grep -q "那 我 就 这 么 记 着" \
+    && chk "重载后回「对」不触发确认" 0 "$(printf '%s\n' "$out" | reps | grep "记 着")" \
+    || chk "重载后回「对」不触发确认" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
