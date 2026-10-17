@@ -1618,6 +1618,11 @@ static inline AI *ai_new(void) {
     ai->max_gen = 6;
     ai->consolidate_every = 50; ai->decay_factor = 0.98f;
     ai->sleep_max_visits = AI_SLEEP_MAX_VISITS;   /* §6.135：睡眠回放的访问上限（看护可改小） */
+    /* §6.184 **测量钩子**：`AIP_SLEEPVISITS=<n>` 覆盖睡眠回放上限（默认仍 20000）。
+     * 为什么要它：厚图上一次睡眠单步顶到 20000 访问、截断 ~1 万（§6.183）⇒ 一个周期
+     * 0.5–0.8 s 摊在 32 轮上。要改"分摊/缩放"得先量"改小之后睡眠质量（抽象/遗忘）变不变"。 */
+    { const char *sv = getenv("AIP_SLEEPVISITS");
+      if (sv && sv[0]) { long v = strtol(sv, NULL, 10); if (v > 0) ai->sleep_max_visits = (size_t)v; } }
 
     ai->gc.gc_min_age = 3000; ai->gc.gc_time_scale = 1000;
     ai->gc.gc_upgrade_rate = 0.15f; ai->gc.gc_interval = 100;

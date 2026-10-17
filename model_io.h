@@ -774,6 +774,13 @@ static inline AI *ai_load_file(const char *path) {
     ai->inner_dialogue_gain = 0.15f;
     ai->narrate_every = 500;
     ai->drift_sample_every = 200;
+    /* §6.184 `sleep_max_visits` 也必须在这里对齐（读盘骨架不走 `ai_new`）：
+     * 以前它只靠 `ai_sleep_step` 里那句 `? : AI_SLEEP_MAX_VISITS` 兜着，
+     * 于是 `AIP_SLEEPVISITS` 对**载入的模型一点用都没有**（实测 1000/4000/20000
+     * 三个值跑出来访问数一模一样，全是 440010）——测量钩子形同虚设。 */
+    ai->sleep_max_visits = AI_SLEEP_MAX_VISITS;
+    { const char *sv = getenv("AIP_SLEEPVISITS");
+      if (sv && sv[0]) { long v = strtol(sv, NULL, 10); if (v > 0) ai->sleep_max_visits = (size_t)v; } }
     /* 读盘骨架的默认值必须和 ai_new 对齐，否则训练/加载两条路径行为分叉
      * （n_candidates 就是这么坑过一次）。assoc_slot_off 用反向命名 +
      * calloc 本来就给 0，这里显式写一遍只为把意图留在代码里。 */
