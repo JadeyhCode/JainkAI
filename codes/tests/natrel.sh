@@ -17,7 +17,15 @@ MODEL=${MODEL:-model.bin}
 
 fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1${3:+（实得「$3」）}"; fail=1; fi }
-run() { { for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } | env $ENVV "$BIN" 2>&1; }
+# "关着"的那几组要**真的关**：外层可能带着 AIP_RELNAT=1（反向测量），
+# 光把 ENVV 清空没用（env 不传就等于继承）⇒ 空的时候用 `env -u AIP_RELNAT` 显式去掉。
+run() {
+    if [ -n "$ENVV" ]; then
+        { for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } | env $ENVV "$BIN" 2>&1
+    else
+        { for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } | env -u AIP_RELNAT "$BIN" 2>&1
+    fi
+}
 ans() { sed -n 's/.*AI > //p' | head -1; }
 
 echo "① 关着（默认）：还是老答案（不动既有行为）"
@@ -78,6 +86,13 @@ echo "⑤ 不误伤：三词日常句不因为开了开关就变成关系层答"
 r=$(run "::char off" "你 能 来 吗" | ans)
 case "$r" in *"--\["*) chk "你 能 来 吗 **没有** 被当成关系断言" 0 "$r" ;;
                  *)     chk "你 能 来 吗 没被当成关系断言（$r）" 1 ;; esac
+
+# §6.232 `::relnat on|off`：以前只有环境变量能开，用户当场没法开
+ENVV=""
+out=$(run "::relnat on" "猫 是 一种 动物 吗" "::relnat off" "猫 是 一种 动物 吗")
+printf '%s\n' "$out" | grep -q "自然说法 = 开" && chk "::relnat on 真的开了" 1 || chk "::relnat on" 0
+printf '%s\n' "$out" | grep -q "对 ， 猫 -\[属于\]-> 动物" && chk "开着：量词剥掉（对）" 1 || chk "开着：量词剥掉" 0
+printf '%s\n' "$out" | grep -q "自然说法 = 关（默认）" && chk "::relnat off 关得回去" 1 || chk "::relnat off" 0
 
 [ "$fail" -eq 0 ] && { echo "PASS natrel（能/可以 → 会：默认关、开着才生效、两边一致、不误伤）"; exit 0; }
 echo "FAIL natrel"; exit 1

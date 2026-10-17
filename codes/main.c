@@ -539,6 +539,7 @@ typedef enum {
     CMD_REL,
     CMD_WHY,
     CMD_RELINFER,
+    CMD_RELNAT,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
     CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
     CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
@@ -668,6 +669,9 @@ static const CmdDef CMDS[] = {
       CMD_REL },
     { "why", NULL, 2, "基本",
       "问 A 关系 B 成不成立，并打出推导路径", CMD_WHY },
+    { "relnat", "on|off", CARG_OPT, "基本",
+      "自然说法（默认关，§6.232）：`能/可以` 归到会、`是 一种 X` 剥量词；\n"
+      "以前只有环境变量能开（AIP_RELNAT=1），用户当场没法开", CMD_RELNAT },
     { "relinfer", NULL, 1, "基本",
       "关系层开关：推理 + 对话中现学知识（默认 on）", CMD_RELINFER },
     { "revise", NULL, 1, "基本",
@@ -2817,6 +2821,20 @@ int main(int argc, char **argv) {
                 if (nrev == 0) printf("    （还没有：这一会话里没发生过改口）\n");
                 printf("  临时符号节点（草稿）：%s（::op 看清单 / ::op 回收临时）\n",
                        "[临:…]，不存盘");
+                continue;
+            }
+            case CMD_RELNAT: {
+                const char *arg = (cmd[6] == ' ') ? cmd + 7 : NULL;   /* "relnat" = 6 字节 */
+                while (arg && *arg == ' ') arg++;
+                if (arg && *arg) {
+                    if (strcmp(arg, "on") == 0) a->brain->rel_nat = 1;
+                    else if (strcmp(arg, "off") == 0) a->brain->rel_nat = 0;
+                    else { printf("[用法] ::relnat on|off\n"); continue; }
+                }
+                printf("[自然说法 = %s]（%s）\n", a->brain->rel_nat ? "开" : "关（默认）",
+                       a->brain->rel_nat
+                           ? "`能/可以` 当「会」、`是 一种 X` 剥量词（说和问两边一致）"
+                           : "只认声明过的关系词（老行为）");
                 continue;
             }
             case CMD_RELINFER: {
