@@ -148,6 +148,18 @@ printf '%s\n' "$out" | grep -q "记下 了 ： 我 叫 小刚" \
     && chk "「我 的 名字 叫 小刚」也认" 1 \
     || chk "「我 的 名字 叫 小刚」" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+echo "⑫ §6.212 名字类问法的形状归一（问得出、反查得到）"
+out=$(run "我 的 名字 是 小明" "我 的 名字 是 什么" "你 知道 我 的 名字 吗" "谁 叫 小明" "小明 是 谁")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 叫 小明" \
+    && chk "「我 的 名字 是 什么」⇒ 答出名字" 1 \
+    || chk "「我 的 名字 是 什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 我 叫 小明" \
+    && chk "「你 知道 我 的 名字 吗」⇒ 答出名字" 1 \
+    || chk "「你 知道 我 的 名字 吗」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "叫 小明 的 有 ： 我" \
+    && chk "「小明 是 谁」⇒ 反查成「谁 叫 小明」" 1 \
+    || chk "「小明 是 谁」" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

@@ -140,10 +140,57 @@ static inline size_t agent_open_strip_shell(char *const *words, size_t n,
     return k;
 }
 
+/* §6.212 **名字类问法的形状归一**：这些问法都该落到「谁 叫 X / A 叫 什么」上 ——
+ * 关系层早就会答，只是没认这几种说法（实测：`我 的 名字 是 什么` 掉流水线，
+ * 答「我 的 愿 望 很 小」；`你 知道 我 的 名字 吗` 答「忘 了 别 的」）。
+ * 只在**问句**上改（`A 的 名字 是 B` 那种陈述走学习侧，另有一处）。返回 1 = 改了。 */
+static inline int agent_norm_name_q(char *const *w, size_t n, char **nw, size_t *out_n) {
+    if (!w || !nw || !out_n || n < 3) return 0;
+    size_t last = n;
+    while (last > 0 && (!strcmp(w[last - 1], "吗") || !strcmp(w[last - 1], "呢"))) last--;
+    /* ① `X 是 谁` ⇒ `谁 叫 X`（反查）*/
+    if (last == 3 && !strcmp(w[1], "是") && !strcmp(w[2], "谁")) {
+        nw[0] = (char *)"谁"; nw[1] = (char *)"叫"; nw[2] = w[0];
+        *out_n = 3; return 1;
+    }
+    /* ② `A 的 名字 是/叫 什么` ⇒ `A 叫 什么`（正查）；分词把「名字」切成 名/字 也认 */
+    {
+        size_t mi = 0; int split = 0;
+        for (size_t i = 0; i + 1 <= last; ++i) {
+            if (i < last && !strcmp(w[i], "名字")) { mi = i; break; }
+            if (i + 1 < last && !strcmp(w[i], "名") && !strcmp(w[i + 1], "字")) { mi = i; split = 1; break; }
+        }
+        size_t after = split ? mi + 2 : mi + 1;
+        if (mi == 2 && last == after + 2 && !strcmp(w[1], "的") &&
+            (!strcmp(w[after], "是") || !strcmp(w[after], "叫")) &&
+            !strcmp(w[after + 1], "什么")) {
+            nw[0] = w[0]; nw[1] = (char *)"叫"; nw[2] = (char *)"什么";
+            *out_n = 3; return 1;
+        }
+    }
+    /* ③ `你/您 知道 A 的 名字 [吗]` ⇒ `A 叫 什么` */
+    if (last == 5 && (!strcmp(w[0], "你") || !strcmp(w[0], "您")) && !strcmp(w[1], "知道") &&
+        !strcmp(w[3], "的") && !strcmp(w[4], "名字")) {
+        nw[0] = w[2]; nw[1] = (char *)"叫"; nw[2] = (char *)"什么";
+        *out_n = 3; return 1;
+    }
+    /* ④ `你/您 知道 A 的 名 字 [吗]`（名字被切开）*/
+    if (last == 6 && (!strcmp(w[0], "你") || !strcmp(w[0], "您")) && !strcmp(w[1], "知道") &&
+        !strcmp(w[3], "的") && !strcmp(w[4], "名") && !strcmp(w[5], "字")) {
+        nw[0] = w[2]; nw[1] = (char *)"叫"; nw[2] = (char *)"什么";
+        *out_n = 3; return 1;
+    }
+    return 0;
+}
+
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
     if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 8) return NULL;
+    /* §6.212 名字类问法先归一到关系层认得的形状（`谁 叫 X` / `A 叫 什么`）。
+     * ⚠ `nw` 必须声明在**函数作用域**：写进块里再 `words = nw` 会留下悬垂指针（实测崩）。 */
+    char *nw[4]; size_t nn = 0;
+    if (agent_norm_name_q(words, n, nw, &nn)) { words = nw; n = nn; }
     /* §6.145 剥掉问法外壳（填充词/前缀）——剥完再按原来的形状判定 */
     char *stripped[16];
     {
