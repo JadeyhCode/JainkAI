@@ -143,6 +143,9 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
     for f in frames.txt relations.txt lexicon.txt; do
         if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$SB/$f"; fi
     done
+    # §6.178 `session.bin`（互动会话图）只给 `session_facts` 那一套用：它是**读**的，
+    # 但 5.9 MB × 每套一个沙箱太浪费 —— 只给需要它的那套拷（名字里带 session 的）。
+    if [ -f "$ROOT/session.bin" ]; then cp "$ROOT/session.bin" "$SB/session.bin"; fi
     cd "$SB"
 }
 pool_task_cleanup() { rm -rf "$PAR/w$2"; }
