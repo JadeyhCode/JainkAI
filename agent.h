@@ -189,8 +189,30 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 8) return NULL;
     /* §6.212 名字类问法先归一到关系层认得的形状（`谁 叫 X` / `A 叫 什么`）。
      * ⚠ `nw` 必须声明在**函数作用域**：写进块里再 `words = nw` 会留下悬垂指针（实测崩）。 */
-    char *nw[4]; size_t nn = 0;
+    char *nw[5]; size_t nn = 0;
     if (agent_norm_name_q(words, n, nw, &nn)) { words = nw; n = nn; }
+    /* §6.215 `A 在 哪` = `A 在 什么`（问**地点**）。关系层只认「什么」这一种占位词，
+     * 实测 `我 在 家里` 学得进、`我 在 什么` 答得出，但 **`我 在 哪` 掉兜底**。
+     * ⚠ 只对**地点关系（在）**开这个口子：`开猫 属于 哪` 这种"哪 + 别的关系"仍然不接 ——
+     * `optest` 有一条断言钉着"光一个「哪」不算占位词（不接，不乱猜）"，那是**有意的保守**。
+     * ⚠ 分词会把「哪里/哪儿」切成 哪/里、哪/儿 ⇒ 两种形状都要认，关系词位置也跟着挪。 */
+    {
+        size_t qpos = n;          /* 占位词在哪个下标 */
+        if (n >= 3 && words[n - 1] &&
+            (!strcmp(words[n - 1], "哪") || !strcmp(words[n - 1], "哪里") ||
+             !strcmp(words[n - 1], "哪儿"))) {
+            qpos = n - 1;
+        } else if (n >= 4 && words[n - 2] && !strcmp(words[n - 2], "哪") && words[n - 1] &&
+                   (!strcmp(words[n - 1], "里") || !strcmp(words[n - 1], "儿"))) {
+            qpos = n - 2;
+        }
+        if (qpos < n && qpos >= 1 && words[qpos - 1] &&
+            rel_id_of(ai, words[qpos - 1], 0) == REL_AT) {
+            for (size_t i = 0; i < qpos; ++i) nw[i] = words[i];
+            nw[qpos] = (char *)"什么";
+            words = nw; n = qpos + 1;
+        }
+    }
     /* §6.145 剥掉问法外壳（填充词/前缀）——剥完再按原来的形状判定 */
     char *stripped[16];
     {

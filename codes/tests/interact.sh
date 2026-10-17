@@ -160,6 +160,15 @@ printf '%s\n' "$out" | reps | sed -n 5p | grep -q "叫 小明 的 有 ： 我" \
     && chk "「小明 是 谁」⇒ 反查成「谁 叫 小明」" 1 \
     || chk "「小明 是 谁」" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 
+echo "⑬ §6.215 「哪/哪里/哪儿」= 问地点（含 哪/里 被切开）"
+out=$(run "猫 在 家里" "猫 在 哪" "猫 在 哪 里" "猫 在 哪 儿")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 猫 在 家里" \
+    && chk "「猫 在 哪」⇒ 答出地点" 1 \
+    || chk "「猫 在 哪」" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 猫 在 家里" \
+    && chk "「猫 在 哪 里」（切开）⇒ 答出地点" 1 \
+    || chk "「猫 在 哪 里」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
