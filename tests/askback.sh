@@ -230,6 +230,19 @@ printf '%s\n' "$out" | reps | grep -q "记下 了" \
     && chk "关着时不造词不学" 0 "$(printf '%s\n' "$out" | reps | grep "记下 了")" \
     || chk "关着时不造词不学" 1
 
+echo "⑳ 纠正**继承**答案 ⇒ 写成具体例外（具体优先于一般）"
+out=$(run 1 "猫 有 毛 吗" "不 对" "猫 有 毛 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "属于·继承" \
+    && chk "先答的是**继承**来的（属于·继承）" 1 \
+    || chk "先答的是继承来的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "改 过来 了 ： 猫 不 有 毛" \
+    && chk "纠正写成具体事实（猫 不 有 毛）" 1 \
+    || chk "纠正写成具体事实" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+r=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$r" | grep -q "不 对 ， 猫 -\[不 有\]-> 毛" \
+    && chk "再问 ⇒ 具体事实压过继承" 1 \
+    || chk "再问 ⇒ 具体事实压过继承" 0 "$r"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
