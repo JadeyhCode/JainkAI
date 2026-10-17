@@ -355,6 +355,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 狗" \
     && chk "谓语对不上就不补（狗 也 会 ≠ 属于）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "谓语对不上就不补" 1
 
+echo "㉖ §6.244 并列词归一（以及 / 还有）"
+out=$(run "我 喜欢 猫 以及 狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 喜欢 猫 、 狗" \
+    && chk "「以及」（分词切碎）也能当并列" 1 \
+    || chk "以及" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "我 喜欢 猫 还有 狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 喜欢 猫 、 狗" \
+    && chk "「还有」（两个 token）也能当并列" 1 \
+    || chk "还有" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 以及 狗 都 是 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 和 狗 都 是 动物" \
+    && chk "并列主语也认「以及」" 1 \
+    || chk "并列主语 以及" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "猫 属于 猫以及狗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
+    && chk "宾语里带「以及」不学成 blob" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "宾语里带「以及」不学成 blob" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

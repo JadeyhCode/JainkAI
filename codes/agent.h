@@ -671,11 +671,31 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     return r;
 }
 
+/* §6.244 **并列词归一**：分词器把 `以及` 切成 以/及、`还有` 切成 还/有 ⇒ 先合成一个 token，
+ * 后面的并列识别只认单 token（`以及`）。不分配内存：指向原数组或字面量。 */
+static inline size_t agent_norm_conj(char *const *words, size_t n, char **out, size_t cap) {
+    size_t m = 0;
+    for (size_t i = 0; i < n && m + 1 < cap; ++i) {
+        if (!strcmp(words[i], "以") && i + 1 < n && !strcmp(words[i + 1], "及")) {
+            out[m++] = (char *)"以及"; i++;
+        } else if (!strcmp(words[i], "还") && i + 1 < n && !strcmp(words[i + 1], "有") &&
+                   !(i + 2 < n && !strcmp(words[i + 2], "的"))) {   /* 「还有的」不算并列 */
+            out[m++] = (char *)"还有"; i++;
+        } else {
+            out[m++] = words[i];
+        }
+    }
+    return m;
+}
+
 /* §6.239 **「A 和 B 都 R C」**（并列主语）：学的时候拆成两条，问的时候两边都查。
  * 实测 `猫 和 狗 都 是 动物 吗` 以前掉兜底（「这个我 不 太 懂」）—— 并列主语没接住。 */
-static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *out_is_q,
+static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out_is_q,
                                     float *out_conf) {
-    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    if (!ai || ai->rel_off || !w0 || n0 < 5) return NULL;
+    char *nwb[24];
+    size_t n = agent_norm_conj(w0, n0, nwb, sizeof nwb / sizeof nwb[0]);
+    char *const *words = nwb;
     size_t last = n;
     int is_q = 0;
     while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
@@ -686,6 +706,7 @@ static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *o
     size_t p = 0;
     for (size_t i = 1; i < last; ++i)
         if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
+            !strcmp(words[i], "以及") || !strcmp(words[i], "还有") ||
             !strcmp(words[i], "、")) { p = i; break; }
     if (!p) return NULL;
     size_t d = 0;
@@ -750,9 +771,12 @@ static inline char *agent_conj_both(AI *ai, char *const *words, size_t n, int *o
 
 /* §6.240 **并列宾语「A R B1 和 B2」**：实测 `我 喜欢 猫 和 狗` 以前掉流水线
  * （答出「狗 睡觉 吗 喜欢 地 事情 点」）。与 §6.239 对称：学的时候拆两条、问的时候两边查。 */
-static inline char *agent_conj_obj(AI *ai, char *const *words, size_t n, int *out_is_q,
+static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_is_q,
                                    float *out_conf) {
-    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    if (!ai || ai->rel_off || !w0 || n0 < 5) return NULL;
+    char *nwb[24];
+    size_t n = agent_norm_conj(w0, n0, nwb, sizeof nwb / sizeof nwb[0]);
+    char *const *words = nwb;
     size_t last = n;
     int is_q = 0;
     while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
@@ -769,8 +793,15 @@ static inline char *agent_conj_obj(AI *ai, char *const *words, size_t n, int *ou
     size_t ni = 0, cl = 0;
     int any = 0;
     for (size_t i = 2; i < last; ++i) {
-        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
-            !strcmp(words[i], "、")) {
+        int is_sep = (!strcmp(words[i], "和") || !strcmp(words[i], "跟") ||
+                      !strcmp(words[i], "与") || !strcmp(words[i], "以及") ||
+                      !strcmp(words[i], "还有") || !strcmp(words[i], "、"));
+        /* 「还 有」是**两个 token** 的并列词（分词器不合成一个）*/
+        if (!is_sep && !strcmp(words[i], "还") && i + 1 < last && !strcmp(words[i + 1], "有")) {
+            is_sep = 1;
+            i++;                                   /* 跳过「有」*/
+        }
+        if (is_sep) {
             if (ni == 0) { items[ni][cl] = 0; if (!cl) return NULL; ni++; cl = 0; }
             else { items[ni][cl] = 0; if (!cl) return NULL; ni++; cl = 0; }
             if (ni >= MAXI) return NULL;
@@ -794,10 +825,16 @@ static inline char *agent_conj_obj(AI *ai, char *const *words, size_t n, int *ou
     char buf[256];
     if (!is_q) {
         if (!A) return NULL;
+        /* §6.240b **任一并列项就是主语本身 ⇒ 整句不接**（`猫 属于 猫、狗` 是坏句子，
+         * 学一半会留下 `猫 属于 狗` 的垃圾）。 */
+        for (size_t i = 0; i < ni; ++i) {
+            Token *t = pool_find(ai->pool, items[i]);
+            if (t && t == A) return NULL;
+        }
         size_t learned = 0;
         for (size_t i = 0; i < ni; ++i) {
             Token *t = pool_find(ai->pool, items[i]);
-            if (!t || t == A) continue;
+            if (!t) continue;
             if (ai_write_rel(ai, A, t, rid, 0, AI_WSRC_RELATION) == 0) learned++;
         }
         if (!learned) return NULL;
@@ -896,8 +933,9 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
-    if (strstr(bw, "、")) return NULL;        /* §6.240b 顿号并列走 conj 那条，别学成「猫、狗」
-                                               * （顿号是 UTF-8 多字节，必须用 strstr，不是 strchr）*/
+    /* §6.240b/§6.244 并列走 conj 那条，别学成「猫、狗」「猫以及狗」这种 blob
+     * （顿号是 UTF-8 多字节，必须用 strstr，不是 strchr）*/
+    if (strstr(bw, "、") || strstr(bw, "以及")) return NULL;
     if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
