@@ -191,6 +191,27 @@ printf '%s\n' "$out" | grep -q "追问回话 = 开" \
     && chk "命令回显状态" 1 \
     || chk "命令回显状态" 0
 
+echo "⑰ 存盘：追问学到的 / 改口改掉的，重开进程还在"
+run 1 "猫 属于 动物 吗" "不 对" "::save $TMP/a1.bin" > /dev/null
+a=$(run 1 "::load $TMP/a1.bin" "猫 属于 动物 吗" | reps | head -1)
+printf '%s\n' "$a" | grep -q "不 对 ， 猫 -\[不 属于\]-> 动物" \
+    && chk "改口存盘后还认（猫 不 属于 动物）" 1 \
+    || chk "改口存盘后还认" 0 "$a"
+run 1 "狗 会 唱 歌 吗" "不 对" "::save $TMP/a2.bin" > /dev/null
+a=$(run 1 "::load $TMP/a2.bin" "狗 会 唱 歌 吗" | reps | head -1)
+printf '%s\n' "$a" | grep -q "不 对 ， 狗" \
+    && chk "追问回话学到的（狗 不 会 唱 歌）存盘后还在" 1 \
+    || chk "追问回话学到的存盘后还在" 0 "$a"
+
+echo "⑱ ::askback clear 能手动丢掉挂着的追问"
+out=$(run 1 "狗 会 唱 歌 吗" "::askback clear" "不 对" "狗 会 唱 歌 吗")
+printf '%s\n' "$out" | reps | grep -q "记下 了" \
+    && chk "丢掉之后那句「不 对」不再被当成回话" 0 "$(printf '%s\n' "$out" | reps | grep "记下 了")" \
+    || chk "丢掉之后那句「不 对」不再被当成回话" 1
+printf '%s\n' "$out" | grep -q "丢掉了挂着的追问" \
+    && chk "clear 回显状态" 1 \
+    || chk "clear 回显状态" 0
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
