@@ -4111,15 +4111,39 @@ static inline int ai_gc_has_valence(const AI *ai, const Token *t) {
     }
     return 0;
 }
+/* §6.208 **O(E) 重建入度**（原来的 `ai_gc_indegree` 是 O(N·E)，GC 里每个候选词调一次）。
+ * 等价性：原函数跳过 `is_garbage` 的来源；GC 的第一趟**不会**改任何词的 `is_garbage`
+ * （标垃圾在第三趟），所以"GC 开头重建一次"与"每次现算"逐字节等价 —— A/B 钉着这一点。
+ * 维护策略刻意选"用前重建"而不是"加边/删边时 ++/--"：后者要在 6+ 处写维护代码，
+ * 漏一处就是**静默**的入度偏差（决策会变、还不报错）。 */
+static inline void ai_gc_rebuild_indegree(TokenPool *p) {
+    if (!p) return;
+    for (size_t i = 0; i < p->count; ++i) if (p->tokens[i]) p->tokens[i]->in_degree = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *from = p->tokens[i];
+        if (!from || from->is_garbage) continue;
+        for (size_t j = 0; j < from->count; ++j)
+            if (from->assocs[j].main) from->assocs[j].main->in_degree++;
+    }
+}
+
 static inline size_t ai_gc_indegree(const TokenPool *p, const Token *t) {
+    if (!t) return 0;
+    /* 校验钩子（默认关）：`AIP_INCHECK=1` 时现算一遍比对缓存值。 */
+    static int incheck = -1;
+    if (incheck < 0) { const char *v = getenv("AIP_INCHECK"); incheck = (v && v[0] == '1') ? 1 : 0; }
+    if (!incheck) return t->in_degree;
     size_t n = 0;
     for (size_t i = 0; i < p->count; ++i) {
         const Token *from = p->tokens[i];
-        if (from->is_garbage) continue;
+        if (!from || from->is_garbage) continue;
         for (size_t j = 0; j < from->count; ++j)
             if (from->assocs[j].main == t) n++;
     }
-    return n;
+    if (n != t->in_degree)
+        fprintf(stderr, "[incheck] %s: 缓存=%u 现算=%zu（不一致！）\n",
+                t->name ? t->name : "?", t->in_degree, n);
+    return t->in_degree;
 }
 static inline float ai_gc_keep_prob(const AI *ai, uint64_t age, uint64_t recency,
                                     uint32_t hits, int valence, size_t indegree) {
@@ -4148,6 +4172,7 @@ static inline void ai_gc(AI *ai) {
      * 两趟不是纯后缀 —— 第一趟里的 `ai_gc_indegree(p, t)` 会**跳过已经标成垃圾的词**，
      * 于是"边涨边埋"会让后面那些词算出的入度与原来不同（决策跟着变）。
      * 收益本来也可忽略（GC 每 100 轮才走一趟，约占每轮开销 1%），不值得拿等价性去换。 */
+    ai_gc_rebuild_indegree(p);        /* §6.208：一次 O(E)，之后每个候选词 O(1) 读 */
     ai->n_scan_tokens += p->count;
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];

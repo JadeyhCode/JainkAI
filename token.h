@@ -238,6 +238,10 @@ struct Token {
     size_t      count, cap;
     uint32_t    next_seq;
     uint32_t    misses, recent_misses;
+    /* §6.208 **入度缓存**（GC 用）：`ai_gc` 开头 O(E) 重建一次，之后 O(1) 读。
+     * 只进内存、不存盘（读盘/训练后第一次 GC 会重建）。放在这里是因为
+     * `sizeof(Token)` 不写进存档（model_io 逐字段写），加字段不动格式。 */
+    uint32_t    in_degree;
     Token      *parent;
     uint8_t     is_category, is_garbage;
     uint64_t    birth_tick, last_touch_tick;
