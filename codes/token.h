@@ -1663,6 +1663,17 @@ static inline void vsa_unbind_to_depth(const TokenPool *p, uint32_t depth,
  * r_c 由 c 的**稳定 id** 生成：同一个 id 永远得到同一个向量，
  * 所以 emb 是 (图 + id) 的确定性函数，可以随时现算，不必存进模型。 */
 static inline void emb_randvec(uint32_t id, int8_t *out) {
+    /* §6.235 逐位写 1024 个字节太慢（实测 1.9 µs/次；embed_build 里每条边要两次，
+     * 4.4 万边 ≈ 170 ms）。改成**查表按字节写**：256 种字节 → 8 个 ±1，
+     * 每个 64 位字 memcpy 8 次。取值与逐位写法**完全一样**（同一个 z、同一个位序）。 */
+    static int8_t tab[256][8];
+    static int tab_ready = 0;
+    if (!tab_ready) {
+        for (int v = 0; v < 256; ++v)
+            for (int b = 0; b < 8; ++b)
+                tab[v][b] = (int8_t)(((v >> b) & 1) ? 1 : -1);
+        tab_ready = 1;
+    }
     uint64_t x = 0x9E3779B97F4A7C15ULL ^ ((uint64_t)id * 0xBF58476D1CE4E5B9ULL);
     for (size_t i = 0; i < VSA_DIM; i += 64) {
         x += 0x9E3779B97F4A7C15ULL;
@@ -1670,8 +1681,8 @@ static inline void emb_randvec(uint32_t id, int8_t *out) {
         z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
         z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
         z = z ^ (z >> 31);
-        for (size_t k = 0; k < 64 && i + k < VSA_DIM; ++k)
-            out[i + k] = ((z >> k) & 1) ? 1 : -1;
+        for (size_t k = 0; k < 64 && i + k < VSA_DIM; k += 8)
+            memcpy(out + i + k, tab[(z >> k) & 0xFFu], 8);
     }
 }
 
