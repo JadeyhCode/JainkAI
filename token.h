@@ -238,6 +238,10 @@ struct Token {
     size_t      count, cap;
     uint32_t    next_seq;
     uint32_t    misses, recent_misses;
+    /* §6.214 **反查倒排表的桶头**（0 = 空，否则是 `TokenPool.rev_next` 的下标+1）。
+     * 只追加、不维护删除：读取时用 `rel_direct*` **校验**，陈旧项自然被过滤
+     * （所以只有一个写入点，不存在"漏维护 ⇒ 静默漏知识"）。只进内存、不存盘。 */
+    uint32_t    rev_head;
     /* §6.208 **入度缓存**（GC 用）：`ai_gc` 开头 O(E) 重建一次，之后 O(1) 读。
      * 只进内存、不存盘（读盘/训练后第一次 GC 会重建）。放在这里是因为
      * `sizeof(Token)` 不写进存档（model_io 逐字段写），加字段不动格式。 */
@@ -669,7 +673,58 @@ struct TokenPool {
     Token            *cache_head;
     size_t            n_cache_queued;
     uint8_t           cache_seeded;
+
+    /* §6.214 **反查倒排表**（`谁 R B` 用）：按"宾语"分桶的链。
+     * 只追加（打关系标记时写一条），删除/GC 不管 —— 查的时候把候选拿去 `rel_direct*`
+     * 校验，陈旧项自然过滤。载入后一次 O(E) 重建（见 model_io）。
+     * 每条 12 字节（src 4 + meta 4 + next 4）；出厂模型 4.4 万边 ≈ 0.6 MB。 */
+    uint32_t         *rev_src;
+    uint32_t         *rev_meta;   /* rid | neg<<15 */
+    uint32_t         *rev_next;
+    size_t            rev_n, rev_cap;
 };
+
+/* ---- §6.214 反查倒排表：**只追加 + 读时校验** ---------------------------------
+ * `dst->rev_head` 是桶头，条目在 pool 的三条平数组里。
+ * 写入点：`token_tag_rel` / `token_tag_nrel` / `token_tag_dyn`（新置位时各追加一条）
+ * 以及 `agent.h` 的直写点。删除、GC、改口、猜测升格都**不动它** ——
+ * 陈旧条目在查询时被 `rel_direct*` 校验掉（多走几条，不会答错）。 */
+static inline void pool_rev_add(TokenPool *p, Token *dst, uint32_t src_id,
+                                uint32_t rid, int neg) {
+    if (!p || !dst || !rid) return;
+    if (p->rev_n == p->rev_cap) {
+        size_t ncap = p->rev_cap ? p->rev_cap * 2 : 1024;
+        uint32_t *ns = (uint32_t *)realloc(p->rev_src, ncap * sizeof *ns);
+        if (!ns) return;
+        p->rev_src = ns;
+        uint32_t *nm = (uint32_t *)realloc(p->rev_meta, ncap * sizeof *nm);
+        if (!nm) return;
+        p->rev_meta = nm;
+        uint32_t *nn = (uint32_t *)realloc(p->rev_next, ncap * sizeof *nn);
+        if (!nn) return;
+        p->rev_next = nn;
+        p->rev_cap = ncap;
+    }
+    uint32_t idx = (uint32_t)p->rev_n;
+    p->rev_src[idx] = src_id;
+    p->rev_meta[idx] = (rid & 0x7FFFu) | (neg ? 0x8000u : 0u);
+    p->rev_next[idx] = dst->rev_head;
+    dst->rev_head = idx + 1;
+    p->rev_n = (size_t)idx + 1;
+}
+
+/* §6.214 桶里有没有 (src, rid, neg) 这一条（`::revcheck` 用）。*/
+static inline int pool_rev_has(const TokenPool *p, const Token *dst, uint32_t src_id,
+                               uint32_t rid, int neg) {
+    if (!p || !dst) return 0;
+    for (uint32_t e = dst->rev_head; e; e = p->rev_next[e - 1]) {
+        uint32_t meta = p->rev_meta[e - 1];
+        if ((uint32_t)(meta & 0x7FFFu) != (rid & 0x7FFFu)) continue;
+        if (((meta & 0x8000u) != 0) != (neg != 0)) continue;
+        if (p->rev_src[e - 1] == src_id) return 1;
+    }
+    return 0;
+}
 
 /* ---- 缓存复核队列（§6.127）--------------------------------------------------
  * 只有一个不变式要守：**图上每一条推论边，其起点词必须进过队列**。
@@ -797,6 +852,7 @@ static inline void pool_free(TokenPool *p) {
         free((void *)t->name); free(t);
     }
     free(p->tokens);
+    free(p->rev_src); free(p->rev_meta); free(p->rev_next);   /* §6.214 反查表 */
     if (p->buckets) {
         for (size_t i = 0; i < p->n_buckets; ++i) {
             NameEntry *e = p->buckets[i];
@@ -1144,6 +1200,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
          * 否则存盘再读会重复装一遍 relations.txt，hits 翻倍 → emb 跟着变。 */
         if (e->rel & bit) return 0;
         e->rel |= bit;
+        if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 0);   /* §6.214 反查表 */
         if (bump) e->hits += bump;
         e->mem_state = MEM_ACTIVE;
         return 0;
@@ -1151,6 +1208,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->rel = bit;
+    if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 0);       /* §6.214 */
     e->hits = bump;
     return 0;
 }
@@ -1178,6 +1236,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
         if (g_obs_revise && (e->rel & bit)) { e->rel &= (uint16_t)~bit; g_obs_revised = 1; }
         if (e->nrel & bit) return 0;
         e->nrel |= bit;
+        if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 1);   /* §6.214 否定 */
         if (bump) e->hits += bump;
         e->mem_state = MEM_ACTIVE;
         return 0;
@@ -1185,6 +1244,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->nrel = bit;
+    if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 1);       /* §6.214 */
     e->hits = bump;
     return 0;
 }
@@ -1202,6 +1262,9 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
         if (e->main != b || !edge_is_plain(e)) continue;
         if (e->dyn == dyn_id) return 0;
         e->dyn = dyn_id;
+        if (a->owner) pool_rev_add(a->owner, b, a->id,
+                                   (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);   /* §6.214 动态 */
+
         if (bump) e->hits += bump;
         e->mem_state = MEM_ACTIVE;
         return 0;
@@ -1209,6 +1272,8 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &a->assocs[a->count - 1];
     e->dyn = dyn_id;
+    if (a->owner) pool_rev_add(a->owner, b, a->id,
+                               (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);
     e->hits = bump;
     return 0;
 }

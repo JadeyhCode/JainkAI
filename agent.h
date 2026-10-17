@@ -270,9 +270,31 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
          * `n_scan_tokens`**（§6.128 的规矩：全图扫描必须记账 —— 这样"反查是不是变慢了"
          * 有数字可查，而不是靠一个拍的上限去赌）。输出仍只列前 4 个（够了就提前停，
          * 记账记的是**真走过的**词数）。 */
+        /* §6.214 **走反查表**（原来全池扫）：只取 `b` 的桶，逐条 `rel_direct*` **校验**
+         * （陈旧项——GC 删边/改口/猜升格——自然被过滤），再按 **词 id 升序**排一遍：
+         * 池序就是 id 序，所以输出顺序与"全池扫描"逐字一致。
+         * 表是"只追加"的：漏写一条的后果是**漏知识**（不是慢），所以有 `::revcheck` 全量对拍。 */
+        uint32_t cand[512];
+        size_t ncd = 0;
+        for (uint32_t ent = b->rev_head;
+             ent && ncd < (sizeof cand / sizeof cand[0]);
+             ent = ai->pool->rev_next[ent - 1]) {
+            uint32_t meta = ai->pool->rev_meta[ent - 1];
+            if ((uint8_t)(meta & 0x7FFFu) != rid) continue;
+            if (((meta & 0x8000u) != 0) != (oq_neg != 0)) continue;
+            uint32_t sid = ai->pool->rev_src[ent - 1];
+            if (sid >= ai->pool->count) continue;
+            cand[ncd++] = sid;
+        }
+        for (size_t i = 1; i < ncd; ++i) {          /* 插入排序（桶很小）*/
+            uint32_t v = cand[i]; size_t j = i;
+            while (j > 0 && cand[j - 1] > v) { cand[j] = cand[j - 1]; --j; }
+            cand[j] = v;
+        }
         size_t scanned = 0;
-        for (size_t i = 0; i < ai->pool->count && hits < 4; ++i) {
-            Token *t = ai->pool->tokens[i];
+        for (size_t ci = 0; ci < ncd && hits < 4; ++ci) {
+            if (ci && cand[ci] == cand[ci - 1]) continue;   /* 同一条边可能被重复追加 */
+            Token *t = ai->pool->tokens[cand[ci]];
             if (!t || t->is_garbage || !t->name || t->name[0] == '[') continue;
             scanned++;
             /* §6.166：`谁 不 R B` 扫**否定边**；其余扫肯定那档 */

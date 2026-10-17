@@ -113,6 +113,16 @@ printf '%s\n' "$out" | grep -q "「属于」在数据里是\*\*独占\*\*关系�
     && chk "独占关系记了 2 个宾语 ⇒ ::rel 有⚠提示" 1 \
     || chk "独占关系记了 2 个宾语 ⇒ ::rel 有⚠提示" 0 "$(printf '%s\n' "$out" | grep -a "⚠" | head -1)"
 
+# §6.214 反查表是"只追加 + 读时校验"的：漏写一条 = 漏知识，所以拿图当基准逐条对拍
+out=$(run "::revcheck")
+printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
+    && chk "::revcheck：出厂模型反查表不缺条目" 1 \
+    || chk "::revcheck" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
+out=$(run "::natcoin on" "考拉 属于 动物" "狗 会 唱歌 吗" "不 对" "::revcheck")
+printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
+    && chk "::revcheck：现场教的两条也都进了反查表" 1 \
+    || chk "::revcheck（教完）" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
+
 echo "⑤ ::why 打出推导，::rel 列出知识，::relinfer off 可关"
 out=$(run "::why 猫 有 毛" "::rel 猫")
 printf '%s\n' "$out" | grep -q '猫 -\[属于·继承\]-> 动物' \

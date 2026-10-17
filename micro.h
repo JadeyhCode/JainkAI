@@ -1870,11 +1870,13 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
                 if (e->role != ASSOC_ROLE_DERIVED) return 0;
             }
             e->rel |= bit;
+            if (p) pool_rev_add(p, m->main, m->target->id, m->rel_id, 0);   /* §6.214 */
         } else {
             if (e->nrel & bit) {
                 if (e->role != ASSOC_ROLE_DERIVED) return 0;
             }
             e->nrel |= bit;
+            if (p) pool_rev_add(p, m->main, m->target->id, m->rel_id, 1);   /* §6.214 */
         }
         e->role = ASSOC_ROLE_DERIVED;
         token_cache_enqueue(m->target);   /* §6.127：新落的推论边进复核队列（不再每轮扫全图） */

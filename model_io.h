@@ -1070,6 +1070,31 @@ static inline AI *ai_load_file(const char *path) {
      *   而存盘存的是最终的图 —— 读盘重算后两边就不一样了。
      *   ① emb 早算的症状最隐蔽：词池逐字节相同，但 810 个符号节点的 emb 不同；
      *   ② idf 早算还会越界（数组按当时的 pool->count 分配，之后又造了词）。 */
+    /* §6.214 **反查倒排表**：一次 O(边数) 重建（只进内存、不进快照）。
+     * 表是"只追加 + 读时校验"的 —— 载入后用图本身重建，陈旧项由查询侧的
+     * `rel_direct*` 过滤，所以这里不需要跟写路径对齐。 */
+    {
+        TokenPool *rp = ai->pool;
+        if (rp) {
+            for (size_t ti = 0; ti < rp->count; ++ti) {
+                Token *t = rp->tokens[ti];
+                if (!t || t->is_garbage) continue;
+                for (size_t ei = 0; ei < t->count; ++ei) {
+                    const AssocEntry *e = &t->assocs[ei];
+                    if (!e->main) continue;
+                    for (uint8_t r = 1; r < REL_DYN_BASE; ++r) {
+                        uint16_t bit = REL_BIT(r);
+                        if (e->rel & bit)  pool_rev_add(rp, e->main, t->id, r, 0);
+                        if (e->nrel & bit) pool_rev_add(rp, e->main, t->id, r, 1);
+                    }
+                    if (e->dyn)
+                        pool_rev_add(rp, e->main, t->id,
+                                     (uint32_t)(REL_DYN_BASE + e->dyn - 1),
+                                     edge_dyn_neg(e) ? 1 : 0);
+                }
+            }
+        }
+    }
     ai_embed_build(ai);       /* 分布式表示（PPMI 随机索引）也现算，不进快照 */
     ai_slots_build(ai);       /* 同位槽类同理 */
     ai_idf_rebuild(ai);       /* IDF 从整句库现算，不进快照 */

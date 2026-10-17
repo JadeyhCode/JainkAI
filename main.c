@@ -598,6 +598,7 @@ typedef enum {
     CMD_TOPICS,
     CMD_POOLDUMP,
     CMD_DERIVEDUMP,
+    CMD_REVCHECK,
     CMD_WTRACE,
     CMD_NONE
 } CmdId;
@@ -847,6 +848,9 @@ static const CmdDef CMDS[] = {
       "话题表", CMD_TOPICS },
     { "pooldump", NULL, 0, "调试/诊断",
       "整个词池 + 每一条边（按 id/名字，可跨进程 diff）", CMD_POOLDUMP },
+    { "revcheck", NULL, 0, "调试/诊断",
+      "反查表全量对拍：图上每条关系边都应该在反查桶里；缺一条就是**漏知识**（不是慢）",
+      CMD_REVCHECK },
     { "derivedump", NULL, 0, "调试/诊断",
       "派生层（idf/hv/emb/槽类/句库/话题/关系表）同样可 diff", CMD_DERIVEDUMP },
     { "wtrace", NULL, 1, "调试/诊断",
@@ -2862,6 +2866,43 @@ int main(int argc, char **argv) {
                        : "开放（知识库里没写就是不知道，默认）");
                 printf("  开放：推不出否定时说「不知道」；否定靠**公理**（比如「属于」独占）。\n");
                 printf("  闭合：「没写就是假」，答得快但会自信地说错。\n");
+                continue;
+            }
+            case CMD_REVCHECK: {
+                /* §6.214 反查表是"只追加 + 读时校验"的；**漏写**一条的后果是漏知识，
+                 * 所以这里拿图本身当基准逐条对拍：图上有的，(dst 的桶里) 必须有。 */
+                AI *B = a->brain;
+                size_t want = 0, missing = 0;
+                if (B && B->pool) {
+                    TokenPool *p = B->pool;
+                    for (size_t i = 0; i < p->count; ++i) {
+                        Token *t = p->tokens[i];
+                        if (!t || t->is_garbage) continue;
+                        for (size_t k = 0; k < t->count; ++k) {
+                            const AssocEntry *e = &t->assocs[k];
+                            if (!e->main) continue;
+                            for (uint8_t r = 1; r < REL_DYN_BASE; ++r) {
+                                uint16_t bit = REL_BIT(r);
+                                if (e->rel & bit) {
+                                    want++;
+                                    if (!pool_rev_has(p, e->main, t->id, r, 0)) missing++;
+                                }
+                                if (e->nrel & bit) {
+                                    want++;
+                                    if (!pool_rev_has(p, e->main, t->id, r, 1)) missing++;
+                                }
+                            }
+                            if (e->dyn) {
+                                want++;
+                                if (!pool_rev_has(p, e->main, t->id,
+                                                  (uint32_t)(REL_DYN_BASE + e->dyn - 1),
+                                                  edge_dyn_neg(e) ? 1 : 0)) missing++;
+                            }
+                        }
+                    }
+                    printf("[revcheck] 图上应有 %zu 条；反查表缺 %zu 条；条目总数 %zu\n",
+                           want, missing, p->rev_n);
+                } else printf("[revcheck] 没有池子\n");
                 continue;
             }
             case CMD_DERIVEDUMP: {
