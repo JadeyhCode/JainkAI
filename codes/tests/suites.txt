@@ -72,6 +72,8 @@ interact|sh tests/interact.sh
 session_facts|sh tests/session_facts.sh
 # 周期性段真的会跑（叙事/诊断/漂移/想象/内部对话；520 轮 ≈ 2.5s）—— 订正"走不到"那个误判
 cadence|sh tests/cadence.sh
+# 健壮性（固定种子）：120 条随机句 + 8 条病态输入，不崩、都答（本机实测 4s）
+fuzz|sh tests/fuzz.sh
 natrel|sh tests/natrel.sh
 # 验证器自身的测试：伪造/非法/断链/假依据必须被拒（本机实测 3.6s）
 dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin > ctest.log 2>&1; rc=$?; tail -12 ctest.log; [ "$rc" -eq 0 ]

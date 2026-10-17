@@ -572,8 +572,12 @@ static inline size_t fr_load(AI *ai, FrameSet *fs, const char *path) {
             size_t tn = 0;
             fr_split(ai, line + sizeof FR_FALL_PFX - 1, toks, slot_at, FR_MAX_TOK,
                      slot_names, &n_slot, &tn);
-            for (size_t i = cur->n_slot; i < n_slot; ++i)
+            /* §6.190 `fr_split` 给**新**槽位名 `fr_dup` 过一份；`fr_slot` 自己会再 dup 一份存进帧，
+             * 所以这份临时名要**还回去**（以前没还 ⇒ 每个新槽位泄一条，ASan 实测 28 条/56 字节）。 */
+            for (size_t i = cur->n_slot; i < n_slot; ++i) {
                 fr_slot(cur, slot_names[i], 1);
+                free((void *)slot_names[i]);
+            }
             for (size_t i = 0; i < tn; ++i) {
                 T->toks[T->n_tmpl][i] = toks[i];
                 T->slot_at[T->n_tmpl][i] = (int8_t)slot_at[i];
@@ -598,9 +602,11 @@ static inline size_t fr_load(AI *ai, FrameSet *fs, const char *path) {
             size_t tn = 0;
             fr_split(ai, line + 6, toks, slot_at, FR_MAX_TOK,
                      slot_names, &n_slot, &tn);
-            /* 新建的槽位登记进帧 */
-            for (size_t i = cur->n_slot; i < n_slot; ++i)
+            /* 新建的槽位登记进帧（临时名用完就还，同上 §6.190） */
+            for (size_t i = cur->n_slot; i < n_slot; ++i) {
                 fr_slot(cur, slot_names[i], 1);
+                free((void *)slot_names[i]);
+            }
             for (size_t i = 0; i < tn; ++i) {
                 T->toks[T->n_tmpl][i] = toks[i];
                 T->slot_at[T->n_tmpl][i] = (int8_t)slot_at[i];
