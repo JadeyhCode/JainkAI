@@ -90,9 +90,32 @@ for spec in "考拉 属于 动物:对" "考拉 会 爬树:对" "考拉 会 飞:�
 done
 [ "$n_bad" -eq 0 ] && chk "重载后 6 条全对（$n_ok/6）" 1 || chk "重载后 6 条全对（$n_ok/6）" 0
 
+echo "③ 跨事实继承：类别上学的结论要能推到成员上（肯定 + 否定）"
+{
+    printf '::load %s\n::natcoin on\n' "$MODEL"
+    printf '动物 会 呼吸\n动物 不 会 唱歌\n考拉 属于 动物\n'
+    printf '考拉 会 呼吸 吗\n考拉 不 会 唱歌 吗\n考拉 会 唱歌 吗\n'
+    printf '::quit\n'
+} > "$TMP/inh.txt"
+timeout 300 "$BIN" < "$TMP/inh.txt" > "$TMP/inh.out" 2>&1 || true
+i=4; n_ok=0; n_bad=0
+for spec in "考拉 会 呼吸:对" "考拉 不 会 唱歌:对" "考拉 会 唱歌:不对"; do
+    line=$(grep -a 'AI > ' "$TMP/inh.out" | sed -n "${i}p" | sed 's/.*AI > //'); i=$((i + 1))
+    want=${spec##*:}
+    if [ "$want" = "对" ]; then
+        printf '%s\n' "$line" | grep -q '^ *对 ， ' && n_ok=$((n_ok + 1)) || { n_bad=$((n_bad + 1)); echo "     ↳ 应为「对」：${spec%:*} ⇒ $line"; }
+    else
+        printf '%s\n' "$line" | grep -q '不 对 ， ' && n_ok=$((n_ok + 1)) || { n_bad=$((n_bad + 1)); echo "     ↳ 应为「不 对」：${spec%:*} ⇒ $line"; }
+    fi
+done
+[ "$n_bad" -eq 0 ] && chk "继承 3/3（肯定·否定·否定问法）" 1 || chk "继承 3/3" 0
+grep -a '属于·继承' "$TMP/inh.out" > /dev/null \
+    && chk "答案里写明走的是「属于·继承」这一跳" 1 \
+    || chk "答案里写明走的是「属于·继承」" 0 "$(grep -a 'AI > ' "$TMP/inh.out" | tail -2 | head -1)"
+
 rm -rf "$TMP"
 if [ "$fail" -ne 0 ]; then
     echo "FAIL consistency（教→问→存盘→重载 的端到端自洽）"
     exit 1
 fi
-echo "PASS consistency（14 条教→问全对；存盘重载后 6 条仍对）"
+echo "PASS consistency（14 条教→问全对；存盘重载后 6 条仍对；跨事实继承 3/3）"
