@@ -765,9 +765,12 @@ typedef struct {
      * 只在**它自己说推不出来**时才记（不靠答复文本里的"不确定"去猜，那是检索来的句子）。 */
     int    askback;
     int    ask_pending;
+    int    ask_kind;                 /* 1 = 我没把握（askback：回一句就教）
+                                      * 2 = 我给了**确定答案**（§6.172：回「不 对」就改口） */
     char   ask_a[64], ask_b[64];
     uint8_t ask_rid;
-    uint8_t ask_neg;
+    uint8_t ask_neg;                 /* 问句本身是不是否定问法 */
+    uint8_t ask_fact_neg;            /* 我**断言**的那条事实的极性（kind=2 用） */
     /* **写入闸门：分层判据**（② 档，默认 0 = 关）：实测 imp 落在 0.587~0.725，
      * 一个阈值切不动（0.65 只切掉 24%、0.70 只切 4.2%）⇒ 打开时改成分档：
      * 高档直接沉淀 / **中档要有旁证**（证据条数或链底分）/ 低档拦下 + 一条硬门槛。 */
@@ -1528,9 +1531,11 @@ static inline void ai_switches_init(AI *ai) {
     ai->askback = 0;                 /* §6.168 默认**关**（反向测量：AIP_ASKBACK=1）*/
     { const char *ak = getenv("AIP_ASKBACK"); if (ak && ak[0] == '1') ai->askback = 1; }
     ai->ask_pending = 0;
+    ai->ask_kind = 0;
     ai->ask_a[0] = ai->ask_b[0] = 0;
     ai->ask_rid = 0;
     ai->ask_neg = 0;
+    ai->ask_fact_neg = 0;
     { const char *pl2 = getenv("AIP_PRONLAST"); if (pl2 && pl2[0] == '1') ai->pron_last = 1; }
     ai->wgate_tier = 0;              /* 闸门分层判据：默认**关** */
     { const char *wt = getenv("AIP_WGATETIER"); if (wt && wt[0] == '1') ai->wgate_tier = 1; }

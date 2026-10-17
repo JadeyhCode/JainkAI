@@ -904,13 +904,16 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
 static inline void agent_askback_arm(AI *ai, const Token *A, uint8_t rid,
-                                     int is_neg, const Token *B, int as_other) {
+                                     int is_neg, const Token *B, int as_other,
+                                     int kind, int fact_neg) {
     if (!ai || !ai->askback || as_other) return;
     if (!A || !B || !A->name || !B->name || rid == 0) return;
     snprintf(ai->ask_a, sizeof ai->ask_a, "%s", A->name);
     snprintf(ai->ask_b, sizeof ai->ask_b, "%s", B->name);
     ai->ask_rid = rid;
     ai->ask_neg = (uint8_t)(is_neg ? 1 : 0);
+    ai->ask_kind = (kind == 2) ? 2 : 1;
+    ai->ask_fact_neg = (uint8_t)(fact_neg ? 1 : 0);
     ai->ask_pending = 1;
 }
 
@@ -969,6 +972,11 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         else       ai->n_rel_no++;
         if (pf.n > 2) ai->n_rel_deep++;
         if (out_conf) *out_conf = 0.9f;
+        /* §6.172 **确定答案也要记**（kind=2）：用户下一轮说「不 对」就该**改口**，
+         * 而不是重新教一条（以前那种回话掉进闲聊模板「没 关系 谁 都 会 有 错」，
+         * 知识一点没动）。断言的事实极性 = 问句极性 ^（我答的是不是「不对」）。 */
+        agent_askback_arm(ai, A, rid, is_neg, B, as_other, 2,
+                          (is_neg ? 1 : 0) ^ (agree ? 0 : 1));
         char *r = (char *)malloc(strlen(resp0) + 1);
         if (r) memcpy(r, resp0, strlen(resp0) + 1);
         return r;
@@ -1008,7 +1016,10 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                 ai->n_cot++;
                 der_say(ai, d, ai->der_style, resp0, sizeof resp0);
                 ai->n_rel_guess++;
-                agent_askback_arm(ai, A, rid, is_neg, B, as_other);   /* §6.168 */
+                /* §6.172b 记**猜的极性**：回「对」要按"我猜的那句"来教，不是按问句。
+                 * 实测会踩：猜「桌子 不 会 飞」、用户回「对」—— 按问句极性会教成「会 飞」。 */
+                agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1,
+                                  (is_neg ? 1 : 0) ^ (d->truth > 0 ? 0 : 1));
                 if (out_conf) *out_conf = mconf;
                 char *r = (char *)malloc(strlen(resp0) + 1);
                 if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -1030,7 +1041,8 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                                AGENT_GUESS_NEIGHBOR | AGENT_GUESS_SIBLING,
                                d, line, sizeof line, gresp, sizeof gresp, &gc)) {
             ai->n_rel_guess++;
-            agent_askback_arm(ai, A, rid, is_neg, B, as_other);       /* §6.168 猜的也记 */
+            agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1,
+                              (is_neg ? 1 : 0) ^ (d->truth > 0 ? 0 : 1));   /* §6.172b */
             if (out_conf) *out_conf = gc;
             char *r = (char *)malloc(strlen(gresp) + 1);
             if (r) memcpy(r, gresp, strlen(gresp) + 1);
@@ -1085,7 +1097,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
      * 判据放在这里而不是去认答复文本里的"不确定"：答复可能是检索来的句子
      * （样例会话里就有一条「我 不 确定 X 会 不 会 Y」），拿文本当信号会误判。
      * 只在 `as_other == 0`（不是"站在他立场"）时记：那条路是别人的信念。 */
-    agent_askback_arm(ai, A, rid, is_neg, B, as_other);
+    agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);   /* 没说反也没说正：按问句极性 */
     return NULL;
 }
 
@@ -2319,12 +2331,70 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     uint8_t rid = ai->ask_rid;
     ai->ask_pending = 0;                /* 这条追问用过就没了（无论成不成） */
     if (!A || !B || rid == 0) return 0;
-    int tneg = ai->ask_neg ^ (no ? 1 : 0);
+    /* §6.172b 极性**以我断言的那条为准**（猜测/确定答案都可能是否定），
+     * 不是以问句为准 —— 回「对」等于确认我刚才说的那句。 */
+    int tneg = ai->ask_fact_neg ^ (no ? 1 : 0);
     if (ai_write_rel(ai, A, B, rid, tneg, AI_WSRC_RELATION) != 0) return 0;
     ai->n_rel_learned++;
     const char *rn = rel_name_of(ai, rid);
     snprintf(out, cap, "好 ， 记下 了 ： %s %s%s %s（你 说 的）",
              A->name, tneg ? "不 " : "", rn ? rn : "?", B->name);
+    return 1;
+}
+
+/* §6.172 **纠正已有答案**（kind=2）：上一轮我给了一个**确定答案**，
+ * 这一轮用户说「不 对 / 不 是 / 错 了 / 说 错 了」⇒ 那条事实**改口**（极性取反）。
+ * 说「对 / 是 / 没 错」⇒ 只是确认：回一句"那我就记着"，**不写图**。
+ * 别的话 ⇒ 追问作废（只等一轮）。
+ *
+ * 为什么需要它：实测今天 `猫 属于 动物 吗` ⇒「对 ， 猫 -[属于]-> 动物」，
+ * 用户答「不 对」⇒「没 关系 谁 都 会 有 错」（闲聊模板）—— **知识一点没动**，
+ * 再问还是「对」。互动里"我说错了、你纠正"这条路等于不存在。
+ *
+ * 纪律：只认**短回话白名单**（多的当闲聊，不猜）；改口靠 `token_tag_*` 的
+ * "观测压过同一条边的对立位"（`g_obs_revise` 默认 1）⇒ 同一条边上不会正负并存；
+ * 只改**我说过的那条**（A/R/B 都来自上一轮的解析，不从回话里重新解析）。 */
+static inline int agent_correct_reply(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !ai->ask_pending || !input || !out || cap == 0) return 0;
+    if (!ai->ask_a[0] || !ai->ask_b[0] || ai->ask_rid == 0) return 0;
+    size_t n = 0;
+    char **w = ai_tokenize(ai, input, &n);
+    if (!w) return 0;
+    char j[96];
+    size_t off = 0;
+    for (size_t i = 0; i < n && off + 1 < sizeof j; ++i) {
+        const char *t = w[i] ? w[i] : "";
+        /* 语气词先剔掉（「错 了」⇒「错」）；别的词原样留着拼 */
+        if (!strcmp(t, "的") || !strcmp(t, "了") || !strcmp(t, "啊") ||
+            !strcmp(t, "呀") || !strcmp(t, "吧") || !strcmp(t, "呢")) continue;
+        off += (size_t)snprintf(j + off, sizeof j - off, "%s%s", off ? " " : "", t);
+    }
+    ai_free_words(w, n);
+    static const char *corr[] = {"不 对", "不 是", "错", "说 错", "不 正 确", NULL};
+    static const char *conf[] = {"对", "是", "嗯", "没 错", "好", "行", NULL};
+    int is_corr = 0, is_conf = 0;
+    for (size_t i = 0; corr[i]; ++i) if (strcmp(j, corr[i]) == 0) { is_corr = 1; break; }
+    if (!is_corr)
+        for (size_t i = 0; conf[i]; ++i) if (strcmp(j, conf[i]) == 0) { is_conf = 1; break; }
+    if (!is_corr && !is_conf) { ai->ask_pending = 0; return 0; }   /* 不是短回话：作废 */
+    Token *A = pool_find(ai->pool, ai->ask_a);
+    Token *B = pool_find(ai->pool, ai->ask_b);
+    uint8_t rid = ai->ask_rid;
+    int fact_neg = ai->ask_fact_neg;
+    ai->ask_pending = 0;
+    if (!A || !B || rid == 0) return 0;
+    const char *rn = rel_name_of(ai, rid);
+    if (is_conf) {                        /* 确认：不写图，只说"记着" */
+        snprintf(out, cap, "嗯 ， 那 我 就 这 么 记 着 ： %s %s%s %s",
+                 A->name, fact_neg ? "不 " : "", rn ? rn : "?", B->name);
+        return 1;
+    }
+    int want = fact_neg ? 0 : 1;          /* 取反 */
+    if (ai_write_rel(ai, A, B, rid, want, AI_WSRC_RELATION) != 0) return 0;
+    ai->n_revised++;
+    ai->n_rel_learned++;
+    snprintf(out, cap, "改 过来 了 ： %s %s%s %s（我 刚才 说 反 了）",
+             A->name, want ? "不 " : "", rn ? rn : "?", B->name);
     return 1;
 }
 
@@ -2338,9 +2408,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* §6.168 追问回话：上一轮我说"推不出来"的那个问句，这一轮用户只回
      * 「会/对/不 会/不 对」⇒ 当教学写进图。说了别的话 ⇒ 这条追问作废（只等一轮）。 */
     if (ai->ask_pending) {
-        if (ai->askback && agent_askback_reply(ai, input, out, out_cap)) {
-            ai->turns++;
-            return strlen(out);
+        if (ai->askback) {
+            /* kind 1 = 我没把握（回一句就教）；kind 2 = 我给了确定答案（回「不对」就改口） */
+            int done = (ai->ask_kind == 2) ? agent_correct_reply(ai, input, out, out_cap)
+                                           : agent_askback_reply(ai, input, out, out_cap);
+            if (done) {
+                ai->turns++;
+                return strlen(out);
+            }
         }
         ai->ask_pending = 0;
     }

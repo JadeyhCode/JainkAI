@@ -103,6 +103,63 @@ printf '%s\n' "$a" | grep -q "对 ， 狗 -\[会\]-> 唱歌" \
     && chk "再问 ⇒「对 ， 狗 -[会]-> 唱歌」（不是 会·猜）" 1 \
     || chk "再问 ⇒ 猜测已升格成知识" 0 "$a"
 
+echo "⑧ 关：答「对」之后说「不 对」不纠正（老行为：知识不动）"
+out=$(run 0 "猫 属于 动物 吗" "不 对" "猫 属于 动物 吗")
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "^对 ，" \
+    && chk "关着时纠正不生效（再问还是「对」）" 1 \
+    || chk "关着时纠正不生效" 0 "$a"
+
+echo "⑨ 开：答「对」之后说「不 对」⇒ 改口；再问 ⇒ 不对"
+out=$(run 1 "猫 属于 动物 吗" "不 对" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "改 过来 了 ： 猫 不 属于 动物" \
+    && chk "回「不 对」⇒「改 过来 了 ： 猫 不 属于 动物」" 1 \
+    || chk "回「不 对」⇒ 改口" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "不 对 ， 猫 -\[不 属于\]-> 动物" \
+    && chk "再问 ⇒「不 对 ， 猫 -[不 属于]-> 动物」" 1 \
+    || chk "再问 ⇒ 改口生效" 0 "$a"
+
+echo "⑩ 开：答「对」之后说「对」⇒ 只确认，不改图"
+out=$(run 1 "猫 属于 动物 吗" "对" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "那 我 就 这 么 记 着" \
+    && chk "回「对」⇒ 只确认" 1 \
+    || chk "回「对」⇒ 只确认" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "^对 ，" \
+    && chk "确认之后答案没被改" 1 \
+    || chk "确认之后答案没被改" 0 "$a"
+
+echo "⑪ 开：中间插一句别的话 ⇒ 纠正作废（只等一轮）"
+out=$(run 1 "猫 属于 动物 吗" "今天 天气 很 好" "不 对" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | grep -q "改 过来 了" \
+    && chk "追问只等一轮（插话后不纠正）" 0 "$(printf '%s\n' "$out" | reps | grep "改 过来 了")" \
+    || chk "追问只等一轮（插话后不纠正）" 1
+a=$(printf '%s\n' "$out" | reps | sed -n 4p)
+printf '%s\n' "$a" | grep -q "^对 ，" \
+    && chk "插话之后知识没被改" 1 \
+    || chk "插话之后知识没被改" 0 "$a"
+
+echo "⑫ 开：我答「不对」、用户回「对」⇒ 确认**否定**那条（极性不能弄反）"
+out=$(run 1 "猫 属于 植物 吗" "对" "猫 属于 植物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 不 属于 植物" \
+    && chk "确认的是「猫 不 属于 植物」" 1 \
+    || chk "确认的是否定那条" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "不 属于" \
+    && chk "再问仍是否定" 1 \
+    || chk "再问仍是否定" 0 "$a"
+
+echo "⑬ 开：我答「不对」、用户回「不 对」⇒ 翻成**肯定**"
+out=$(run 1 "猫 属于 植物 吗" "不 对" "猫 属于 植物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "改 过来 了 ： 猫 属于 植物" \
+    && chk "回「不 对」⇒ 翻成肯定" 1 \
+    || chk "回「不 对」⇒ 翻成肯定" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+a=$(printf '%s\n' "$out" | reps | sed -n 3p)
+printf '%s\n' "$a" | grep -q "^对 ，" \
+    && chk "再问 ⇒「对」" 1 \
+    || chk "再问 ⇒「对」" 0 "$a"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
