@@ -686,9 +686,17 @@ struct TokenPool {
 
 /* ---- §6.214 反查倒排表：**只追加 + 读时校验** ---------------------------------
  * `dst->rev_head` 是桶头，条目在 pool 的三条平数组里。
- * 写入点：`token_tag_rel` / `token_tag_nrel` / `token_tag_dyn`（新置位时各追加一条）
- * 以及 `agent.h` 的直写点。删除、GC、改口、猜测升格都**不动它** ——
- * 陈旧条目在查询时被 `rel_direct*` 校验掉（多走几条，不会答错）。 */
+ *
+ * **写入点清单（§6.224 逐条核过；`::revcheck` 是它的安全网）**：
+ *   ① `token_tag_rel`（命中已有边 / 新建边两处）
+ *   ② `token_tag_nrel`（两处）
+ *   ③ `token_tag_dyn`（两处）
+ *   ④ `token_tag_dyn_neg`（把"否定"置上时追加 neg=1 —— 在 ③ 之后）
+ *   ⑤ `micro.h` 的 `MOD_TAG_DERIVED`（两处：肯定/否定）
+ *   ⑥ `agent.h` 的 `agent_guess_remember`（直写 `e->rel`，刻意不走 token_tag_rel）
+ * 载入后由 `model_io.h` 一次 O(E) 重建兜底。
+ * 删除、GC、改口、猜测升格都**不动它** —— 陈旧条目在查询时被 `rel_direct*` 校验掉。
+ * ⚠ 新增第 11 个写入点时必须也追加，否则 `::revcheck` 会红（它就是这么被发现的两次）。 */
 static inline void pool_rev_add(TokenPool *p, Token *dst, uint32_t src_id,
                                 uint32_t rid, int neg) {
     if (!p || !dst || !rid) return;
@@ -1297,8 +1305,14 @@ static inline int token_tag_dyn_neg(Token *a, Token *b, uint8_t dyn_id, int neg,
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &a->assocs[i];
         if (e->main != b || e->dyn != dyn_id) continue;
+        int fresh_neg = neg && !(e->nrel & (uint16_t)REL_NEG_DYN_BIT);
         if (neg) e->nrel |= (uint16_t)REL_NEG_DYN_BIT;
         else     e->nrel &= (uint16_t)~REL_NEG_DYN_BIT;
+        /* §6.224 **否定的动态关系也要进反查表**：`token_tag_dyn` 追加的是 neg=0 那一条，
+         * 这里把"否定"置上之后必须再追加一条 neg=1 —— 否则 `谁 不 <谓语> B` 反查不到
+         * （`::revcheck` 实测报「缺（动态 喵）：猫 -> 鱼」）。*/
+        if (fresh_neg && a->owner)
+            pool_rev_add(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), 1);
         return 0;
     }
     return -1;
