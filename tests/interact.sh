@@ -188,6 +188,26 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -q "我 喜欢 猫" \
     && chk "「我们 刚才 聊 了 什么」⇒ 列出最近几轮" 1 \
     || chk "「我们 刚才 聊 了 什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+echo "⑯ §6.218 「A V 在 B」⇒ 学地点（动词那半句如实说没记）；新地点替掉旧地点"
+if [ "${AIP_LOCATIVE:-1}" = "0" ]; then
+    echo "  （AIP_LOCATIVE=0：反向测量，跳过这一节）"
+else
+out=$(run "我 住 在 北京" "我 在 哪")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 在 北京" \
+    && chk "「我 住 在 北京」⇒ 学成 我 在 北京（并说明住没记）" 1 \
+    || chk "「我 住 在 北京」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 在 北京" \
+    && chk "接着「我 在 哪」⇒ 答北京" 1 \
+    || chk "接着「我 在 哪」" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "我 住 在 北京" "我 住 在 学校" "我 在 哪")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "先前 记 的 我 在 北京 撤 掉 了" \
+    && chk "换地点 ⇒ 旧地点撤掉，并说出来" 1 \
+    || chk "换地点" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 我 在 学校" \
+    && chk "换完再问 ⇒ 只有学校" 1 \
+    || chk "换完再问" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

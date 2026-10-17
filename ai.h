@@ -750,6 +750,7 @@ typedef struct {
     /* **触发接求解**（② 档，默认 0 = 关）：开放式关系问句（`A R 什么` / `谁 R B`）
      * 走求解器（正向查邻居 / 反向扫一遍），而不是掉"我不太懂"。 */
     int    rel_open;
+    int    locative;                 /* §6.218 地点块学习（A V 在 B ⇒ A 在 B），默认开 */
     /* **指代消解最小版**（② 档，默认 0 = 关）：记"最近提到的那个谁"，
      * 于是「他 觉得 猫 会 飞 吗」里的**他/她/它**能指回那个人（而不是掉流水线）。 */
     int    pron_last;
@@ -1543,6 +1544,12 @@ static inline void ai_switches_init(AI *ai) {
      * 查不到时说「图里 没 记 过（不 编）」。**反向测量**（`AIP_RELOPEN=1` 整包 41/41）绿了才翻的。
      * 想回到老行为：`AIP_RELOPEN=0` 或 `::rel open off`。 */
     ai->rel_open = 1;
+    /* §6.218 地点块学习（`A V 在 B` / `A 在 B V` ⇒ `A 在 B`）：默认开，
+     * `AIP_LOCATIVE=0` 关掉（A/B 用）。 */
+    ai->locative = 1;
+    { const char *lc = getenv("AIP_LOCATIVE");
+      if (lc && lc[0] == '1') ai->locative = 1;
+      else if (lc && lc[0] == '0') ai->locative = 0; }
     { const char *ro = getenv("AIP_RELOPEN");
       if (ro && ro[0] == '1') ai->rel_open = 1;
       else if (ro && ro[0] == '0') ai->rel_open = 0; }

@@ -506,6 +506,83 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
 /* 步骤一：用户**陈述**了一条关系事实吗？是就当场学进图里（并写进模型）。
  * 支持肯定（`猫 属于 动物`）和否定（`猫 不 会 飞`）两种陈述。
  * 返回要说的确认话（调用方 free），不是陈述就返回 NULL。 */
+/* §6.218 **「A V 在 B」/「A 在 B V」里的地点事实**：
+ * 实测 `我 住 北京` 学得进（动态关系 住），但 `我 住 在 北京`、`我 在 学校 学习` **整句掉兜底**
+ * （答出「学习 小 的 那 我 空 吧」这种词串）。地点是 `在 B` 这一块，先把**它**学下来：
+ * 学 `A 在 B`（`在` 是核心关系 REL_AT），动词/多出来的词**如实说没记**。
+ * 守卫：疑问词/否定/多词主语/地点后缀（上/里/下/中/外/前/后/旁边）一律不接。 */
+static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, float *out_conf) {
+    if (!ai || ai->rel_off || !ai->locative || !words || n < 4 || n > 6) return NULL;
+    if (ai_has_question_word(words, n)) return NULL;
+    for (size_t i = 0; i < n; ++i) {
+        if (!words[i]) return NULL;
+        if (!strcmp(words[i], "不") || !strcmp(words[i], "没") || !strcmp(words[i], "没有")) return NULL;
+    }
+    size_t at = n;
+    for (size_t i = 2; i + 1 < n; ++i) if (!strcmp(words[i], "在")) { at = i; break; }
+    /* 只认 **`A V 在 B`**（在 前面至少还有一个动词/谓词，地点在句尾）——
+     * `A 在 B V`（`我 在 学校 学习`）里"地点到哪儿结束"没有词典判不了，**不猜**。 */
+    if (at == n || at < 2) return NULL;
+    /* 地点后缀（「桌子 上」）说明宾语不是一个完整地点 ⇒ 不猜 */
+    static const char *suf[] = {"上", "里", "下", "中", "外", "前", "后", "旁边", NULL};
+    for (size_t k = 0; suf[k]; ++k) if (!strcmp(words[n - 1], suf[k])) return NULL;
+    /* 地点 = `在` 后面所有词**拼起来**（分词常把「北京」切成 北/京）*/
+    char bl[32]; size_t bl_n = 0;
+    for (size_t i = at + 1; i < n; ++i) {
+        size_t wl = strlen(words[i]);
+        if (bl_n + wl + 1 >= sizeof bl) return NULL;
+        memcpy(bl + bl_n, words[i], wl); bl_n += wl;
+    }
+    bl[bl_n] = 0;
+    if (bl_n == 0 || bl_n > 12) return NULL;
+    Token *A = pool_token_intern(ai->pool, words[0]);
+    Token *B = pool_token_intern(ai->pool, bl);
+    if (!A || !B || A == B) return NULL;
+    /* §6.218 **地点是独占的**（`::stats` 的测量：在=独占 单24/多0）⇒ 新地点**替掉**旧地点：
+     * 人不会同时在两个地方。只清**关系位**（共现边留着），并如实说出撤掉了哪条。
+     * 注意：这条"后说的地点替换先说的"只在**地点**上做 —— `属于` 有嵌套（动物/哺乳动物），
+     * 不能照搬。 */
+    size_t retracted = 0;
+    char old_place[48]; old_place[0] = 0;
+    {
+        uint16_t bit = REL_BIT(REL_AT);
+        for (size_t i = 0; i < A->count; ++i) {
+            AssocEntry *e = &A->assocs[i];
+            if (!e->main || e->main == B) continue;
+            if (!(e->rel & bit)) continue;
+            e->rel &= (uint16_t)~bit;
+            if (!old_place[0] && e->main->name)
+                snprintf(old_place, sizeof old_place, "%s", e->main->name);
+            retracted++;
+        }
+    }
+    if (ai_write_rel(ai, A, B, REL_AT, 0, AI_WSRC_RELATION) != 0) return NULL;
+    ai->n_rel_learned++;
+    /* 把"没记"的那部分如实说出来（A、`在`、地点之外还有词就说） */
+    char dropped[64]; size_t dl = 0; dropped[0] = 0;
+    for (size_t i = 0; i < at; ++i) {
+        if (i == 0) continue;
+        size_t wl = strlen(words[i]);
+        if (dl + wl + 2 >= sizeof dropped) break;
+        if (dl) dropped[dl++] = ' ';
+        memcpy(dropped + dl, words[i], wl); dl += wl; dropped[dl] = 0;
+    }
+    char buf[224];
+    if (retracted && old_place[0])
+        snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（先前 记 的 %s 在 %s 撤 掉 了 ——"
+                 " 一个人 不 会 同时 在 两 个 地方）%s", words[0], bl, words[0], old_place,
+                 dropped[0] ? "；动词 那 半 句 我 没 记 关系" : "");
+    else if (dropped[0])
+        snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（「%s」这 半 句 我 没 记 关系）",
+                 words[0], bl, dropped);
+    else
+        snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s", words[0], bl);
+    if (out_conf) *out_conf = 0.7f;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                                         float *out_conf) {
     if (!ai || ai->rel_off || !words || n < 3 || n > 6) return NULL;
@@ -3215,6 +3292,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_relation(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    /* §6.218 地点块：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）*/
+    if (!resp) {
+        float rc = 0.5f;
+        resp = agent_learn_locative(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     /* §6.173 含**新词**的自然说法（默认关）：关系词是已知核心关系、主语/宾语是没见过的
