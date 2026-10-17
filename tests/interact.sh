@@ -240,6 +240,20 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "那 我 换 个 说 法" \
     && chk "没说过什么时说「我 不 明白」⇒ 换个说法（不出词串）" 1 \
     || chk "「我 不 明白」（空历史）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "⑲ §6.227 地点/名字不能是虚词（不学垃圾）"
+out=$(run "我 住 在 很" "我 在 哪")
+printf '%s\n' "$out" | grep -q "记下 了 ：" \
+    && chk "地点是虚词（很）⇒ 不学" 0 "$(printf '%s\n' "$out" | grep -a "记下 了 ：" | head -1)" \
+    || chk "地点是虚词（很）⇒ 不学" 1
+out=$(run "我 的 名字 是 很" "我 叫 什么")
+printf '%s\n' "$out" | grep -q "记下 了 ：" \
+    && chk "名字是虚词（很）⇒ 不学" 0 "$(printf '%s\n' "$out" | grep -a "记下 了 ：" | head -1)" \
+    || chk "名字是虚词（很）⇒ 不学" 1
+out=$(run "我 住 在 学校" "我 在 哪")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 在 学校" \
+    && chk "正常地点照旧学得进" 1 \
+    || chk "正常地点照旧学得进" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

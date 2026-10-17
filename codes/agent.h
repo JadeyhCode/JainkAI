@@ -576,6 +576,9 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     }
     bl[bl_n] = 0;
     if (bl_n == 0 || bl_n > 12) return NULL;
+    /* §6.227 **地点不能是虚词**：实测 `我 住 在 很` 会学成 `我 在 很`（"很"当地点）。
+     * 虚词表只有一处（frame.h 的 FR_FUNC + FR_PARTICLES），与 §6.226 同源。 */
+    if (fr_is_func(bl)) return NULL;
     Token *A = pool_token_intern(ai->pool, words[0]);
     Token *B = pool_token_intern(ai->pool, bl);
     if (!A || !B || A == B) return NULL;
@@ -854,6 +857,17 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     }
     B[ob] = 0;
     if (!A[0] || !B[0] || strcmp(A, B) == 0) return NULL;
+    /* §6.227 **虚词不当宾语**（`我 住 在 很` 会学成 `我住 在 很`）+ **代词不能跟别的词拼成主语**
+     * （`我 住 在 …` 的主语是 我+住 两截 ⇒ 拼出来的「我住」是垃圾词）。 */
+    if (fr_is_func(B)) return NULL;
+    {
+        static const char *pron[] = {"我", "你", "您", "他", "她", "它", "我们", "你们", "他们", NULL};
+        int subj_pron = 0;
+        for (size_t i = 0; i < na; ++i)
+            for (size_t k = 0; pron[k]; ++k)
+                if (words[i] && strcmp(words[i], pron[k]) == 0) subj_pron = 1;
+        if (subj_pron && na > 1) return NULL;
+    }
     if (!pool_find(ai->pool, A) && strlen(A) > 12) return NULL;   /* 别造超长怪词 */
     if (!pool_find(ai->pool, B) && strlen(B) > 12) return NULL;
     Token *ta = pool_token_intern(ai->pool, A);
