@@ -243,6 +243,29 @@ printf '%s\n' "$r" | grep -q "不 对 ， 猫 -\[不 有\]-> 毛" \
     && chk "再问 ⇒ 具体事实压过继承" 1 \
     || chk "再问 ⇒ 具体事实压过继承" 0 "$r"
 
+echo "㉑ §6.188 追问能跨存盘：挂起 → ::save → 新进程 ::load → 回一句照样教"
+run 1 "狗 会 唱歌 吗" "::save $TMP/pend.bin" > /dev/null
+out=$(run 1 "::load $TMP/pend.bin" "::askback" "不 对" "狗 会 唱歌 吗")
+printf '%s\n' "$out" | grep -q "挂着一条追问：狗 会 唱歌" \
+    && chk "重载后状态里能看到挂着的追问" 1 \
+    || chk "重载后能看到挂着的追问" 0 "$(printf '%s\n' "$out" | grep -a "挂着")"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 狗 不 会 唱歌" \
+    && chk "重载后回「不 对」照样教" 1 \
+    || chk "重载后回「不 对」照样教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+r=$(printf '%s\n' "$out" | reps | sed -n 2p)
+printf '%s\n' "$r" | grep -q "不 对 ， 狗" \
+    && chk "再问 ⇒ 不 对" 1 \
+    || chk "再问 ⇒ 不 对" 0 "$r"
+echo "㉒ 吃过的那条追问不该在下次载入时复活"
+run 1 "狗 会 唱歌 吗" "不 对" "::save $TMP/pend2.bin" > /dev/null
+out=$(run 1 "::load $TMP/pend2.bin" "::askback" "不 对" "狗 会 唱歌 吗")
+printf '%s\n' "$out" | grep -q "没有挂着的追问" \
+    && chk "吃掉后重载没有挂着的追问" 1 \
+    || chk "吃掉后重载没有挂着的追问" 0 "$(printf '%s\n' "$out" | grep -a "挂着")"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了" \
+    && chk "不会再被那句「不 对」教一次" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "不会再被那句「不 对」教一次" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1

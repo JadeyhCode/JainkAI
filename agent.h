@@ -1002,6 +1002,86 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
 /* §6.168 **记下这个问句**（等用户下一轮回话）。
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
+/* §6.188 **把 pending 落成一个标记节点**：`[追问:k|n|f|R|A|B]`（普通符号节点、随图存盘）。
+ * pending 本身只在内存 ⇒ 存盘再开就没了；有了标记，`agent_ask_restore` 能把它接回来。
+ * 注意：标记是**新增节点**（不删不挪）⇒ 存档 id 仍然连续（§6.186 的约束）。 */
+static inline void agent_ask_persist(AI *ai) {
+    if (!ai || !ai->pool || !ai->ask_pending) return;
+    Micro *mk = micro_of(ai);
+    if (!mk || mk->safe.mod_off) return;
+    const char *rn = rel_name_of(ai, ai->ask_rid);
+    if (!rn) return;
+    if (strchr(ai->ask_a, '|') || strchr(ai->ask_b, '|') || strchr(rn, '|')) return;
+    char nm[96];
+    int n = snprintf(nm, sizeof nm, MICRO_PENDING_TOKEN_PREFIX "%d|%d|%d|%s|%s|%s]",
+                     ai->ask_kind, ai->ask_neg, ai->ask_fact_neg, rn, ai->ask_a, ai->ask_b);
+    if (n <= 0 || (size_t)n >= sizeof nm) return;
+    ModIntent in;
+    memset(&in, 0, sizeof in);
+    in.type = MOD_ADD_TOKEN;
+    in.target = pool_find(ai->pool, ai->ask_a);
+    if (!in.target) in.target = ai->self;
+    if (!in.target) return;
+    snprintf(in.name, sizeof in.name, "%s", nm);
+    snprintf(in.source, sizeof in.source, "来源:追问");
+    (void)mod_propose(&mk->queue, &in);
+    (void)micro_drain_queue(ai);          /* 当场落地（这些路径在 agent_step 开头就返回了） */
+    snprintf(ai->ask_mark, sizeof ai->ask_mark, "%s", nm);
+}
+
+/* 丢掉 pending（无论成不成）：**标记标成垃圾**（不删节点 ⇒ id 连续），字段清干净。 */
+static inline void agent_ask_drop(AI *ai) {
+    if (!ai) return;
+    if (ai->ask_mark[0]) {
+        Token *m = pool_find(ai->pool, ai->ask_mark);
+        if (m) m->is_garbage = 1;          /* 内核自己的账，不是知识：直写 */
+        ai->ask_mark[0] = 0;
+    }
+    ai->ask_pending = 0;
+    ai->ask_kind = 0;
+    ai->ask_fact_neg = 0;
+}
+
+/* §6.188 **载入后把挂着的追问接回来**（只扫一次）：取**最新的**非垃圾 `[追问:…]` 标记，
+ * 解析成 (kind, neg, fact_neg, R, A, B)。关系词认不出（比如动态谓语）就跳过。 */
+static inline void agent_ask_restore(AI *ai) {
+    if (!ai || !ai->pool || ai->ask_restored) return;
+    ai->ask_restored = 1;
+    if (ai->ask_pending) return;
+    const Token *best = NULL;
+    const size_t plen = strlen(MICRO_PENDING_TOKEN_PREFIX);
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        const Token *t = ai->pool->tokens[i];
+        if (!t || t->is_garbage || !t->name) continue;
+        if (strncmp(t->name, MICRO_PENDING_TOKEN_PREFIX, plen) != 0) continue;
+        if (!best || t->id > best->id) best = t;
+    }
+    if (!best) return;
+    char buf[96];
+    snprintf(buf, sizeof buf, "%s", best->name + plen);
+    size_t bl = strlen(buf);
+    if (bl && buf[bl - 1] == ']') buf[bl - 1] = 0;
+    char *f[6]; size_t nf = 0;
+    for (char *q = buf; *q && nf < 6; ) {
+        f[nf++] = q;
+        char *bar = strchr(q, '|');
+        if (!bar) { q += strlen(q); break; }
+        *bar = 0; q = bar + 1;
+    }
+    if (nf < 6) return;
+    uint8_t rid = rel_id_of(ai, f[3], 0);
+    if (!rid) return;
+    if (!pool_find(ai->pool, f[4]) || !pool_find(ai->pool, f[5])) return;
+    snprintf(ai->ask_a, sizeof ai->ask_a, "%s", f[4]);
+    snprintf(ai->ask_b, sizeof ai->ask_b, "%s", f[5]);
+    ai->ask_rid = rid;
+    ai->ask_kind = (atoi(f[0]) == 2) ? 2 : 1;
+    ai->ask_neg = (uint8_t)(atoi(f[1]) ? 1 : 0);
+    ai->ask_fact_neg = (uint8_t)(atoi(f[2]) ? 1 : 0);
+    snprintf(ai->ask_mark, sizeof ai->ask_mark, "%s", best->name);
+    ai->ask_pending = 1;
+}
+
 static inline void agent_askback_arm_name(AI *ai, const char *a, uint8_t rid,
                                          int is_neg, const char *b,
                                          int kind, int fact_neg) {
@@ -1013,6 +1093,8 @@ static inline void agent_askback_arm_name(AI *ai, const char *a, uint8_t rid,
     ai->ask_kind = (kind == 2) ? 2 : 1;
     ai->ask_fact_neg = (uint8_t)(fact_neg ? 1 : 0);
     ai->ask_pending = 1;
+    ai->ask_mark[0] = 0;
+    agent_ask_persist(ai);              /* §6.188：落一个 [追问:…] 标记，存盘后可恢复 */
 }
 /* §6.174 **问句里含新词**（`恐龙 会 飞 吗`）：关系层解析不了（主语被切成 恐/龙），
  * 于是连追问都不会挂 —— 用户回一句「不 会」也白说。
@@ -2487,13 +2569,14 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     Token *A = pool_find(ai->pool, ai->ask_a);
     Token *B = pool_find(ai->pool, ai->ask_b);
     uint8_t rid = ai->ask_rid;
-    ai->ask_pending = 0;                /* 这条追问用过就没了（无论成不成） */
+    int fact_neg = ai->ask_fact_neg;    /* 先取下来：drop 会把字段清干净（§6.188） */
+    agent_ask_drop(ai);                 /* 这条追问用过就没了（无论成不成；标记标垃圾） */
     if (!A && ai->ask_a[0] && strlen(ai->ask_a) <= 12) A = pool_token_intern(ai->pool, ai->ask_a);
     if (!B && ai->ask_b[0] && strlen(ai->ask_b) <= 12) B = pool_token_intern(ai->pool, ai->ask_b);
     if (!A || !B || rid == 0) return 0;
     /* §6.172b 极性**以我断言的那条为准**（猜测/确定答案都可能是否定），
      * 不是以问句为准 —— 回「对」等于确认我刚才说的那句。 */
-    int tneg = ai->ask_fact_neg ^ (no ? 1 : 0);
+    int tneg = fact_neg ^ (no ? 1 : 0);
     if (ai_write_rel(ai, A, B, rid, tneg, AI_WSRC_RELATION) != 0) return 0;
     ai->n_rel_learned++;
     const char *rn = rel_name_of(ai, rid);
@@ -2552,12 +2635,12 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
             }
         }
     }
-    if (!is_corr && !is_conf) { ai->ask_pending = 0; return 0; }   /* 不是短回话：作废 */
+    if (!is_corr && !is_conf) { agent_ask_drop(ai); return 0; }   /* 不是短回话：作废 */
     Token *A = pool_find(ai->pool, ai->ask_a);
     Token *B = pool_find(ai->pool, ai->ask_b);
     uint8_t rid = ai->ask_rid;
     int fact_neg = ai->ask_fact_neg;
-    ai->ask_pending = 0;
+    agent_ask_drop(ai);
     if (!A || !B || rid == 0) return 0;
     const char *rn = rel_name_of(ai, rid);
     if (is_conf) {                        /* 确认：不写图，只说"记着" */
@@ -2600,6 +2683,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     a->cycle++;
     /* §6.168 追问回话：上一轮我说"推不出来"的那个问句，这一轮用户只回
      * 「会/对/不 会/不 对」⇒ 当教学写进图。说了别的话 ⇒ 这条追问作废（只等一轮）。 */
+    if (!ai->ask_restored) agent_ask_restore(ai);   /* §6.188：载入后的第一轮接回追问 */
     if (ai->ask_pending) {
         if (ai->askback) {
             /* kind 1 = 我没把握（回一句就教）；kind 2 = 我给了确定答案（回「不对」就改口） */
@@ -2610,7 +2694,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 return strlen(out);
             }
         }
-        ai->ask_pending = 0;
+        agent_ask_drop(ai);
     }
     /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
     uint64_t seg_t = ai_seg_mark(ai);

@@ -209,6 +209,10 @@ static inline int micro_token_reserved(const Token *t) {
  * 所以给它开一个专用前缀，其余 '[' 前缀照旧一律拒绝。 */
 #define MICRO_NEW_TOKEN_PREFIX "[新概念:"
 #define MICRO_ASK_TOKEN_PREFIX "[自问:"
+/* §6.188 **等回话的追问**（askback 的 pending）：`[追问:kind|neg|factneg|R|A|B]`。
+ * 它是**普通符号节点**（随图存盘）⇒ 存盘再开还能接着答（pending 本身只在内存）。
+ * 回收时标 `is_garbage`（不删节点 ⇒ 存档 id 仍然连续，§6.186）。 */
+#define MICRO_PENDING_TOKEN_PREFIX "[追问:"
 /* §6.143 元认知提醒的节点前缀。**收进内部命名空间**（下面 `micro_internal_ns`）之后，
  * `[提醒:…]` 就不再算"协议骨架" ⇒ 它跟「我」之间那条边**可以过统一通道**（受审 + 记账 + 审计）。
  * 不这么做的话：`micro_endpoint_reserved()` 判真 ⇒ 命中 K6 的静态例外 ⇒ 永远直写
@@ -246,6 +250,7 @@ static inline int micro_token_reserved(const Token *t) {
  * 别的 '[' 名字是协议骨架（[原语:]/[时刻:]/[提醒:]…），一律不许碰。 */
 static inline int micro_internal_ns(const char *name) {
     static const char *const ns[] = { MICRO_NEW_TOKEN_PREFIX, MICRO_ASK_TOKEN_PREFIX,
+                                      MICRO_PENDING_TOKEN_PREFIX,
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
                                       MICRO_CODE_TOKEN_PREFIX, MICRO_EXEC_TOKEN_PREFIX,

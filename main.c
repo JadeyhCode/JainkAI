@@ -2734,6 +2734,7 @@ int main(int argc, char **argv) {
                     else if (strcmp(arg, "off") == 0) a->brain->askback = 0;
                     else { printf("[用法] ::askback on|off|clear\n"); continue; }
                 }
+                agent_ask_restore(a->brain);   /* §6.188：载入后先接回存档里的追问，状态才打得对 */
                 printf("[追问回话 = %s]（%s）\n", a->brain->askback ? "开" : "关（默认）",
                        a->brain->askback
                            ? "你回一句「会/不 会/对」我就记进图；你说「不 对」我就改口"

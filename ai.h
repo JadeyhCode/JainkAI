@@ -767,6 +767,8 @@ typedef struct {
                                       * 并学进图（默认**关**；只认核心关系，不造谓语）*/
     int    askback;
     int    ask_pending;
+    int    ask_restored;             /* §6.188：载入后扫过一次 `[追问:…]` 标记了吗（只扫一次）*/
+    char   ask_mark[96];             /* §6.188：这一条 pending 对应的标记节点名（回收时按它找）*/
     int    ask_kind;                 /* 1 = 我没把握（askback：回一句就教）
                                       * 2 = 我给了**确定答案**（§6.172：回「不 对」就改口） */
     char   ask_a[64], ask_b[64];
@@ -1535,6 +1537,8 @@ static inline void ai_switches_init(AI *ai) {
     ai->askback = 0;                 /* §6.168 默认**关**（反向测量：AIP_ASKBACK=1）*/
     { const char *ak = getenv("AIP_ASKBACK"); if (ak && ak[0] == '1') ai->askback = 1; }
     ai->ask_pending = 0;
+    ai->ask_restored = 0;
+    ai->ask_mark[0] = 0;
     ai->ask_kind = 0;
     ai->ask_a[0] = ai->ask_b[0] = 0;
     ai->ask_rid = 0;

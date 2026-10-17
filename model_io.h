@@ -783,6 +783,13 @@ static inline AI *ai_load_file(const char *path) {
      * 以前它只靠 `ai_sleep_step` 里那句 `? : AI_SLEEP_MAX_VISITS` 兜着，
      * 于是 `AIP_SLEEPVISITS` 对**载入的模型一点用都没有**（实测 1000/4000/20000
      * 三个值跑出来访问数一模一样，全是 440010）——测量钩子形同虚设。 */
+    /* §6.188：载入的模型没有"内存里的 pending"（它只在内存），但可以**从标记节点恢复** ——
+     * `agent_step` 第一轮会扫一遍 `[追问:…]`。这里只保证几个字段是干净的初值。 */
+    ai->ask_pending = 0;
+    ai->ask_restored = 0;
+    ai->ask_mark[0] = 0;
+    ai->ask_kind = 0;
+    ai->ask_fact_neg = 0;
     ai->sleep_max_visits = AI_SLEEP_MAX_VISITS;
     { const char *sv = getenv("AIP_SLEEPVISITS");
       if (sv && sv[0]) { long v = strtol(sv, NULL, 10); if (v > 0) ai->sleep_max_visits = (size_t)v; } }
