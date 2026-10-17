@@ -4081,14 +4081,89 @@ static inline void ai_form_abstractions(AI *ai) {
     TokenPool *p = ai->pool;
     size_t created = 0;
     const size_t MAX_NEW = 3;
+    /* §6.238 **候选集倒排**（精确剪枝，不改结果）：jaccard≥70 要求两边共享**很多**邻居，
+     * 至少 1 个（两侧出度都 ≥3 时其实 ≥3 个）。原来的二重循环对**每一对**都算
+     * `ai_jaccard`（O(出度²)）。这里先建"谁指向 m"的倒排表（O(E)），再只对**与 a 共享邻居**
+     * 的 b 算 jaccard，候选按 id 升序处理 —— 与原来的"j 从小到大、第一个满足就取"等价。 */
+    size_t n = p->count;
+    size_t ecount = 0;
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        for (size_t k = 0; k < t->count; ++k) {
+            Token *m = t->assocs[k].main;
+            if (!m || (m->name && m->name[0] == '[')) continue;
+            if (m->id >= n) continue;
+            ecount++;
+        }
+    }
+    uint32_t *in_off = (uint32_t *)calloc(n + 2, sizeof *in_off);
+    uint32_t *in_src = (uint32_t *)malloc((ecount + 1) * sizeof *in_src);
+    uint8_t  *seen   = (uint8_t *)calloc(n + 1, 1);
+    uint32_t *cand   = (uint32_t *)malloc((n + 1) * sizeof *cand);
+    if (!in_off || !in_src || !seen || !cand || ecount == 0) {
+        free(in_off); free(in_src); free(seen); free(cand);
+        if (ecount == 0) return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        Token *t = p->tokens[i];
+        for (size_t k = 0; k < t->count; ++k) {
+            Token *m = t->assocs[k].main;
+            if (!m || (m->name && m->name[0] == '[')) continue;
+            if (m->id >= n) continue;
+            in_off[m->id + 1]++;
+        }
+    }
+    for (size_t i = 0; i < n; ++i) in_off[i + 1] += in_off[i];
+    {
+        uint32_t *cur = (uint32_t *)malloc((n + 2) * sizeof *cur);
+        if (!cur) { free(in_off); free(in_src); free(seen); free(cand); return; }
+        memcpy(cur, in_off, (n + 2) * sizeof *cur);
+        for (size_t i = 0; i < n; ++i) {
+            Token *t = p->tokens[i];
+            for (size_t k = 0; k < t->count; ++k) {
+                Token *m = t->assocs[k].main;
+                if (!m || (m->name && m->name[0] == '[')) continue;
+                if (m->id >= n) continue;
+                uint32_t pos = cur[m->id]++;
+                if (pos < ecount) in_src[pos] = (uint32_t)i;
+            }
+        }
+        free(cur);
+    }
+
     for (size_t i = 0; i < p->count && created < MAX_NEW; ++i) {
         Token *a = p->tokens[i];
         if (a->is_garbage || !a->name || a->parent) continue;
         if (a->name[0] == '[' || a->count < 3) continue;
-        for (size_t j = i + 1; j < p->count && created < MAX_NEW; ++j) {
+        /* 候选 = a 的邻居们的"入边来源"（去重、只要 id > i）*/
+        size_t ncand = 0;
+        for (size_t k = 0; k < a->count; ++k) {
+            Token *m = a->assocs[k].main;
+            if (!m || (m->name && m->name[0] == '[')) continue;
+            if (m->id >= n) continue;
+            for (uint32_t q = in_off[m->id]; q < in_off[m->id + 1]; ++q) {
+                uint32_t t = in_src[q];
+                if (t <= i || t >= n) continue;
+                if (seen[t]) continue;
+                seen[t] = 1;
+                cand[ncand++] = t;
+            }
+        }
+        /* 按 id 升序（原来的 j 就是从小到大）*/
+        for (size_t x = 1; x < ncand; ++x) {
+            uint32_t v = cand[x]; size_t y = x;
+            while (y > 0 && cand[y - 1] > v) { cand[y] = cand[y - 1]; --y; }
+            cand[y] = v;
+        }
+        for (size_t x = 0; x < ncand; ++x) seen[cand[x]] = 0;   /* 清标记 */
+        for (size_t ci = 0; ci < ncand && created < MAX_NEW; ++ci) {
+            size_t j = cand[ci];
             Token *b = p->tokens[j];
             if (b->is_garbage || !b->name || b->parent) continue;
             if (b->name[0] == '[' || b->count < 3) continue;
+            /* §6.238b 试过"度数比剪枝"（min(ca,cb) ≥ 0.7·max），**撤了**：
+             * 代数上该成立，实测却**改变了选中的配对**（抽象 49 挂在别的词上）。
+             * 等价性没证住的东西不许留 —— 只保留"共享邻居"那条（已验证逐字节等价）。 */
             if (ai_jaccard(a, b) < 70) continue;
             char cname[64];
             snprintf(cname, sizeof cname, "[抽象%zu]", ai->n_abstractions);
@@ -4106,6 +4181,7 @@ static inline void ai_form_abstractions(AI *ai) {
             break;
         }
     }
+    free(in_off); free(in_src); free(seen); free(cand);
 }
 
 /* ============================ 睡眠（增量） ============================ */
