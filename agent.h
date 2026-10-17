@@ -424,6 +424,46 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * 以前这里抄了一份、检索和拒答各抄一份，三份还各不相同。 */
     if (ai_has_question_word(words, n)) return NULL;
 
+    /* §6.205 **名字介绍的自然说法**：`我 的 名字 是 小明` / `我 名字 是 小明`
+     * （也认「叫」）。它们是同一个意思（`我 叫 小明`，那条本来就能学），
+     * 但形状不是"A 关系 B" ⇒ 以前整句掉流水线、答一句"我是你的伙伴"，名字没学进去。
+     * 这里**只做形状改写**，后面的学习路径完全不变（动态关系 叫、受审、记账）。 */
+    char *norm[3];
+    char namebuf[32];
+    {
+        /* 分词器可能把「名字」切成一个词、也可能切成 名/字（§6.171 那类）；
+         * 「小红/小刚」这类名字也常被切成两个单字 ⇒ 这里**按 token 拼回来**。 */
+        size_t mi = n; int split_name = 0;
+        for (size_t i = 0; i + 1 < n; ++i) {
+            if (!words[i]) continue;
+            if (strcmp(words[i], "名字") == 0) { mi = i; break; }
+            if (words[i + 1] && !strcmp(words[i], "名") && !strcmp(words[i + 1], "字")) {
+                mi = i; split_name = 1; break;
+            }
+        }
+        size_t after = (mi < n) ? (split_name ? mi + 2 : mi + 1) : n;
+        int prefix_ok = (mi == 1) ||
+                        (mi == 2 && words[1] && strcmp(words[1], "的") == 0);
+        if (mi < n && prefix_ok && after < n && words[after] &&
+            (!strcmp(words[after], "是") || !strcmp(words[after], "叫")) &&
+            after + 1 < n) {
+            size_t bl = 0; int ok = 1;
+            for (size_t i = after + 1; i < n && ok; ++i) {
+                size_t wl = words[i] ? strlen(words[i]) : 0;
+                if (bl + wl + 1 >= sizeof namebuf) { ok = 0; break; }
+                memcpy(namebuf + bl, words[i], wl);
+                bl += wl;
+            }
+            if (ok && bl > 0 && bl <= 12) {
+                namebuf[bl] = 0;
+                norm[0] = words[0];
+                norm[1] = (char *)"叫";
+                norm[2] = namebuf;
+                words = norm; n = 3;
+            }
+        }
+    }
+
     const char *aw = NULL, *bw = NULL, *rw = NULL;
     uint8_t rid = 0;
     int is_q = 0, is_neg = 0;

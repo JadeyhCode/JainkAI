@@ -2683,6 +2683,14 @@ static inline void ai_slots_build(AI *ai) {
     if (!ai) return;
     ai->slots_n = 0;
     if (!ai->pairs || ai->pairs_n == 0) return;
+    /* §6.207 **sig → 槽下标**的开放寻址表（只在建表期间用，栈上 8 KB）：
+     * 原来每来一条候选都要线性扫已建好的槽类（槽类满 1024 时 = 每次 1024 次比较，
+     * 库句到十万级就是十亿次）。表里只放"槽下标+1"，空槽 = 0 ——
+     * **判等还是回读 `ai->slots[idx].sig`**，不另存一份 sig（不会有第二份真相）。
+     * 语义与原来完全一致：同一个 sig 只有一个槽，插入顺序不变 ⇒ 槽下标不变。 */
+    enum { SLOT_HASH_SZ = 2048 };         /* 2×AI_MAX_SLOTS：装载因子 ≤ 0.5 */
+    uint32_t sh[SLOT_HASH_SZ];
+    memset(sh, 0, sizeof sh);
     for (size_t i = 0; i < ai->pairs_n; ++i) {
         const AISentPair *p = &ai->pairs[i];
         if (p->in_n < 2) continue;
@@ -2692,15 +2700,20 @@ static inline void ai_slots_build(AI *ai) {
             if (t->name[0] == '[') continue;              /* 跳过标记词 */
             if (t->name[0] && strlen(t->name) > 6) continue;
             uint32_t sg = ai_slot_sig(p->in, p->in_n, k);
-            /* 找已有同类 */
+            /* 找已有同类（哈希探测；命中判据是"槽里存的 sig 相等"） */
             size_t at = ai->slots_n;
-            for (size_t q = 0; q < ai->slots_n; ++q)
-                if (ai->slots[q].sig == sg) { at = q; break; }
+            size_t h = (size_t)(sg * 2654435761u) & (SLOT_HASH_SZ - 1);
+            while (sh[h]) {
+                size_t cand = (size_t)sh[h] - 1;
+                if (cand < ai->slots_n && ai->slots[cand].sig == sg) { at = cand; break; }
+                h = (h + 1) & (SLOT_HASH_SZ - 1);
+            }
             if (at == ai->slots_n) {
                 if (ai->slots_n >= AI_MAX_SLOTS) continue;
                 ai->slots[at].n = 0;
                 ai->slots[at].sig = sg;
                 ai->slots_n++;
+                sh[h] = (uint32_t)(at + 1);
             }
             AISlot *sl = &ai->slots[at];
             int dup = 0;
