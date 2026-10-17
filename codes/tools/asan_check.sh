@@ -135,6 +135,29 @@ run_group "random" "$TMP/rnd.txt"
 run_group "patho"  "$TMP/patho.txt"
 run_group "bytes"  "$TMP/bytes.txt"
 
+echo "== 4c/4 混合变异（合法词 + 随机字节，确定性 LCG）"
+seed=987654321
+rnd() { seed=$(( (seed * 1103515245 + 12345) % 2147483648 )); echo $(( seed / 65536 )); }
+words="猫 狗 属于 会 吗 不 水 飞 游泳 唱歌 动物 植物 桌子 太阳 什么 谁"
+: > "$TMP/mut.txt"
+i=0
+while [ "$i" -lt 120 ]; do
+    line=""; n=$(( $(rnd) % 6 + 1 )); j=0
+    while [ "$j" -lt "$n" ]; do
+        if [ $(( $(rnd) % 3 )) -eq 0 ]; then
+            b=$(( $(rnd) % 255 + 1 ))
+            frag=$(printf "\\$(printf '%03o' "$b")")
+        else
+            k=$(( $(rnd) % 16 + 1 ))
+            frag=$(printf '%s' "$words" | cut -d' ' -f"$k")
+        fi
+        line="$line$frag"; j=$((j + 1))
+    done
+    printf '%s\n' "$line" >> "$TMP/mut.txt"
+    i=$((i + 1))
+done
+run_group "mutate" "$TMP/mut.txt"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL asan_check（看上面的报告；输出在 $TMP/*.out）"
     exit 1

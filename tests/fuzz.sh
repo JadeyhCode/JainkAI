@@ -97,8 +97,41 @@ set -e
 grep -aqE "Segmentation|Assertion|corrupt|stack smashing" "$TMP/bytes.out" \
     && chk "非法字节输出干净" 0 || chk "非法字节输出干净" 1
 
+echo "④ 混合变异：合法词 + 随机字节（确定性 LCG），120 行"
+# 固定种子 LCG：不依赖 $RANDOM，跑两次结果一样
+seed=987654321
+rnd() { seed=$(( (seed * 1103515245 + 12345) % 2147483648 )); echo $(( seed / 65536 )); }
+words="猫 狗 属于 会 吗 不 水 飞 游泳 唱歌 动物 植物 桌子 太阳 什么 谁"
+: > "$TMP/mut.txt"
+i=0
+while [ "$i" -lt 120 ]; do
+    line=""
+    n=$(( $(rnd) % 6 + 1 ))
+    j=0
+    while [ "$j" -lt "$n" ]; do
+        if [ $(( $(rnd) % 3 )) -eq 0 ]; then
+            b=$(( $(rnd) % 255 + 1 ))
+            frag=$(printf "\\$(printf '%03o' "$b")")
+        else
+            k=$(( $(rnd) % 16 + 1 ))
+            frag=$(printf '%s' "$words" | cut -d' ' -f"$k")
+        fi
+        line="$line$frag"
+        j=$((j + 1))
+    done
+    printf '%s\n' "$line" >> "$TMP/mut.txt"
+    i=$((i + 1))
+done
+set +e
+timeout 300 "$BIN" "$MODEL" < "$TMP/mut.txt" > "$TMP/mut.out" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] && chk "混合变异也没崩（rc=0）" 1 || chk "混合变异也没崩（rc=$rc）" 0
+n_ans=$(grep -ac "AI > " "$TMP/mut.out" || true)
+[ "$n_ans" -eq 120 ] && chk "120 行都答了（实得 $n_ans）" 1 || chk "120 行都答了（实得 $n_ans）" 0
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL fuzz（健壮性）"
     exit 1
 fi
-echo "PASS fuzz（120 条确定性随机句 + 8 条病态输入 + 非法字节/长句：不崩、都答）"
+echo "PASS fuzz（120 随机句 + 8 病态 + 非法字节/长句 + 120 混合变异：不崩、都答）"
