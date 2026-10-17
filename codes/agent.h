@@ -422,7 +422,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     /* 登记新谓语是**有副作用**的，所以先只验形状（不碰关系表），
      * 形状对了才允许 rel_parse 去登记 —— 否则「你 觉得 天气 怎么样」
      * 会把「觉得」污染进动态关系表，还写进模型。 */
-    if (!rel_shape_ok(words, n)) return NULL;
+    if (!rel_shape_ok2(words, n, ai ? ai->rel_nat : 0)) return NULL;   /* §6.163：开着才剥量词 */
     if (!rel_parse(ai, words, n, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
                    &bw, &is_q, &rw, 1)) return NULL;
     if (is_q) return NULL;

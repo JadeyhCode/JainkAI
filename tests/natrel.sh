@@ -45,6 +45,23 @@ r=$(run "::char off" "鸟 不 能 飞 吗" | ans)
 case "$r" in *"不 对"*) chk "鸟 不 能 飞 吗 ⇒ 不 对（纠正：鸟会飞）" 1 ;;
                  *)      chk "鸟 不 能 飞 吗 ⇒ 不 对" 0 "$r" ;; esac
 
+echo "④b 量词（§6.163）：是 一种 X —— 关着不动、开着才剥"
+ENVV=""
+r=$(run "::char off" "猫 是 一种 动物 吗" | ans)
+case "$r" in *"不 太 懂"*) chk "关着：猫 是 一种 动物 吗 ⇒「不 太 懂」（老行为）" 1 ;;
+                 *)          chk "关着：猫 是 一种 动物 吗 ⇒「不 太 懂」" 0 "$r" ;; esac
+ENVV="AIP_RELNAT=1"
+r=$(run "::char off" "猫 是 一种 动物 吗" | ans)
+case "$r" in *"对"*"属于"*) chk "开着：猫 是 一种 动物 吗 ⇒ 对（剥掉量词）" 1 ;;
+                   *)        chk "开着：猫 是 一种 动物 吗 ⇒ 对" 0 "$r" ;; esac
+r=$(run "::char off" "猫 是 个 动物 吗" | ans)
+case "$r" in *"对"*) chk "开着：猫 是 个 动物 吗 ⇒ 对（单字量词也剥）" 1 ;;
+             *)      chk "开着：猫 是 个 动物 吗 ⇒ 对" 0 "$r" ;; esac
+out=$(run "::char off" "鱼 是 一种 动物" "鱼 是 一种 动物 吗")
+r=$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | sed -n '2p')
+case "$r" in *"对"*) chk "开着：陈述侧也认（鱼 是 一种 动物 → 问 ⇒ 对）" 1 ;;
+             *)      chk "开着：陈述侧也认" 0 "$r" ;; esac
+
 echo "⑤ 不误伤：三词日常句不因为开了开关就变成关系层答"
 r=$(run "::char off" "你 能 来 吗" | ans)
 case "$r" in *"--\["*) chk "你 能 来 吗 **没有** 被当成关系断言" 0 "$r" ;;

@@ -128,6 +128,16 @@ static inline uint8_t rel_dyn_intern(AI *ai, const char *w) {
     ai->dynrel_n++;
     return (uint8_t)(REL_DYN_BASE + ai->dynrel_n - 1);
 }
+/* §6.162 **只查**（不登记）：这个谓语已经是个动态关系了吗？有就返回它的 id。
+ * 以前 `rel_id_of(..., allow_new=0)` 直接 return 0，于是"能教不能问"
+ * （`::teach 月亮 喵 鱼` 学会，`月亮 喵 鱼 吗` 却答"不太懂"）。 */
+static inline uint8_t rel_dyn_find(const AI *ai, const char *w) {
+    if (!ai || !w || !*w) return 0;
+    for (size_t i = 0; i < ai->dynrel_n; ++i)
+        if (ai->dynrel_name[i] && strcmp(ai->dynrel_name[i], w) == 0)
+            return (uint8_t)(REL_DYN_BASE + i);
+    return 0;
+}
 static inline const char *rel_dyn_name(const AI *ai, uint8_t id) {
     if (!ai || id < REL_DYN_BASE) return NULL;
     size_t i = (size_t)(id - REL_DYN_BASE);
@@ -188,6 +198,9 @@ static inline uint8_t rel_id_of(AI *ai, const char *w, int allow_new) {
     if (rd) return rd->id;
     uint8_t al = rel_alias_id(w);      /* 别名 → 核心关系（**唯一**一张表） */
     if (al) return al;
+    /* §6.162 修：`allow_new=0` 的意思是**只查**，不是"不认识" ——
+     * 已经登记过的动态谓语（用户教过的新说法）也要查到，否则"教得进、问不出"。 */
+    { uint8_t d = rel_dyn_find(ai, w); if (d) return d; }
     if (!allow_new || !ai) return 0;
     return rel_dyn_intern(ai, w);
 }
@@ -1408,12 +1421,24 @@ static inline int rel_one_cjk(const char *s) {
     return !fr_is_func(s);
 }
 
+/* §6.163 **量词**：`猫 是 一种 动物` 里的 `一种`（也收常见的 一类/一个/个/只/种…）。
+ * 它后面那个词才是真正的宾语；不剥掉的话，形状判定会因为它"不是单字实词"整句拒掉
+ * （实测 `猫 是 一种 动物 吗` ⇒「这个我 不 太 懂」）。**只在 `是/属于` 后面剥**，
+ * 且只在开关打开时剥（`ai->rel_nat`，"自然说法"那一档）。 */
+static inline int rel_is_classifier(const char *w) {
+    if (!w) return 0;
+    static const char *const cls[] = { "一种", "一类", "一个", "一样", "个", "只", "种", "样", NULL };
+    for (size_t i = 0; cls[i]; ++i)
+        if (strcmp(w, cls[i]) == 0) return 1;
+    return 0;
+}
+
 /* 先只验**形状**、完全不碰关系表：
  *   `<主语> [不] <谓语词> <宾语…> [吗]`，主语 1 个词、谓语 1 个词、
  *   宾语 1 个词或 2~4 个单字实词。
  * 存在的意义：登记新谓语是**有副作用**的，不能先登记再发现形状不对 ——
  * 实测「你 觉得 天气 怎么样」会因此把「觉得」登记成动态关系（还写进模型）。 */
-static inline int rel_shape_ok(char *const *words, size_t n) {
+static inline int rel_shape_ok2(char *const *words, size_t n, int nat) {
     if (!words || n < 3 || n > 6) return 0;
     size_t last = n;
     if (rel_is_qmark(words[n - 1])) last = n - 1;
@@ -1423,11 +1448,23 @@ static inline int rel_shape_ok(char *const *words, size_t n) {
     if (last >= 4 && strcmp(words[1], "不") == 0) ri = 2;
     if (ri >= last) return 0;
     size_t nobj = last - ri - 1;
-    if (nobj == 0 || nobj > 4) return 0;
-    if (nobj == 1) return words[ri + 1][0] != '[';
-    for (size_t i = ri + 1; i < last; ++i)
+    if (nobj == 0) return 0;
+    size_t ob = ri + 1;                   /* 宾语起点 */
+    /* §6.163 `是/属于 + 量词 + 宾语`：剥掉量词再看（只在"自然说法"开关打开时） */
+    if (nat && nobj >= 2 && rel_is_classifier(words[ob]) &&
+        (strcmp(words[ri], "是") == 0 || strcmp(words[ri], "属于") == 0)) {
+        ob++;
+        nobj--;
+    }
+    if (nobj > 4) return 0;
+    if (nobj == 1) return words[ob][0] != '[';
+    for (size_t i = ob; i < last; ++i)
         if (!rel_one_cjk(words[i])) return 0;
     return 1;
+}
+/* 老签名（不带开关）：保持给不认识 `ai` 的地方用 —— 语义 = 不剥量词。 */
+static inline int rel_shape_ok(char *const *words, size_t n) {
+    return rel_shape_ok2(words, n, 0);
 }
 
 /* 解析 `<主语> [不] <关系词> <宾语…> [吗]`。
@@ -1512,13 +1549,19 @@ static inline int rel_parse(AI *ai, char *const *words, size_t n,
 
     size_t nobj = last - ri - 1;
     if (nobj == 0) return 0;
+    size_t ob = ri + 1;                   /* §6.163 宾语起点（可能要跳过量词）*/
+    if (ai->rel_nat && nobj >= 2 && rel_is_classifier(words[ob]) &&
+        (strcmp(words[ri], "是") == 0 || strcmp(words[ri], "属于") == 0)) {
+        ob++;
+        nobj--;
+    }
     if (nobj == 1) {
-        if (words[ri + 1][0] == '[') return 0;
-        if (bw) *bw = words[ri + 1];
+        if (words[ob][0] == '[') return 0;
+        if (bw) *bw = words[ob];
     } else {
         if (nobj > 4) return 0;
         size_t bl = 0;
-        for (size_t i = ri + 1; i < last; ++i) {
+        for (size_t i = ob; i < last; ++i) {
             if (!rel_one_cjk(words[i])) return 0;
             size_t l = strlen(words[i]);
             if (bl + l + 1 > bufsz) return 0;

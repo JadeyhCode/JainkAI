@@ -55,6 +55,17 @@ printf '%s\n' "$out" | grep -aq "教 会 了.*喵" \
     && chk "「::teach 月亮 喵 鱼」被接受（登记成动态关系）" 1 || chk "动态关系被接受" 0
 printf '%s\n' "$out" | grep -aq "喵" && chk "::rel 月亮 里能看到这条边" 1 || chk "::rel 里能看到" 0
 
+echo "④b 动态关系**能被问**（§6.162 修：以前"教得进、问不出"）"
+out=$(run "::char off" "::teach 月亮 喵 鱼" "月亮 喵 鱼 吗")
+r=$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | head -1)
+case "$r" in *"对"*"喵"*) chk "月亮 喵 鱼 吗 ⇒ 对（动态关系可查）" 1 ;;
+               *)         chk "月亮 喵 鱼 吗 ⇒ 对" 0 "$r" ;; esac
+out=$(run "::char off" "::rel open on" "::teach 月亮 喵 鱼" "月亮 喵 什么" "谁 喵 鱼")
+printf '%s\n' "$out" | grep -aq "我 记 的 是 ： 月亮 喵 鱼" \
+    && chk "开放式 月亮 喵 什么 ⇒ 月亮 喵 鱼" 1 || chk "开放式 月亮 喵 什么" 0
+printf '%s\n' "$out" | grep -aq "喵 鱼 的 有 ： 月亮" \
+    && chk "反查 谁 喵 鱼 ⇒ 月亮" 1 || chk "反查 谁 喵 鱼" 0
+
 echo "⑤ 存档重载：教过的（含新词）还在"
 run "::char off" "::teach 麒麟 属于 神兽" "::save $TMP/t1.bin" > /dev/null
 r=$(run "::load $TMP/t1.bin" "::char off" "麒麟 属于 神兽 吗" | ans)
