@@ -200,8 +200,46 @@ awk -v N=120 'BEGIN{
 }' > "$TMP/syn.txt"
 run_group "syntax" "$TMP/syn.txt"
 
+echo "== 4e/4 命令面（84 条元命令 × 无参/给个假参/on，各跑一遍）"
+# 命令清单从 `::help` 里取（**唯一一份**），在**临时目录**里跑 —— `::save` 之类会写文件，
+# 在仓库根跑会覆盖 model.bin（cmdtable.sh 也是这么防的）。
+"$OUT" "$MODEL" > "$TMP/help.out" 2>&1 <<'HELPEOF'
+::help
+HELPEOF
+grep -aE "^  ::[a-z]" "$TMP/help.out" | sed 's/^  ::\([a-z_0-9]*\).*/\1/' | sort -u > "$TMP/cmds.txt"
+ncmd=$(wc -l < "$TMP/cmds.txt")
+mkdir -p "$TMP/cmdrun"
+cp "$MODEL" "$TMP/cmdrun/model.bin"
+for f in frames.txt relations.txt lexicon.txt; do
+    [ -f "$f" ] && cp "$f" "$TMP/cmdrun/"
+done
+: > "$TMP/cmdrun/in.txt"
+while read -r c; do
+    printf '::%s\n' "$c"      >> "$TMP/cmdrun/in.txt"
+    printf '::%s x\n' "$c"    >> "$TMP/cmdrun/in.txt"
+    printf '::%s on\n' "$c"   >> "$TMP/cmdrun/in.txt"
+done < "$TMP/cmds.txt"
+printf '::quit\n' >> "$TMP/cmdrun/in.txt"
+
+olddir=$(pwd)
+cd "$TMP/cmdrun"
+set +e
+ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 timeout 900 "$OUT" model.bin \
+    < in.txt > "$TMP/cmdrun.out" 2>&1
+rc=$?
+set -e
+cd "$olddir"
+bad=$(grep -aE "ERROR: AddressSanitizer|runtime error:|SUMMARY: AddressSanitizer" "$TMP/cmdrun.out" | head -3 || true)
+if [ "$rc" -ne 0 ] || [ -n "$bad" ]; then
+    echo "  [FAIL] cmds（$ncmd 条，rc=$rc）"
+    [ -n "$bad" ] && printf '%s\n' "$bad" | sed 's/^/    /'
+    fail=1
+else
+    echo "  [OK]   cmds（$ncmd 条 × 3 种参数：rc=0，无 ASan/UBSan/泄漏报告）"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL asan_check（看上面的报告；输出在 $TMP/*.out）"
     exit 1
 fi
-echo "PASS asan_check（生命周期 + 120 条随机句 + 8 条病态输入：ASan/UBSan/LSan 全干净）"
+echo "PASS asan_check（生命周期 + 随机句 + 病态 + 非法字节 + 混合变异 + 语法变异 + 命令面：ASan/UBSan/LSan 全干净）"

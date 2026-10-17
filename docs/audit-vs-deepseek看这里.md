@@ -8126,3 +8126,37 @@ runtime error: index 64 out of bounds for type 'Token *[64]'
 
 **局限**：这一套只钉"不崩/不漏"，**不判答案对错**——语义级回归仍靠 `interact.sh` /
 `session_facts.sh` 那些"人挑的固定事实"。
+## §6.196 命令面 ASan 扫一遍：`::derivedump` 又犯了"拿 pool->count 当 idf 边界"的错
+
+§6.192~§6.195 扫的是**输入**；这轮扫**命令面**：从 `::help` 里取命令清单（84 条），
+每条跑三种形态（无参 / 给个假参 `x` / `on`），在**临时目录**里跑（`::save` 之类会写文件，
+在仓库根跑会覆盖 model.bin —— `cmdtable.sh` 也是这么防的）。
+
+ASan 立刻报：
+
+```
+ERROR: AddressSanitizer: heap-buffer-overflow
+READ of size 4 ... 0 bytes to the right of 1936-byte region
+    #0 main.c:2857   (::derivedump)
+allocated by: ai_idf_rebuild  ai.h:2970
+```
+
+`::derivedump` 里那句 `if (B->idf && i < B->pool->count) iv = B->idf[i];` —— **边界又用了
+`pool->count`**。idf 数组是按**重建时**的词数分配的（1936 B = 484 个 float），而池子之后还能
+继续造词 ⇒ 读到数组外。**这个坑 `ai_idf_of()` 的注释里写得清清楚楚**（"边界用 idf_n，
+不是 pool->count"），`derivedump` 这条调试命令没照着写。
+
+**修法**：`i < B->idf_n`。修后同一批（84×3）**ASan 干净**。
+
+**落到工具**：`tools/asan_check.sh` 加"命令面"一组（自动从 `::help` 取清单、临时目录里跑），
+现在是**七组**：生命周期 / 随机句 / 病态 / 非法字节 / 混合变异 / 语法变异 / 命令面。
+
+**证据**：`sh tools/asan_check.sh` 七组全 `[OK]`；整包 **41/41**（275 s）；
+100 轮存档与 post185 基线**逐字节相同**。
+
+**局限**
+
+- 命令面只跑"无参 / 假参 / on"三种形态，没有按**每个命令的真实参数形状**构造（那要读 84 条帮助）；
+- 会真写文件的命令（`::code`/`::act`/`::save`）在临时目录里跑，但**外部副作用**只验了不崩，
+  没验写得对不对；
+- 同一类"边界用错字段"的坑只在这个文件里查了（`grep idf[`），没有全仓的静态检查。

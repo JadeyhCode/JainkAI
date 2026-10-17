@@ -2854,7 +2854,11 @@ int main(int argc, char **argv) {
                         if (t->emb)     { h3 = (h3 ^ (uint8_t)t->emb[k])     * 1099511628211ull; }
                     }
                     uint32_t ib = 0; float iv = 0.0f;
-                    if (B->idf && i < B->pool->count) { iv = B->idf[i]; memcpy(&ib, &iv, 4); }
+                    /* §6.196 边界用 `idf_n`（数组真实长度），不是 `pool->count`：
+                     * 重建 idf 之后还会造词，用当前词数当边界就**越界读**
+                     * （和 `ai_idf_of()` 注释里记的是同一个坑，这里又犯了一次）。
+                     * ASan：`::derivedump` 在池子长过 idf_n 之后 heap-buffer-overflow。 */
+                    if (B->idf && i < B->idf_n) { iv = B->idf[i]; memcpy(&ib, &iv, 4); }
                     printf("D %u %s hv=%016llx hvp=%016llx emb=%016llx idf=%.6g/%08x\n",
                            t->id, t->name, (unsigned long long)h1, (unsigned long long)h2,
                            (unsigned long long)h3, (double)iv, ib);
