@@ -761,50 +761,68 @@ static inline char *agent_conj_obj(AI *ai, char *const *words, size_t n, int *ou
     if (last < 4) return NULL;
     uint8_t rid = rel_id_of(ai, words[1], 0);          /* 关系词固定在第二个 */
     if (!rid) return NULL;
-    size_t p = 0;
-    for (size_t i = 2; i + 1 < last; ++i)
-        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
-            !strcmp(words[i], "、")) { p = i; break; }
-    if (!p) return NULL;
     const char *aw = words[0];
     if (!agent_subj_ok(aw)) return NULL;
-    char bw[32], cw[32];
-    size_t bl = 0, cl = 0;
-    for (size_t i = 2; i < p; ++i) {
+    /* §6.240c **任意个并列项**（不再是"切两半"）：`我 喜欢 猫、狗、鱼` 也要拆三条。 */
+    enum { MAXI = 6 };
+    char items[MAXI][32];
+    size_t ni = 0, cl = 0;
+    int any = 0;
+    for (size_t i = 2; i < last; ++i) {
+        if (!strcmp(words[i], "和") || !strcmp(words[i], "跟") || !strcmp(words[i], "与") ||
+            !strcmp(words[i], "、")) {
+            if (ni == 0) { items[ni][cl] = 0; if (!cl) return NULL; ni++; cl = 0; }
+            else { items[ni][cl] = 0; if (!cl) return NULL; ni++; cl = 0; }
+            if (ni >= MAXI) return NULL;
+            any = 1;
+            continue;
+        }
         size_t wl = strlen(words[i]);
-        if (bl + wl + 1 >= sizeof bw) return NULL;
-        memcpy(bw + bl, words[i], wl); bl += wl;
+        if (!items[ni] || cl + wl + 1 >= sizeof items[0]) return NULL;
+        if (cl == 0 && ni > 0) { /* 新项开始 */ }
+        memcpy(items[ni] + cl, words[i], wl); cl += wl;
+        if (cl + 1 < sizeof items[0]) items[ni][cl] = 0;
     }
-    bw[bl] = 0;
-    for (size_t i = p + 1; i < last; ++i) {
-        size_t wl = strlen(words[i]);
-        if (cl + wl + 1 >= sizeof cw) return NULL;
-        memcpy(cw + cl, words[i], wl); cl += wl;
-    }
-    cw[cl] = 0;
-    if (!bl || !cl) return NULL;
-    if (!agent_obj_ok(bw) || !agent_obj_ok(cw)) return NULL;
-    const char *rw = words[1];
-    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw), *C = pool_find(ai->pool, cw);
-    char buf[224];
+    (void)any;
+    if (ni == 0) return NULL;
+    items[ni][cl] = 0;
+    if (!cl) return NULL;
+    ni++;
+    if (ni < 2) return NULL;
+    for (size_t i = 0; i < ni; ++i) if (!agent_obj_ok(items[i])) return NULL;
+    Token *A = pool_find(ai->pool, aw);
+    char buf[256];
     if (!is_q) {
-        if (!A || (!B && !C)) return NULL;
-        if (B == A || C == A) return NULL;        /* §6.240b 自己和自己不成关系（`猫 属于 猫、狗`）*/
-        if (B) (void)ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION);
-        if (C) (void)ai_write_rel(ai, A, C, rid, 0, AI_WSRC_RELATION);
+        if (!A) return NULL;
+        size_t learned = 0;
+        for (size_t i = 0; i < ni; ++i) {
+            Token *t = pool_find(ai->pool, items[i]);
+            if (!t || t == A) continue;
+            if (ai_write_rel(ai, A, t, rid, 0, AI_WSRC_RELATION) == 0) learned++;
+        }
+        if (!learned) return NULL;
         ai->n_rel_learned++;
-        snprintf(buf, sizeof buf, "记下 了 ： %s %s %s 和 %s", aw, rw, bw, cw);
+        size_t off = (size_t)snprintf(buf, sizeof buf, "记下 了 ： %s %s ", aw, words[1]);
+        for (size_t i = 0; i < ni && off + 1 < sizeof buf; ++i)
+            off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s", i ? " 、 " : "", items[i]);
         if (out_conf) *out_conf = 0.75f;
     } else {
-        int nb = B ? (rel_direct(A, rid, B) ? 1 : (rel_direct_neg(A, rid, B) ? -1 : 0)) : 0;
-        int nc = C ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
-        if (nb == 1 && nc == 1)
-            snprintf(buf, sizeof buf, "对 ， %s %s %s 和 %s", aw, rw, bw, cw);
-        else if (nb == -1 || nc == -1)
-            snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", aw, rw, (nb == -1) ? bw : cw);
+        int nfalse = 0, nunk = 0;
+        const char *first_false = NULL, *first_unk = NULL;
+        for (size_t i = 0; i < ni; ++i) {
+            Token *t = pool_find(ai->pool, items[i]);
+            int v = t ? (rel_direct(A, rid, t) ? 1 : (rel_direct_neg(A, rid, t) ? -1 : 0)) : 0;
+            if (v == 0) { nunk++; if (!first_unk) first_unk = items[i]; }
+            else if (v == -1) { nfalse++; if (!first_false) first_false = items[i]; }
+        }
+        if (nunk == 0 && nfalse == 0)
+            snprintf(buf, sizeof buf, "对 ， %s 都 %s 这 %zu 个", aw, words[1], ni);
+        else if (nfalse)
+            snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", aw, words[1], first_false);
         else
-            snprintf(buf, sizeof buf, "我 不 确定 ： %s %s 的 那 两 个 里 我 只 知道 一边", aw, rw);
-        if (out_conf) *out_conf = (nb == 1 && nc == 1) ? 0.85f : 0.5f;
+            snprintf(buf, sizeof buf, "我 不 确定 ： %s 的 这几 个 里 我 没 记 过 %s %s",
+                     aw, words[1], first_unk ? first_unk : "?");
+        if (out_conf) *out_conf = (nunk == 0 && nfalse == 0) ? 0.85f : 0.5f;
     }
     if (out_is_q) *out_is_q = is_q;
     char *r = (char *)malloc(strlen(buf) + 1);
