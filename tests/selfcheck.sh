@@ -181,9 +181,24 @@ for cmd in $(grep -v '^[[:space:]]*#' tests/suites.txt | grep -v '^[[:space:]]*$
 done
 [ "$bad" -eq 0 ] && say OK "清单与脚本对得上" || true
 
+echo "== ⑦ 文档里引用的 §6.x 小节必须真的存在（摘要会腐坏：引用指空最常见）=="
+_tmp=$(mktemp -d)
+{ grep -hoE "§6\.[0-9]+" docs/*.md CHANGELOG.md README.md 2>/dev/null || true; } \
+    | sed -E 's/§//; s/^(6\.[0123456789]+).*/\1/' | sort -u > "$_tmp/refs"
+{ grep -hoE "^#{2,4} §?6\.[0123456789]+" docs/audit*.md 2>/dev/null || true; } \
+    | sed -E 's/^#+ //; s/^§//' | sort -u > "$_tmp/secs"
+orph=$(comm -23 "$_tmp/refs" "$_tmp/secs" || true)
+if [ -n "$orph" ]; then
+    say FAIL "有引用了但审计里找不到的小节：$(printf '%s ' $orph)"
+    bad=1
+else
+    say OK "文档里 $(wc -l < "$_tmp/refs" | tr -d ' ') 个 §6.x 引用都有对应小节"
+fi
+rm -rf "$_tmp"
+
 echo
 if [ "$bad" -eq 0 ]; then
-    echo "PASS selfcheck（看护的看护：清单与脚本写法没这三类坑）"
+    echo "PASS selfcheck（看护的看护：清单/脚本/文档引用的 7 类坑都没踩）"
 else
     echo "FAIL selfcheck（上面列的问题会让整包汇总骗人，先修它们）"
     exit 1
