@@ -391,6 +391,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定 你 指 哪 �
     && chk "两边都不确定 ⇒ 明说" 1 \
     || chk "两边都不确定" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉘ §6.246 并列谓语（A R B1 也 R B2）"
+out=$(run "猫 会 爬树 也 会 抓老鼠")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 会 抓老鼠" \
+    && chk "重复谓语也算并列（猫 会 爬树 也 会 抓老鼠）" 1 \
+    || chk "并列谓语" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "我 喜欢 猫 也 喜欢 狗" "我 喜欢 狗 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 我 -\[喜欢\]-> 狗" \
+    && chk "重复谓语学进来的第二条查得到" 1 \
+    || chk "重复谓语第二条" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "我 喜欢 猫 也 喜欢 狗" "我 喜欢 猫 也 喜欢 狗 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 我 都 喜欢 这 2 个" \
+    && chk "并列谓语的问句答得出（先教后问）" 1 \
+    || chk "并列谓语问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫 会 爬树 也 会 抓老鼠")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "抓老鼠（爬树 我 还 不 认识）" \
+    && chk "没认出来的项如实说（爬树 被切成 爬/树）" 1 \
+    || chk "没认出来的项如实说" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

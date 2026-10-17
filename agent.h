@@ -858,6 +858,13 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
         int is_sep = (!strcmp(words[i], "和") || !strcmp(words[i], "跟") ||
                       !strcmp(words[i], "与") || !strcmp(words[i], "以及") ||
                       !strcmp(words[i], "还有") || !strcmp(words[i], "、"));
+        /* §6.246 **并列谓语**：`A R B1 也 R B2`（`猫 会 爬树 也 会 抓老鼠`）——
+         * 「也/都 + 同一个关系词」也算分隔符（跳过重复的那个关系词）。 */
+        if (!is_sep && i + 1 < last && (!strcmp(words[i], "也") || !strcmp(words[i], "都")) &&
+            !strcmp(words[i + 1], words[1])) {
+            is_sep = 1;
+            i++;
+        }
         /* 「还 有」是**两个 token** 的并列词（分词器不合成一个）*/
         if (!is_sep && !strcmp(words[i], "还") && i + 1 < last && !strcmp(words[i + 1], "有")) {
             is_sep = 1;
@@ -893,17 +900,35 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
             Token *t = pool_find(ai->pool, items[i]);
             if (t && t == A) return NULL;
         }
-        size_t learned = 0;
+        /* §6.247 **只报真的写进去的**：词池里没有的项（`爬树` 被分词切成 爬/树）
+         * 不能算"记下了" —— 以前照样报「记下 了 ： 猫 会 爬树、抓老鼠」，再问就"没记过"，
+         * 自相矛盾。现在：写进去的列出来，没认出来的单独说。 */
+        size_t learned = 0, skipped = 0;
+        char wrote[160] = {0}, missed[96] = {0};
+        size_t wo = 0, mo = 0;
         for (size_t i = 0; i < ni; ++i) {
             Token *t = pool_find(ai->pool, items[i]);
-            if (!t) continue;
-            if (ai_write_rel(ai, A, t, rid, 0, AI_WSRC_RELATION) == 0) learned++;
+            if (!t) {
+                if (mo + strlen(items[i]) + 4 < sizeof missed)
+                    mo += (size_t)snprintf(missed + mo, sizeof missed - mo, "%s%s",
+                                           mo ? " 、 " : "", items[i]);
+                skipped++;
+                continue;
+            }
+            if (ai_write_rel(ai, A, t, rid, 0, AI_WSRC_RELATION) == 0) {
+                if (wo + strlen(items[i]) + 4 < sizeof wrote)
+                    wo += (size_t)snprintf(wrote + wo, sizeof wrote - wo, "%s%s",
+                                           wo ? " 、 " : "", items[i]);
+                learned++;
+            }
         }
         if (!learned) return NULL;
         ai->n_rel_learned++;
-        size_t off = (size_t)snprintf(buf, sizeof buf, "记下 了 ： %s %s ", aw, words[1]);
-        for (size_t i = 0; i < ni && off + 1 < sizeof buf; ++i)
-            off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s", i ? " 、 " : "", items[i]);
+        if (skipped)
+            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）",
+                     aw, words[1], wrote, missed);
+        else
+            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s", aw, words[1], wrote);
         if (out_conf) *out_conf = 0.75f;
     } else {
         int nfalse = 0, nunk = 0;
