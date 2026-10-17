@@ -1002,6 +1002,31 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
 /* §6.168 **记下这个问句**（等用户下一轮回话）。
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
+/* §6.203 **裸短回话**（没有挂着的追问时）：整句只是 对/不 对/嗯/好/不会 这类词。
+ * 以前这种输入会掉进生成流水线，答出「对 自己 你 故意 的」「不会 到 回来 在 说 行 不」这种词串。
+ * 返回 1=肯定、2=否定、0=不是裸短回话（照常走流水线）。 */
+static inline int agent_bare_reply(const char *input) {
+    if (!input) return 0;
+    char buf[64];
+    size_t bl = 0;
+    for (const char *q = input; *q && bl + 1 < sizeof buf; ++q) {
+        if (*q == '\r' || *q == '\n') continue;
+        buf[bl++] = *q;
+    }
+    buf[bl] = 0;
+    /* 前后空白切干净 */
+    char *b = buf; while (*b == ' ' || *b == '\t') b++;
+    char *e = b + strlen(b); while (e > b && (e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+    if (!*b) return 0;
+    static const char *yes[] = {"对", "是", "嗯", "好", "行", "好的", "是啊", "是的", "没错",
+                                "对 的", "可以", "嗯 嗯", NULL};
+    static const char *no[]  = {"不", "不是", "不对", "不会", "不能", "没", "没有", "不 对",
+                                "不 是", "不 会", "不 能", "没 有", "不 太 对", NULL};
+    for (size_t i = 0; yes[i]; ++i) if (strcmp(b, yes[i]) == 0) return 1;
+    for (size_t i = 0; no[i]; ++i)  if (strcmp(b, no[i]) == 0)  return 2;
+    return 0;
+}
+
 /* §6.188 **把 pending 落成一个标记节点**：`[追问:k|n|f|R|A|B]`（普通符号节点、随图存盘）。
  * pending 本身只在内存 ⇒ 存盘再开就没了；有了标记，`agent_ask_restore` 能把它接回来。
  * 注意：标记是**新增节点**（不删不挪）⇒ 存档 id 仍然连续（§6.186 的约束）。 */
@@ -2582,10 +2607,14 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
         const char *t = w[i] ? w[i] : "";
         if (!strcmp(t, "的") || !strcmp(t, "了") || !strcmp(t, "啊") ||
             !strcmp(t, "呀") || !strcmp(t, "吧") || !strcmp(t, "呢")) continue;
-        if (!strcmp(t, "不") || !strcmp(t, "没") || !strcmp(t, "没有")) { no = 1; continue; }
+        /* §6.203 **合写形式也要认**：`不会`/`不能` 在固定词表里是**一个** token
+         * （`不对`/`不是` 却会被切开 —— 不对称，实测 `不 会` 能教、`不会` 掉进流水线出词串）。 */
+        if (!strcmp(t, "不") || !strcmp(t, "没") || !strcmp(t, "没有") ||
+            !strcmp(t, "不会") || !strcmp(t, "不能") || !strcmp(t, "不对") ||
+            !strcmp(t, "不是") || !strcmp(t, "没 有")) { no = 1; continue; }
         if (!strcmp(t, "对") || !strcmp(t, "是")  || !strcmp(t, "会") ||
             !strcmp(t, "能") || !strcmp(t, "可以") || !strcmp(t, "嗯") ||
-            !strcmp(t, "好") || !strcmp(t, "行")) { yes = 1; continue; }
+            !strcmp(t, "好") || !strcmp(t, "行") || !strcmp(t, "没错")) { yes = 1; continue; }
         junk = 1;                       /* 有别的词 ⇒ 不是短回话 */
     }
     ai_free_words(w, n);
@@ -2728,6 +2757,21 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
         }
         agent_ask_drop(ai);
+    }
+    /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
+    if (!ai->ask_pending) {
+        int bk = agent_bare_reply(input);
+        if (bk == 1) {
+            const char *r = "嗯 ， 好";
+            snprintf(out, out_cap, "%s", r);
+            ai->turns++;
+            return strlen(out);
+        } else if (bk == 2) {
+            const char *r = "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句";
+            snprintf(out, out_cap, "%s", r);
+            ai->turns++;
+            return strlen(out);
+        }
     }
     /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
     uint64_t seg_t = ai_seg_mark(ai);
