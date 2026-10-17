@@ -854,6 +854,11 @@ typedef struct {
     const char **cb_ptr;
     uint8_t     *cb_len;
     size_t       cb_chused, cb_chcap;
+    /* §6.210 **库句侧 bigram 布隆位**（64 bit/条；出厂模型 6701 条 = 54 KB）。
+     * 判据**精确**：两边没有共享的**字符 bigram** ⇒ `ai_cb_core` 的 inter 一定是 0
+     * ⇒ 字符项必然是 0 —— 跳过它是"提前知道结果是 0"，不是近似（哈希碰撞只会放行）。
+     * 只进内存、不进存档，跟着 `cb_bits` 那条懒补一起长。 */
+    uint64_t    *cb_bg;
     /* **全图扫描的账**（§6.126）：维护类活动（GC / 缓存复核 / 巩固）每轮走了多少词、多少边。
      * 加它是因为"减少扫全局"这句要求**必须有数字**支撑 —— 改前改后各量一遍才敢说快了。 */
     size_t n_scan_tokens;
@@ -1724,6 +1729,7 @@ static inline void ai_free(AI *ai) {
     free(ai->sc_memo); free(ai->sc_cov);      /* §6.132 打分备忘（calloc 起家，可能是 NULL） */
     free(ai->cb_bits);                        /* §6.136 库句字符集位图（同上，可能是 NULL）*/
     free(ai->cb_off); free(ai->cb_ptr); free(ai->cb_len);   /* §6.140 库句字符切片 */
+    free(ai->cb_bg);                          /* §6.210 库句 bigram 布隆位 */
     free(ai->last_output);
     free(ai->last_skipped);
     free(ai->pairs);
@@ -3142,6 +3148,7 @@ typedef struct {
     const char  *c[96];
     uint8_t      l[96];
     uint32_t     sig;
+    uint64_t     bg64;                /* §6.210 查询侧字符 bigram 布隆位（64 bit）*/
     uint64_t     cbits[AI_CB_WORDS];  /* §6.136 查询侧 256 位字符集位图（切一次、几千次复用）*/
 } AiCharQueryMemo;
 static AiCharQueryMemo g_charq;
@@ -3165,6 +3172,16 @@ static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an
         sig |= token_name_sig(a[i]);
     }
     g_charq.nc = nc; g_charq.sig = sig;
+    {   /* §6.210 查询侧的字符 bigram 布隆位（与库句侧同一个哈希函数）*/
+        uint64_t bgv = 0;
+        for (size_t k = 0; k + 1 < nc; ++k) {
+            uint64_t h = 1469598103934665603ull;
+            for (uint8_t q = 0; q < g_charq.l[k]; ++q) h = (h ^ (uint8_t)g_charq.c[k][q]) * 1099511628211ull;
+            for (uint8_t q = 0; q < g_charq.l[k+1]; ++q) h = (h ^ (uint8_t)g_charq.c[k+1][q]) * 1099511628211ull;
+            bgv |= 1ull << (h & 63);
+        }
+        g_charq.bg64 = bgv;
+    }
     memset(g_charq.cbits, 0, sizeof g_charq.cbits);      /* §6.136：查询侧 256 位字符集位图 */
     ai_cb_fill(g_charq.cbits, g_charq.c, g_charq.l, nc);
     return 0;
@@ -3248,6 +3265,7 @@ static inline int ai_sent_score_cov(AI *ai, Token *const *a, size_t an,
 
 static inline int ai_pair_cb_slice(AI *ai, size_t i,
                                    const char *const **c, const uint8_t **l, size_t *n);
+static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i);   /* §6.210 前向（打分段要用）*/
 
 /* §6.146 **查询侧的 IDF 权重备忘**（纯性能，行为零改动）：一句话要对几千条库句打分，
  * 而"查询词的 IDF 权重"和"查询侧权重和 wa"**每条库句都重算一遍**是白搭。
@@ -3302,9 +3320,16 @@ static inline int ai_sent_score_pair(AI *ai, Token *const *a, size_t an, size_t 
     int dice = (int)((inter * 200) / (an + bn));
     const char *const *cc = NULL; const uint8_t *ll = NULL; size_t nn = 0;
     int bg;
-    if (ai_pair_cb_slice(ai, pi, &cc, &ll, &nn))
-        bg = ai_char_bigram_score_cached(ai->pool ? ai->pool->serial : 0, a, an, cc, ll, nn);
-    else bg = ai_char_bigram_score(ai->pool ? ai->pool->serial : 0, a, an, b, bn);
+    if (ai_pair_cb_slice(ai, pi, &cc, &ll, &nn)) {
+        /* §6.210 **bigram 布隆预筛**：跟这条库句一个 bigram 都不共享 ⇒ 字符项必然是 0
+         * （`ai_cb_core` 的 inter 会算成 0），直接跳过那一趟字符比较。
+         * 先确保懒补到了这一条（`ai_pair_cb_bits` 里连 `cb_bg` 一起补）。 */
+        (void)ai_pair_cb_bits(ai, pi);
+        if (ai->cb_bg && (g_charq.bg64 & ai->cb_bg[pi]) == 0)
+            bg = 0;
+        else
+            bg = ai_char_bigram_score_cached(ai->pool ? ai->pool->serial : 0, a, an, cc, ll, nn);
+    } else bg = ai_char_bigram_score(ai->pool ? ai->pool->serial : 0, a, an, b, bn);
     int sc = (cov * 55 + bg * 30 + dice * 15) / 100;
     if (sc > 100) sc = 100;
     if (out_cov) *out_cov = cov;
@@ -3361,7 +3386,9 @@ static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i) {
             size_t ncap = ai->pairs_n + 256;
             uint64_t *nb = (uint64_t *)realloc(ai->cb_bits, ncap * AI_CB_WORDS * sizeof *nb);
             if (!nb) return NULL;
-            ai->cb_bits = nb; ai->cb_cap = ncap;
+            uint64_t *ng = (uint64_t *)realloc(ai->cb_bg, ncap * sizeof *ng);
+            if (!ng) { return NULL; }            /* 布隆位拿不到就整条老路（切片也当没有）*/
+            ai->cb_bits = nb; ai->cb_bg = ng; ai->cb_cap = ncap;
         }
         /* 切片那两条 blob 的容量一起保证（每包多留 256 条 × 96 字符的空间，够用很久）*/
         if (ai->cb_chcap < ai->pairs_n * 8 + 512) {
@@ -3384,6 +3411,16 @@ static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i) {
             uint64_t *dst = ai->cb_bits + ai->cb_n * AI_CB_WORDS;
             memset(dst, 0, AI_CB_WORDS * sizeof *dst);
             ai_cb_fill(dst, cb, lb_, bn);
+            if (ai->cb_bg) {      /* §6.210：把这条库句的字符 bigram 压成 64 位布隆 */
+                uint64_t bgv = 0;
+                for (size_t k = 0; k + 1 < bn; ++k) {
+                    uint64_t h = 1469598103934665603ull;
+                    for (uint8_t q = 0; q < lb_[k]; ++q) h = (h ^ (uint8_t)cb[k][q]) * 1099511628211ull;
+                    for (uint8_t q = 0; q < lb_[k+1]; ++q) h = (h ^ (uint8_t)cb[k+1][q]) * 1099511628211ull;
+                    bgv |= 1ull << (h & 63);
+                }
+                ai->cb_bg[ai->cb_n] = bgv;
+            }
             if (ai->cb_off) {
                 while (ai->cb_chused + bn > ai->cb_chcap) {      /* 不够就翻倍（切片不失效）*/
                     size_t ncap = ai->cb_chcap * 2 + 1024;
