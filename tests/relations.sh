@@ -120,6 +120,11 @@ printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
     || chk "::revcheck" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
 # §6.223 类比猜出来的那条也要进反查表（`agent_guess_remember` 是直写 rel 位的，
 # 第一版漏了追加 ⇒ revcheck 报"缺 1 条：狗 -[会]-> 唱歌"）
+# §6.225 混合写入（地点 + 继承 + 类比猜测 + 动态否定 + 造词）之后，反查表仍要一条不缺
+out=$(run "我 住 在 北京" "我 在 学校 学习" "狗 会 唱歌 吗" "猫 不 喵 鱼" "::natcoin on" "麒麟 属于 神兽" "::revcheck")
+printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
+    && chk "::revcheck：混合写入之后也一条不缺" 1 \
+    || chk "::revcheck（混合写入）" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
 out=$(run "猫 不 喵 鱼" "::revcheck")
 printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
     && chk "::revcheck：否定的动态关系也进了反查表" 1 \
