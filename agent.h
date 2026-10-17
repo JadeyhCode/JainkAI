@@ -516,6 +516,85 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     return r;
 }
 
+/* §6.173 **自然说法里的新词**（默认关，`AIP_NATCOIN=1`）：
+ * `麒麟 属于 神兽` 两个词都不在词表 ⇒ 以前整句掉降级答复（只有 `::teach` 学得到）。
+ *
+ * 怎么认（**不猜**）：从第 2 个词往后找**第一个已知的核心关系词**（`rel_id_of(...,0)`，
+ * 清单里那 9 个）；它前面的是主语、后面的是宾语，两边各自**拼成一个词**。
+ *
+ * 守卫（宁可少学，不可学歪）：
+ *   · 关系词必须是**核心**关系（`< REL_DYN_BASE`）—— 自然文本里**不登记新谓语**
+ *     （那条路会把「觉得」这类词灌进关系表，§6.80 记过）；
+ *   · 主语 / 宾语各最多 **2 个词**；每个词要么是**单字实词**、要么**已经在词池里**
+ *     （多字词只有在池里才认，免得把 `学校`+`学习` 拼成 `学校学习`）；
+ *   · 任何一边含虚词/语气词（的/了/在/很/就/都…，`rel_one_cjk` 就是问这个）⇒ 不认；
+ *   · 句子里有疑问词 ⇒ 不认（§6.171：问句不许学成事实）；
+ *   · 否定（`不`）⇒ 不认：分词把主语切碎时没法分清 `不` 属于哪边，宁可不学。
+ * 返回要说的确认话（调用方 free），不认就 NULL。 */
+static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
+                                         float *out_conf) {
+    if (!ai || ai->rel_off || !ai->nat_coin || !words || n < 3 || n > 7) return NULL;
+    if (ai_has_question_word(words, n)) return NULL;
+    for (size_t i = 0; i < n; ++i)
+        if (!words[i] || !words[i][0] || words[i][0] == '[') return NULL;
+
+    /* 找第一个**已知核心关系词**（不调用 allow_new ⇒ 绝不登记新谓语） */
+    size_t ri = 0;
+    uint8_t rid = 0;
+    for (size_t i = 1; i + 1 < n; ++i) {
+        if (strcmp(words[i], "不") == 0 || strcmp(words[i], "没") == 0) return NULL;
+        uint8_t id = rel_id_of(ai, words[i], 0);
+        if (id && id < REL_DYN_BASE) { ri = i; rid = id; break; }
+    }
+    if (!ri) return NULL;
+    size_t na = ri, nb = n - ri - 1;
+    if (na < 1 || na > 2 || nb < 1 || nb > 2) return NULL;
+    /* 每个词：单字实词，或池里已有的整词。
+     * **拼词只许用单字**：多字词当"一个词"用，不许和别的词再拼 ——
+     * 实测漏了这条，`我 在 学校 学习`（在 = 核心关系「在」）会被拼成
+     * `我 --[在]--> 学校学习` 这种垃圾符号节点，正是项目记过的那个坑。 */
+    for (size_t i = 0; i < n; ++i) {
+        if (i == ri) continue;
+        size_t side_n = (i < ri) ? na : nb;          /* 这一边有几个词 */
+        int single = rel_one_cjk(words[i]);
+        int whole  = pool_find(ai->pool, words[i]) != NULL;
+        if (!single && !whole) return NULL;          /* 多字又不在池里：不认 */
+        if (!single && side_n > 1) return NULL;      /* 多字整词只能**独占**它那一边 */
+    }
+    char A[64], B[64];
+    size_t oa = 0, ob = 0;
+    for (size_t i = 0; i < na; ++i) {
+        size_t l = strlen(words[i]);
+        if (oa + l + 1 >= sizeof A) return NULL;
+        memcpy(A + oa, words[i], l); oa += l;
+    }
+    A[oa] = 0;
+    for (size_t i = 0; i < nb; ++i) {
+        size_t l = strlen(words[ri + 1 + i]);
+        if (ob + l + 1 >= sizeof B) return NULL;
+        memcpy(B + ob, words[ri + 1 + i], l); ob += l;
+    }
+    B[ob] = 0;
+    if (!A[0] || !B[0] || strcmp(A, B) == 0) return NULL;
+    if (!pool_find(ai->pool, A) && strlen(A) > 12) return NULL;   /* 别造超长怪词 */
+    if (!pool_find(ai->pool, B) && strlen(B) > 12) return NULL;
+    Token *ta = pool_token_intern(ai->pool, A);
+    Token *tb = pool_token_intern(ai->pool, B);
+    if (!ta || !tb || ta == tb) return NULL;
+    if (ai_write_rel(ai, ta, tb, rid, 0, AI_WSRC_RELATION) != 0) return NULL;
+    ai->n_rel_learned++;
+    ai->n_learned++;
+    char resp0[192];
+    snprintf(resp0, sizeof resp0, "记下 了 ： %s %s %s（新词当场造）",
+             ta->name, words[ri], tb->name);
+    cot_push(ai, COT_LEARN, 1, 80, "自然说法里含新词：当场造词 + 学一条核心关系", resp0);
+    ai->n_cot++;
+    if (out_conf) *out_conf = 0.7f;
+    char *r = (char *)malloc(strlen(resp0) + 1);
+    if (r) memcpy(r, resp0, strlen(resp0) + 1);
+    return r;
+}
+
 /* 步骤一点五：**进入假设世界**（反事实）。
  *
  *   「如果 猫 会 飞」 / 「假设 猫 属于 鸟」 / 「要是 猫 不 会 飞」
@@ -2678,6 +2757,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_relation(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    /* §6.173 含**新词**的自然说法（默认关）：关系词是已知核心关系、主语/宾语是没见过的
+     * 单字词（或池里已有的整词）⇒ 当场造词 + 学一条。放着不吃就整句掉降级答复（实测）。 */
+    if (!resp) {
+        float rc = 0.5f;
+        resp = agent_learn_new_words(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     /* 「他 觉得 <问题>」→ 站到他的立场（只留归他的假设层），

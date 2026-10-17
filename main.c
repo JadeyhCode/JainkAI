@@ -541,6 +541,7 @@ typedef enum {
     CMD_RELINFER,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
     CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
+    CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -670,6 +671,10 @@ static const CmdDef CMDS[] = {
       "关系层开关：推理 + 对话中现学知识（默认 on）", CMD_RELINFER },
     { "revise", NULL, 1, "基本",
       "改口语义：后说的观测替掉先说的对立极性（默认 on；off 回到旧语义做 A/B）", CMD_REVISE },
+    { "natcoin", "on|off", CARG_OPT, "基本",
+      "自然说法里的新词（默认关，§6.173）：`麒麟 属于 神兽` 这种主语/宾语没见过的说法，\n"
+      "当场造词 + 学一条**核心**关系（不登记新谓语）。\n"
+      "守卫：每侧最多 2 个词、多字整词只能独占一侧、有疑问词/否定/虚词都不认", CMD_NATCOIN },
     { "askback", "on|off|clear", CARG_OPT, "基本",
       "追问回话（默认关，§6.168/§6.172）：它说「没把握（只能猜/拿不准）」之后，\n"
       "你回一句「会/不 会/对/不 对」就当教学写进图；\n"
@@ -2681,6 +2686,22 @@ int main(int argc, char **argv) {
                            w[0], w[1], w[2]);
                 }
                 free(dup);
+                continue;
+            }
+            case CMD_NATCOIN: {
+                /* §6.173 **自然说法里的新词**：默认关（`AIP_NATCOIN=1` 也能开）。 */
+                const char *arg = cmd;
+                while (*arg && *arg != ' ') arg++;
+                while (*arg == ' ') arg++;
+                if (*arg) {
+                    if (strcmp(arg, "on") == 0) a->brain->nat_coin = 1;
+                    else if (strcmp(arg, "off") == 0) a->brain->nat_coin = 0;
+                    else { printf("[用法] ::natcoin on|off\n"); continue; }
+                }
+                printf("[自然说法里的新词 = %s]（%s）\n", a->brain->nat_coin ? "开" : "关（默认）",
+                       a->brain->nat_coin
+                           ? "`麒麟 属于 神兽` 这种会说「记下 了」并当场造词（只认核心关系）"
+                           : "老行为：含新词的陈述整句掉降级答复（要教用 ::teach）");
                 continue;
             }
             case CMD_ASKBACK: {

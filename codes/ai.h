@@ -763,6 +763,8 @@ typedef struct {
      * 为什么值得做：用户原话「主要的知识获取途径还要是互动」——
      * 现在的互动是"我说一句它学一句"（陈述），**问句答不上来这条就没下文了**。
      * 只在**它自己说推不出来**时才记（不靠答复文本里的"不确定"去猜，那是检索来的句子）。 */
+    int    nat_coin;                 /* §6.173 自然说法里的**新词**：`麒麟 属于 神兽` 当场造词
+                                      * 并学进图（默认**关**；只认核心关系，不造谓语）*/
     int    askback;
     int    ask_pending;
     int    ask_kind;                 /* 1 = 我没把握（askback：回一句就教）
@@ -1528,6 +1530,8 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rr = getenv("AIP_REMINDROUTE"); if (rr && rr[0] == '1') ai->remind_route = 1; }
     ai->rel_nat = 0;                 /* §6.161 默认**关**（反向测量：AIP_RELNAT=1）*/
     { const char *rn = getenv("AIP_RELNAT"); if (rn && rn[0] == '1') ai->rel_nat = 1; }
+    ai->nat_coin = 0;                /* §6.173 默认**关**（反向测量：AIP_NATCOIN=1）*/
+    { const char *nc = getenv("AIP_NATCOIN"); if (nc && nc[0] == '1') ai->nat_coin = 1; }
     ai->askback = 0;                 /* §6.168 默认**关**（反向测量：AIP_ASKBACK=1）*/
     { const char *ak = getenv("AIP_ASKBACK"); if (ak && ak[0] == '1') ai->askback = 1; }
     ai->ask_pending = 0;
