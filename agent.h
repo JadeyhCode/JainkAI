@@ -1133,6 +1133,26 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
 /* §6.168 **记下这个问句**（等用户下一轮回话）。
  * 三个地方调：记忆猜测、类比猜测、真的推不出来 —— 都是"我没把握"。
  * 不记"确定答出来"的那条：那时用户再说「会」是纠正，不是补充（纠正走改口那条路）。 */
+/* §6.216 **「再说一遍」**：把上一句答复原样再说一次。
+ * 它本来就记着上一句（`ai->last_output` 存的是**答复**的词），只是没有这个指令 ⇒
+ * 实测 `再 说 一 遍` 掉进生成流水线，答出「遍 我 睡 很 问 你」。 */
+static inline int agent_repeat_request(const char *input) {
+    if (!input) return 0;
+    char j[64]; size_t jl = 0;
+    for (const char *q = input; *q && jl + 1 < sizeof j; ++q) {
+        if (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') continue;
+        j[jl++] = *q;
+    }
+    j[jl] = 0;
+    static const char *forms[] = {
+        "再说一遍", "再说一次", "再说一下", "再讲一遍", "重复一遍", "重复一次",
+        "你刚才说什么", "你说了什么", "你刚说啥", "刚才说什么",
+        NULL
+    };
+    for (size_t i = 0; forms[i]; ++i) if (strcmp(j, forms[i]) == 0) return 1;
+    return 0;
+}
+
 /* §6.203 **裸短回话**（没有挂着的追问时）：整句只是 对/不 对/嗯/好/不会 这类词。
  * 以前这种输入会掉进生成流水线，答出「对 自己 你 故意 的」「不会 到 回来 在 说 行 不」这种词串。
  * 返回 1=肯定、2=否定、0=不是裸短回话（照常走流水线）。 */
@@ -2889,6 +2909,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
         agent_ask_drop(ai);
     }
+    /* §6.216 「再说一遍」：原样重复上一句答复（不用生成） */
+    if (!ai->ask_pending && agent_repeat_request(input)) {
+        if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
+        else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
+        ai->turns++;
+        return strlen(out);
+    }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
         int bk = agent_bare_reply(input);
@@ -3555,6 +3582,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 放在**所有输出决策之后**（含输出侧补丁）—— 这样哪条路说的都要过这一关。
      * 只截**说出去的话**：`resp` / 自举学到的东西照旧（它想的是那些，用户看到的是截过的）。 */
     (void)ai_dirty_apply(ai, out, out_cap, NULL);
+
+    /* §6.216 记住**发出去的原文**（"再说一遍"要原样复述，含排版）*/
+    if (out[0] && strcmp(out, "……") != 0) snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
 
     ai_seg_lap(ai, AI_SEG_KERNEL, &seg_t);
     /* 维护 */

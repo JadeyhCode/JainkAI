@@ -169,6 +169,16 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 猫 在 �
     && chk "「猫 在 哪 里」（切开）⇒ 答出地点" 1 \
     || chk "「猫 在 哪 里」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "⑭ §6.216 「再说一遍」：原样复述上一句（含排版），没说过就说没说过"
+out=$(run "猫 属于 动物 吗" "再 说 一 遍")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 刚才 说 的 是 ： 对 ， 猫 -\[属于\]-> 动物" \
+    && chk "「再 说 一 遍」⇒ 原样复述（含 -[属于]-> 排版）" 1 \
+    || chk "「再 说 一 遍」" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "再 说 一 遍")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 还 没 说 过 什么" \
+    && chk "还没说过 ⇒ 明说「还没说过什么」" 1 \
+    || chk "还没说过" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

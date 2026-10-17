@@ -990,6 +990,9 @@ typedef struct {
 
     Token **last_output;
     size_t last_output_n, last_output_cap;
+    /* §6.216 **上一句答复的原文**（用来"再说一遍"）：按词 token 拼回去会丢掉
+     * `-[属于]->` 这种排版（实测），所以直接存最终字符串。只进内存。 */
+    char   last_reply[256];
     Token **last_skipped;
     size_t last_skipped_n, last_skipped_cap;
 
