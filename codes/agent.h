@@ -2409,6 +2409,23 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
     if (ai_write_rel(ai, A, B, rid, want, AI_WSRC_RELATION) != 0) return 0;
     ai->n_revised++;
     ai->n_rel_learned++;
+    /* §6.172d **留一个 `[修正:…]` 标记节点**（与陈述那条改口路一致）：
+     * 这样"这件事被改口过"在图里**查得到**（`::edges [修正:猫_不_属于_动物]`），
+     * 而不是只在 `::stats` 的计数里。走受审通道；同名 intern ⇒ 改口多次只有一个标记。 */
+    if (!micro_of(ai)->safe.mod_off) {
+        ModIntent in;
+        memset(&in, 0, sizeof in);
+        in.type = MOD_ADD_TOKEN;
+        in.target = A;
+        agent_revise_name(in.name, sizeof in.name, A->name, want,
+                          rel_name_of(ai, rid), B->name);
+        snprintf(in.source, sizeof in.source, "来源:改口");
+        (void)mod_propose(&micro_of(ai)->queue, &in);
+        /* **当场过安全点**：这一轮在 `agent_step` 开头就返回了（没走到 micro_step），
+         * 不冲一下的话标记要等**下一个**文本回合才落地 —— 实测 `::edges [修正:…]` 当场查不到。
+         * `micro_drain_queue` 末尾清队列，所以这里冲完不会把意图留到下一轮。 */
+        (void)micro_drain_queue(ai);
+    }
     snprintf(out, cap, "改 过来 了 ： %s %s%s %s（我 刚才 说 反 了）",
              A->name, want ? "不 " : "", rn ? rn : "?", B->name);
     return 1;

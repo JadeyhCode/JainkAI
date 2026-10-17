@@ -171,6 +171,16 @@ printf '%s\n' "$a" | grep -q "^对 ，" \
     && chk "「我 说 的 不 对」不改我的图" 1 \
     || chk "「我 说 的 不 对」不改我的图" 0 "$a"
 
+echo "⑮ §6.172d：改口留「修正标记」节点（当场落地，关着没有）"
+out=$(run 1 "猫 属于 动物 吗" "不 对" "::edges [修正:猫_不_属于_动物]")
+printf '%s\n' "$out" | grep -q "修正:猫_不_属于_动物\]\] 有 1 条边" \
+    && chk "开着时图里有 [修正:猫_不_属于_动物]" 1 \
+    || chk "开着时图里有修正标记" 0 "$(printf '%s\n' "$out" | grep "修正" | tail -1)"
+out=$(run 0 "猫 属于 动物 吗" "不 对" "::edges [修正:猫_不_属于_动物]")
+printf '%s\n' "$out" | grep -q "没有这个符号节点" \
+    && chk "关着时没有修正标记（老行为）" 1 \
+    || chk "关着时没有修正标记" 0 "$(printf '%s\n' "$out" | grep "修正" | tail -1)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1
