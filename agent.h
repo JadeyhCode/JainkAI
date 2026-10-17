@@ -3289,6 +3289,64 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
     return 1;
 }
 
+/* §6.242 **复句：一句话里多条陈述**（`猫 属于 动物，狗 属于 动物`）。
+ * 实测以前整句掉兜底。做法：**在 token 层按分隔符切子句**（分词器会把 ，；。 切成独立 token，
+ * 比在字节层切安全得多 —— 字节层切会把多字节标点切碎），逐条走既有学习链
+ * （看法/并列/地点/关系/造词）；只有**全部子句都学下来**才算成功（有问句或学不动就整句回落）。 */
+static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, float *out_conf) {
+    if (!ai || ai->rel_off || !words || n < 5 || n > 24) return NULL;
+    size_t seg[9]; size_t nseg = 0;
+    seg[0] = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const char *t = words[i];
+        if (!t) continue;
+        if (!strcmp(t, "，") || !strcmp(t, ",") || !strcmp(t, "；") || !strcmp(t, ";") ||
+            !strcmp(t, "。") || !strcmp(t, ".")) {
+            if (nseg + 1 >= sizeof seg / sizeof seg[0]) return NULL;
+            seg[++nseg] = i + 1;
+        }
+    }
+    if (!nseg) return NULL;
+    size_t ncl = nseg + 1;
+    char out[384]; size_t off = 0; size_t learned_n = 0;
+    for (size_t c = 0; c < ncl; ++c) {
+        size_t b = seg[c];
+        size_t e = (c + 1 < ncl) ? seg[c + 1] - 1 : n;   /* 去掉分隔符那个 token */
+        if (e <= b || e - b < 3 || e - b > 8) return NULL;
+        char *const *cw = words + b;
+        size_t cn = e - b;
+        if (ai_has_question_word(cw, cn)) return NULL;
+        float rc = 0.5f;
+        char *r = agent_learn_belief(ai, cw, cn, &rc);
+        if (!r) { int cq = 0; r = agent_conj_both(ai, cw, cn, &cq, &rc); }
+        if (!r) { int cq = 0; r = agent_conj_obj(ai, cw, cn, &cq, &rc); }
+        if (!r) r = agent_learn_locative(ai, cw, cn, &rc);
+        if (!r) r = agent_learn_relation(ai, cw, cn, &rc);
+        if (!r) r = agent_learn_new_words(ai, cw, cn, &rc);
+        if (!r) return NULL;
+        const char *body = r;
+        /* 各条自带的抬头都去掉（学过的回「我 知道 ： 」、新学的回「记下 了 ： 」）*/
+        static const char *pres[] = {"记下 了 ： ", "我 知道 ： ", NULL};
+        for (size_t pi = 0; pres[pi]; ++pi)
+            if (strncmp(body, pres[pi], strlen(pres[pi])) == 0) { body += strlen(pres[pi]); break; }
+        if (off + strlen(body) + 8 < sizeof out) {
+            off += (size_t)snprintf(out + off, sizeof out - off, "%s%s",
+                                    learned_n ? " ； " : "", body);
+            learned_n++;
+        }
+        free(r);
+    }
+    if (!learned_n) return NULL;
+    char full[420];
+    snprintf(full, sizeof full, "记下 了 ： %s", out);
+    if (out_conf) *out_conf = 0.75f;
+    if (learned_n > 1) ai->n_rel_learned += learned_n - 1;
+    char *rr = (char *)malloc(strlen(full) + 1);
+    if (rr) memcpy(rr, full, strlen(full) + 1);
+    return rr;
+}
+
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -3600,6 +3658,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_belief(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    if (!resp) {
+        float rc = 0.5f;
+        resp = agent_learn_multi(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {

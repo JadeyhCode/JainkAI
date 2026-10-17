@@ -321,6 +321,23 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "这 3 个" \
     && chk "三个并列项问 ⇒ 都对" 1 \
     || chk "三个并列项问" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "㉔ §6.242 复句：一句多条陈述"
+out=$(run "猫 属于 动物，狗 属于 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 属于 动物 ； 狗 属于 动物" \
+    && chk "两个子句各学一条" 1 \
+    || chk "两个子句各学一条" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "鸟 会 飞，鱼 会 游泳" "鸟 会 飞 吗" "鱼 会 游泳 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 鸟 -\[会\]-> 飞" \
+    && chk "复句里学的第一条查得到" 1 \
+    || chk "复句第一条" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "对 ， 鱼 -\[会\]-> 游泳" \
+    && chk "复句里学的第二条查得到" 1 \
+    || chk "复句第二条" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "猫 属于 动物，狗 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
+    && chk "混了问句就整句回落（不半答）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "混了问句就整句回落（不半答）" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
