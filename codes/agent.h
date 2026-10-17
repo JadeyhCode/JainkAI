@@ -516,6 +516,24 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     return r;
 }
 
+/* §6.173d **一侧的词**能不能拼成一个词：最多 3 个词，其中**最多一个**是池里已有的整词，
+ * 其余必须是**单字实词**（虚词/语气词由 `rel_one_cjk` 挡掉，`上/里/中` 这类也在虚词表里）。
+ * 为什么允许"整词 + 单字"混排：实测 `鲸鱼 属于 哺乳动物` 分词成 `[哺][乳][动物]`、
+ * `大学生 属于 人` 分词成 `[大][学生]` —— 都只差这一条。两整词（`学校`+`学习`）仍然拒，
+ * 那正是会拼出垃圾节点的形状。 */
+static inline int agent_nat_side_ok(AI *ai, char *const *words, size_t from, size_t cnt) {
+    if (!ai || cnt < 1 || cnt > 3) return 0;
+    size_t whole = 0;
+    for (size_t i = 0; i < cnt; ++i) {
+        const char *w = words[from + i];
+        if (!w || !w[0]) return 0;
+        if (rel_one_cjk(w)) continue;
+        if (!pool_find(ai->pool, w)) return 0;
+        if (++whole > 1) return 0;
+    }
+    return 1;
+}
+
 /* §6.173 **自然说法里的新词**（默认关，`AIP_NATCOIN=1`）：
  * `麒麟 属于 神兽` 两个词都不在词表 ⇒ 以前整句掉降级答复（只有 `::teach` 学得到）。
  *
@@ -561,20 +579,8 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
         neg = 1; neg_sep = 1;
     }
     size_t na = ri - (size_t)neg_sep, nb = n - ri - 1;
-    if (na < 1 || na > 2 || nb < 1 || nb > 2) return NULL;
-    /* 每个词：单字实词，或池里已有的整词。
-     * **拼词只许用单字**：多字词当"一个词"用，不许和别的词再拼 ——
-     * 实测漏了这条，`我 在 学校 学习`（在 = 核心关系「在」）会被拼成
-     * `我 --[在]--> 学校学习` 这种垃圾符号节点，正是项目记过的那个坑。 */
-    for (size_t i = 0; i < n; ++i) {
-        if (i == ri) continue;
-        if (neg_sep && i == ri - 1) continue;        /* 那个 `不`/`没` 已经算进 neg，不再当主语词 */
-        size_t side_n = (i < ri) ? na : nb;          /* 这一边有几个词 */
-        int single = rel_one_cjk(words[i]);
-        int whole  = pool_find(ai->pool, words[i]) != NULL;
-        if (!single && !whole) return NULL;          /* 多字又不在池里：不认 */
-        if (!single && side_n > 1) return NULL;      /* 多字整词只能**独占**它那一边 */
-    }
+    if (!agent_nat_side_ok(ai, words, 0, na)) return NULL;
+    if (!agent_nat_side_ok(ai, words, ri + 1, nb)) return NULL;
     char A[64], B[64];
     size_t oa = 0, ob = 0;
     for (size_t i = 0; i < na; ++i) {
@@ -1038,15 +1044,8 @@ static inline void agent_ask_new_word_arm(AI *ai, char *const *words, size_t n) 
         neg = 1; neg_sep = 1;
     }
     size_t na = ri - (size_t)neg_sep, nb = last - ri - 1;
-    if (na < 1 || na > 2 || nb < 1 || nb > 2) return;
-    for (size_t i = 0; i < last; ++i) {
-        if (i == ri || (neg_sep && i == ri - 1)) continue;
-        size_t side_n = (i < ri) ? na : nb;
-        int single = rel_one_cjk(words[i]);
-        int whole  = pool_find(ai->pool, words[i]) != NULL;
-        if (!single && !whole) return;
-        if (!single && side_n > 1) return;
-    }
+    if (!agent_nat_side_ok(ai, words, 0, na)) return;
+    if (!agent_nat_side_ok(ai, words, ri + 1, nb)) return;
     char A[64], B[64];
     size_t oa = 0, ob = 0;
     for (size_t i = 0; i < na; ++i) {

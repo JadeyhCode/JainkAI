@@ -143,6 +143,20 @@ printf '%s\n' "$r" | grep -q "不 对 ， 企鹅 -\[不 属于\]-> 鸟" \
     && chk "存成否定（问肯定的 ⇒ 不 对）" 1 \
     || chk "存成否定" 0 "$r"
 
+echo "⑫ 长新词 / 单字+整词混排：鲸鱼 属于 哺乳动物、大学生 属于 人"
+out=$(run 1 "鲸鱼 属于 哺乳动物" "鲸鱼 属于 哺乳动物 吗")
+printf '%s\n' "$out" | ans | grep -q "记下 了 ： 鲸鱼 属于 哺乳动物" \
+    && chk "哺乳动物（单字+整词混排）能造" 1 \
+    || chk "哺乳动物能造" 0 "$(printf '%s\n' "$out" | ans)"
+r=$(printf '%s\n' "$out" | reps | sed -n 2p)
+printf '%s\n' "$r" | grep -q "对 ， 鲸鱼 -\[属于\]-> 哺乳动物" \
+    && chk "再问 ⇒ 对" 1 \
+    || chk "再问 ⇒ 对" 0 "$r"
+out=$(run 1 "大学生 属于 人" "大学生 属于 人 吗")
+printf '%s\n' "$out" | ans | grep -q "记下 了 ： 大学生 属于 人" \
+    && chk "大学生（整词+单字）能造" 1 \
+    || chk "大学生能造" 0 "$(printf '%s\n' "$out" | ans)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL natcoin（自然说法里的新词）"
     exit 1
