@@ -2885,18 +2885,40 @@ int main(int argc, char **argv) {
                                 uint16_t bit = REL_BIT(r);
                                 if (e->rel & bit) {
                                     want++;
-                                    if (!pool_rev_has(p, e->main, t->id, r, 0)) missing++;
+                                    if (!pool_rev_has(p, e->main, t->id, r, 0)) {
+                                        missing++;
+                                        if (missing <= 5)
+                                            printf("[revcheck] 缺：%s -[%s]-> %s\n",
+                                                   t->name ? t->name : "?",
+                                                   rel_name_of(B, r) ? rel_name_of(B, r) : "?",
+                                                   e->main->name ? e->main->name : "?");
+                                    }
                                 }
                                 if (e->nrel & bit) {
                                     want++;
-                                    if (!pool_rev_has(p, e->main, t->id, r, 1)) missing++;
+                                    if (!pool_rev_has(p, e->main, t->id, r, 1)) {
+                                        missing++;
+                                        if (missing <= 5)
+                                            printf("[revcheck] 缺（否定）：%s -[不 %s]-> %s\n",
+                                                   t->name ? t->name : "?",
+                                                   rel_name_of(B, r) ? rel_name_of(B, r) : "?",
+                                                   e->main->name ? e->main->name : "?");
+                                    }
                                 }
                             }
                             if (e->dyn) {
                                 want++;
                                 if (!pool_rev_has(p, e->main, t->id,
                                                   (uint32_t)(REL_DYN_BASE + e->dyn - 1),
-                                                  edge_dyn_neg(e) ? 1 : 0)) missing++;
+                                                  edge_dyn_neg(e) ? 1 : 0)) {
+                                    missing++;
+                                    if (missing <= 5) {
+                                        const char *dn = rel_dyn_name(B, (uint8_t)(REL_DYN_BASE + e->dyn - 1));
+                                        printf("[revcheck] 缺（动态 %s）：%s -> %s\n",
+                                               dn ? dn : "?", t->name ? t->name : "?",
+                                               e->main->name ? e->main->name : "?");
+                                    }
+                                }
                             }
                         }
                     }

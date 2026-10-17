@@ -118,6 +118,12 @@ out=$(run "::revcheck")
 printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
     && chk "::revcheck：出厂模型反查表不缺条目" 1 \
     || chk "::revcheck" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
+# §6.223 类比猜出来的那条也要进反查表（`agent_guess_remember` 是直写 rel 位的，
+# 第一版漏了追加 ⇒ revcheck 报"缺 1 条：狗 -[会]-> 唱歌"）
+out=$(run "狗 会 唱歌 吗" "::revcheck")
+printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
+    && chk "::revcheck：类比猜出来的那条也进了反查表" 1 \
+    || chk "::revcheck（猜过之后）" 0 "$(printf '%s\n' "$out" | grep -a revcheck)"
 out=$(run "::natcoin on" "考拉 属于 动物" "狗 会 唱歌 吗" "不 对" "::revcheck")
 printf '%s\n' "$out" | grep -q "反查表缺 0 条" \
     && chk "::revcheck：现场教的两条也都进了反查表" 1 \

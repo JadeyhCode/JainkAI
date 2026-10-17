@@ -378,7 +378,11 @@ static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
     if (!e) return;
     uint16_t bit = REL_BIT(rid);
     if ((e->rel & bit) && e->role != ASSOC_ROLE_DERIVED) return;   /* 已是观测：拒绝降级 */
+    int fresh_bit = !(e->rel & bit);
     e->rel |= bit;
+    /* §6.223 反查表也要追加（漏了这一处 ⇒ `::revcheck` 报"缺 1 条：狗 -[会]-> 唱歌"，
+     * 反查会**查不到**这条猜出来的知识 —— 又是"只追加必须每个写入点都写到"的活教材）。 */
+    if (fresh_bit && A->owner) pool_rev_add(A->owner, B, A->id, rid, 0);
     e->action = m;                              /* 出处写在动作槽上（就像 [因果]/[前提]） */
     e->role = ASSOC_ROLE_DERIVED;               /* 角色最后打（观测写法会清掉它） */
     token_cache_enqueue(A);                     /* §6.127：新落的推论边要进复核队列 */
