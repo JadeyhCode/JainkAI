@@ -3882,6 +3882,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     ai_seg_lap(ai, AI_SEG_KERNEL, &seg_t);
     /* 维护 */
     ai->turns++;
+    /* §6.237 三段各自计时（只在 AIP_SEGTIME=1 时读表） */
+    uint64_t mnt_t = ai_seg_mark(ai);
     if (ai->consolidate_every && (ai->turns % ai->consolidate_every) == 0) {
         ai->n_scan_tokens += ai->pool->count;
         for (size_t i = 0; i < ai->pool->count; ++i) {
@@ -3892,11 +3894,20 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             token_decay_hits(t, ai->decay_factor);
         }
     }
+    {   /* 巩固段收尾 */
+        if (ai_seg_on()) { ai->mnt_ns[0] += ai_seg_now() - mnt_t; ai->mnt_hits[0]++; }
+        mnt_t = ai_seg_mark(ai);
+    }
     if (ai->gc.gc_interval && (ai->turns % ai->gc.gc_interval) == 0)
         ai_gc(ai);
+    {   /* GC 段收尾 */
+        if (ai_seg_on()) { ai->mnt_ns[1] += ai_seg_now() - mnt_t; ai->mnt_hits[1]++; }
+        mnt_t = ai_seg_mark(ai);
+    }
     if (ai->sleep_every && (ai->turns % ai->sleep_every) == 0)
         ai_sleep_begin(ai);
     if (ai_sleep_pending(ai)) ai_sleep_step(ai);
+    if (ai_seg_on()) { ai->mnt_ns[2] += ai_seg_now() - mnt_t; ai->mnt_hits[2]++; }
 
     ai_seg_lap(ai, AI_SEG_MAINT, &seg_t);
     /* 漂移 / 诊断 / 叙事 */

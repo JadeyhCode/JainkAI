@@ -867,6 +867,9 @@ typedef struct {
     /* §6.135 分段计时的累加器（只在 `AIP_SEGTIME=1` 时被写；段名见 `AI_SEG_NAMES`）。 */
     uint64_t seg_ns[AI_SEG_N];
     uint32_t seg_hits[AI_SEG_N];
+    /* §6.237 维护段再细分（巩固 / GC / 睡眠）——`::segreport` 一起打出来。 */
+    uint64_t mnt_ns[3];
+    uint32_t mnt_hits[3];
     /* §6.139 脏思考检查器（默认**开**，用户点名要"强制停止"）：输出里连续重复词/句就截停。
      * `AIP_DIRTY=0` 或 `::dirty off` 退回。 */
     int    dirty_guard;

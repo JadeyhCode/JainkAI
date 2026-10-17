@@ -2905,6 +2905,10 @@ int main(int argc, char **argv) {
                            AI_SEG_NAMES[i], h, ms, h ? ms / (double)h : 0.0,
                            total > 0 ? ms * 100.0 / total : 0.0);
                 }
+                printf("  维护细分：巩固 %.1f ms（%u 次） / GC %.1f ms（%u 次） / 睡眠 %.1f ms（%u 轮）\n",
+                       (double)B->mnt_ns[0] / 1e6, B->mnt_hits[0],
+                       (double)B->mnt_ns[1] / 1e6, B->mnt_hits[1],
+                       (double)B->mnt_ns[2] / 1e6, B->mnt_hits[2]);
                 printf("  合计 %.1f ms\n", total);
                 continue;
             }
