@@ -1191,9 +1191,10 @@ static inline void think_finish(AI *ai, Think *t, const ThinkGoal *g,
         think_utf8_clip(tmp, sizeof tmp, chain ? chain : "");
         think_utf8_clip(t->chain_text, sizeof t->chain_text, tmp);
     }
-    snprintf(t->concl_text, sizeof t->concl_text, "%s %s %s %s",
+    /* §6.176 同一种坑：否定占位是空串时别再留一个空格（肯定句原来会说成「鲸鱼  会 游泳」） */
+    snprintf(t->concl_text, sizeof t->concl_text, "%s %s%s %s",
              g->a && g->a->name ? g->a->name : "?",
-             concl < 0 ? "不" : "",
+             concl < 0 ? "不 " : "",
              rel_name_of(ai, g->rid) ? rel_name_of(ai, g->rid) : "?",
              g->b && g->b->name ? g->b->name : "?");
     int other_cls = 0, other_cache = 0;
@@ -1226,9 +1227,9 @@ static inline void think_finish(AI *ai, Think *t, const ThinkGoal *g,
                  think_evidence_name(other_cls, other_cache));
         think_step(t, TH_REFLECT, 1, 70, "缓存被推翻", note);
         t->flipped = 1;      /* 这一轮说出去的话要跟着改口，不然用户先听到旧答案 */
-        snprintf(t->concl_text, sizeof t->concl_text, "%s %s %s %s",
+        snprintf(t->concl_text, sizeof t->concl_text, "%s %s%s %s",   /* §6.176 */
                  g->a && g->a->name ? g->a->name : "?",
-                 concl < 0 ? "不" : "",
+                 concl < 0 ? "不 " : "",
                  rel_name_of(ai, g->rid) ? rel_name_of(ai, g->rid) : "?",
                  g->b && g->b->name ? g->b->name : "?");
     }
