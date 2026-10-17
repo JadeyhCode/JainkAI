@@ -66,6 +66,8 @@ teach|sh tests/teach.sh
 askback|sh tests/askback.sh
 # 自然说法里的新词（默认关，AIP_NATCOIN=1）：造词 + 学一条核心关系，垃圾形状不认（本机实测 3s）
 natcoin|sh tests/natcoin.sh
+# 互动通道端到端（跨功能一个进程聊到底：造词/否定/纠正/继承例外/追问/新词问句/存盘重载）（本机实测 5s）
+interact|sh tests/interact.sh
 natrel|sh tests/natrel.sh
 # 验证器自身的测试：伪造/非法/断链/假依据必须被拒（本机实测 3.6s）
 dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin > ctest.log 2>&1; rc=$?; tail -12 ctest.log; [ "$rc" -eq 0 ]
