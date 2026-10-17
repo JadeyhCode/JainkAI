@@ -430,6 +430,14 @@ static inline int agent_guess_answer(AI *ai, Token *A, uint8_t rid, Token *B, in
                      "类比推测（知识库里没有，借最像的那个词；已验证推测合法）", line);
             ai->n_cot++;
             der_say(ai, d, ai->der_style, resp, respcap);
+            /* §6.221 **答复里要点到被问的那个词**：类比链的底是"最像的那个词"（鱼），
+             * 实测 `考拉 吃 草 吗` 答成「鱼 ≈（60% 像）≈> 草」——完全没提考拉，读起来像答错了对象。
+             * 用户问的是哪个词，答复就得以它开头（白箱：先说清"我在拿谁比"）。 */
+            if (A->name && A->name[0] && !strstr(resp, A->name)) {
+                char tmp[512];
+                snprintf(tmp, sizeof tmp, "（问的是 %s）%s", A->name, resp);
+                snprintf(resp, respcap, "%s", tmp);
+            }
             agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
             agent_guess_remember(ai, A, rid, B, src);      /* 猜出来的结论记进"记忆"（一处） */
             if (out_conf) *out_conf = ai_guess_conf(1);
@@ -463,11 +471,17 @@ static inline int agent_guess_answer(AI *ai, Token *A, uint8_t rid, Token *B, in
              "同类互推（同一个上位下的兄弟有这条关系；类比，不是直接知识）", line);
     ai->n_cot++;
     snprintf(resp, respcap,
-             "大概 —— 同类里 %.48s 也 %.12s %.48s（%.48s；**类比**，不是直接知识）",
+             "大概 —— 同类里 %.48s 也 %.12s %.48s（%.48s；**类比**，不是直接知识）%s%s",
              sib->name ? sib->name : "?",
              rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?",
              B->name ? B->name : "?",
-             sup && sup->name ? sup->name : "?");
+             sup && sup->name ? sup->name : "?",
+             "", "");
+    if (A->name && A->name[0] && !strstr(resp, A->name)) {
+        char tmp[512];
+        snprintf(tmp, sizeof tmp, "（问的是 %s）%s", A->name, resp);
+        snprintf(resp, respcap, "%s", tmp);
+    }
     agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
     agent_guess_remember(ai, A, rid, B, sib);
     if (out_conf) *out_conf = ai_guess_conf(1);

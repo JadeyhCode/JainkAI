@@ -113,9 +113,21 @@ grep -a '属于·继承' "$TMP/inh.out" > /dev/null \
     && chk "答案里写明走的是「属于·继承」这一跳" 1 \
     || chk "答案里写明走的是「属于·继承」" 0 "$(grep -a 'AI > ' "$TMP/inh.out" | tail -2 | head -1)"
 
+echo "④ §6.221 类比兜底的答复要点到被问的那个词（不能只提"最像的那个词"）"
+{
+    printf '::load %s\n::natcoin on\n' "$MODEL"
+    printf '动物 吃 草\n考拉 属于 动物\n考拉 吃 草 吗\n'
+    printf '::quit\n'
+} > "$TMP/ana.txt"
+timeout 300 "$BIN" < "$TMP/ana.txt" > "$TMP/ana.out" 2>&1 || true
+line=$(grep -a 'AI > ' "$TMP/ana.out" | sed -n 3p | sed 's/.*AI > //')
+printf '%s\n' "$line" | grep -q "^（问的是 考拉）" \
+    && chk "类比答复以「（问的是 考拉）」开头" 1 \
+    || chk "类比答复以「（问的是 考拉）」开头" 0 "$line"
+
 rm -rf "$TMP"
 if [ "$fail" -ne 0 ]; then
     echo "FAIL consistency（教→问→存盘→重载 的端到端自洽）"
     exit 1
 fi
-echo "PASS consistency（14 条教→问全对；存盘重载后 6 条仍对；跨事实继承 3/3）"
+echo "PASS consistency（14 条教→问全对；存盘重载 6/6；继承 3/3；类比点到被问的词）"
