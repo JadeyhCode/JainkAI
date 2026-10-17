@@ -698,6 +698,14 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * 以前这里 `if (is_neg) return NULL`，于是「猫 不 喵 狗」整句掉降级答复。 */
     char resp0[192];
     if (rid >= REL_DYN_BASE) {          /* 边界是 REL_DYN_BASE：核心关系现在有 9 个 */
+        /* §6.226 **谓语或宾语是虚词 ⇒ 这不是一条关系**。实测垃圾学习：
+         * `我 忘 了` ⇒ 我 --[忘]--> 了；`举 个 例子` ⇒ 举 --[个]--> 例子；
+         * `说 中文`（分词切成 中/文）⇒ 说 --[中]--> 文。虚词表只有一处（frame.h 的 FR_FUNC +
+         * FR_PARTICLES，`fr_is_func`），守卫只加在**动态谓语**这条路上 ——
+         * 核心关系（有/会/在）本身就是虚词，不能一视同仁。 */
+        /* ⚠ 只查**谓语和宾语**：主语常是代词（我/他），代词本来就在虚词表里 ——
+         * 第一版连 `aw` 一起查，把 `我 叫 小明`（名字介绍）也挡了，套件当场红。 */
+        if (fr_is_func(rw) || fr_is_func(bw)) return NULL;
         if (ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION) != 0) return NULL;
         snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s", aw, is_neg ? "不 " : "", rw, bw);
         ai->n_rel_learned++;
@@ -1312,14 +1320,38 @@ static inline int agent_bare_reply(const char *input) {
     buf[bl] = 0;
     /* 前后空白切干净 */
     char *b = buf; while (*b == ' ' || *b == '\t') b++;
+    /* §6.226 句首代词**只对「没听懂」那组**放宽（`我 不 明白` / `我 不懂`）：
+     * ⚠ 不能拿去匹配肯定/否定组 —— 第一版这么干，`你 好` 被剥成「好」⇒ 当成裸回话「嗯，好」，
+     * 连带把他者模型那条路也绕掉了（features 套件「他者模型」当场红）。 */
+    char *bp = b;
+    {
+        static const char *pron[] = {"我们", "我", "你", "您", "他", "她", "它", NULL};
+        for (size_t i = 0; pron[i]; ++i) {
+            size_t pl = strlen(pron[i]);
+            if (strncmp(b, pron[i], pl) == 0 && (b[pl] == ' ' || b[pl] == '\t')) {
+                char *q = b + pl;
+                while (*q == ' ' || *q == '\t') q++;
+                bp = q;
+                break;
+            }
+        }
+    }
     char *e = b + strlen(b); while (e > b && (e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
     if (!*b) return 0;
     static const char *yes[] = {"对", "是", "嗯", "好", "行", "好的", "是啊", "是的", "没错",
-                                "对 的", "可以", "嗯 嗯", NULL};
+                                "对 的", "可以", "嗯 嗯", "懂了", "明白", "明白了", "知道了", NULL};
     static const char *no[]  = {"不", "不是", "不对", "不会", "不能", "没", "没有", "不 对",
-                                "不 是", "不 会", "不 能", "没 有", "不 太 对", NULL};
+                                "不 是", "不 会", "不 能", "没 有", "不 太 对",
+                                "不知道", NULL};
+    /* §6.226 **没听懂**是第三种回话（不是"你说错了"）：`不懂`/`不 懂`/`不明白`/`没 听懂` …
+     * 以前它们既不算肯定也不算否定 ⇒ 掉进生成流水线，答出「懂 没 到 来 不 完全 但」。 */
+    static const char *confuse[] = {"不懂", "不 懂", "不明白", "不 明白", "没懂", "没 懂",
+                                    "没听懂", "没 听 懂", "听不懂", "听 不 懂",
+                                    "不清楚", "不 清楚", NULL};
     for (size_t i = 0; yes[i]; ++i) if (strcmp(b, yes[i]) == 0) return 1;
     for (size_t i = 0; no[i]; ++i)  if (strcmp(b, no[i]) == 0)  return 2;
+    for (size_t i = 0; confuse[i]; ++i)
+        if (strcmp(b, confuse[i]) == 0 || strcmp(bp, confuse[i]) == 0) return 3;
     return 0;
 }
 
@@ -3104,6 +3136,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         } else if (bk == 2) {
             const char *r = "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句";
             snprintf(out, out_cap, "%s", r);
+            ai->turns++;
+            return strlen(out);
+        } else if (bk == 3) {
+            /* 「没听懂」：把上一句再说一遍（比答词串有用得多）*/
+            if (ai->last_reply[0])
+                snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
+            else
+                snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
             ai->turns++;
             return strlen(out);
         }

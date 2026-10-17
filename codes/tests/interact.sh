@@ -225,6 +225,21 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 在 学校学习" \
     || chk "地点边界不许贪（不能是「学校学习」）" 1
 fi
 
+echo "⑱ §6.226 虚词不当谓语/宾语（不学垃圾）；「不懂」= 再说一遍"
+out=$(run "我 忘 了" "举 个 例子" "说 中文" "我 不 明白")
+# 只看**学习确认话**（`记下 了 ：`），别把帮助/开关提示里的「记下 了」也算进来
+printf '%s\n' "$out" | grep -q "记下 了 ：" \
+    && chk "虚词类说法不该学成关系（忘 了 / 个 / 中 文）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了 ：" | head -1)" \
+    || chk "虚词类说法不该学成关系（忘 了 / 个 / 中 文）" 1
+out=$(run "猫 属于 动物 吗" "不懂")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 讲 清 吗 ？ 我 再 说 一 遍 ： 对 ， 猫 -\[属于\]-> 动物" \
+    && chk "「不懂」⇒ 把上一句再说一遍" 1 \
+    || chk "「不懂」⇒ 把上一句再说一遍" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "我 不 明白")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "那 我 换 个 说 法" \
+    && chk "没说过什么时说「我 不 明白」⇒ 换个说法（不出词串）" 1 \
+    || chk "「我 不 明白」（空历史）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
