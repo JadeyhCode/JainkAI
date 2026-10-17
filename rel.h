@@ -176,6 +176,14 @@ static inline uint8_t rel_alias_id(const char *w) {
 }
 
 static inline uint8_t rel_id_of(AI *ai, const char *w, int allow_new) {
+    /* §6.161 **自然说法**（默认关，`AIP_RELNAT=1`）：`能`/`可以` 归到核心关系「会」。
+     * 为什么需要：实测 `鸟 能 飞` 会被当成**动态谓语「能」**记下来（陈述侧 allow_new=1），
+     * 而 `鸟 能 飞 吗` 查不到（查询侧 allow_new=0 ⇒ `rel_id_of("能")=0`）——
+     * 同一句话**说得进、问不出**。归到「会」之后两边说的是同一件事。
+     * 默认关是因为它会改行为：`你 能 来 吗` 这种三词日常句也会被关系层接（可能答非所问）。 */
+    if (ai && ai->rel_nat && w) {
+        if (!strcmp(w, "能") || !strcmp(w, "可以")) return REL_CAN;
+    }
     const RelDef *rd = rel_by_name(w);
     if (rd) return rd->id;
     uint8_t al = rel_alias_id(w);      /* 别名 → 核心关系（**唯一**一张表） */
