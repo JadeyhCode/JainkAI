@@ -3309,6 +3309,9 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
     if (!nseg) return NULL;
     size_t ncl = nseg + 1;
     char out[384]; size_t off = 0; size_t learned_n = 0;
+    /* §6.243 省略/指代：`猫 属于 动物，狗 也 是` —— 后一句的主语换人、谓语宾语全省。
+     * 记住上一句的（谓语词, 宾语），遇到 `[X][也][R]` 就补成 `[X][上一句谓语][上一句宾语]`。 */
+    char prev_rw[16] = {0}, prev_obj[40] = {0};
     for (size_t c = 0; c < ncl; ++c) {
         size_t b = seg[c];
         size_t e = (c + 1 < ncl) ? seg[c + 1] - 1 : n;   /* 去掉分隔符那个 token */
@@ -3317,13 +3320,44 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
         size_t cn = e - b;
         if (ai_has_question_word(cw, cn)) return NULL;
         float rc = 0.5f;
-        char *r = agent_learn_belief(ai, cw, cn, &rc);
+        char *r = NULL;
+        /* 省略句：`[X][也][R]`（也/同样），用上一句补全 */
+        if (!r && cn == 3 && prev_rw[0] && prev_obj[0] &&
+            (!strcmp(cw[1], "也") || !strcmp(cw[1], "都"))) {
+            uint8_t r1 = rel_id_of(ai, cw[2], 0), r0 = rel_id_of(ai, prev_rw, 0);
+            int same = (r1 && r0 && r1 == r0) ||
+                       (!strcmp(cw[2], "是") && r0 == REL_IS_A) ||
+                       (!strcmp(prev_rw, "是") && r1 == REL_IS_A);
+            if (same) {
+                char *const syn[3] = {cw[0], prev_rw, prev_obj};
+                r = agent_learn_relation(ai, syn, 3, &rc);
+                if (r) {
+                    /* 换成"补全后"的说明，别让用户以为是原句 */
+                    char fix[160];
+                    snprintf(fix, sizeof fix, "记下 了 ： %s %s %s（接着 上 一 句）",
+                             cw[0], prev_rw, prev_obj);
+                    free(r); r = (char *)malloc(strlen(fix) + 1);
+                    if (r) memcpy(r, fix, strlen(fix) + 1);
+                }
+            }
+        }
+        if (!r) r = agent_learn_belief(ai, cw, cn, &rc);
         if (!r) { int cq = 0; r = agent_conj_both(ai, cw, cn, &cq, &rc); }
         if (!r) { int cq = 0; r = agent_conj_obj(ai, cw, cn, &cq, &rc); }
         if (!r) r = agent_learn_locative(ai, cw, cn, &rc);
         if (!r) r = agent_learn_relation(ai, cw, cn, &rc);
         if (!r) r = agent_learn_new_words(ai, cw, cn, &rc);
         if (!r) return NULL;
+        /* 记下这句的谓语/宾语，供下一句省略用 */
+        {
+            char jb[64]; const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
+            uint8_t rid2 = 0; int neg2 = 0, q2 = 0;
+            if (rel_parse(ai, cw, cn, jb, sizeof jb, &aw2, &rid2, &neg2, &bw2, &q2, &rw2, 0) &&
+                rw2 && bw2 && strlen(rw2) < sizeof prev_rw && strlen(bw2) < sizeof prev_obj) {
+                snprintf(prev_rw, sizeof prev_rw, "%s", rw2);
+                snprintf(prev_obj, sizeof prev_obj, "%s", bw2);
+            } else { prev_rw[0] = 0; prev_obj[0] = 0; }
+        }
         const char *body = r;
         /* 各条自带的抬头都去掉（学过的回「我 知道 ： 」、新学的回「记下 了 ： 」）*/
         static const char *pres[] = {"记下 了 ： ", "我 知道 ： ", NULL};

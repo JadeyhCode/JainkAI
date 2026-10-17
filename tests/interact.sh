@@ -338,6 +338,23 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
     && chk "混了问句就整句回落（不半答）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "混了问句就整句回落（不半答）" 1
 
+echo "㉕ §6.243 复句里的省略/指代（「狗 也 是」）"
+out=$(run "猫 属于 动物，狗 也 是" "狗 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "狗 属于 动物" \
+    && chk "省略句用上一句补全（并说明「接着上一句」）" 1 \
+    || chk "省略句补全" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 狗 -\[属于\]-> 动物" \
+    && chk "补全的那条真的学进去了" 1 \
+    || chk "补全的那条真学进" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "鸟 会 飞，鱼 也 会" "鱼 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 鱼 -\[会\]-> 飞" \
+    && chk "谓语省略（鱼 也 会）也能补" 1 \
+    || chk "谓语省略" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫 属于 动物，狗 也 会")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 狗" \
+    && chk "谓语对不上就不补（狗 也 会 ≠ 属于）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "谓语对不上就不补" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
