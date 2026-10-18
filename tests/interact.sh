@@ -459,6 +459,20 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "它" \
     && chk "没上文时「它」不瞎替换（原样）" 1 \
     || chk "没上文时「它」不瞎替换" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉝ §6.256 天气/预报：没数据就明说，不编"
+out=$(run "明天 会 下雨 吗")
+r1=$(printf '%s\n' "$out" | reps | sed -n 1p)
+printf '%s\n' "$r1" | grep -q "我 没有 天气 数据" \
+    && chk "天气预报 ⇒ 明说没有数据" 1 \
+    || chk "天气预报 ⇒ 明说没有数据" 0 "$r1"
+printf '%s\n' "$r1" | grep -q "可能 会 下雨" \
+    && chk "不编造（不说「明天可能会下雨」）" 0 "$r1" \
+    || chk "不编造（不说「明天可能会下雨」）" 1
+out=$(run "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ， 猫 -\[属于\]-> 动物" \
+    && chk "非天气问题不受影响" 1 \
+    || chk "非天气问题不受影响" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

@@ -688,6 +688,19 @@ static inline size_t agent_norm_conj(char *const *words, size_t n, char **out, s
     return m;
 }
 
+/* §6.256 **天气/预报类问题**：没有数据就**不编**。
+ * 实测 `明天 会 下雨 吗` 答出「应该，明天 可能 会 下雨」—— 这是**编**（没有天气数据、也没有联网）。
+ * 白箱原则：宁可说"不知道"，也不能给出听起来像知识的话。 */
+static inline int agent_weather_unknown(const char *input) {
+    if (!input) return 0;
+    int has_weather = strstr(input, "天气") || strstr(input, "下雨") || strstr(input, "下雪") ||
+                      strstr(input, "气温") || strstr(input, "温度") || strstr(input, "晴");
+    if (!has_weather) return 0;
+    return strstr(input, "明天") || strstr(input, "今天") || strstr(input, "现在") ||
+           strstr(input, "未来") || strstr(input, "外面") || strstr(input, "会 不 会") ||
+           strstr(input, "吗");
+}
+
 /* §6.254 **「忘 掉 X R Y」/「删 掉 X R Y」**：认出"要求删除"并**如实说明删不了**。
  * 为什么不做删除：`micro.h` 的 `MOD_REMOVE_ASSOC` 里有一条**硬底线** ——
  * 观测到的关系边不许被剪（`micro_edge_removable()` 只放行 DERIVED 缓存）。
@@ -3660,6 +3673,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->turns++;
         return strlen(out);
     }
+    /* §6.256 天气/预报：没有数据就明说（不编） */
+    if (agent_weather_unknown(input)) {
+        snprintf(out, out_cap,
+                 "天气 我 不 知道 —— 我 没有 天气 数据，也 连 不 上 网。"
+                 "（这 类 问题 我 只 能 说 不 会，不 编。）");
+        ai->turns++;
+        return strlen(out);
+    }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
         int bk = agent_bare_reply(input);
@@ -4375,7 +4396,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         char pout[1024];
         int pr = patch_emit_all(ai, pout, sizeof pout);
-        if (pr == 1)       snprintf(out, out_cap, "%s", pout);
+        /* §6.256b 截断有界：`out_cap` 可能小于 `pout`（optest 用 600），
+         * 直接 `%s` 会触发 -Wformat-truncation（探针也要 -Werror 过的）。 */
+        if (pr == 1)       snprintf(out, out_cap, "%.*s",
+                                    (int)(out_cap ? out_cap - 1 : 0), pout);
         else if (pr == -1) out[0] = 0;          /* 补丁明确说：这一轮不说话 */
     }
 
