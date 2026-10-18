@@ -992,6 +992,16 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "图里 没 记 过 猪 属于
     && chk "「猪属于动物吗」（没有这类边）⇒ 明说没记过" 1 \
     || chk "没这类边" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "69 §6.309 复合条件句：不硬猜，给出两步用法；单句假设照旧进假设层"
+out=$(run "如果猫会飞那它还会游泳吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "复合条件句" \
+    && chk "复合条件句 ⇒ 说明两步用法（不掉兜底）" 1 \
+    || chk "复合条件句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "如果猫会飞" "它会游泳吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "假设 下" \
+    && chk "两步：先「如果猫会飞」再「它会游泳吗」⇒ 在假设下推理" 1 \
+    || chk "两步假设" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
