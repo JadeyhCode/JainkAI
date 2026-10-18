@@ -52,7 +52,7 @@ gen() {
 echo "① 120 条确定性随机句：每条都要有答复，进程不许崩"
 gen 120 > "$TMP/rnd.txt"
 set +e
-timeout 300 "$BIN" "$MODEL" < "$TMP/rnd.txt" > "$TMP/rnd.out" 2>&1
+timeout 300 "$BIN" --model "$MODEL" < "$TMP/rnd.txt" > "$TMP/rnd.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 0 ] && chk "进程正常退出（rc=0）" 1 || chk "进程正常退出（rc=$rc）" 0
@@ -74,7 +74,7 @@ echo "② 病态输入：空行 / 纯空白 / 裸括号 / 保留记号 / 600 词
     awk 'BEGIN{s="";for(i=0;i<300;i++)s=s"猫";print s}'
 } > "$TMP/patho.txt"
 set +e
-timeout 300 "$BIN" "$MODEL" < "$TMP/patho.txt" > "$TMP/patho.out" 2>&1
+timeout 300 "$BIN" --model "$MODEL" < "$TMP/patho.txt" > "$TMP/patho.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 0 ] && chk "病态输入也没崩（rc=0）" 1 || chk "病态输入也没崩（rc=$rc）" 0
@@ -90,7 +90,7 @@ echo "③ 非法/截断 UTF-8 + 6 万字节长句（§6.193 的两个越界就�
     awk 'BEGIN{s="";for(i=0;i<20000;i++)s=s"猫";print s}'
 } > "$TMP/bytes.txt"
 set +e
-timeout 300 "$BIN" "$MODEL" < "$TMP/bytes.txt" > "$TMP/bytes.out" 2>&1
+timeout 300 "$BIN" --model "$MODEL" < "$TMP/bytes.txt" > "$TMP/bytes.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 0 ] && chk "非法字节/长句也没崩（rc=0）" 1 || chk "非法字节/长句也没崩（rc=$rc）" 0
@@ -123,7 +123,7 @@ while [ "$i" -lt 120 ]; do
     i=$((i + 1))
 done
 set +e
-timeout 300 "$BIN" "$MODEL" < "$TMP/mut.txt" > "$TMP/mut.out" 2>&1
+timeout 300 "$BIN" --model "$MODEL" < "$TMP/mut.txt" > "$TMP/mut.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 0 ] && chk "混合变异也没崩（rc=0）" 1 || chk "混合变异也没崩（rc=$rc）" 0
@@ -171,7 +171,7 @@ awk -v N=120 'BEGIN{
     }
 }' > "$TMP/syn.txt"
 set +e
-timeout 300 "$BIN" "$MODEL" < "$TMP/syn.txt" > "$TMP/syn.out" 2>&1
+timeout 300 "$BIN" --model "$MODEL" < "$TMP/syn.txt" > "$TMP/syn.out" 2>&1
 rc=$?
 set -e
 [ "$rc" -eq 0 ] && chk "语法变异没崩（rc=0）" 1 || chk "语法变异没崩（rc=$rc）" 0

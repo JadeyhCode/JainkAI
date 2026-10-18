@@ -38,7 +38,7 @@ chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1${3:+ï¼ˆå®
 run() {
     nc=$1; shift
     { for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } \
-        | env AIP_NATCOIN="$nc" "$BIN" "$MODEL" 2>&1
+        | env AIP_NATCOIN="$nc" "$BIN" --model "$MODEL" 2>&1
 }
 reps() { sed -n 's/.*AI > //p'; }
 ans()  { reps | head -1; }

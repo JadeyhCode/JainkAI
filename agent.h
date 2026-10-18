@@ -3299,21 +3299,34 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     size_t n = 0;
     char **w = ai_tokenize(ai, input, &n);
     if (!w) return 0;
-    int yes = 0, no = 0, junk = 0;
-    if (n < 1 || n > 2) junk = 1;
-    for (size_t i = 0; !junk && i < n; ++i) {
+    /* §6.249 **两套回话要分开**：
+     *   ① **答词**（会/能/可以/不 会/不 能）—— 回答的是**问句**，极性是绝对的；
+     *   ② **判词**（对/是/没错/不 对/不 是）—— 评的是**我刚才那句**，极性相对（fact_neg ^ no）。
+     * 以前两套混着按"相对"处理 ⇒ 我猜「大概 不 会」、用户答「会」（其实是"会飞"）
+     * 被教成「不 会 飞」（实测极性反了）。
+     * ⚠ `不 会` 是两个 token（`不` + `会`），逐 token 分类会一半判词一半答词 ⇒ 先拼成整串再比。 */
+    int yes = 0, no = 0, junk = 0, saw_judge = 0, saw_answer = 0;
+    char j[64];
+    size_t jo = 0;
+    for (size_t i = 0; i < n && jo + 1 < sizeof j; ++i) {
         const char *t = w[i] ? w[i] : "";
         if (!strcmp(t, "的") || !strcmp(t, "了") || !strcmp(t, "啊") ||
             !strcmp(t, "呀") || !strcmp(t, "吧") || !strcmp(t, "呢")) continue;
-        /* §6.203 **合写形式也要认**：`不会`/`不能` 在固定词表里是**一个** token
-         * （`不对`/`不是` 却会被切开 —— 不对称，实测 `不 会` 能教、`不会` 掉进流水线出词串）。 */
-        if (!strcmp(t, "不") || !strcmp(t, "没") || !strcmp(t, "没有") ||
-            !strcmp(t, "不会") || !strcmp(t, "不能") || !strcmp(t, "不对") ||
-            !strcmp(t, "不是") || !strcmp(t, "没 有")) { no = 1; continue; }
-        if (!strcmp(t, "对") || !strcmp(t, "是")  || !strcmp(t, "会") ||
-            !strcmp(t, "能") || !strcmp(t, "可以") || !strcmp(t, "嗯") ||
-            !strcmp(t, "好") || !strcmp(t, "行") || !strcmp(t, "没错")) { yes = 1; continue; }
-        junk = 1;                       /* 有别的词 ⇒ 不是短回话 */
+        jo += (size_t)snprintf(j + jo, sizeof j - jo, "%s%s", jo ? " " : "", t);
+    }
+    if (n < 1 || n > 3) junk = 1;
+    if (!junk) {
+        static const char *ay[] = {"会", "能", "可以", NULL};
+        static const char *an[] = {"不 会", "不会", "不 能", "不能", NULL};
+        static const char *jy[] = {"对", "是", "嗯", "好", "行", "没 错", "没错",
+                                   "对 的", "是 的", NULL};
+        static const char *jn[] = {"不 对", "不对", "不 是", "不是", "不", "没",
+                                   "没 有", "没有", "错", NULL};
+        for (size_t i = 0; ay[i]; ++i) if (!strcmp(j, ay[i])) { yes = 1; saw_answer = 1; }
+        for (size_t i = 0; an[i]; ++i) if (!strcmp(j, an[i])) { no = 1; saw_answer = 1; }
+        for (size_t i = 0; jy[i]; ++i) if (!strcmp(j, jy[i])) { yes = 1; saw_judge = 1; }
+        for (size_t i = 0; jn[i]; ++i) if (!strcmp(j, jn[i])) { no = 1; saw_judge = 1; }
+        if (!yes && !no) junk = 1;
     }
     ai_free_words(w, n);
     if (junk || (!yes && !no)) return 0;
@@ -3328,9 +3341,17 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     if (!A && ai->ask_a[0] && strlen(ai->ask_a) <= 12) A = pool_token_intern(ai->pool, ai->ask_a);
     if (!B && ai->ask_b[0] && strlen(ai->ask_b) <= 12) B = pool_token_intern(ai->pool, ai->ask_b);
     if (!A || !B || rid == 0) return 0;
-    /* §6.172b 极性**以我断言的那条为准**（猜测/确定答案都可能是否定），
-     * 不是以问句为准 —— 回「对」等于确认我刚才说的那句。 */
-    int tneg = fact_neg ^ (no ? 1 : 0);
+    /* §6.172b/§6.249 极性的两种口径（见上面的 saw_judge / saw_answer）：
+     *   答词（会/不会…）⇒ 绝对极性（问的是"会不会"，答"会"就是会）；
+     *   判词（对/不对…）⇒ 相对我刚才那句（fact_neg ^ 否定）。
+     * 没有明确分类时（比如只说「嗯」）按判词口径（更保守）。 */
+    /* 判词的基准极性：**kind=2**（我给了确定答案）用"我说的那句"（fact_neg，§6.172b）；
+     * **kind=1**（我没把握/是猜的）用**问句本身的极性**（ask_neg）—— 猜出来的那句话
+     * 极性在图上没有落点，实测按 fact_neg 会反（`桌子 不 会 飞 吗` 回「对」教成「会 飞」）。 */
+    int base = (ai->ask_kind == 2) ? fact_neg : (int)ai->ask_neg;
+    int tneg;
+    if (saw_answer && !saw_judge) tneg = no ? 1 : 0;
+    else                          tneg = base ^ (no ? 1 : 0);
     if (ai_write_rel(ai, A, B, rid, tneg, AI_WSRC_RELATION) != 0) return 0;
     ai->n_rel_learned++;
     const char *rn = rel_name_of(ai, rid);

@@ -34,7 +34,7 @@ chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1${3:+（�
 run() {
     ab=$1; shift
     { for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } \
-        | env AIP_ASKBACK="$ab" "$BIN" "$MODEL" 2>&1
+        | env AIP_ASKBACK="$ab" "$BIN" --model "$MODEL" 2>&1
 }
 reps() { sed -n 's/.*AI > //p'; }            # 只留 AI 的答复
 ans()  { reps | head -1; }
