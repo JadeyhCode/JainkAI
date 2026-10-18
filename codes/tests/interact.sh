@@ -694,6 +694,25 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "挺 好" \
     && chk "「你好吗」有正常应答（不再拒答）" 1 \
     || chk "你好吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "㊼ §6.272 生词被切成单字（上海/夸克）：问句说\"还不认识\"，教一句就接上"
+out=$(run "上海在哪" "夸克属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "还 不 认识 「上海」" \
+    && chk "「上海在哪」⇒ 明说还不认识（不再\"这个我不太懂\"）" 1 \
+    || chk "上海在哪" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "还 不 认识 「夸克」" \
+    && chk "「夸克属于什么」⇒ 明说还不认识" 1 \
+    || chk "夸克属于什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "教你上海属于城市" "上海属于什么" "上海在哪")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 上海 属于 城市" \
+    && chk "「教你上海属于城市」学得进（方位字上海不再被虚词守卫挡）" 1 \
+    || chk "学上海" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "上海 属于 城市" \
+    && chk "教完就能问回来" 1 \
+    || chk "问回来" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "上海 在 什么 ， 图里 没 记 过" \
+    && chk "多字主语接上「在」问句（问的是地点，不是\"不太懂\"）" 1 \
+    || chk "多字主语+在" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

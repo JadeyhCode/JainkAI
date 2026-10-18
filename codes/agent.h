@@ -322,6 +322,67 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         if (r) memcpy(r, buf, strlen(buf) + 1);
         return r;
     }
+    /* §6.272 **多字主语**（生词被切成单字的安全网）：分词对没见过的词按单字切
+     * （`上海` → 上/海，`夸克` → 夸/克），严格形状 `[A][R][什么]` 于是认不出。
+     * 放宽成：在关系词位置找**第一个已知关系词**，它前面的词拼成主语。
+     * 主语在池里就照常查；**不在池里就明说"还不认识"**（这才是用户能接着做的动作）。
+     * 只在严格形状失败后才走这里，所以已认识的词行为一点不变。 */
+    if (last >= 3 && last <= 6) {
+        size_t rj = 0;
+        uint8_t rjd = 0;
+        int rjneg = 0;
+        for (size_t i = 1; i + 1 < last; ++i) {
+            int ng = 0;
+            uint8_t id = agent_rid_maybe_neg(ai, words[i], &ng);
+            if (id) { rj = i; rjd = id; rjneg = ng; break; }
+        }
+        size_t sj = (rj >= 2) ? agent_open_slot_len(words + rj + 1, last - rj - 1) : 0;
+        if (rj >= 2 && sj && (last == rj + 1 + sj || last == rj + 1 + sj + 1)) {
+            char subj[64];
+            size_t so = 0;
+            for (size_t i = 0; i < rj; ++i) {
+                size_t l = strlen(words[i]);
+                if (so + l + 1 >= sizeof subj) { so = 0; break; }
+                memcpy(subj + so, words[i], l);
+                so += l;
+            }
+            subj[so] = 0;
+            /* 只认**两个汉字**的拼法（`上海/夸克/鲸鱼`）——这正是"分词把生词切成单字"的形状。
+             * 放宽到任意长度会把 `开猫 真的 属于 什么` 这类（填充词混在里面）也接住，
+             * 与 optest 的「不是写死的填充词 ⇒ 不接」冲突（实测那条当场红）。 */
+            if (so != 6) return NULL;
+            Token *a2 = pool_find(ai->pool, subj);
+            char buf[256];
+            if (!a2) {
+                snprintf(buf, sizeof buf,
+                         "我 还 不 认识 「%s」（图里 没 这 个 词）—— 你 教 一 句「%s %s …」"
+                         "我 就 记 住（不 编）。", subj, subj,
+                         rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "属于");
+            } else {
+                Token *out2[8];
+                uint8_t hyp2[8];
+                size_t got2 = rel_next_cands(ai, a2, rjd, rjneg, out2, hyp2,
+                                             (size_t)(sizeof out2 / sizeof out2[0]));
+                size_t o2 = 0;
+                o2 += (size_t)snprintf(buf + o2, sizeof buf - o2, "我 记 的 是 ： %s %s%s ",
+                                       subj, rjneg ? "不 " : "",
+                                       rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "?");
+                if (got2 == 0)
+                    snprintf(buf + o2, sizeof buf - o2, "什么 ， 图里 没 记 过（不 编）");
+                else {
+                    for (size_t i = 0; i < got2 && i < 4; ++i)
+                        o2 += (size_t)snprintf(buf + o2, sizeof buf - o2, "%s%s",
+                                               i ? " 、 " : "",
+                                               out2[i]->name ? out2[i]->name : "?");
+                    if (got2 > 4) snprintf(buf + o2, sizeof buf - o2, " … 共 %zu 个", got2);
+                }
+            }
+            if (out_conf) *out_conf = a2 ? 0.8f : 0.6f;
+            char *r2 = (char *)malloc(strlen(buf) + 1);
+            if (r2) memcpy(r2, buf, strlen(buf) + 1);
+            return r2;
+        }
+    }
     /* 形状二：`什么/谁 R B`（反向扫；上限 64 个候选，避免大池子上太慢） */
     size_t sl2 = agent_open_slot_len(words, last);
     /* §6.166 **否定反查**：`谁 不 R B`（「谁 不 会 唱歌」）。以前 `不` 会被当成**类别词**
@@ -1666,7 +1727,18 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     if (fr_is_func(B)) return NULL;
     /* §6.245 并列/选择词留在宾语里 ⇒ 那是"两个东西"，不是一个新词（`猫或狗`/`猫、狗`）*/
     if (strstr(B, "或") || strstr(B, "、") || strstr(B, "以及")) return NULL;
-    if (!agent_subj_ok(words[0])) return NULL;   /* §6.229 主语不能是别的虚词（很/了/的…）*/
+    /* §6.229 主语不能是别的虚词（很/了/的…）。
+     * §6.272 **例外：地名/方位复合**（`上海`）—— 首字 `上/下/里/中/外` 在虚词表里，
+     * 于是「上海 属于 城市」整句学不进（实测），可问句那头已经会说"我还不认识上海"，
+     * 教学闭环就断了。只放这几个**地名常用方位字**、且正好 2 个词、另一个必须是实词。 */
+    if (!agent_subj_ok(words[0])) {
+        static const char *loc0[] = {"上", "下", "里", "中", "外", NULL};
+        int ok_loc = 0;
+        if (na == 2)
+            for (size_t t = 0; loc0[t]; ++t)
+                if (!strcmp(words[0], loc0[t])) ok_loc = 1;
+        if (!ok_loc) return NULL;
+    }
     /* §6.231/§6.265 **多词那一侧不许混进虚词**，但**代词+名词**的复合是正常说法
      * （`我表弟 是 大学生`）：以前一律挡"代词 + 别的词"，把这类合法复合也挡了（实测
      * `我表弟是大学生` 整句学不进）。现在：含代词时，**其余词必须都是词池里已有的词**
@@ -1680,7 +1752,15 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
                                            "他们", NULL};
                 int is_pron = 0;
                 for (size_t k = 0; pr[k]; ++k) if (!strcmp(words[i], pr[k])) { is_pron = 1; break; }
-                if (!is_pron) return NULL;     /* 别的虚词一律不行（很/了/的…）*/
+                if (!is_pron) {
+                    /* §6.272 同上：`上海` 的 `上` 是方位虚词，作为地名首字放行（只限 2 词）。 */
+                    static const char *loc1[] = {"上", "下", "里", "中", "外", NULL};
+                    int is_loc = 0;
+                    if (na == 2 && i == 0)
+                        for (size_t t = 0; loc1[t]; ++t)
+                            if (!strcmp(words[i], loc1[t])) is_loc = 1;
+                    if (!is_loc) return NULL;  /* 别的虚词一律不行（很/了/的…）*/
+                }
                 has_pron = 1;
             }
         }
