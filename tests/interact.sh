@@ -590,6 +590,24 @@ printf '%s\n' "$out" | grep -q "记下 了 ： 猫很" \
     && chk "代词/名词之外的虚词复合仍挡（猫很）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
     || chk "虚词复合仍挡" 1
 
+echo "㊷ §6.266/§6.267 为什么问句（白箱看家本事）+ 做不到的功能请求明说"
+out=$(run "为什么猫属于动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "因为 猫 属于 动物" \
+    && chk "「为什么猫属于动物」⇒ 给依据链" 1 \
+    || chk "为什么…属于…" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "为什么猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "其实 是 反 的：猫 不 属于 植物" \
+    && chk "问反的 ⇒ 指出其实是反的（不再说成成立）" 1 \
+    || chk "问反的 ⇒ 指出反的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "为什么猫不会飞")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "因为 猫 不 会 飞" \
+    && chk "否定问句 ⇒ 因为…不…" 1 \
+    || chk "否定问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "讲个笑话" "说点别的")
+n=$(printf '%s\n' "$out" | reps | grep -c "这 个 我 真 不 会" || true)
+[ "$n" -eq 2 ] && chk "讲笑话/换话题 ⇒ 明说不会（不再出词串）" 1 \
+    || chk "做不到的请求明说" 0 "$(printf '%s\n' "$out" | reps | head -2 | tr '\n' '|')"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

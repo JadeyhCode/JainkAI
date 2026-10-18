@@ -756,6 +756,80 @@ static inline int agent_self_capability(const char *input) {
  * 这些都不是图里的知识，而是**实现事实**；以前分别答成
  * 「就三件事…」（语言被打成了"能做什么"）、「我 没 有 生 日 但 我 可 以 有」（年龄）、
  * 「这个我 不 太 懂」（住哪/谁做的）、「你 有 感情」（感情，还把主语搞反了）。 */
+/* §6.266 **"为什么 A R B"**：白箱项目的看家本事应该能在自然语言里用 ——
+ * 以前 `为什么猫属于动物` ⇒「这个我 不 太 懂」（只有 `::why` 命令能看依据）。
+ * 做法：剥掉"为什么"、按 A/R/B 解析、用 `rel_solve` 找证明链（正反都试），再用 `proof_text` 说出来。 */
+static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
+                                       float *out_conf, int *handled) {
+    if (handled) *handled = 0;
+    if (!ai || !words || n < 4 || n > 8) return NULL;
+    size_t wi = n;
+    for (size_t i = 0; i < n; ++i)
+        if (!strcmp(words[i], "为什么") || !strcmp(words[i], "为啥") ||
+            !strcmp(words[i], "为何")) { wi = i; break; }
+    if (wi == n) return NULL;
+    /* 拼出 A R B（去掉"为什么"这个 token；"不"留在关系词前会被 rel_parse 认）*/
+    char *rest[8]; size_t rn = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (i == wi) continue;
+        rest[rn++] = words[i];
+    }
+    if (rn < 3) return NULL;
+    /* 去掉尾巴上的"呢/吗" */
+    while (rn > 3 && (!strcmp(rest[rn - 1], "呢") || !strcmp(rest[rn - 1], "吗"))) rn--;
+    char jb[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int neg = 0, q = 0;
+    if (!rel_parse(ai, rest, rn, jb, sizeof jb, &aw, &rid, &neg, &bw, &q, &rw, 0)) return NULL;
+    if (!aw || !bw || !rid) return NULL;
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw);
+    Proof pf, pf2;
+    char line[320], buf[640];
+    /* ⚠ `Proof.status` 的语义（实测确认）：它是**求解出来的那条断言的极性** ——
+     *   +1 = 「A R B」成立；-1 = 「A 不 R B」成立；0 = 推不出（开放世界）。
+     * 不是"问句真假"。踩过的两个坑：① 把 `status != 0` 当"成立"⇒「为什么猫属于植物」答成
+     * "因为猫属于植物"；② 只问正极性 ⇒ 多值关系（会）里"已知 A 不 R B"时正极性给 0，
+     * 必须再问一次 `want_neg=1` 才拿到 -1。 */
+    const char *neg_txt = neg ? "不 " : "";
+    const char *opp_txt = neg ? "" : "不 ";
+    int answered = 0;
+    int got_pol = 0;
+    if (A && B) {
+        rel_solve(ai, A, rid, B, 0, &pf);
+        if (pf.status != 0) got_pol = pf.status;
+        else {
+            rel_solve(ai, A, rid, B, 1, &pf2);
+            if (pf2.status != 0) { pf = pf2; got_pol = pf2.status; }
+        }
+        if (got_pol != 0) {
+            int want = neg ? -1 : 1;
+            proof_text(ai, &pf, line, sizeof line);
+            if (got_pol == want)
+                snprintf(buf, sizeof buf, "因为 %s %s%s %s —— %s：%s", aw, neg_txt, rw, bw,
+                         pf.n > 2 ? "多 跳 推 导" : "直接 记 着 的 事实", line);
+            else
+                snprintf(buf, sizeof buf, "其实 是 反 的：%s %s%s %s —— %s：%s", aw, opp_txt, rw, bw,
+                         pf.n > 2 ? "多 跳 推 导" : "直接 记 着 的 事实", line);
+            answered = 1;
+        }
+    }
+    if (!answered) {
+        if (A && B && rel_guess(ai, A, rid, B, &pf)) {
+            proof_text(ai, &pf, line, sizeof line);
+            snprintf(buf, sizeof buf, "我 没有 直接 依据，只 能 猜：%s（推测，不 是 知识）", line);
+        } else {
+            snprintf(buf, sizeof buf, "「%s %s%s %s」这 条 我 图 里 没 有 依据 —— 推 不 出 来。",
+                     aw, neg_txt, rw, bw);
+        }
+    }
+    if (out_conf) *out_conf = 0.7f;
+    if (handled) *handled = 1;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 /* §6.262 **不带空格的"在哪"问句要在分词前拆开**：`我在哪` 分词成 [我在][哪]（`我在` 是
  * 词池里的最大匹配），关系层只认 `[A][在][什么]` ⇒ 整句掉兜底。这里在**字符串层**重写成
  * `A 在 什么`（带空格），不动 token 数组（往 token 数组里插指针会破坏 free 的所有权）。
@@ -781,6 +855,21 @@ static inline int agent_rewrite_where(const char *in, char *out, size_t cap) {
     c[pos] = 0;
     snprintf(out, cap, "%s 在 什么%s", c, has_ma ? " 吗" : "");
     return 1;
+}
+
+/* §6.267 **做不到的"功能请求"要明说**：`说点别的` / `讲个笑话` / `唱首歌` 这类，
+ * 以前会掉进生成流水线出词串（实测「的 想 出来 在 哭 会」「话 有 每 在 上 人 我们」）。 */
+static inline const char *agent_unsupported_request(const char *input) {
+    if (!input) return NULL;
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return NULL;
+    if (strstr(b, "讲个笑话") || strstr(b, "说个笑话") || strstr(b, "讲笑话") ||
+        strstr(b, "说笑话") || strstr(b, "讲个故事") || strstr(b, "唱首歌") ||
+        strstr(b, "唱个歌") || strstr(b, "说点别的") || strstr(b, "换个话题") ||
+        strstr(b, "聊点别的"))
+        return "这 个 我 真 不 会 —— 我 只 能 回答 图 里 记 着 的 关系、记 你 教 我 的 东西，"
+               "不 会 讲 笑 话/唱 歌。你 想 聊 知识 的话 我 在。";
+    return NULL;
 }
 
 static inline const char *agent_self_fact(const char *input) {
@@ -1916,6 +2005,10 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
                  "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
                  "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
         return out;
+    }
+    {
+        const char *un = agent_unsupported_request(input);
+        if (un) { snprintf(out, cap, "%s", un); return out; }
     }
     if (agent_clock_unknown(input)) {
         snprintf(out, cap,
@@ -4176,6 +4269,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_belief(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    if (!resp) {
+        float rc = 0.5f;
+        int wh = 0;
+        resp = agent_why_question(ai, words, n, &rc, &wh);
         if (resp) conf = rc;
     }
     if (!resp) {
