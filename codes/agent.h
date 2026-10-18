@@ -88,7 +88,7 @@ static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
 #define AIP_REPLY_MAX 64
 static char g_reply_kw[AIP_REPLY_MAX][128];
-static char g_reply_txt[AIP_REPLY_MAX][384];   /* §6.285 天气/时钟那几句超过 192 字节，被静默丢过 */
+static char g_reply_txt[AIP_REPLY_MAX][1024];  /* §6.285/§6.287 长答复（能力清单）曾被 384 静默丢掉 */
 static size_t g_reply_n;
 static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
 
@@ -1003,14 +1003,6 @@ static inline int agent_nosp(const char *in, char *buf, size_t cap) {
 /* §6.259 **"你能做什么"** —— 用户最常问的一句，也是"可用"的门面。
  * 以前回「我 一直 在 这里 …」（闲聊模板）。现在给一份**短、准、带例子**的能力清单，
  * 并且明说做不到的（不联网/不会算术/不知道天气）。 */
-static inline int agent_self_capability(const char *input) {
-    if (!input) return 0;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return 0;
-    return strstr(b, "你能做什么") || strstr(b, "你会什么") || strstr(b, "你能干什么") ||
-           strstr(b, "你能干嘛") || strstr(b, "你有什么用") || strstr(b, "你能帮我做什么") ||
-           strstr(b, "你能做什么事");
-}
 
 /* §6.260 **关于"我"的几个具体问题**：语言/年龄/位置/出处/感情。
  * 这些都不是图里的知识，而是**实现事实**；以前分别答成
@@ -1502,32 +1494,7 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
  * 这些不是知识问题，以前大多掉生成流水线出词串（实测「意思 别 上 谁 有 样 时候」、
  * 「你 当 时 也 是 没 办 法」）。原则：**能答实的就答**（能记住/记得住），
  * 答不了的**明说不编**（没有看法、不记人）—— 比闲聊模板有用，也不假装理解。 */
-static inline const char *agent_self_fact(const char *input) {
-    if (!input) return NULL;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return NULL;
-    if (strstr(b, "什么语言") || strstr(b, "哪国语言") || strstr(b, "哪些语言"))
-        return "现在 只 有 中文（分词 + 关系 图 都 是 中文 的）。";
-    if (strstr(b, "你多大") || strstr(b, "你几岁") || strstr(b, "你的年龄"))
-        return "我 没 有 年龄 —— 我 是 一 个 程序，不 会 长 大；"
-               "「多 大」对 我 只 能 理解 成「模型 里 有 多少 东西」，那 个 你 可 以 让 我 报 统计。";
-    if (strstr(b, "你住在哪") || strstr(b, "你在哪住") || strstr(b, "你家在哪"))
-        return "我 没有 物理 位置 —— 我 跑 在 这 个 进程 里。";
-    if (strstr(b, "谁做的你") || strstr(b, "谁写的你") || strstr(b, "谁创造了你") ||
-        strstr(b, "谁开发你"))
-        return "我 是 一 个 C11 单 头 文件 的 实现（JainkAI）：知识 在 图 里，回答 全 部 可 追。";
-    if (strstr(b, "你有感情吗") || strstr(b, "你有情绪吗") || strstr(b, "你会难过吗"))
-        return "没有 —— 我 没有 感情。不过 我 会 记 住 你 说 过 的 事，也 会 在 你 难过 的 时候 少 说 废话。";
-    return NULL;
-}
 
-static inline int agent_self_identity(const char *input) {
-    if (!input) return 0;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return 0;
-    return strstr(b, "你叫什么") || strstr(b, "你的名字") || strstr(b, "你是谁") ||
-           strstr(b, "你是什么") || strstr(b, "你叫啥");
-}
 
 /* §6.258b **日期/时刻**：没有时钟就明说（与天气同一条原则）*/
 /* §6.257 **能力边界要如实说**（与 §6.256 同一条原则：不会就说不会，别用闲聊模板糊过去）。
@@ -2767,22 +2734,9 @@ static inline int agent_repeat_request(const char *input) {
  *   ⑥ 联网 / 算术（能力边界）
  * 返回非 NULL 表示已经答完（out 里有内容）。 */
 static inline const char *agent_self_route(const char *input, char *out, size_t cap) {
-    const char *sf = agent_self_fact(input);
-    if (sf) { snprintf(out, cap, "%s", sf); return out; }
-    if (agent_self_capability(input)) {
-        snprintf(out, cap,
-                 "就 三 件 事：① 回答 图 里 记 着 的 关系（「猫 属于 动物 吗」「谁 会 飞」）；"
-                 "② 你 教 一 句 我 就 记 住（「考拉 属于 动物」「我 叫 小明」）；"
-                 "③ 多 跳 推 理 / 假设 / 记 别人 的 看法（「如果 猫 会 飞」「他 以为 …」）。"
-                 "不 会 的 我 直说：不 联 网、不 会 算 术、不 知道 天气 和 日期。");
-        return out;
-    }
-    if (agent_self_identity(input)) {
-        snprintf(out, cap,
-                 "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
-                 "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
-        return out;
-    }
+    /* §6.287 实现事实/能力清单/身份已搬进 `patterns.txt` 的 `[reply]` 桶
+     * （`agent_self_fact` / `agent_self_capability` / `agent_self_identity` 已删除）。
+     * 这里只剩两件**带判据**的：确认（你确定吗）和量/尺度（多大/多远）。 */
     {
         const char *cf = agent_confirm_request(input);
         if (cf) { snprintf(out, cap, "%s", cf); return out; }
