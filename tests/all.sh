@@ -140,7 +140,9 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
     AIP_PREBUILT="$SB/build_aip"; export AIP_PREBUILT
     # §6.144：`lexicon.txt` 也带进沙箱 —— 它是**数据入口**（分词按整词切），
     # 仓库自带的那份只多四个别名词（惧怕/喜爱/喜好/具有），没有别的副作用。
-    for f in frames.txt relations.txt lexicon.txt; do
+    # §6.283 `patterns.txt`（说法层数据表）也要带 —— 否则套件看到的是空表，
+    # 数据驱动的行为在套件里根本没被覆盖。
+    for f in frames.txt relations.txt lexicon.txt patterns.txt; do
         if [ -f "$ROOT/$f" ]; then cp "$ROOT/$f" "$SB/$f"; fi
     done
     # §6.178 `session.bin`（互动会话图）只给 `session_facts` 那一套用：它是**读**的，

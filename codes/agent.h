@@ -72,14 +72,88 @@ static inline int agent_open_slot_word(const char *w) {
 /* §6.148 **占位词也可能是两个词**：分词器会把「哪些」「哪种」「哪个」切开
  * （实测「哪些 属于 动物」整句掉流水线，而「谁 属于 动物」能答）。
  * 所以跟填充词一样按**连写**比 —— 返回占位短语占几个词（1 或 2），0 = 这儿不是占位词。 */
+/* §6.283 **把"说法层"的表搬进数据文件**（`patterns.txt`）：引导语 / 占位词 / 含糊回话
+ * 这三张表以前写死在代码里，加一种说法就得改 C。现在从 `patterns.txt` 读：
+ *     [lead] 请注意
+ *     [slot] 哪一类
+ *     [confuse] 我不明白
+ * 文件不存在就**当空表**（套件沙箱里不一定有这份文件，不能因此报错）。
+ * 判据仍然是"前缀/整词匹配"——这不是理解，**但加新说法不再需要改代码**，
+ * 这正是当前目标要的最小一步。 */
+#define AIP_PAT_MAX 96
+#define AIP_PAT_LEN 48
+typedef struct { char w[AIP_PAT_LEN]; } AipPat;
+static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
+static size_t g_lead_n, g_slot_n, g_confuse_n;
+static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
+
+static inline AipPat *aip_pat_bucket(const char *kind, size_t *n) {
+    if (!strcmp(kind, "lead"))    return g_lead;
+    if (!strcmp(kind, "slot"))    return g_slot;
+    if (!strcmp(kind, "confuse")) return g_confuse;
+    (void)n;
+    return NULL;
+}
+static inline size_t *aip_pat_count(const char *kind) {
+    if (!strcmp(kind, "lead"))    return &g_lead_n;
+    if (!strcmp(kind, "slot"))    return &g_slot_n;
+    if (!strcmp(kind, "confuse")) return &g_confuse_n;
+    return NULL;
+}
+static inline void aip_patterns_load(void) {
+    if (g_pat_loaded) return;
+    g_pat_loaded = 1;
+    g_lead_n = g_slot_n = g_confuse_n = 0;
+    FILE *f = fopen("patterns.txt", "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (!*p || *p == '#') continue;
+        if (*p != '[') continue;
+        char *rb = strchr(p, ']');
+        if (!rb) continue;
+        *rb = 0;
+        const char *kind = p + 1;
+        char *val = rb + 1;
+        while (*val == ' ' || *val == '\t') val++;
+        char *e = val + strlen(val);
+        while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
+        if (!*val || strlen(val) >= AIP_PAT_LEN) continue;
+        AipPat *arr = aip_pat_bucket(kind, NULL);
+        size_t *cnt = aip_pat_count(kind);
+        if (!arr || !cnt || *cnt >= AIP_PAT_MAX) continue;
+        snprintf(arr[*cnt].w, AIP_PAT_LEN, "%s", val);
+        (*cnt)++;
+    }
+    fclose(f);
+}
+/* 前缀命中：返回匹配长度（0 = 没中）。 */
+static inline size_t aip_pat_prefix(const AipPat *arr, size_t n, const char *s) {
+    if (!arr || !s) return 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t l = strlen(arr[i].w);
+        if (l && strncmp(s, arr[i].w, l) == 0) return l;
+    }
+    return 0;
+}
+static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
+    if (!arr || !s) return 0;
+    for (size_t i = 0; i < n; ++i) if (!strcmp(arr[i].w, s)) return 1;
+    return 0;
+}
+
 static inline size_t agent_open_slot_len(char *const *w, size_t n) {
     static const char *const slots[] = { "什么", "谁", "哪些", "啥", "哪种", "哪个",
                                          "哪一个", "哪一位", NULL };
-    for (size_t take = (n < 2 ? n : 2); take >= 1; --take) {
+    for (size_t take = (n < 3 ? n : 3); take >= 1; --take) {
         char j[32];
         agent_open_join(w, take, j, sizeof j);
         for (size_t k = 0; slots[k]; ++k)
             if (strcmp(j, slots[k]) == 0) return take;
+        /* §6.283 数据表里加的占位词（`哪一类` 这种多字占位） */
+        if (aip_pat_is(g_slot, g_slot_n, j)) return take;
     }
     return 0;
 }
@@ -2819,6 +2893,10 @@ static inline int agent_bare_reply(const char *input) {
     for (size_t i = 0; no[i]; ++i)  if (strcmp(b, no[i]) == 0)  return 2;
     for (size_t i = 0; confuse[i]; ++i)
         if (strcmp(b, confuse[i]) == 0 || strcmp(bp, confuse[i]) == 0) return 3;
+    /* §6.283 数据表里的「没听懂」说法（前缀匹配：`我不明白你说什么` 也算）。
+     * ⚠ 两个形态都要查：`b` 是原句、`bp` 是剥掉句首代词后的。 */
+    if (aip_pat_prefix(g_confuse, g_confuse_n, b) ||
+        aip_pat_prefix(g_confuse, g_confuse_n, bp)) return 3;
     return 0;
 }
 
@@ -4359,6 +4437,7 @@ static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
 static inline Agent *agent_new(AgentPerceiveFn perceive, AgentActFn act, void *user) {
     Agent *a = (Agent *)calloc(1, sizeof *a);
     if (!a) return NULL;
+    aip_patterns_load();                 /* §6.283 说法层：patterns.txt（缺文件也无妨） */
     a->brain = ai_new();
     if (!a->brain) { free(a); return NULL; }
     a->perceive = perceive; a->act = act; a->user = user;
@@ -4813,15 +4892,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         while (*q == ' ' || *q == '\t') q++;
         static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches"};
 
-        for (size_t i = 0; lead[i]; ++i) {
-            size_t ll = strlen(lead[i]);
-            if (strncmp(q, lead[i], ll) != 0) continue;
+        size_t ll = 0;
+        for (size_t i = 0; lead[i] && !ll; ++i)
+            if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
+        /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
+        if (!ll) ll = aip_pat_prefix(g_lead, g_lead_n, q);
+        if (ll) {
             const char *rest = q + ll;
             while (*rest == ' ' || *rest == '\t') rest++;
-            if (!*rest) break;
-            snprintf(decl_in, sizeof decl_in, "%s", rest);
-            input_eff = decl_in;
-            break;
+            if (*rest) { snprintf(decl_in, sizeof decl_in, "%s", rest); input_eff = decl_in; }
         }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */

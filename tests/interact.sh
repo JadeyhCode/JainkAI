@@ -864,6 +864,19 @@ printf '%s\n' "$out" | grep -q "猫你" \
     && chk "「猫你属于什么」不再被当成新词「猫你」" 0 "$(printf '%s\n' "$out" | grep -a 猫你 | head -1)" \
     || chk "不再把\"猫你\"当新词" 1
 
+echo "57 §6.283 说法层搬进数据（patterns.txt）：加一行就多认一种说法"
+out=$(run "请注意考拉属于动物" "猫属于哪一类")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 考拉 属于 动物" \
+    && chk "数据表里的引导语（请注意）生效" 1 \
+    || chk "数据表引导语" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 属于 动物" \
+    && chk "数据表里的占位词（哪一类）生效" 1 \
+    || chk "数据表占位词" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "我不明白你说什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "换 个 说 法" \
+    && chk "数据表里的含糊回话（前缀匹配）生效" 1 \
+    || chk "数据表含糊回话" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
