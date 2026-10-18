@@ -487,6 +487,22 @@ printf '%s\n' "$r1" | grep -qE "(^|[^0-9])2([^0-9]|$)" \
     && chk "算术不假装会（没有编出结果）" 0 "$r1" \
     || chk "算术不假装会" 1
 
+echo "㉟ §6.258 可用性三补：自述身份统一 / 没有时钟 / 占位地名不学"
+out=$(run "你 叫 什么 名字" "你 是 谁" "你叫什么")
+n=$(printf '%s\n' "$out" | reps | grep -c "我 叫 JainkAI" || true)
+[ "$n" -eq 3 ] && chk "三种问法给同一句自述（不再各说各的）" 1 \
+    || chk "自述身份统一" 0 "$(printf '%s\n' "$out" | reps | head -3 | tr '\n' '|')"
+out=$(run "今天几号" "现在 几 点")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 没有 时 钟" \
+    && chk "问日期 ⇒ 明说没有时钟" 1 \
+    || chk "问日期 ⇒ 明说没有时钟" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | grep -q "记下 了 ： 今天" \
+    && chk "日期问题不该被当成知识记下" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "日期问题不该被当成知识记下" 1
+out=$(run "我 住 在 一个 地方" "我 在 哪")
+printf '%s\n' "$out" | grep -q "一个地方" && c=0 || c=1
+[ "$c" -eq 1 ] && chk "占位地名（一个地方）不学" 1 || chk "占位地名不学" 0 "$(printf '%s\n' "$out" | grep -a 一个地方 | head -1)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

@@ -620,6 +620,10 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     if (bl_n == 0 || bl_n > 12) return NULL;
     /* §6.227 **地点不能是虚词**：实测 `我 住 在 很` 会学成 `我 在 很`（"很"当地点）。
      * 虚词表只有一处（frame.h 的 FR_FUNC + FR_PARTICLES），与 §6.226 同源。 */
+    /* §6.258c **占位地名不算地名**：`我 住 在 一个 地方` 以前会学成「我 在 一个地方」
+     * （"一个地方"是占位说法，不是地名）。 */
+    if (strstr(bl, "地方") || strstr(bl, "某") || strstr(bl, "一个") || strstr(bl, "哪里"))
+        return NULL;
     if (fr_is_func(bl)) return NULL;
     if (!agent_subj_ok(words[0])) return NULL;     /* §6.229 `了 在 家里` 不该学 */
     Token *A = pool_token_intern(ai->pool, words[0]);
@@ -691,14 +695,49 @@ static inline size_t agent_norm_conj(char *const *words, size_t n, char **out, s
 /* §6.256 **天气/预报类问题**：没有数据就**不编**。
  * 实测 `明天 会 下雨 吗` 答出「应该，明天 可能 会 下雨」—— 这是**编**（没有天气数据、也没有联网）。
  * 白箱原则：宁可说"不知道"，也不能给出听起来像知识的话。 */
+/* 去掉空格的小写副本（判据要同时认「你 叫 什么」和「你叫什么」两种写法 —— 实测混着来）*/
+static inline int agent_nosp(const char *in, char *buf, size_t cap) {
+    if (!in || !buf || cap == 0) return 0;
+    size_t o = 0;
+    for (const char *q = in; *q && o + 1 < cap; ++q) {
+        if (*q == ' ' || *q == '\t') continue;
+        buf[o++] = *q;
+    }
+    buf[o] = 0;
+    return (int)o;
+}
+
 static inline int agent_weather_unknown(const char *input) {
     if (!input) return 0;
-    int has_weather = strstr(input, "天气") || strstr(input, "下雨") || strstr(input, "下雪") ||
-                      strstr(input, "气温") || strstr(input, "温度") || strstr(input, "晴");
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return 0;
+    int has_weather = strstr(b, "天气") || strstr(b, "下雨") || strstr(b, "下雪") ||
+                      strstr(b, "气温") || strstr(b, "温度") || strstr(b, "晴");
     if (!has_weather) return 0;
-    return strstr(input, "明天") || strstr(input, "今天") || strstr(input, "现在") ||
-           strstr(input, "未来") || strstr(input, "外面") || strstr(input, "会 不 会") ||
-           strstr(input, "吗");
+    return strstr(b, "明天") || strstr(b, "今天") || strstr(b, "现在") ||
+           strstr(b, "未来") || strstr(b, "外面") || strstr(b, "会不会") || strstr(b, "吗");
+}
+
+/* §6.258 **自述身份**：统一成一句，别再各说各的。
+ * 实测 `你 叫 什么 名字` ⇒「我 是 一 直 在 听 你 说 的 人」、`你 是 谁` ⇒「我 是 你 的 伙伴」、
+ * `你 叫 什么` ⇒「我 是 一 直 在 学 的 东西」—— 三句三个说法，且都没说**它是什么**。 */
+static inline int agent_self_identity(const char *input) {
+    if (!input) return 0;
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return 0;
+    return strstr(b, "你叫什么") || strstr(b, "你的名字") || strstr(b, "你是谁") ||
+           strstr(b, "你是什么") || strstr(b, "你叫啥");
+}
+
+/* §6.258b **日期/时刻**：没有时钟就明说（与天气同一条原则）*/
+static inline int agent_clock_unknown(const char *input) {
+    if (!input) return 0;
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return 0;
+    int ask = strstr(b, "几号") || strstr(b, "几点") || strstr(b, "星期几") ||
+              strstr(b, "礼拜几") || strstr(b, "哪一年") || strstr(b, "几月");
+    return ask && (strstr(b, "今天") || strstr(b, "现在") || strstr(b, "明天") ||
+                   strstr(b, "昨天") || strstr(b, "今年") || strstr(b, "当前"));
 }
 
 /* §6.257 **能力边界要如实说**（与 §6.256 同一条原则：不会就说不会，别用闲聊模板糊过去）。
@@ -3687,6 +3726,21 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!ai->ask_pending && agent_repeat_request(input)) {
         if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
         else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
+        ai->turns++;
+        return strlen(out);
+    }
+    /* §6.258 自述身份（统一口径） */
+    if (agent_self_identity(input)) {
+        snprintf(out, out_cap,
+                 "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
+                 "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
+        ai->turns++;
+        return strlen(out);
+    }
+    /* §6.258b 日期/时刻：没有时钟就明说 */
+    if (agent_clock_unknown(input)) {
+        snprintf(out, out_cap,
+                 "我 没有 时 钟，也 不 联 网 —— 具体 几 号/几 点 我 不 知道（你 看 一下 手机 更 准）。");
         ai->turns++;
         return strlen(out);
     }
