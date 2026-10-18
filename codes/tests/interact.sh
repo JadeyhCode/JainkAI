@@ -911,6 +911,18 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "猫 -\[属于\]-> 动物" \
     && chk "「猫到底属不属于动物」⇒ 对（到/底、属不属于 都由数据行还原）" 1 \
     || chk "到底+属不属于" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "61 §6.290 指代/并列的补句全靠数据行：留出集 26→28"
+out=$(run "猫和狗谁会飞" "猫属于动物它们会飞吗" "狗属于动物它会飞吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "都 不 会 飞" \
+    && chk "「猫和狗谁会飞」⇒ 逐项都 不 会 飞" 1 \
+    || chk "并列+谁" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[不 会\]-> 飞" \
+    && chk "「…它们会飞吗」（它们被切成 它/们）也接上" 1 \
+    || chk "它们指代" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "狗 -\[不 会\]-> 飞" \
+    && chk "「…它会飞吗」指代先行词正确" 1 \
+    || chk "它指代" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

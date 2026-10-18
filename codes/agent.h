@@ -77,7 +77,7 @@ static inline int agent_open_slot_word(const char *w) {
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
  * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
  * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
-#define AIP_SHAPE_MAX 8
+#define AIP_SHAPE_MAX 32   /* §6.290 原来 8 条，新加的规则被静默丢弃（又是"上限太小"）*/
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
