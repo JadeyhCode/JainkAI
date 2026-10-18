@@ -533,6 +533,7 @@ static inline char *agent_analogy_fallback(AI *ai, char *const *words, size_t n,
     char jbuf[64];
     if (!rel_parse(ai, words, n, jbuf, sizeof jbuf, &aw, &rid, &is_neg, &bw, &is_q, &rw, 0))
         return NULL;
+
     if (!is_q || rid == 0 || is_neg) return NULL;          /* 只兜肯定的疑问句（否定另说） */
     Token *A = pool_find(ai->pool, aw);
     Token *B = pool_find(ai->pool, bw);
@@ -828,6 +829,31 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
     char *r = (char *)malloc(strlen(buf) + 1);
     if (r) memcpy(r, buf, strlen(buf) + 1);
     return r;
+}
+
+/* §6.268 **省略问句「那狗呢」/「狗呢」**：把上一轮问句的（关系, 极性, 宾语）搬过来，
+ * 只换主语 —— 实测 `猫不会飞吗` 之后 `那狗呢` ⇒「应该，我 还 没 学 过 这 个」（没接住）。
+ * 返回 1 表示重写过（out 里是新的输入串）。 */
+static inline int agent_rewrite_ellipsis(const AI *ai, const char *in, char *out, size_t cap) {
+    if (!ai || !in || !out || cap == 0) return 0;
+    if (!ai->last_q_rid || !ai->last_q_b[0]) return 0;
+    char c[128];
+    if (!agent_nosp(in, c, sizeof c)) return 0;
+    size_t cl = strlen(c);
+    if (cl < 5 || strcmp(c + cl - 3, "呢") != 0) return 0;     /* 以「呢」结尾（3 字节）*/
+    cl -= 3;
+    if (cl == 0 || cl > 36) return 0;
+    char subj[40];
+    size_t sl = 0;
+    const char *p = c;
+    if (cl >= 6 && strncmp(p, "那", 3) == 0) { p += 3; cl -= 3; }   /* 「那狗呢」去掉「那」*/
+    if (cl == 0 || cl > sizeof subj - 1) return 0;
+    memcpy(subj, p, cl); subj[cl] = 0; sl = cl;
+    (void)sl;
+    const char *rn = rel_name_of(ai, ai->last_q_rid);
+    if (!rn) return 0;
+    snprintf(out, cap, "%s %s%s %s 吗", subj, ai->last_q_neg ? "不 " : "", rn, ai->last_q_b);
+    return 1;
 }
 
 /* §6.262 **不带空格的"在哪"问句要在分词前拆开**：`我在哪` 分词成 [我在][哪]（`我在` 是
@@ -4061,6 +4087,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             break;
         }
     }
+    {   /* §6.268 「那狗呢 / 狗呢」⇒ 「狗 <上一句的关系> <上一句的宾语> 吗」*/
+        char el[160];
+        if (agent_rewrite_ellipsis(ai, input_eff, el, sizeof el)) {
+            snprintf(decl_in, sizeof decl_in, "%s", el);
+            input_eff = decl_in;
+        }
+    }
     {   /* §6.262 「X在哪 / X住哪」⇒ 「X 在 什么」（必须在分词前：`我在` 会被当成一个词）*/
         char wh[224];
         if (agent_rewrite_where(input_eff, wh, sizeof wh)) {
@@ -4070,6 +4103,20 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     }
     char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)
                                    : ai_tokenize(ai, input_eff, &n);
+    /* §6.268 记下"这是不是一个问句、问的是什么（关系/极性/宾语）"——「那狗呢」靠它补全。
+     * 放在这里（分词后、所有路径之前）一处记录，比在各条答复路径里分别记可靠。 */
+    if (words && n >= 3) {
+        char jb[64];
+        const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
+        uint8_t rid2 = 0;
+        int neg2 = 0, q2 = 0;
+        if (rel_parse(ai, words, n, jb, sizeof jb, &aw2, &rid2, &neg2, &bw2, &q2, &rw2, 0) &&
+            q2 && rid2 && bw2 && strlen(bw2) < sizeof ai->last_q_b) {
+            ai->last_q_rid = rid2;
+            ai->last_q_neg = (uint8_t)(neg2 ? 1 : 0);
+            snprintf(ai->last_q_b, sizeof ai->last_q_b, "%s", bw2);
+        }
+    }
     /* 视角切换会把 words/n 往后挪两个词，但**释放必须用原始的指针** ——
      * 不然 free 的是数组中间，是堆破坏（不是崩一下就完的那种）。 */
     char **words_alloc = words;

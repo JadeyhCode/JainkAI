@@ -608,6 +608,20 @@ n=$(printf '%s\n' "$out" | reps | grep -c "这 个 我 真 不 会" || true)
 [ "$n" -eq 2 ] && chk "讲笑话/换话题 ⇒ 明说不会（不再出词串）" 1 \
     || chk "做不到的请求明说" 0 "$(printf '%s\n' "$out" | reps | head -2 | tr '\n' '|')"
 
+echo "㊸ §6.268 省略问句「那狗呢 / 鸟呢」：沿用上一句的关系与宾语"
+out=$(run "猫不会飞吗" "那狗呢")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "狗 -\[不 会\]-> 飞" \
+    && chk "「那狗呢」沿用上一句（不 会 飞）" 1 \
+    || chk "「那狗呢」沿用上一句" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫属于动物吗" "那鸟呢")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "鸟 -\[属于\]-> 动物" \
+    && chk "换关系后也跟着换（那鸟呢 ⇒ 属于 动物）" 1 \
+    || chk "换关系后跟着换" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "那狗呢")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ，" \
+    && chk "没上文时「那狗呢」不瞎补全（不编出「对，…」）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "没上文时不瞎补全" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

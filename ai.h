@@ -773,6 +773,10 @@ typedef struct {
     int    ask_kind;                 /* 1 = 我没把握（askback：回一句就教）
                                       * 2 = 我给了**确定答案**（§6.172：回「不 对」就改口） */
     char   ask_a[64], ask_b[64];
+    /* §6.268 上一轮**问句**的（关系, 宾语）—— 供「那狗呢」这种省略问句补全 */
+    uint8_t last_q_rid;
+    uint8_t last_q_neg;
+    char    last_q_b[40];
     uint8_t ask_rid;
     uint8_t ask_neg;                 /* 问句本身是不是否定问法 */
     uint8_t ask_fact_neg;            /* 我**断言**的那条事实的极性（kind=2 用） */
@@ -1597,6 +1601,7 @@ static inline void ai_switches_init(AI *ai) {
     ai->ask_mark[0] = 0;
     ai->ask_kind = 0;
     ai->ask_a[0] = ai->ask_b[0] = 0;
+    ai->last_q_rid = 0; ai->last_q_neg = 0; ai->last_q_b[0] = 0;
     ai->ask_rid = 0;
     ai->ask_neg = 0;
     ai->ask_fact_neg = 0;
