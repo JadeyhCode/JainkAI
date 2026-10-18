@@ -260,7 +260,9 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
             if (pat[0] == '$' && pat[1] >= '1' && pat[1] <= '9') {
                 size_t k = (size_t)(pat[1] - '1');
                 const char *con = pat + 2;           /* @k / @r / 空 */
-                if (strchr(con, 'k') && !pool_find(ai->pool, ww[i])) ok = 0;
+                /* §6.323 `@k` 也认 lexicon.txt 里的词：新词第一次出现时还没进池（形状比
+                 * 分词早），否则「鲸鱼 是否 属于 鱼」这类会因为 @k 不成立而永远匹配不上。 */
+                if (strchr(con, 'k') && !pool_find(ai->pool, ww[i]) && !ai_lex_extra_has(ai, ww[i])) ok = 0;
                 if (strchr(con, 'r') && rel_id_of(ai, ww[i], 0) == 0) ok = 0;
                 bind[k] = ww[i];
             } else if (strcmp(pat, ww[i]) != 0) ok = 0;
