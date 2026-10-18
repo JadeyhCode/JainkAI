@@ -12,10 +12,13 @@ cd "$ROOT"
 BIN=${BIN:-./build_aip}
 MODEL=${1:-session.bin}
 N=${2:-100}
+QFILE=${3:-}
 TMP=${TMPDIR:-/tmp}/cp.$$
 trap 'rm -f "$TMP.q" "$TMP.fails"' EXIT INT TERM
 
-if [ -f tests/corpus_q100.txt ] && [ "$N" = 100 ]; then
+if [ -n "$QFILE" ] && [ -f "$QFILE" ]; then
+    grep -v '^#' "$QFILE" > "$TMP.q"
+elif [ -f tests/corpus_q100.txt ] && [ "$N" = 100 ]; then
     grep -v '^#' tests/corpus_q100.txt > "$TMP.q"
 else
 python3 - "$N" > "$TMP.q" <<'PY'
