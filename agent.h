@@ -343,7 +343,7 @@ typedef struct { char w[AIP_PAT_LEN]; } AipPat;
 static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
-#define AIP_REPLY_MAX 64
+#define AIP_REPLY_MAX 128
 static char g_reply_kw[AIP_REPLY_MAX][128];
 static char g_reply_txt[AIP_REPLY_MAX][1024];  /* §6.285/§6.287 长答复（能力清单）曾被 384 静默丢掉 */
 static size_t g_reply_n;
@@ -523,7 +523,12 @@ static inline void aip_patterns_load(AI *ai) {
         }
         if (!strcmp(kind, "reply")) {
             char *eq = strchr(val, '=');
-            if (!eq || g_reply_n >= AIP_REPLY_MAX) continue;
+            if (!eq) continue;
+            if (g_reply_n >= AIP_REPLY_MAX) {
+                fprintf(stderr, "[patterns] ⚠ [reply] 超过上限 %d，这一行被丢弃：%.60s\n",
+                        AIP_REPLY_MAX, val);
+                continue;
+            }
             *eq = 0;
             char *txt = eq + 1;
             while (*txt == ' ' || *txt == '\t') txt++;
