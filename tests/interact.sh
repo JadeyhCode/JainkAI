@@ -409,6 +409,16 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "抓老鼠（爬树 我 还 �
     && chk "没认出来的项如实说（爬树 被切成 爬/树）" 1 \
     || chk "没认出来的项如实说" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉙ §6.247 并列主语只报真的写进去的"
+out=$(run "考拉 和 猫 都 是 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 是 动物（考拉 我 还 不 认识）" \
+    && chk "一边不在词池 ⇒ 只报另一边并说明" 1 \
+    || chk "并列主语只报写进去的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "考拉 和 猫 都 是 动物" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 猫 -\[属于\]-> 动物" \
+    && chk "报的那条确实学进去了（写后能读回）" 1 \
+    || chk "报的那条能读回" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

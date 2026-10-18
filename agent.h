@@ -745,10 +745,19 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
     if (!is_q) {
         if (!C) return NULL;
         if (!A && !B) return NULL;
-        if (A) (void)ai_write_rel(ai, A, C, rid, 0, AI_WSRC_RELATION);
-        if (B) (void)ai_write_rel(ai, B, C, rid, 0, AI_WSRC_RELATION);
+        /* §6.247 **只报真的写进去的**（与 §6.247 的 conj_obj 同一条纪律）：
+         * 词池里没有的那个主语不能算"记下了"。 */
+        int wa = 0, wb = 0;
+        if (A) wa = (ai_write_rel(ai, A, C, rid, 0, AI_WSRC_RELATION) == 0);
+        if (B) wb = (ai_write_rel(ai, B, C, rid, 0, AI_WSRC_RELATION) == 0);
+        if (!wa && !wb) return NULL;
         ai->n_rel_learned++;
-        snprintf(buf, sizeof buf, "记下 了 ： %s 和 %s 都 %s %s", aw, bw, rw, cw);
+        if (wa && wb)
+            snprintf(buf, sizeof buf, "记下 了 ： %s 和 %s 都 %s %s", aw, bw, rw, cw);
+        else if (wa)
+            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）", aw, rw, cw, bw);
+        else
+            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）", bw, rw, cw, aw);
         if (out_conf) *out_conf = 0.75f;
     } else {
         if (!C) return NULL;
