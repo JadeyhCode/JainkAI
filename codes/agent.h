@@ -3306,6 +3306,25 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
      * 判据放在这里而不是去认答复文本里的"不确定"：答复可能是检索来的句子
      * （样例会话里就有一条「我 不 确定 X 会 不 会 Y」），拿文本当信号会误判。
      * 只在 `as_other == 0`（不是"站在他立场"）时记：那条路是别人的信念。 */
+    /* §6.298 **宾语是"人"的多值问题答不出来时，明说不知道**。
+     * 实测 `猫 喜欢 你 吗` 被检索/类比答成「我 喜欢 你 喜欢 的 动物」——比拒答糟得多。
+     * 只在宾语是人称代词时走这条：别的未知（`老虎 会 飞 吗`）仍交给类比去"大概"，
+     * 那条答法是有标注的猜测，不能一刀切掉。 */
+    if (aw && bw && rw && !rel_is_excl(ai, rid)) {
+        static const char *pr[] = {"你", "我", "您", "他", "她", "我们", "你们", "他们", NULL};
+        int is_person = 0;
+        for (size_t i = 0; pr[i]; ++i) if (!strcmp(bw, pr[i])) is_person = 1;
+        if (is_person) {
+            char rb[220];
+            snprintf(rb, sizeof rb, "我 不 知道 %s %s 不 %s %s —— 图里 没 记 过（不 编）。",
+                     aw, rw, rw, bw);
+            agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);
+            if (out_conf) *out_conf = 0.35f;
+            char *r = (char *)malloc(strlen(rb) + 1);
+            if (r) memcpy(r, rb, strlen(rb) + 1);
+            return r;
+        }
+    }
     agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);   /* 没说反也没说正：按问句极性 */
     return NULL;
 }
@@ -5750,9 +5769,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (ai_seg_on()) { ai->mnt_ns[2] += ai_seg_now() - mnt_t; ai->mnt_hits[2]++; }
 
     ai_seg_lap(ai, AI_SEG_MAINT, &seg_t);
-    /* 漂移 / 诊断 / 叙事 */
-    if (ai->drift_sample_every && (ai->turns % ai->drift_sample_every) == 0)
-        ai_drift_sample(ai);
+    /* 诊断 / 叙事（漂移采样器已删，见 ai.h 的说明） */
     if (ai->turns % 300 == 0)
         ai_diagnose(ai);
     if (ai->narrate_every && (ai->turns % ai->narrate_every) == 0)

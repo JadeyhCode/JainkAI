@@ -46,7 +46,7 @@
  *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
  *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
  *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
-#define MODEL_VERSION 13u  /* v13: 他者**改口历史**（BelHist，§6.112） */  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+#define MODEL_VERSION 14u  /* v14: 删掉 hv/hv_prev（VSA 绑定代数整套撤销，§6.299）；读 v13 时按旧布局丢弃 */  /* v13: 他者**改口历史**（BelHist，§6.112） */  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -160,7 +160,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     w.len = 0;
     mw_u32(&w, MODEL_MAGIC);
     mw_u32(&w, MODEL_VERSION);
-    mw_u32(&w, VSA_DIM);
+    mw_u32(&w, EMB_DIM);
     mw_u32(&w, (uint32_t)saved_tokens);
     mw_u32(&w, total_assocs);
     mw_u32(&w, (uint32_t)(p->perspective_cur ? p->perspective_cur->depth : 0));
@@ -175,10 +175,6 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         uint32_t nlen = t->name ? (uint32_t)strlen(t->name) : 0;
         mw_u32(&w, t->id);
         mw_str(&w, t->name ? t->name : "", nlen);
-        mw_u8 (&w, t->hv ? 1 : 0);
-        if (t->hv) mw_raw(&w, t->hv, VSA_DIM);
-        mw_u8 (&w, t->hv_prev ? 1 : 0);
-        if (t->hv_prev) mw_raw(&w, t->hv_prev, VSA_DIM);
         mw_u32(&w, t->misses);
         mw_u32(&w, t->recent_misses);
         mw_u32(&w, t->parent ? t->parent->id : TOKEN_ID_NONE);
@@ -532,7 +528,7 @@ static inline AI *ai_load_file(const char *path) {
     int has_belief  = (mver >= 8u);
     int has_wide_rel = (mver >= 9u);   /* v9：rel/nrel 是 2 字节 */
     int has_ctx      = (mver < 10u);   /* v10 起：边上**没有**语境字段（旧文件要跳过去） */
-    if (mr_u32(&r) != (uint32_t)VSA_DIM) goto fail;
+    if (mr_u32(&r) != (uint32_t)EMB_DIM) goto fail;
     uint32_t n_tok   = mr_u32(&r);
     uint32_t n_assoc = mr_u32(&r);
     uint32_t depth   = mr_u32(&r);
@@ -569,10 +565,15 @@ static inline AI *ai_load_file(const char *path) {
         free(name);
         if (!t || t->id != id) goto fail;
 
-        if (mr_u8(&r)) { if (mr_raw(&r, t->hv, VSA_DIM) != 0) goto fail; }
-        else           { if (mr_raw(&r, NULL, VSA_DIM) != 0) goto fail; }
-        if (mr_u8(&r)) { if (mr_raw(&r, t->hv_prev, VSA_DIM) != 0) goto fail; }
-        else           { if (mr_raw(&r, NULL, VSA_DIM) != 0) goto fail; }
+        /* §6.299 v13 及更早：每个符号节点带两份 1024 字节向量（hv/hv_prev）。
+         * 读旧档时照样把字节**吃掉**（读到临时缓冲再丢），这样旧 model/session 不用重训。 */
+        if (mver <= 13u) {
+            int8_t scratch[EMB_DIM];
+            for (int k = 0; k < 2; ++k) {
+                if (mr_u8(&r)) { if (mr_raw(&r, scratch, EMB_DIM) != 0) goto fail; }
+                else           { if (mr_raw(&r, NULL, EMB_DIM) != 0) goto fail; }
+            }
+        }
 
         t->misses        = mr_u32(&r);
         t->recent_misses = mr_u32(&r);
@@ -643,8 +644,11 @@ static inline AI *ai_load_file(const char *path) {
             uint32_t nl = mr_u32(&rr);
             if (rr.err || nl > (1u << 20)) goto fail;
             if (mr_raw(&rr, NULL, nl) != 0) goto fail;
-            if (mr_u8(&rr)) { if (mr_raw(&rr, NULL, VSA_DIM) != 0) goto fail; }
-            if (mr_u8(&rr)) { if (mr_raw(&rr, NULL, VSA_DIM) != 0) goto fail; }
+            /* §6.299 第二趟重扫：v13 及更早这里还有两段向量要跳过（v14 起没有）。 */
+            if (mver <= 13u) {
+                if (mr_u8(&rr)) { if (mr_raw(&rr, NULL, EMB_DIM) != 0) goto fail; }
+                if (mr_u8(&rr)) { if (mr_raw(&rr, NULL, EMB_DIM) != 0) goto fail; }
+            }
             (void)mr_u32(&rr); (void)mr_u32(&rr);
             (void)mr_u32(&rr); (void)mr_u32(&rr); (void)mr_u32(&rr);
             (void)mr_u8(&rr); (void)mr_u8(&rr); (void)mr_u8(&rr);

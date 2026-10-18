@@ -215,10 +215,12 @@ _tmp2=$(mktemp -d)
 #   pron            —— 旧文写作 `::pron last`（现为 `::others pron`；历史小节点不动）
 #   delo            —— §6.198 记录里**引用过这个错拼**（真命令是 ::delib）；记录本身不改
 #   lease / prune / relx / x / xxx —— 文档里明确说"没有这个命令"或纯示例
+#   drift           —— §6.299 删掉了 `::drift`（hv_prev 恒等 ⇒ 漂移恒 0）；文档里是**历史记录**，不改
 cat > "$_tmp2/ok" <<'OK'
 affect
 aidump
 delo
+drift
 forget
 lease
 note

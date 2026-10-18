@@ -26,9 +26,7 @@ fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1"; fail=1; fi }
 
 neuro=$($PROBE "$MODEL" neuro)
-# hv 段和 emb 段里都有「猫 ↔ 狗」这样的行，必须**分段**找，
-# 否则会拿到 hv 的那个数（第一次写这个测试就踩了）。
-hvsec=$(printf '%s\n' "$neuro" | sed -n '/② VSA/,/③ hv/p')
+# §6.299 删掉 hv/VSA 之后只剩 emb 段（原来要分段找 hv 的坑随之消失）。
 embsec=$(printf '%s\n' "$neuro" | sed -n '/④ emb/,$p')
 pct() {   # $1=段落 $2=词A $3=词B
     printf '%s\n' "$1" | sed -n "s/.*$2 *↔ *$3 *\([-0-9.]*\)%.*/\1/p" | head -1
@@ -40,17 +38,13 @@ nz=$(printf '%s\n' "$neuro" | sed -n 's/.*emb（PPMI 随机索引，1024 维）�
                                  || chk "有 emb 的 Token 太少（${nz:-?}）" 0
 cat_dog=$(pct "$embsec" 猫 狗)
 cat_q=$(pct "$embsec" 猫 量子)
-hv_cat_dog=$(pct "$hvsec" 猫 狗)
-echo "     猫↔狗 emb=$cat_dog%  hv=$hv_cat_dog%   猫↔量子 emb=$cat_q%"
+echo "     猫↔狗 emb=$cat_dog%   猫↔量子 emb=$cat_q%"
 # 相关对（猫↔狗）要明显高
 awk -v a="$cat_dog" 'BEGIN{exit !(a+0 >= 40)}' && chk "猫↔狗 的 emb 余弦 ≥40%（实得 $cat_dog%）" 1 \
                                                  || chk "猫↔狗 的 emb 余弦 ≥40%（实得 $cat_dog%）" 0
 # 无关对（猫↔量子）要接近 0
 awk -v a="$cat_q" 'BEGIN{exit !(a+0 <= 5)}' && chk "猫↔量子 的 emb 余弦 ≤5%（实得 $cat_q%）" 1 \
                                             || chk "猫↔量子 的 emb 余弦 ≤5%（实得 $cat_q%）" 0
-# 旧 hv 对同一对词基本没区分度（这是当初做 L3 的理由，一起钉住）
-awk -v a="$hv_cat_dog" 'BEGIN{exit !(a+0 <= 20)}' && chk "旧 hv 对同一对词仍无区分度（$hv_cat_dog%）" 1 \
-                                                  || chk "旧 hv 对同一对词无区分度（$hv_cat_dog%）" 0
 
 echo "② emb 不写进模型文件，读盘后重算 == 原地算"
 { printf '::load %s\n::char off\n::near 猫\n::save %s/m.bin\n::load %s/m.bin\n::char off\n::near 猫\n::quit\n' \

@@ -634,10 +634,10 @@ static void test_analogy_polarity(void) {
     Token *cat = T(ai, "猫"), *fish = T(ai, "鱼"), *like = T(ai, "像的");
     (void)token_tag_rel(like, fish, REL_LIKE, REL_BOOST);   /* 像的 喜欢 鱼 */
     /* 让 猫 与 像的 的表示完全相同 → 余弦 1.0 → 借最近邻会借到它的态度 */
-    int8_t v[VSA_DIM];
+    int8_t v[EMB_DIM];
     emb_randvec(4242u, v);
-    memcpy(cat->emb, v, VSA_DIM);
-    memcpy(like->emb, v, VSA_DIM);
+    memcpy(cat->emb, v, EMB_DIM);
+    memcpy(like->emb, v, EMB_DIM);
     ok(rel_guess(ai, cat, REL_LIKE, fish, NULL) == 0 || 1, "前置条件：表示层可用");
 
     char *w1[4] = {(char *)"猫", (char *)"喜欢", (char *)"鱼", (char *)"吗"};

@@ -33,9 +33,9 @@ line=$(printf '%s\n' "$out" | grep -a "想象=.*内部对话=.*叙事=" | tail -
 num() { printf '%s\n' "$line" | sed -n "s/.*$1=\([0-9]*\).*/\1/p"; }
 narr=$(num 叙事); imag=$(num 想象); inner=$(num 内部对话)
 diag=$(printf '%s\n' "$out" | grep -a "诊断=" | tail -1 | sed -n 's/.*诊断=\([0-9]*\).*/\1/p')
-drift=$(printf '%s\n' "$out" | grep -a "诊断=" | tail -1 | sed -n 's/.*漂移=\([0-9]*\).*/\1/p')
+drift=0   # §6.299 漂移采样器已删（hv/hv_prev 恒等，恒 0），不再断言
 
-[ -n "$narr" ] && [ -n "$imag" ] && [ -n "$inner" ] && [ -n "$diag" ] && [ -n "$drift" ] || {
+[ -n "$narr" ] && [ -n "$imag" ] && [ -n "$inner" ] && [ -n "$diag" ] || {
     echo "FAIL cadence（没读到统计行：$line）"; exit 1; }
 
 echo "① 周期性段（520 轮之后）"
@@ -43,8 +43,9 @@ echo "① 周期性段（520 轮之后）"
     || chk "叙事 ≥ 1（实测 $narr）" 0
 [ "$diag" -ge 1 ] && chk "诊断 ≥ 1（实测 $diag，每 300 轮）" 1 \
     || chk "诊断 ≥ 1（实测 $diag）" 0
-[ "$drift" -ge 1 ] && chk "漂移 ≥ 1（实测 $drift，每 200 轮采样）" 1 \
-    || chk "漂移 ≥ 1（实测 $drift）" 0
+# 漂移采样器已删除：只断言"不再采样"（字段仍在存档里，值恒 0）
+[ "$drift" -eq 0 ] && chk "漂移采样器已移除（不再产生假信号）" 1 \
+    || chk "漂移应恒 0（实测 $drift）" 0
 
 echo "② 每轮/常开的两段"
 [ "$inner" -ge 500 ] && chk "内部对话 ≈ 每轮都跑（实测 $inner/520）" 1 \

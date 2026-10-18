@@ -297,11 +297,8 @@ static void relay_mode(AI *ai) {
 /* 「符号神经」体检：这个系统到底有多少是「神经」（分布式表示）的。
  * 问四件事：
  *   ① 边上有多少带类型信息（角色/话题/句尾模式）—— 符号侧的结构化程度；
- *   ② 两个语义相关的词的 VSA 相似度，和随机词对的相似度比 ——
- *      如果一样（都≈0），说明超向量只是「名字的随机投影」，没学到任何东西；
- *   ③ 有多少符号节点的 hv 和 hv_prev 不同 —— 如果全是 0，
- *      说明 hv 建好之后从没被学习更新过，所谓「漂移度量」恒等于 0；
- *   ④ ai_analogy（bind/unbind 做 A:B::C:? 推理）有没有被调用过
+ *   （§6.299 已删掉 ②③：hv/VSA 那套向量没有消费者，见 audit）
+ *   ④ ai_analogy（emb 做 A:B::C:? 推理）有没有被调用过
  *      —— 这个只能在源码里数，这里给出它依赖的数据是否就绪。 */
 static void neuro_mode(AI *ai) {
     size_t e_role = 0, e_topic = 0, e_pat = 0, e_all = 0;
@@ -330,57 +327,13 @@ static void neuro_mode(AI *ai) {
         {"猫", "量子", "无关（对照）"},
         {NULL, NULL, NULL}
     };
-    printf("② VSA 相似度（余弦，0~1 尺度的百分数）:\n");
-    for (size_t i = 0; pairs[i][0]; ++i) {
-        Token *x = pool_find(ai->pool, pairs[i][0]);
-        Token *y = pool_find(ai->pool, pairs[i][1]);
-        if (!x || !y || !x->hv || !y->hv) {
-            printf("   %-6s ↔ %-6s  (词不在图里)\n", pairs[i][0], pairs[i][1]);
-            continue;
-        }
-        printf("   %-6s ↔ %-6s  %6.1f%%   (%s)\n",
-               pairs[i][0], pairs[i][1], 100.0 * (double)vsa_cosine(x->hv, y->hv),
-               pairs[i][2]);
-    }
-    /* 随机词对的相似度分布，用来判断「上面那些数是不是噪声」 */
-    {
-        size_t n = ai->pool->count;
-        double sum = 0, sumsq = 0; size_t cnt = 0;
-        for (size_t i = 0; i + 7 < n; i += 7) {
-            Token *x = ai->pool->tokens[i];
-            Token *y = ai->pool->tokens[i + 7];
-            if (!x->name || !y->name || x->name[0] == '[' || y->name[0] == '[') continue;
-            if (!x->hv || !y->hv) continue;
-            double c = (double)vsa_cosine(x->hv, y->hv);
-            sum += c; sumsq += c * c; cnt++;
-        }
-        if (cnt) {
-            double mean = sum / (double)cnt;
-            double var = sumsq / (double)cnt - mean * mean;
-            printf("   随机词对（每 7 个取一对，%zu 对）：均值 %.1f%%  标准差 %.1f%%\n",
-                   cnt, 100.0 * mean, 100.0 * (var > 0 ? sqrt(var) : 0));
-        }
-    }
-
-    size_t n_diff = 0, n_hv = 0;
-    for (size_t i = 0; i < ai->pool->count; ++i) {
-        Token *t = ai->pool->tokens[i];
-        if (!t->name || !t->hv || !t->hv_prev) continue;
-        n_hv++;
-        if (memcmp(t->hv, t->hv_prev, VSA_DIM) != 0) n_diff++;
-    }
-    printf("③ hv 与 hv_prev 不同的符号节点 = %zu / %zu", n_diff, n_hv);
-    if (n_hv) printf("（%.1f%%）", 100.0 * (double)n_diff / (double)n_hv);
-    printf("\n   0%% 就意味着超向量建好之后再没被学习更新过，\n"
-           "   那么 ai_drift_sample 里的 vsa_cosine(hv, hv_prev) 恒等于 1，漂移恒为 0。\n");
-
     /* ④ 学出来的分布式表示（emb）：这才该是「神经」那一半 */
     ai_embed_build(ai);
     size_t n_emb = 0;
     for (size_t i = 0; i < ai->pool->count; ++i) {
         Token *t = ai->pool->tokens[i];
         if (!t->name || t->name[0] == '[' || !t->emb) continue;
-        for (size_t d = 0; d < VSA_DIM; ++d) if (t->emb[d]) { n_emb++; break; }
+        for (size_t d = 0; d < EMB_DIM; ++d) if (t->emb[d]) { n_emb++; break; }
     }
     printf("④ emb（PPMI 随机索引，1024 维）非零的符号节点 = %zu\n", n_emb);
     printf("   语义相关词对：\n");
@@ -401,7 +354,7 @@ static void neuro_mode(AI *ai) {
             if (!x->name || !y->name || x->name[0] == '[' || y->name[0] == '[') continue;
             if (!x->emb || !y->emb) continue;
             size_t nz = 0;
-            for (size_t d = 0; d < VSA_DIM; ++d) if (x->emb[d] || y->emb[d]) { nz = 1; break; }
+            for (size_t d = 0; d < EMB_DIM; ++d) if (x->emb[d] || y->emb[d]) { nz = 1; break; }
             if (!nz) continue;
             double c = (double)emb_cosine(x->emb, y->emb);
             sum += c; sumsq += c * c; cnt++;
@@ -421,29 +374,29 @@ static void neuro_mode(AI *ai) {
     {
         size_t n = ai->pool->count;
         size_t used = 0;
-        double *E = (double *)calloc(n * VSA_DIM, sizeof(double));
-        double *v = (double *)calloc(VSA_DIM, sizeof(double));
+        double *E = (double *)calloc(n * EMB_DIM, sizeof(double));
+        double *v = (double *)calloc(EMB_DIM, sizeof(double));
         double *u = (double *)calloc(n, sizeof(double));
         if (E && v && u) {
             for (size_t i = 0; i < n; ++i) {
                 Token *t = ai->pool->tokens[i];
                 if (!t->emb) continue;
                 int nz = 0;
-                for (size_t d = 0; d < VSA_DIM; ++d) if (t->emb[d]) { nz = 1; break; }
+                for (size_t d = 0; d < EMB_DIM; ++d) if (t->emb[d]) { nz = 1; break; }
                 if (!nz) continue;
-                for (size_t d = 0; d < VSA_DIM; ++d) E[i * VSA_DIM + d] = (double)t->emb[d];
+                for (size_t d = 0; d < EMB_DIM; ++d) E[i * EMB_DIM + d] = (double)t->emb[d];
                 used++;
             }
             double total = 0;
-            for (size_t k = 0; k < used * VSA_DIM; ++k) total += E[k] * E[k];
+            for (size_t k = 0; k < used * EMB_DIM; ++k) total += E[k] * E[k];
             printf("   主成分方差占比（%zu 个有向量的词）:", used);
-            double inv = 1.0 / sqrt((double)VSA_DIM);
+            double inv = 1.0 / sqrt((double)EMB_DIM);
             for (int comp = 0; comp < 3; ++comp) {
-                for (size_t d = 0; d < VSA_DIM; ++d) v[d] = inv;
+                for (size_t d = 0; d < EMB_DIM; ++d) v[d] = inv;
                 for (int it = 0; it < 12; ++it) {
                     for (size_t i = 0; i < n; ++i) {
                         double a2 = 0;
-                        for (size_t d = 0; d < VSA_DIM; ++d) a2 += E[i * VSA_DIM + d] * v[d];
+                        for (size_t d = 0; d < EMB_DIM; ++d) a2 += E[i * EMB_DIM + d] * v[d];
                         u[i] = a2;
                     }
                     double nu = 0;
@@ -451,29 +404,29 @@ static void neuro_mode(AI *ai) {
                     if (nu <= 0) break;
                     nu = sqrt(nu);
                     for (size_t i = 0; i < n; ++i) u[i] /= nu;
-                    for (size_t d = 0; d < VSA_DIM; ++d) v[d] = 0;
+                    for (size_t d = 0; d < EMB_DIM; ++d) v[d] = 0;
                     for (size_t i = 0; i < n; ++i) {
                         if (u[i] == 0) continue;
-                        for (size_t d = 0; d < VSA_DIM; ++d) v[d] += E[i * VSA_DIM + d] * u[i];
+                        for (size_t d = 0; d < EMB_DIM; ++d) v[d] += E[i * EMB_DIM + d] * u[i];
                     }
                     double nv = 0;
-                    for (size_t d = 0; d < VSA_DIM; ++d) nv += v[d] * v[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) nv += v[d] * v[d];
                     if (nv <= 0) break;
                     nv = sqrt(nv);
-                    for (size_t d = 0; d < VSA_DIM; ++d) v[d] /= nv;
+                    for (size_t d = 0; d < EMB_DIM; ++d) v[d] /= nv;
                 }
                 /* 奇异值²：用收敛后的 v 重算 u = E v，取 |u|²（= σ²）。
                  * 之前拿归一化后的 u 去算，恒等于 1，占比永远是 0%（量错过一次）。 */
                 double sv = 0;
                 for (size_t i = 0; i < n; ++i) {
                     double a2 = 0;
-                    for (size_t d = 0; d < VSA_DIM; ++d) a2 += E[i * VSA_DIM + d] * v[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) a2 += E[i * EMB_DIM + d] * v[d];
                     sv += a2 * a2;
                 }
                 for (size_t i = 0; i < n; ++i) {
                     double p2 = 0;
-                    for (size_t d = 0; d < VSA_DIM; ++d) p2 += E[i * VSA_DIM + d] * v[d];
-                    for (size_t d = 0; d < VSA_DIM; ++d) E[i * VSA_DIM + d] -= p2 * v[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) p2 += E[i * EMB_DIM + d] * v[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) E[i * EMB_DIM + d] -= p2 * v[d];
                 }
                 printf(" PC%d=%.1f%%", comp + 1, total > 0 ? 100.0 * sv / total : 0.0);
             }

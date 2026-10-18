@@ -2813,7 +2813,7 @@ static inline int ai_same_slot(const AI *ai, const Token *a, const Token *b) {
  * （oversmoothing），相似度全都变高，等于什么都没说。随机索引投影是**一遍**的，
  * 且保留 PPMI 空间的内积，不会塌。
  *
- * 成本 O(E × VSA_DIM)：实测 model.bin（35858 条边）约 0.2 秒，
+ * 成本 O(E × EMB_DIM)：实测 model.bin（35858 条边）约 0.2 秒，
  * 只在「训练收尾」和「读盘之后」各跑一次。
  *
  * emb **不写进模型文件**：它是 (边 + hits + 稳定 id) 的确定性函数，
@@ -2824,9 +2824,9 @@ static inline void ai_embed_build(AI *ai) {
     size_t n = p->count;
     if (n == 0) return;
 
-    int32_t *acc = (int32_t *)calloc(n * VSA_DIM, sizeof(int32_t));
+    int32_t *acc = (int32_t *)calloc(n * EMB_DIM, sizeof(int32_t));
     int64_t *marg = (int64_t *)calloc(n, sizeof(int64_t));
-    int8_t  *rv = (int8_t *)malloc(VSA_DIM);
+    int8_t  *rv = (int8_t *)malloc(EMB_DIM);
     if (!acc || !marg || !rv) { free(acc); free(marg); free(rv); return; }
 
     /* ⓪ df：一个上下文被多少个**不同的**词指向。
@@ -2898,9 +2898,9 @@ static inline void ai_embed_build(AI *ai) {
                 if (pmi > 0) {
                     if (pmi > 10.0) pmi = 10.0;
                     emb_randvec(m->id, rv);
-                    int32_t *a = acc + i * VSA_DIM;
+                    int32_t *a = acc + i * EMB_DIM;
                     int32_t w = (int32_t)(pmi * 1024.0);
-                    for (size_t d = 0; d < VSA_DIM; ++d) a[d] += w * rv[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) a[d] += w * rv[d];
                 }
             }
             /* 反向：m 的向量里加上 t 的随机向量（稀疏词的救命稻草） */
@@ -2912,9 +2912,9 @@ static inline void ai_embed_build(AI *ai) {
                     if (pmi2 > 0) {
                         if (pmi2 > 10.0) pmi2 = 10.0;
                         emb_randvec(t->id, rv);
-                        int32_t *a = acc + mi * VSA_DIM;
+                        int32_t *a = acc + mi * EMB_DIM;
                         int32_t w = (int32_t)(pmi2 * 1024.0);
-                        for (size_t d = 0; d < VSA_DIM; ++d) a[d] += w * rv[d];
+                        for (size_t d = 0; d < EMB_DIM; ++d) a[d] += w * rv[d];
                     }
                 }
             }
@@ -2933,20 +2933,20 @@ static inline void ai_embed_build(AI *ai) {
      * 去掉公共方向之后，留下的是「这个词**特别**的上下文」。这是 embedding
      * 后处理的常规做法（all-but-the-top），这里用幂迭代取前 3 个方向，
      * 固定初值、固定轮数 → 完全确定性。 */
-    float *E = (float *)calloc(n * VSA_DIM, sizeof(float));
-    float *mu = (float *)calloc(VSA_DIM, sizeof(float));
-    float *v = (float *)malloc(VSA_DIM * sizeof(float));
+    float *E = (float *)calloc(n * EMB_DIM, sizeof(float));
+    float *mu = (float *)calloc(EMB_DIM, sizeof(float));
+    float *v = (float *)malloc(EMB_DIM * sizeof(float));
     float *u = (float *)malloc(n * sizeof(float));
     if (!E || !mu || !v || !u) {
         /* 内存不够就退回「不做后处理」的老路，至少还有向量 */
         for (size_t i = 0; i < n; ++i) {
             Token *t = p->tokens[i];
             if (!t->emb) continue;
-            int32_t *a = acc + i * VSA_DIM;
+            int32_t *a = acc + i * EMB_DIM;
             int32_t mx = 0;
-            for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
-            if (mx == 0) { memset(t->emb, 0, VSA_DIM); continue; }
-            for (size_t d = 0; d < VSA_DIM; ++d) {
+            for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+            if (mx == 0) { memset(t->emb, 0, EMB_DIM); continue; }
+            for (size_t d = 0; d < EMB_DIM; ++d) {
                 int32_t q2 = (int32_t)(((int64_t)a[d] * 120) / mx);
                 if (q2 > 127) q2 = 127;
                 if (q2 < -128) q2 = -128;
@@ -2958,38 +2958,38 @@ static inline void ai_embed_build(AI *ai) {
     }
     size_t used = 0;
     for (size_t i = 0; i < n; ++i) {
-        int32_t *a = acc + i * VSA_DIM;
+        int32_t *a = acc + i * EMB_DIM;
         int32_t mx = 0;
-        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
         if (mx == 0) continue;                       /* 空向量不参与统计 */
-        float *e = E + i * VSA_DIM;
-        for (size_t d = 0; d < VSA_DIM; ++d) e[d] = (float)a[d] / (float)mx;
+        float *e = E + i * EMB_DIM;
+        for (size_t d = 0; d < EMB_DIM; ++d) e[d] = (float)a[d] / (float)mx;
         used++;
-        for (size_t d = 0; d < VSA_DIM; ++d) mu[d] += e[d];
+        for (size_t d = 0; d < EMB_DIM; ++d) mu[d] += e[d];
     }
     if (used == 0) {
         free(acc); free(marg); free(rv); free(E); free(mu); free(v); free(u); free(df);
         return;
     }
-    for (size_t d = 0; d < VSA_DIM; ++d) mu[d] /= (float)used;
+    for (size_t d = 0; d < EMB_DIM; ++d) mu[d] /= (float)used;
     for (size_t i = 0; i < n; ++i) {
-        int32_t *a = acc + i * VSA_DIM;
+        int32_t *a = acc + i * EMB_DIM;
         int32_t mx = 0;
-        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
         if (mx == 0) continue;
-        float *e = E + i * VSA_DIM;
-        for (size_t d = 0; d < VSA_DIM; ++d) e[d] -= mu[d];
+        float *e = E + i * EMB_DIM;
+        for (size_t d = 0; d < EMB_DIM; ++d) e[d] -= mu[d];
     }
     /* 前 3 个主成分：幂迭代 + 逐次 deflate */
     {
-        double inv = 1.0 / sqrt((double)VSA_DIM);
+        double inv = 1.0 / sqrt((double)EMB_DIM);
         for (int comp = 0; comp < 3; ++comp) {
-            for (size_t d = 0; d < VSA_DIM; ++d) v[d] = (float)inv;   /* 固定初值 */
+            for (size_t d = 0; d < EMB_DIM; ++d) v[d] = (float)inv;   /* 固定初值 */
             for (int it = 0; it < 8; ++it) {
                 for (size_t i = 0; i < n; ++i) {
-                    float *e = E + i * VSA_DIM;
+                    float *e = E + i * EMB_DIM;
                     float acc2 = 0;
-                    for (size_t d = 0; d < VSA_DIM; ++d) acc2 += e[d] * v[d];
+                    for (size_t d = 0; d < EMB_DIM; ++d) acc2 += e[d] * v[d];
                     u[i] = acc2;
                 }
                 double nu = 0;
@@ -2997,27 +2997,27 @@ static inline void ai_embed_build(AI *ai) {
                 if (nu <= 0) break;
                 nu = sqrt(nu);
                 for (size_t i = 0; i < n; ++i) u[i] = (float)(u[i] / nu);
-                for (size_t d = 0; d < VSA_DIM; ++d) v[d] = 0;
+                for (size_t d = 0; d < EMB_DIM; ++d) v[d] = 0;
                 for (size_t i = 0; i < n; ++i) {
-                    float *e = E + i * VSA_DIM;
+                    float *e = E + i * EMB_DIM;
                     float ui = u[i];
                     if (ui == 0) continue;
-                    for (size_t d = 0; d < VSA_DIM; ++d) v[d] += e[d] * ui;
+                    for (size_t d = 0; d < EMB_DIM; ++d) v[d] += e[d] * ui;
                 }
                 double nv = 0;
-                for (size_t d = 0; d < VSA_DIM; ++d) nv += (double)v[d] * (double)v[d];
+                for (size_t d = 0; d < EMB_DIM; ++d) nv += (double)v[d] * (double)v[d];
                 if (nv <= 0) break;
                 nv = sqrt(nv);
-                for (size_t d = 0; d < VSA_DIM; ++d) v[d] = (float)(v[d] / nv);
+                for (size_t d = 0; d < EMB_DIM; ++d) v[d] = (float)(v[d] / nv);
             }
             /* 从每个向量里减掉在主方向上的投影 */
             for (size_t i = 0; i < n; ++i) {
-                float *e = E + i * VSA_DIM;
+                float *e = E + i * EMB_DIM;
                 /* 只对有向量的词做：空向量的 E 行是 0，投影也是 0，不影响 */
                 float p2 = 0;
-                for (size_t d = 0; d < VSA_DIM; ++d) p2 += e[d] * v[d];
+                for (size_t d = 0; d < EMB_DIM; ++d) p2 += e[d] * v[d];
                 if (p2 == 0) continue;
-                for (size_t d = 0; d < VSA_DIM; ++d) e[d] -= p2 * v[d];
+                for (size_t d = 0; d < EMB_DIM; ++d) e[d] -= p2 * v[d];
             }
         }
     }
@@ -3025,15 +3025,15 @@ static inline void ai_embed_build(AI *ai) {
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
         if (!t->emb) continue;
-        int32_t *a = acc + i * VSA_DIM;
+        int32_t *a = acc + i * EMB_DIM;
         int32_t mx = 0;
-        for (size_t d = 0; d < VSA_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
-        if (mx == 0) { memset(t->emb, 0, VSA_DIM); continue; }
-        float *e = E + i * VSA_DIM;
+        for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
+        if (mx == 0) { memset(t->emb, 0, EMB_DIM); continue; }
+        float *e = E + i * EMB_DIM;
         float p3 = 0;
-        for (size_t d = 0; d < VSA_DIM; ++d) { float q3 = e[d] < 0 ? -e[d] : e[d]; if (q3 > p3) p3 = q3; }
-        if (p3 <= 0) { memset(t->emb, 0, VSA_DIM); continue; }
-        for (size_t d = 0; d < VSA_DIM; ++d) {
+        for (size_t d = 0; d < EMB_DIM; ++d) { float q3 = e[d] < 0 ? -e[d] : e[d]; if (q3 > p3) p3 = q3; }
+        if (p3 <= 0) { memset(t->emb, 0, EMB_DIM); continue; }
+        for (size_t d = 0; d < EMB_DIM; ++d) {
             int32_t q4 = (int32_t)((e[d] / p3) * 120.0f);
             if (q4 > 127) q4 = 127;
             if (q4 < -128) q4 = -128;
@@ -4659,17 +4659,8 @@ static inline void ai_social_feedback(AI *ai, OtherModel *om, int feedback) {
     float target = (feedback > 0) ? 1.0f : 0.0f;
     om->trust = om->trust * 0.9f + target * 0.1f;
     om->n_interactions++;
-    if (om->who && om->who->hv) {
-        Token *marker = (feedback > 0) ? ai->social_good : ai->social_bad;
-        if (marker && marker->hv) {
-            Token *r = pool_token(ai->pool, NULL, NULL);
-            if (r && r->hv) {
-                vsa_bind(om->who->hv, marker->hv, r->hv);
-                r->perspective_of = om->who;
-                token_add_assoc_unique(om->who, r);
-            }
-        }
-    }
+    /* §6.299 无名节点**删掉**：原来这里造一个无名节点只为挂 `trust` 的两条边，
+     * 没有任何消费者读它。`trust` / `n_interactions` 照常更新。 */
 }
 static inline OtherModel *ai_identify_speaker(AI *ai, char **words, size_t n) {
     if (!ai || !words || n == 0) return NULL;
@@ -4764,22 +4755,22 @@ static inline void ai_imagine(AI *ai) {
     if (i == j) return;
     Token *a = ai->focus_ring[i];
     Token *b = ai->focus_ring[j];
-    if (!a || !b || !a->hv || !b->hv || a->is_garbage || b->is_garbage) return;
+    if (!a || !b || a->is_garbage || b->is_garbage) return;
 
-    Token *r = pool_token(ai->pool, NULL, NULL);
-    if (!r || !r->hv) return;
-    vsa_bind(a->hv, b->hv, r->hv);
-    /* **自撰写入走统一通道**（第 6 条尾巴 / §B.2 那条"老写入者绕过安全内核"）：
-     * 想象出来的东西是**它自己想出来的**，`route_writes` 打开时该和别的自撰一样受审。
-     * 注意 `pool_token` 只是**造节点**（结构），这里路由的是**边**。 */
-    (void)ai_write_assoc(ai, r, a, AI_WSRC_IMAGINE);
-    (void)ai_write_assoc(ai, r, b, AI_WSRC_IMAGINE);
-    Token *marker = pool_token_intern(ai->pool, "[想象]");
-    (void)ai_write_assoc(ai, r, marker, AI_WSRC_IMAGINE);
-    (void)ai_write_assoc(ai, ai->self, r, AI_WSRC_IMAGINE);
+    /* §6.299 **想象的载体换了**（外部评审拍板的方案 1）：不造节点、不绑向量，
+     * 直接把两个焦点词**连起来**，边上标 `ASSOC_ROLE_IMAGINED`。
+     * 好处：零新字段（role 字节本来就在存档里）、边可存盘可衰减、
+     * 一眼看得出"这条不是听到的，是它自己想出来的"。
+     * 也不设 `rel` 位 ⇒ 不污染关系知识（rel_direct 看不到它）。 */
+    (void)ai_write_assoc(ai, a, b, AI_WSRC_IMAGINE);
+    (void)ai_write_assoc(ai, b, a, AI_WSRC_IMAGINE);
+    {
+        AssocEntry *e = token_find_assoc_action(a, b, NULL);
+        if (e) e->role = ASSOC_ROLE_IMAGINED;
+        e = token_find_assoc_action(b, a, NULL);
+        if (e) e->role = ASSOC_ROLE_IMAGINED;
+    }
     ai->n_imaginations++;
-    if (ai->inner.comfort > 0.8f && ai->inner.arousal < 0.3f)
-        r->mem_state = MEM_FADING;
 }
 
 /* ============================ 类比 ============================ */
@@ -4803,8 +4794,8 @@ static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
     if (!ai || !item_a || !pair_ab || !item_c) return NULL;
     if (!item_a->emb || !pair_ab->emb || !item_c->emb) return NULL;
     /* 查询向量用 float 累加（emb 是 int8，直接相加会溢出） */
-    int16_t q[VSA_DIM];
-    for (size_t d = 0; d < VSA_DIM; ++d) {
+    int16_t q[EMB_DIM];
+    for (size_t d = 0; d < EMB_DIM; ++d) {
         int v = (int)item_c->emb[d] + (int)pair_ab->emb[d] - (int)item_a->emb[d];
         if (v > 127) v = 127;
         if (v < -128) v = -128;
@@ -4818,7 +4809,7 @@ static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
         if (!t->name || t->name[0] == '[') continue;
         if (t == item_a || t == pair_ab || t == item_c) continue;
         double dot = 0, nq = 0, nt = 0;
-        for (size_t d = 0; d < VSA_DIM; ++d) {
+        for (size_t d = 0; d < EMB_DIM; ++d) {
             dot += (double)q[d] * (double)t->emb[d];
             nq  += (double)q[d] * (double)q[d];
             nt  += (double)t->emb[d] * (double)t->emb[d];
@@ -5009,27 +5000,12 @@ static inline int ai_eval_cmp(const char *expr, int *out) {
     return 0;                             /* 认不出形状 ⇒ 判不了（绝不默认成立） */
 }
 
-/* ============================ 漂移 ============================ */
-
-static inline void ai_drift_sample(AI *ai) {
-    if (!ai) return;
-    TokenPool *p = ai->pool;
-    for (size_t i = 0; i < p->count; ++i) {
-        Token *t = p->tokens[i];
-        if (t->is_garbage || !t->hv || !t->hv_prev) continue;
-        if (t->name && t->name[0] == '[') continue;
-        float sim = vsa_cosine(t->hv, t->hv_prev);
-        float drift = 1.0f - sim;
-        if (drift > 0.30f) {
-            char name[64];
-            snprintf(name, sizeof name, "[漂移:%s]", t->name ? t->name : "?");
-            Token *d = pool_token_intern(ai->pool, name);
-            if (d) (void)ai_write_assoc(ai, ai->self, d, AI_WSRC_INNER);   /* 自撰写入：走统一通道 */
-            ai->n_drifts_detected++;
-        }
-        memcpy(t->hv_prev, t->hv, VSA_DIM);
-    }
-}
+/* ============================ 漂移（§6.299 删除） ============================
+ * 原来比较 hv 与 hv_prev 的余弦来量"漂移"。实测 1198/1198 个符号节点的两份向量
+ * 完全相同（hv 建成后只有 memcpy）⇒ 漂移恒 0，是假信号；唯一非零来自想象造的
+ * 无名节点（被 vsa_bind 覆盖）。hv 删掉后它没有载体，**整个采样器删除**。
+ * `drift_sample_every` / `n_drifts_detected` 两个字段仍在存档里（为了 v13 兼容
+ * 读取不重排），但已无写入方 —— 当作历史残留，`::drift` 命令一并删除。 */
 
 /* ============================ 叙事 ============================ */
 
@@ -5119,7 +5095,7 @@ static inline void ai_diagnose(AI *ai) {
     float div = ai_lexical_diversity(ai);
     size_t p_n = ai->pool->perspective_n;
     size_t abs_n = ai->n_abstractions;
-    size_t imag_n = ai->n_imaginations, useful_n = ai->n_imagine_useful;
+    size_t imag_n = ai->n_imaginations;   /* `n_imagine_useful` 恒 0（全仓没有 ++），不再参与判定 */
 
     if (ai->diag.prev_lexical_diversity > 0 &&
         div < ai->diag.prev_lexical_diversity - 0.15f) {
@@ -5137,8 +5113,9 @@ static inline void ai_diagnose(AI *ai) {
         if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
     }
-    if (imag_n > ai->diag.prev_imaginations + 20 &&
-        useful_n <= ai->diag.prev_imagine_useful) {
+    /* `n_imagine_useful` 恒 0（全仓没有 ++）⇒ 原来这个条件等价于"想象超过 20 次就报噪声"。
+     * 现在只剩前半条，语义仍是"想象次数异常增长"（§6.299 指出那个计数器是摆设）。 */
+    if (imag_n > ai->diag.prev_imaginations + 20) {
         Token *d = pool_token_intern(ai->pool, "[诊断:想象噪声]");
         if (d) token_add_assoc_unique(ai->self, d);
         ai->n_diagnoses++;
@@ -5147,7 +5124,6 @@ static inline void ai_diagnose(AI *ai) {
     ai->diag.prev_perspective_n = p_n;
     ai->diag.prev_abstractions = abs_n;
     ai->diag.prev_imaginations = imag_n;
-    ai->diag.prev_imagine_useful = useful_n;
     ai->diag.last_diag_tick = ai->pool->current_tick;
 }
 

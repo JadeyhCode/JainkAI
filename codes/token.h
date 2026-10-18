@@ -32,8 +32,8 @@
 #ifndef TOKEN_HASH_INIT
 #define TOKEN_HASH_INIT 16u
 #endif
-#ifndef VSA_DIM
-#define VSA_DIM 1024
+#ifndef EMB_DIM
+#define EMB_DIM 1024
 #endif
 
 #define TOKEN_SEQ_NONE ((uint32_t)-1)
@@ -97,6 +97,10 @@ typedef enum {
      * 回边（`[回边]`）。它要解决的就是四选一里那个问题：**过程边与共现边分不开**。
      * role 一直是序列化字段（0~5 已用，还剩 250 个值）⇒ **存档布局不动**。 */
     ASSOC_ROLE_PROCESS = 6,
+    /* §6.299 **想象出来的边**：`ai_imagine` 把两个焦点词直接连起来（不造节点、不绑向量）。
+     * 角色字节本来就在存档里 ⇒ 零格式改动；它可存盘、可衰减，并且能一眼看出
+     * "这条不是听到的，是它自己想出来的"。 */
+    ASSOC_ROLE_IMAGINED = 7,
 } AssocRole;
 
 /* 来源档的中文名（一份，谁要显示都调它 —— 别在几个地方各写一遍）。 */
@@ -108,6 +112,7 @@ static inline const char *assoc_role_name(uint8_t role) {
     case ASSOC_ROLE_DERIVED: return "推论";
     case ASSOC_ROLE_INNATE:  return "基准";
     case ASSOC_ROLE_PROCESS: return "过程";
+    case ASSOC_ROLE_IMAGINED: return "想象";
     default:                 return "共现";
     }
 }
@@ -252,12 +257,10 @@ struct Token {
     uint8_t     mem_state;
     TokenPool  *owner;
     const char *name;
-    int8_t     *hv;
-    int8_t     *hv_prev;
-    /* emb = **学出来的**分布式表示（1024 维 int8）。
-     * 和 hv 的区别：hv 是「名字的随机投影」（vsa_init(hash(name))），只适合做
-     * bind/unbind 代数；emb 是从图的邻居按 PPMI 加权做**随机索引**投影出来的，
-     * 所以语义相关的词余弦真的会高。
+    /* emb = **学出来的**分布式表示（1024 维 int8）：从图的邻居按 PPMI 加权做
+     * **随机索引**投影出来的，所以语义相关的词余弦真的会高。
+     * §6.299 删掉了 hv/hv_prev（名字的随机投影 + VSA 绑定代数）：它们不进任何
+     * 对话/推理路径，占存档 2/3，而且 hv_prev 与 hv 恒等（漂移指标结构上恒 0）。
      * emb 是 (边 + hits + 稳定 id) 的确定性函数 → **不进模型文件**，
      * 训练收尾和读盘之后各现算一遍（见 ai_embed_build）。 */
     int8_t     *emb;
@@ -767,46 +770,6 @@ static inline Token *token_cache_take(TokenPool *p) {
     return h;
 }
 
-/* ============================ VSA 核心 ============================ */
-
-static inline void vsa_init(int8_t *hv, uint32_t seed) {
-    uint32_t x = seed ? seed : 0x9E3779B9u;
-    for (size_t i = 0; i < VSA_DIM; ++i) {
-        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-        hv[i] = (x & 1) ? 1 : -1;
-    }
-}
-static inline void vsa_bind(const int8_t *a, const int8_t *b, int8_t *out) {
-    for (size_t i = 0; i < VSA_DIM; ++i) out[i] = a[i] * b[i];
-}
-static inline void vsa_unbind(const int8_t *bound, const int8_t *role, int8_t *out) {
-    for (size_t i = 0; i < VSA_DIM; ++i) out[i] = bound[i] * role[i];
-}
-static inline void vsa_bundle(const int8_t *const *vecs, size_t n, int8_t *out) {
-    if (n == 0) { for (size_t i = 0; i < VSA_DIM; ++i) out[i] = 1; return; }
-    int32_t *acc = (int32_t *)calloc(VSA_DIM, sizeof(int32_t));
-    if (!acc) { for (size_t i = 0; i < VSA_DIM; ++i) out[i] = 1; return; }
-    for (size_t k = 0; k < n; ++k)
-        for (size_t i = 0; i < VSA_DIM; ++i) acc[i] += vecs[k][i];
-    for (size_t i = 0; i < VSA_DIM; ++i) out[i] = (acc[i] >= 0) ? 1 : -1;
-    free(acc);
-}
-static inline float vsa_cosine(const int8_t *a, const int8_t *b) {
-    int32_t dot = 0;
-    for (size_t i = 0; i < VSA_DIM; ++i) dot += a[i] * b[i];
-    return (float)dot / (float)VSA_DIM;
-}
-static inline void vsa_merge(int8_t *dst, const int8_t *src, float alpha) {
-    if (alpha < 0) alpha = 0;
-    if (alpha > 1) alpha = 1;
-    int32_t *acc = (int32_t *)malloc(VSA_DIM * sizeof(int32_t));
-    if (!acc) return;
-    for (size_t i = 0; i < VSA_DIM; ++i)
-        acc[i] = (int32_t)((float)dst[i] * (1.0f - alpha) + (float)src[i] * alpha);
-    for (size_t i = 0; i < VSA_DIM; ++i) dst[i] = (acc[i] >= 0) ? 1 : -1;
-    free(acc);
-}
-
 /* ============================ 哈希 ============================ */
 
 static inline uint32_t tok_hash_str(const char *s) {
@@ -868,7 +831,7 @@ static inline void pool_free(TokenPool *p) {
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (p->meaning_free && t->meaning) p->meaning_free(t->meaning);
-        free(t->assocs); free(t->hv); free(t->hv_prev); free(t->emb);
+        free(t->assocs); free(t->emb);
         free((void *)t->name); free(t);
     }
     free(p->tokens);
@@ -906,18 +869,11 @@ static inline Token *pool_token(TokenPool *p, const char *name, void *meaning) {
         memcpy(copy, name, len + 1);
         t->name = copy;
     }
-    t->hv      = (int8_t *)malloc(VSA_DIM);
-    t->hv_prev = (int8_t *)malloc(VSA_DIM);
-    t->emb     = (int8_t *)calloc(VSA_DIM, 1);   /* 全 0 = 还没算过 */
-    if (!t->hv || !t->hv_prev || !t->emb) {
-        free(t->hv); free(t->hv_prev); free(t->emb);
+    t->emb = (int8_t *)calloc(EMB_DIM, 1);       /* 全 0 = 还没算过 */
+    if (!t->emb) {
         free((void *)t->name); free(t);
         return NULL;
     }
-    uint32_t seed = t->name ? tok_hash_str(t->name)
-                            : (uint32_t)p->count ^ (uint32_t)p->current_tick;
-    vsa_init(t->hv, seed);
-    memcpy(t->hv_prev, t->hv, VSA_DIM);
 
     t->id = (uint32_t)p->count;
     t->meaning = meaning;
@@ -948,7 +904,6 @@ static inline Token *pool_token_intern(TokenPool *p, const char *name) {
                 t->last_touch_tick = p->current_tick;
                 t->mem_state = MEM_ACTIVE;
                 t->misses = 0; t->recent_misses = 0;
-                if (t->hv && t->hv_prev) memcpy(t->hv_prev, t->hv, VSA_DIM);
             }
             return t;
         }
@@ -1618,36 +1573,6 @@ static inline Token *pool_current_perspective(const TokenPool *p) {
 static inline void pool_push_perspective(TokenPool *p, Token *who) { perspective_enter(p, who); }
 static inline void pool_pop_perspective(TokenPool *p) { perspective_exit(p); }
 
-static inline void vsa_bind_perspective(const TokenPool *p,
-                                        const int8_t *content, int8_t *out) {
-    memcpy(out, content, VSA_DIM);
-    if (!p || !p->perspective_cur) return;
-    PerspectiveNode *n = p->perspective_cur;
-    while (n && n->who && n->who->hv) {
-        vsa_bind(out, n->who->hv, out);
-        n = n->parent;
-    }
-}
-static inline void vsa_unbind_perspective(const TokenPool *p,
-                                          const int8_t *bound, int8_t *out) {
-    memcpy(out, bound, VSA_DIM);
-    if (!p || !p->perspective_cur) return;
-    Token *path[32];
-    size_t d = perspective_path(p, path, 32);
-    for (size_t i = 0; i < d; ++i)
-        if (path[i] && path[i]->hv) vsa_unbind(out, path[i]->hv, out);
-}
-static inline void vsa_unbind_to_depth(const TokenPool *p, uint32_t depth,
-                                       const int8_t *bound, int8_t *out) {
-    memcpy(out, bound, VSA_DIM);
-    if (!p || !p->perspective_cur) return;
-    PerspectiveNode *n = p->perspective_cur;
-    while (n && n->depth > depth && n->who && n->who->hv) {
-        vsa_unbind(out, n->who->hv, out);
-        n = n->parent;
-    }
-}
-
 /* ============================ VSA 检索 ============================ */
 
 /* ---- 随机索引（random indexing）嵌入 ----
@@ -1675,13 +1600,13 @@ static inline void emb_randvec(uint32_t id, int8_t *out) {
         tab_ready = 1;
     }
     uint64_t x = 0x9E3779B97F4A7C15ULL ^ ((uint64_t)id * 0xBF58476D1CE4E5B9ULL);
-    for (size_t i = 0; i < VSA_DIM; i += 64) {
+    for (size_t i = 0; i < EMB_DIM; i += 64) {
         x += 0x9E3779B97F4A7C15ULL;
         uint64_t z = x;
         z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
         z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
         z = z ^ (z >> 31);
-        for (size_t k = 0; k < 64 && i + k < VSA_DIM; k += 8)
+        for (size_t k = 0; k < 64 && i + k < EMB_DIM; k += 8)
             memcpy(out + i + k, tab[(z >> k) & 0xFFu], 8);
     }
 }
@@ -1691,7 +1616,7 @@ static inline void emb_randvec(uint32_t id, int8_t *out) {
 static inline float emb_cosine(const int8_t *a, const int8_t *b) {
     if (!a || !b) return 0.0f;
     int64_t dot = 0, na = 0, nb = 0;
-    for (size_t i = 0; i < VSA_DIM; ++i) {
+    for (size_t i = 0; i < EMB_DIM; ++i) {
         dot += (int)a[i] * (int)b[i];
         na  += (int)a[i] * (int)a[i];
         nb  += (int)b[i] * (int)b[i];
@@ -1712,22 +1637,6 @@ static inline Token *pool_query_emb(const TokenPool *p, const int8_t *query,
         if (t->is_garbage || !t->emb) continue;
         if (t->name && t->name[0] == '[') continue;
         float s = emb_cosine(query, t->emb);
-        if (s > best_sim) { best_sim = s; best = t; }
-    }
-    if (out_sim) *out_sim = best ? best_sim : 0.0f;
-    return best;
-}
-
-static inline Token *pool_query_vsa(TokenPool *p, const int8_t *query,
-                                    float threshold, float *out_sim) {
-    if (!p || !query) return NULL;
-    Token *best = NULL;
-    float best_sim = threshold;
-    for (size_t i = 0; i < p->count; ++i) {
-        Token *t = p->tokens[i];
-        if (t->is_garbage || !t->hv) continue;
-        if (t->name && t->name[0] == '[') continue;
-        float s = vsa_cosine(query, t->hv);
         if (s > best_sim) { best_sim = s; best = t; }
     }
     if (out_sim) *out_sim = best ? best_sim : 0.0f;

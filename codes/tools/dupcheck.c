@@ -132,7 +132,7 @@ int main(void) {
         }
         ok(dup == 0, "PRIMS 里名字不重复（以前 prim_kind 与 pool_init_prims 各写一份）");
         ok(dead == 0, "PRIMS 里没有 kind 落空的条目");
-        ok(prim_count() >= 37, "PRIMS 条数与实现相符（含符号节点行为入口）");
+        ok(prim_count() >= 31, "PRIMS 条数与实现相符（§6.299 删 6 条 VSA 原语后 31 条）");
         AI *ai = ai_new();
         pool_init_prims(ai->pool);
         size_t miss = 0;

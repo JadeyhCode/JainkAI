@@ -201,8 +201,17 @@ static void test_no_fabrication_from_rehearsal(void) {
     size_t rel1 = count_rel_edges(ai);
     for (int k = 0; k < 200; ++k) ai_imagine(ai);
     ok(count_rel_edges(ai) == rel1, "想象跑了 200 次也没有长出一条关系事实边");
-    ok(ai->n_imaginations == 0 || pool_find(ai->pool, "[想象]") != NULL,
-       "想象出来的东西挂的是 [想象] 标记（可辨识，不当观测）");
+    {   /* §6.299：想象改成 role=想象 的边（不再造节点、不再有 [想象] 标记节点） */
+        size_t role_edges = 0;
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (!t) continue;
+            for (size_t j = 0; j < t->count; ++j)
+                if (t->assocs[j].role == ASSOC_ROLE_IMAGINED) role_edges++;
+        }
+        ok(ai->n_imaginations == 0 || role_edges > 0,
+           "想象写的是 role=想象 的边（可辨识，不当观测）");
+    }
     ai_free(ai);
 }
 

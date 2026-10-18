@@ -64,8 +64,8 @@ elif [ -n "$legacy_use" ]; then
 else
     ok "语境（subs/subs_not）字段已从 AssocEntry 删掉，且全仓没有访问点（v10，省 64 字节/条）"
 fi
-grep -q '^#define MODEL_VERSION 13u' "$ROOT/model_io.h" \
-    && ok "存档版本 = 13（§6.110 加了 N1 摘要段；v10 及更早仍读得回来）" \
+grep -q '^#define MODEL_VERSION 14u' "$ROOT/model_io.h" \
+    && ok "存档版本 = 14（§6.299 删 hv/hv_prev；v13 及更早仍读得回来）" \
     || bad "存档版本" "$(grep -m1 'MODEL_VERSION' "$ROOT/model_io.h")"
 run '::tokens 12\n' o3b
 has '分类=1' "$(cat o3b)" && ok "类别继承：模型里已有自动抽象类别（分类=1）" || ok "类别继承机制在位"
@@ -112,12 +112,9 @@ has '耦合表' "$(cat o3e)" && ok "驱动参与决策：耦合表列得出来�
 has '现在命中' "$(cat o3e)" && ok "表里标出**现在命中的那一行**（可解释）" \
     || ok "耦合表在，当前没有命中的行（也算正常）"
 
-echo "== 4. VSA 结构表示：绑定 / 解绑 / 捆绑 / 检索 =="
-run '::asm [原语:对象] 猫 [原语:对象] 动物 [原语:绑定] [原语:检索]\n::stats\n' o4
-has '执行了' "$(cat o4)" && ok "绑定→检索 原语链执行完成" || bad "VSA 原语" "$(cat o4)"
-run '::asm [原语:对象] 猫 [原语:对象] 动物 [原语:嵌套] [原语:展开]\n' o4b
-has '执行了' "$(cat o4b)" && ok "嵌套→展开（视角树绑定）执行完成" || bad "嵌套/展开" "$(cat o4b)"
-
+echo "== 4. 结构表示：嵌套 / 展开（§6.299 后不再有向量绑定）=="
+run '::asm [原语:对象] 猫 [原语:对象] 动物 [原语:嵌套] [原语:展开]\n::stats\n' o4
+has '执行了' "$(cat o4)" && ok "嵌套→展开 原语链执行完成" || bad "嵌套/展开" "$(cat o4)"
 echo "== 5. 元认知：置信度 / 知道感 / 七档表达 / 空缺感 =="
 run '猫\n::edges 猫\n' o5
 has '置信=[0-9]' "$(cat o5)" && ok "置信度快照可见" || bad "置信度" "$(grep '置信' o5)"

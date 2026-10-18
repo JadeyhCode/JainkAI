@@ -64,8 +64,6 @@ static void fingerprint_dims(const AI *ai) {
         MIXH(hp, t->parent ? t->parent->id : TOKEN_ID_NONE);
         MIXH(hp, t->next_in_time ? t->next_in_time->id : TOKEN_ID_NONE);
         MIXH(hp, t->perspective_of ? t->perspective_of->id : TOKEN_ID_NONE);
-        if (t->hv) for (size_t k = 0; k < VSA_DIM; ++k) MIXH(hhv, (uint8_t)t->hv[k]);
-        if (t->hv_prev) for (size_t k = 0; k < VSA_DIM; ++k) MIXH(hhv, (uint8_t)t->hv_prev[k]);
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &t->assocs[j];
             MIXH(he, e->main ? e->main->id : TOKEN_ID_NONE);
@@ -837,11 +835,7 @@ static const CmdDef CMDS[] = {
       "周期性那条每 `narrate_every`(500) 轮跑一次；这里能**当场**看/跑：\n"
       "::narrate      看最近一次叙事（哪个轮次、说了什么）与累计次数\n"
       "::narrate now  当场跑一次（与周期性那条同一处实现，走统一写入通道）", CMD_NARRATE },
-    { "drift", NULL, 1, "内生状态 / 情绪",
-      "**漂移**（§6.141）：按 VSA 余弦比「这个词的表示和上一版差多少」，>0.30 记一个 `[漂移:…]`\n"
-      "（挂在 `ai->self` 上，自撰写入走统一通道）。周期性那条每 `drift_sample_every`(200) 轮跑一次。\n"
-      "::drift      看累计探测数 / 最近一次采到几个\n"
-      "::drift now  当场采一次（跑完报这一次探到几个）", CMD_DRIFT },
+
     { "mod", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
       "自修改总开关（默认 on）；不给参数看状态与最近应用\n::mod coact|gap|prune [on|off]  单个检测器：共现固化 / 缺口命名 / 休眠剪枝\n::mod try 加边|加符号节点|打关系|删边|强化 …  手动提一条意图（调试入口，走的同一条\n审查/应用链路；它不是自修改，自修改必须是系统自己提的）", CMD_MOD },
     { "safe", NULL, 1, "微内核（自修改 / 安全内核 / 补丁）",
@@ -1702,26 +1696,6 @@ int main(int argc, char **argv) {
                     else
                         printf("  还没说过（周期性那条要 %zu 轮；想现在看就 `::narrate now`）\n",
                                a->brain->narrate_every);
-                }
-                continue;
-            }
-            case CMD_DRIFT: {
-                /* §6.141 漂移显形：看计数 / now 当场采一次。 */
-                const char *arg = (cmd[5] == ' ') ? cmd + 6 : NULL;
-                while (arg && *arg == ' ') arg++;
-                if (arg && !strcmp(arg, "now")) {
-                    size_t before = a->brain->n_drifts_detected;
-                    ai_drift_sample(a->brain);
-                    a->brain->n_drift_last = a->brain->n_drifts_detected - before;
-                    printf("[漂移] 现场采一次：这次探到 %zu 个（累计 %zu）\n",
-                           a->brain->n_drift_last, a->brain->n_drifts_detected);
-                } else if (arg && *arg) { printf("[用法] ::drift [now]\n"); continue; }
-                else {
-                    printf("[漂移 = 每 %zu 轮采一次]  累计探到 %zu 个",
-                           a->brain->drift_sample_every, a->brain->n_drifts_detected);
-                    if (a->brain->n_drift_last) printf("  最近一次 %zu 个", a->brain->n_drift_last);
-                    printf("\n");
-                    printf("  判据：表示（VSA）和上一版余弦差 > 0.30 ⇒ 记 `[漂移:词]` 挂到「我」名下\n");
                 }
                 continue;
             }
@@ -3002,11 +2976,10 @@ int main(int argc, char **argv) {
                     Token *t = B->pool->tokens[i];
                     if (!t || !t->name) continue;
                     uint64_t h1 = 1469598103934665603ull, h2 = h1, h3 = h1;
-                    for (int k = 0; k < VSA_DIM; ++k) {
-                        if (t->hv)      { h1 = (h1 ^ (uint8_t)t->hv[k])      * 1099511628211ull; }
-                        if (t->hv_prev) { h2 = (h2 ^ (uint8_t)t->hv_prev[k]) * 1099511628211ull; }
+                    for (int k = 0; k < EMB_DIM; ++k) {
                         if (t->emb)     { h3 = (h3 ^ (uint8_t)t->emb[k])     * 1099511628211ull; }
                     }
+                    (void)h1; (void)h2;   /* §6.299 hv/hv_prev 已删：这两个哈希没有载体了 */
                     uint32_t ib = 0; float iv = 0.0f;
                     /* §6.196 边界用 `idf_n`（数组真实长度），不是 `pool->count`：
                      * 重建 idf 之后还会造词，用当前词数当边界就**越界读**
@@ -3271,7 +3244,7 @@ int main(int argc, char **argv) {
                 Token *t = pool_token_intern(a->brain->pool, arg);
                 if (!t) { printf("[取不到这个词]\n"); continue; }
                 int nz = 0;
-                if (t->emb) for (size_t d = 0; d < VSA_DIM; ++d) if (t->emb[d]) { nz = 1; break; }
+                if (t->emb) for (size_t d = 0; d < EMB_DIM; ++d) if (t->emb[d]) { nz = 1; break; }
                 if (!nz) {
                     printf("[%s] 还没有分布式表示（图里没有它的边）\n", arg);
                     continue;

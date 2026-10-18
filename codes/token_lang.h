@@ -32,12 +32,6 @@
 #define PRIM_TIME_BEFORE  "[原语:之前]"
 #define PRIM_TIME_AFTER   "[原语:之后]"
 #define PRIM_TIME_CHAIN   "[原语:时间链]"
-#define PRIM_BIND         "[原语:绑定]"
-#define PRIM_UNBIND       "[原语:解绑]"
-#define PRIM_BUNDLE       "[原语:捆绑]"
-#define PRIM_QUERY        "[原语:检索]"
-#define PRIM_EXTRACT_REL  "[原语:抽关系]"
-#define PRIM_APPLY_REL    "[原语:套关系]"
 /* ---- 符号节点行为（图操作）的原语入口：把「行为」写进语言层，用**已有的栈机**组合 ----
  *   [原语:对象] A [原语:对象] B [原语:插词]            在 A、B 之间插一个临时符号节点（经它中转）
  *   [原语:对象] A [原语:对象] B [原语:插词为] <名字>    同上，但中转符号节点用这个名字
@@ -77,8 +71,6 @@ typedef enum {
     PK_NEST, PK_EXPAND,
     PK_PERSPECTIVE, PK_BELIEVE, PK_QUOTE,
     PK_TIME_NOW, PK_TIME_BEFORE, PK_TIME_AFTER, PK_TIME_CHAIN,
-    PK_BIND, PK_UNBIND, PK_BUNDLE, PK_QUERY,
-    PK_EXTRACT_REL, PK_APPLY_REL,
     /* 符号节点行为的原语入口（它们不改图，只把请求交给宿主回调） */
     PK_PREMISE_TIE, PK_INSERT, PK_INSERT_NAMED, PK_COLLECT_TEMP, PK_PRE_ASSOC_NOT,
 } PrimKind;
@@ -205,12 +197,6 @@ static const PrimDef PRIMS[] = {
     { PRIM_TIME_BEFORE,  PK_TIME_BEFORE,   2, 2, 0, PF_NONE },
     { PRIM_TIME_AFTER,   PK_TIME_AFTER,    2, 2, 0, PF_NONE },
     { PRIM_TIME_CHAIN,   PK_TIME_CHAIN,    2, 0, 0, PF_NONE },     /* 整栈成链，不改栈 */
-    { PRIM_BIND,         PK_BIND,          2, 2, 1, PF_NONE },
-    { PRIM_UNBIND,       PK_UNBIND,        2, 2, 1, PF_NONE },
-    { PRIM_BUNDLE,       PK_BUNDLE,        1, 0, 0, PF_CLEAR },    /* 真实行为：整栈折成一个 */
-    { PRIM_QUERY,        PK_QUERY,         1, 1, 1, PF_INEXACT },  /* 没中就只推 0 个 */
-    { PRIM_EXTRACT_REL,  PK_EXTRACT_REL,   2, 2, 1, PF_NONE },
-    { PRIM_APPLY_REL,    PK_APPLY_REL,     2, 2, 1, PF_NONE },
     { PRIM_PRE_ASSOC_NOT, PK_PRE_ASSOC_NOT, 1, 1, 0, PF_NONE },    /* 反前提（[原语:前关联不]） */
     { PRIM_PREMISE_TIE,  PK_PREMISE_TIE,   3, 3, 0, PF_NONE },     /* 符号节点行为入口（见文件头注释） */
 
@@ -495,10 +481,14 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         Token *acc = ip->stack[ip->n - 1];
         for (size_t i = ip->n - 1; i > ip->stmt_start; --i) {
             Token *left = ip->stack[i - 1];
-            if (!left || !acc || !left->hv || !acc->hv) break;
-            Token *r = pool_token(ip->pool, NULL, NULL);
-            if (!r || !r->hv) break;
-            vsa_bind(left->hv, acc->hv, r->hv);
+            if (!left || !acc) break;
+            /* §6.299 不再用向量绑定：折出来的节点用**名字 + 边**当载体
+             * （`[嵌套:左+右]`，两边各一条关联边）——结构就是它的含义。 */
+            char nm[96];
+            snprintf(nm, sizeof nm, "[嵌套:%s+%s]",
+                     left->name ? left->name : "?", acc->name ? acc->name : "?");
+            Token *r = pool_token_intern(ip->pool, nm);
+            if (!r) break;
             token_add_assoc_unique(r, left);
             token_add_assoc_unique(r, acc);
             acc = r;
@@ -509,7 +499,7 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
     }
     case PK_EXPAND: {
         Token *nested = interp_pop(ip);
-        if (!nested || !nested->hv) break;
+        if (!nested) break;
         Token *left = NULL, *rest = NULL;
         for (size_t i = 0; i < nested->count; ++i) {
             if (!left) left = nested->assocs[i].main;
@@ -530,12 +520,17 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
     }
     case PK_BELIEVE: {
         Token *content = interp_pop(ip);
-        if (!content || !content->hv) break;
+        if (!content) break;
         Token *holder = pool_current_perspective(ip->pool);
-        if (!holder || !holder->hv) break;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) break;
-        vsa_bind_perspective(ip->pool, content->hv, r->hv);
+        if (!holder) break;
+        /* §6.299 结构载体：节点名带"谁的看法"，并记下 perspective_of。 */
+        char nm[96];
+        snprintf(nm, sizeof nm, "[看法:%s:%s]",
+                 holder->name ? holder->name : "?",
+                 content->name ? content->name : "?");
+        Token *r = pool_token_intern(ip->pool, nm);
+        if (!r) break;
+        r->perspective_of = holder;
         token_add_assoc_unique(r, holder);
         token_add_assoc_unique(r, content);
         r->perspective_of = holder;
@@ -585,80 +580,6 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
                 token_add_assoc_unique(a, b);
             }
         }
-        break;
-    }
-    case PK_BIND: {
-        Token *b = interp_pop(ip);
-        Token *a = interp_pop(ip);
-        if (!a || !b || !a->hv || !b->hv) break;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) break;
-        vsa_bind(a->hv, b->hv, r->hv);
-        token_add_assoc_unique(r, a);
-        token_add_assoc_unique(r, b);
-        interp_push(ip, r);
-        break;
-    }
-    case PK_UNBIND: {
-        Token *role  = interp_pop(ip);
-        Token *bound = interp_pop(ip);
-        if (!role || !bound || !role->hv || !bound->hv) break;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) break;
-        vsa_unbind(bound->hv, role->hv, r->hv);
-        token_add_assoc_unique(r, role);
-        token_add_assoc_unique(r, bound);
-        interp_push(ip, r);
-        break;
-    }
-    case PK_BUNDLE: {
-        size_t cnt = ip->n - ip->stmt_start;
-        if (cnt == 0) break;
-        const int8_t **vecs = (const int8_t **)malloc(cnt * sizeof *vecs);
-        if (!vecs) break;
-        size_t m = 0;
-        for (size_t i = ip->stmt_start; i < ip->n; ++i)
-            if (ip->stack[i]->hv) vecs[m++] = ip->stack[i]->hv;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) { free(vecs); break; }
-        vsa_bundle(vecs, m, r->hv);
-        for (size_t i = ip->stmt_start; i < ip->n; ++i)
-            token_add_assoc_unique(r, ip->stack[i]);
-        free(vecs);
-        ip->n = ip->stmt_start;
-        interp_push(ip, r);
-        break;
-    }
-    case PK_QUERY: {
-        Token *q = interp_pop(ip);
-        if (!q || !q->hv) break;
-        float sim = 0;
-        Token *match = pool_query_vsa(ip->pool, q->hv, 0.15f, &sim);
-        if (match) interp_push(ip, match);
-        break;
-    }
-    case PK_EXTRACT_REL: {
-        Token *pair = interp_pop(ip);
-        Token *item = interp_pop(ip);
-        if (!pair || !item || !pair->hv || !item->hv) break;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) break;
-        vsa_unbind(pair->hv, item->hv, r->hv);
-        token_add_assoc_unique(r, pair);
-        token_add_assoc_unique(r, item);
-        interp_push(ip, r);
-        break;
-    }
-    case PK_APPLY_REL: {
-        Token *rel = interp_pop(ip);
-        Token *item = interp_pop(ip);
-        if (!rel || !item || !rel->hv || !item->hv) break;
-        Token *r = pool_token(ip->pool, NULL, NULL);
-        if (!r || !r->hv) break;
-        vsa_bind(item->hv, rel->hv, r->hv);
-        token_add_assoc_unique(r, rel);
-        token_add_assoc_unique(r, item);
-        interp_push(ip, r);
         break;
     }
     default:

@@ -26,14 +26,14 @@ int main(int argc, char **argv) {
     if (!ai) { fprintf(stderr, "load failed: %s\n", path); return 1; }
     size_t n = ai->pool->count, e = 0;
     for (size_t i = 0; i < n; ++i) e += ai->pool->tokens[i]->count;
-    printf("tokens=%zu edges=%zu VSA_DIM=%d\n", n, e, VSA_DIM);
+    printf("tokens=%zu edges=%zu EMB_DIM=%d\n", n, e, EMB_DIM);
     printf("估算峰值：acc=int32[n*%d]=%.1f MB，E=float[n*%d]=%.1f MB（合计 %.1f MB）\n",
-           VSA_DIM, (double)n * VSA_DIM * 4.0 / 1048576.0,
-           VSA_DIM, (double)n * VSA_DIM * 4.0 / 1048576.0,
-           2.0 * (double)n * VSA_DIM * 4.0 / 1048576.0);
+           EMB_DIM, (double)n * EMB_DIM * 4.0 / 1048576.0,
+           EMB_DIM, (double)n * EMB_DIM * 4.0 / 1048576.0,
+           2.0 * (double)n * EMB_DIM * 4.0 / 1048576.0);
     /* rv 生成占多少：每条边的正/反向各生成一次 1024 维 ±1 向量 */
     {
-        int8_t rv[VSA_DIM];
+        int8_t rv[EMB_DIM];
         int reps2 = 100000;
         double r0 = now_ms();
         for (int i = 0; i < reps2; ++i) emb_randvec((uint32_t)i, rv);

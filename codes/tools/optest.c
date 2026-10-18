@@ -262,7 +262,7 @@ static void test_prim_stack(void) {
     }
     ok(dup == 0, "原语表里名字不重复（以前名字写在两处，现在只有这一张）");
     ok(dead == 0, "每条原语都有 kind（不会出现「表里有、识别不出」）");
-    ok(prim_count() >= 37, "原语表条数够（含新增的行为入口，含 [原语:前关联不]）");
+    ok(prim_count() >= 31, "原语表条数够（§6.299 删掉 6 条 VSA 原语后 31 条）");
 
     AI *ai = ai_new();
     ok(prim_kind(T(ai, PRIM_INSERT))       == PK_INSERT,       "[原语:插词] 识别得了");
@@ -1773,8 +1773,16 @@ static void test_selfwrite_route(void) {
     ok(fires >= 1, "想象真的触发了（把想象率拉满、多试几次）");
     ok(ai->writes[AI_WSRC_IMAGINE] > wi0, "想象那一路的写入**记进来源账**（「想象」那一格）");
     {
-        Token *mk = pool_find(ai->pool, "[想象]");
-        ok(mk != NULL, "`[想象]` 标记还在（想象出来的东西照样有记号）");
+        /* §6.299：载体从「无名节点 + [想象] 标记」换成「role=想象 的边」。
+         * 记号照样有，而且**能存盘、能衰减**（role 是序列化字段）。 */
+        size_t role_edges = 0;
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (!t) continue;
+            for (size_t j = 0; j < t->count; ++j)
+                if (t->assocs[j].role == ASSOC_ROLE_IMAGINED) role_edges++;
+        }
+        ok(role_edges > 0, "想象写的是 role=想象 的边（可辨识，不当观测）");
     }
     ai_free(ai);
 }
