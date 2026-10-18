@@ -473,6 +473,20 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ， 猫 -\[属于\]-> 动
     && chk "非天气问题不受影响" 1 \
     || chk "非天气问题不受影响" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉞ §6.257 能力边界（联网/算术）明说不会"
+out=$(run "你 上 网 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 联 网" \
+    && chk "问联网 ⇒ 明说不联网" 1 \
+    || chk "问联网 ⇒ 明说不联网" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "一 加 一 等于 几")
+r1=$(printf '%s\n' "$out" | reps | sed -n 1p)
+printf '%s\n' "$r1" | grep -q "算 术 我 不 会" \
+    && chk "问算术 ⇒ 明说不会（不给答案、不糊过去）" 1 \
+    || chk "问算术 ⇒ 明说不会" 0 "$r1"
+printf '%s\n' "$r1" | grep -qE "(^|[^0-9])2([^0-9]|$)" \
+    && chk "算术不假装会（没有编出结果）" 0 "$r1" \
+    || chk "算术不假装会" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

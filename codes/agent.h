@@ -701,6 +701,23 @@ static inline int agent_weather_unknown(const char *input) {
            strstr(input, "吗");
 }
 
+/* §6.257 **能力边界要如实说**（与 §6.256 同一条原则：不会就说不会，别用闲聊模板糊过去）。
+ * 实测：`你 上 网 吗` ⇒「这个我 不 太 懂」；`一 加 一 等于 几` ⇒「别 硬 撑 我 陪 你」——
+ * 都不是"不会"的明说。这两件事是**确定没有**的能力，明说比含糊更诚实。 */
+static inline const char *agent_capability_unknown(const char *input) {
+    if (!input) return NULL;
+    if (strstr(input, "上 网") || strstr(input, "上网") || strstr(input, "联网") ||
+        strstr(input, "联 网") || strstr(input, "搜索") || strstr(input, "百度") ||
+        strstr(input, "谷歌") || strstr(input, "查 一下 网"))
+        return "我 不 联 网，也 没 有 实时 数据 —— 只 能 用 我 自己 图 里 的 东西 回答。";
+    if (strstr(input, "等于") &&
+        (strstr(input, "加") || strstr(input, "减") || strstr(input, "乘") ||
+         strstr(input, "除") || strstr(input, "＋") || strstr(input, "＋") ||
+         strstr(input, "+") || strstr(input, "-")))
+        return "算 术 我 不 会（没 有 算术 能力）—— 这 个数 你 自己 算 更 快，也 不 会 错。";
+    return NULL;
+}
+
 /* §6.254 **「忘 掉 X R Y」/「删 掉 X R Y」**：认出"要求删除"并**如实说明删不了**。
  * 为什么不做删除：`micro.h` 的 `MOD_REMOVE_ASSOC` 里有一条**硬底线** ——
  * 观测到的关系边不许被剪（`micro_edge_removable()` 只放行 DERIVED 缓存）。
@@ -3672,6 +3689,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
         ai->turns++;
         return strlen(out);
+    }
+    /* §6.257 能力边界（联网/算术）：明说"不会" */
+    {
+        const char *cap = agent_capability_unknown(input);
+        if (cap) { snprintf(out, out_cap, "%s", cap); ai->turns++; return strlen(out); }
     }
     /* §6.256 天气/预报：没有数据就明说（不编） */
     if (agent_weather_unknown(input)) {
