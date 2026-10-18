@@ -542,7 +542,12 @@ static inline void aip_patterns_load(AI *ai) {
         if (strlen(val) >= AIP_PAT_LEN) continue;   /* 其余桶是单词语义，太长不要 */
         AipPat *arr = aip_pat_bucket(kind, NULL);
         size_t *cnt = aip_pat_count(kind);
-        if (!arr || !cnt || *cnt >= AIP_PAT_MAX) continue;
+        if (!arr || !cnt) continue;
+        if (*cnt >= AIP_PAT_MAX) {   /* §6.352 静默丢弃的通用护栏：任何桶满了都要喊 */
+            fprintf(stderr, "[patterns] ⚠ [%s] 超过上限 %d，这一行被丢弃：%.50s\n",
+                    kind, AIP_PAT_MAX, val);
+            continue;
+        }
         snprintf(arr[*cnt].w, AIP_PAT_LEN, "%s", val);
         (*cnt)++;
     }

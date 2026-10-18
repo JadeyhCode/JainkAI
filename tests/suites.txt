@@ -106,3 +106,5 @@ action|sh tests/action.sh
 asmcheck|sh tests/asmcheck.sh
 # 「独占」由数据判定：可印证、可改口、改口后推理跟着变（本机实测 0.07s —— 它用预编好的 build_aip + 小语料，是真的快；评审以为 0.0s 是没量）
 exclusivity|sh tests/exclusivity.sh
+# §6.352 数据桶计数看护：五次"桶满了静默丢弃"之后加的（文件行数 vs 加载数；shape 含自动变体）
+patcount|sh tests/patcount.sh
