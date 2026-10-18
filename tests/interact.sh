@@ -682,6 +682,18 @@ printf '%s\n' "$out" | grep -q "记下 了 ： 太阳" \
     && chk "问句不当事实学（太阳 有 多大 不记）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
     || chk "问句不当事实学" 1
 
+echo "㊻ §6.271 整句检索的假阳性：问句不再被不相干的陈述句抢答 + 问候有应答"
+out=$(run "猫喜欢吃什么" "地球是圆的吗" "你好吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "饿 的 时候" \
+    && chk "「猫喜欢吃什么」不被「你 喜欢 吃 什么」的答案抢答" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "问句不被不相干陈述句抢答（猫喜欢吃什么）" 1
+printf '%s\n' "$out" | reps | sed -n 2p | grep -qE "饿 的 时候|我 是 真 的 在 和 你 说 话|我 是 一 个 程序" \
+    && chk "「地球是圆的吗」不吐闲聊句" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)" \
+    || chk "问句不被闲聊句抢答（地球是圆的吗）" 1
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "挺 好" \
+    && chk "「你好吗」有正常应答（不再拒答）" 1 \
+    || chk "你好吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

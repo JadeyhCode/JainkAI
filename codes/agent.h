@@ -1020,6 +1020,9 @@ static inline const char *agent_social_glue(const char *input) {
         return "我 只 能 按 图 里 的 关系 理解 —— 你 再 说 一 遍，或者 换 个 说 法，我 再 试。";
     if (strstr(b, "这个怎么说") || strstr(b, "这怎么说") || strstr(b, "怎么念"))
         return "你 是 想 问 某 个 词 怎么 说 吧 —— 把 那个 词 说 出 来，我 查 图，或者 你 教 我 一 句。";
+    if (strstr(b, "你好吗") || strstr(b, "你还好吗") || strstr(b, "最近怎么样") ||
+        strcmp(b, "在吗") == 0 || strstr(b, "在不在"))
+        return "我 挺 好 的 —— 一直 在 这儿。你 想 查 什 么，或者 教 我 一 句 都 行。";
     if (strstr(b, "然后呢") || strstr(b, "还有呢") || strstr(b, "再来一个") ||
         strstr(b, "换个问题") || strstr(b, "换个说法") || strstr(b, "接下来呢"))
         return "你 想 问 哪 个 词 / 哪 件 事 ？ 我 记 得 的 都 能 追（也 可 以 先 教 我 一 句）。";
@@ -4610,6 +4613,30 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             int cov_need = 55;
             int ok = (hit && sc >= need && cov >= cov_need);
             if (!is_question && cov < 25) ok = 0;
+            /* §6.271 **问句只配问句**：用户这句是问句，而命中的那条例句**自己不是问句**
+             * ⇒ 它答的不是这一类问题，是假阳性。实测（session.bin，8 句答不上来的问句）
+             * 5 句被不相干的陈述句抢答：「猫喜欢吃什么」⇒「饿的时候就去吃点好的」。
+             * 判据只看命中句的**词**（有没有疑问词），不看分数字段 —— 分不开的正是这一类。 */
+            if (ok && is_question) {
+                /* §6.271 **用户的内容词必须在那条例句里出现过**（第一道）。
+                 * 实测「猫 喜欢 吃 什么」命中了语料的「你 喜欢 吃 什么」（4 词里 3 个一样），
+                 * 于是把"你"的答案原样吐给"猫" —— 检索复述最典型的错法。
+                 * 虚词和疑问词不比（它们不承载"问的是谁"）。 */
+                if (ok) {
+                    int miss = 0;
+                    for (size_t i2 = 0; i2 < n && !miss; ++i2) {
+                        const char *wn = words[i2];
+                        if (!wn || !wn[0] || fr_is_func(wn) || ai_token_has_question_word(wn))
+                            continue;
+                        if (!toks[i2]) { miss = 1; break; }
+                        int found = 0;
+                        for (size_t k2 = 0; k2 < hit->in_n && !found; ++k2)
+                            if (hit->in[k2] && hit->in[k2]->id == toks[i2]->id) found = 1;
+                        if (!found) miss = 1;
+                    }
+                    if (miss) ok = 0;
+                }
+            }
             /* 第四关：**长度比**。cov 单独看会被「一个少见词命中」骗到 ——
              * 实测「1加1等于几」(4 词) cov=55，其实是拿 `几` 去撞了一条长句。
              * 真正该对应的记忆，输入句长度不会差太远。
