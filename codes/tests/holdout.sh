@@ -26,6 +26,12 @@ while IFS='	' read -r q want setup; do
         printf '%s\n::quit\n' "$q"
     } | timeout 30 "$BIN" --model "$MODEL" > /tmp/holdout_one.log 2>&1
     out=$(sed -n 's/.*AI > //p' /tmp/holdout_one.log | tail -1)
+    case "$want" in
+    !*)  # `!片段` = 答复里**不许**出现（查"学出垃圾"）
+        if printf '%s\n' "$out" | grep -qE "${want#!}"; then fail=$((fail+1)); bad="$bad
+  ✗ $q  ⇒ $out"; else pass=$((pass+1)); fi
+        continue ;;
+    esac
     if printf '%s\n' "$out" | grep -qE "$want"; then
         pass=$((pass+1))
     else
