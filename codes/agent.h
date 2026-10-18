@@ -290,6 +290,13 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
                  * 分词早），否则「鲸鱼 是否 属于 鱼」这类会因为 @k 不成立而永远匹配不上。 */
                 if (strchr(con, 'k') && !pool_find(ai->pool, ww[i]) && !ai_lex_extra_has(ai, ww[i])) ok = 0;
                 if (strchr(con, 'r') && rel_id_of(ai, ww[i], 0) == 0) ok = 0;
+                /* §6.341 `$3@s2`：这个位置必须与**第 2 个占位符**取到同一个词。
+                 * 用途：A-不-A 句式（`吃 不 吃`）一条规则覆盖所有谓语，不用每个动词写一行。
+                 * ⚠ 不能写成 `@=2`：加载器按**第一个 `=`** 切 lhs/rhs，会把规则切坏（踩过）。 */
+                if (con[0] == 's' && con[1] >= '1' && con[1] <= '9') {
+                    size_t ref = (size_t)(con[1] - '1');
+                    if (bind[ref] && strcmp(bind[ref], ww[i]) != 0) ok = 0;
+                }
                 bind[k] = ww[i];
             } else if (strcmp(pat, ww[i]) != 0) ok = 0;
         }
@@ -445,7 +452,9 @@ static inline void aip_patterns_load(AI *ai) {
                     g_shape_r[g_shape_n][--L] = 0;
             }
             g_shape_n++;
-            /* §6.322 **自动生成"分词变体"**：规则里的多字实词（如 `属于`）在词池里
+            if (!ai) continue;              /* dump 工具传 NULL：不生成变体（要查词池） */
+            /* §6.322 **自动生成"分词变体"**（没有 ai 时跳过：dump 工具会传 NULL）：
+             * 规则里的多字实词（如 `属于`）在词池里
              * 有时是一个 token、有时被切成 `属`+`于`。与其让写规则的人两种都写一遍
              * （已经踩过 N 次），这里在加载时**自动再存一条"逐字拆开"的变体**。
              * 只对**第一个**多字实词做（限制变体数量），rhs 不变 —— 语义完全一样。 */
