@@ -577,6 +577,19 @@ printf '%s\n' "$out" | grep -q "记下 了 ： 袋鼠" \
     && chk "::natcoin off 关得回去" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
     || chk "::natcoin off 关得回去" 1
 
+echo "㊶ §6.265 多字新主语（我表弟）：代词+名词的复合能学；代词+虚词仍挡"
+out=$(run "我表弟是大学生" "我表弟属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我表弟" \
+    && chk "「我表弟是大学生」学得进（代词+名词复合）" 1 \
+    || chk "「我表弟是大学生」学得进" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我表弟 属于 大学生" \
+    && chk "学进来的复合主语查得到" 1 \
+    || chk "复合主语查得到" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫 很 属于 动物")
+printf '%s\n' "$out" | grep -q "记下 了 ： 猫很" \
+    && chk "代词/名词之外的虚词复合仍挡（猫很）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "虚词复合仍挡" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

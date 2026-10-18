@@ -1406,12 +1406,31 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     /* §6.245 并列/选择词留在宾语里 ⇒ 那是"两个东西"，不是一个新词（`猫或狗`/`猫、狗`）*/
     if (strstr(B, "或") || strstr(B, "、") || strstr(B, "以及")) return NULL;
     if (!agent_subj_ok(words[0])) return NULL;   /* §6.229 主语不能是别的虚词（很/了/的…）*/
-    /* §6.231 **多词那一侧不许混进虚词**：`猫 很 属于 动物` 会拼成「猫很」（副词当主语的一部分）。
-     * 以前只挡"代词 + 别的词"（我住），漏了副词/助词（猫很、很好、猫的…）。
-     * 单边只有一个词时不受此限（那个词由 agent_subj_ok / 宾语守卫管）。 */
-    if (na > 1)
-        for (size_t i = 0; i < na; ++i)
-            if (fr_is_func(words[i])) return NULL;
+    /* §6.231/§6.265 **多词那一侧不许混进虚词**，但**代词+名词**的复合是正常说法
+     * （`我表弟 是 大学生`）：以前一律挡"代词 + 别的词"，把这类合法复合也挡了（实测
+     * `我表弟是大学生` 整句学不进）。现在：含代词时，**其余词必须都是词池里已有的词**
+     * 且不是虚词/关系词 —— `我住`（住 是动词、可以不在池）挡，`我表弟`（表弟 在池）放。
+     * `猫 很 属于 动物` 仍挡（很 是虚词）。 */
+    if (na > 1) {
+        int has_pron = 0;
+        for (size_t i = 0; i < na; ++i) {
+            if (fr_is_func(words[i])) {
+                static const char *pr[] = {"我", "你", "您", "他", "她", "它", "我们", "你们",
+                                           "他们", NULL};
+                int is_pron = 0;
+                for (size_t k = 0; pr[k]; ++k) if (!strcmp(words[i], pr[k])) { is_pron = 1; break; }
+                if (!is_pron) return NULL;     /* 别的虚词一律不行（很/了/的…）*/
+                has_pron = 1;
+            }
+        }
+        if (has_pron) {
+            for (size_t i = 0; i < na; ++i) {
+                if (fr_is_func(words[i])) continue;             /* 代词本身 */
+                if (!pool_find(ai->pool, words[i])) return NULL; /* 别的词必须在池里 */
+                if (rel_id_of(ai, words[i], 0)) return NULL;     /* 关系词不当名字的一部分 */
+            }
+        }
+    }
     if (nb > 1)
         for (size_t i = 0; i < nb; ++i)
             if (fr_is_func(words[ri + 1 + i])) return NULL;
