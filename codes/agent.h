@@ -233,6 +233,8 @@ static inline int agent_compound_ok(AI *ai, char *const *w, size_t k) {
         if (i == 0 && agent_loc_char(w[i])) { bytes += l; continue; }
         if (i + 1 == k) {
             if (!rel_one_cjk(w[i]) && !pool_find(ai->pool, w[i])) return 0;
+            /* §6.281 末词也不许是虚词/代词：`猫你` 是宾语前置的碎片，不是名字。 */
+            if (k >= 2 && fr_is_func(w[i])) return 0;
         } else if (!rel_one_cjk(w[i])) return 0;
         bytes += l;
     }
@@ -1203,6 +1205,49 @@ static inline int agent_rewrite_coref(AI *ai, const char *in, char *out, size_t 
     if (rid != REL_IS_A && bbuf[0]) ante = bbuf;
     snprintf(out, cap, "%s%s", ante, cl2 + pl);
     return 1;
+}
+
+/* §6.281 **宾语前置**（`猫 你 喜欢 吗` / `游泳 你 会 吗`）：中文里很常见的形状，
+ * 以前掉闲聊；更糟的是 `猫 你 喜欢 什么` 会被当成"新词 猫你"（§6.272 的多字主语兜底误报）。
+ * 只处理**是非问句**（句尾 吗/呢，或谓语被并成「会吗」）：把 `[X][你][R][吗]` 还原成
+ * `你 R X 吗`。`X` 必须在词池里，且第二个词是代词 —— 别的一律不动。 */
+static inline int agent_rewrite_topic(AI *ai, const char *in, char *out, size_t cap) {
+    if (!ai || !in || !out || cap < 32) return 0;
+    char c[192];
+    if (!agent_nosp(in, c, sizeof c)) return 0;
+    size_t n = 0;
+    char **w = ai_tokenize(ai, c, &n);
+    if (!w || n < 3 || n > 8) { if (w) ai_free_words(w, n); return 0; }
+    int ok = 0;
+    static const char *pr[] = {"你", "您", "他", "她", NULL};
+    int is_pr = 0;
+    for (size_t i = 0; pr[i]; ++i) if (!strcmp(w[1], pr[i])) is_pr = 1;
+    const char *r = w[2];
+    char rbuf[16];
+    size_t rl = strlen(r);
+    int tail_ma = 0;
+    /* 「会吗/能吗」被并成一个词：拆开 */
+    if (rl > strlen("吗") && strcmp(r + rl - strlen("吗"), "吗") == 0) {
+        snprintf(rbuf, sizeof rbuf, "%.*s", (int)(rl - strlen("吗")), r);
+        r = rbuf;
+        tail_ma = 1;
+    }
+    uint8_t rid = rel_id_of(ai, r, 0);
+    if (!is_pr || !rid) goto done;
+    if (!pool_find(ai->pool, w[0])) goto done;
+    /* 句尾必须带「吗/呢」，否则不是是非问句（`猫 你 喜欢 什么` 不动） */
+    if (!tail_ma && strcmp(w[n - 1], "吗") != 0 && strcmp(w[n - 1], "呢") != 0) goto done;
+    {
+        size_t o = 0;
+        o += (size_t)snprintf(out + o, cap - o, "%s %s %s", w[1], r, w[0]);
+        for (size_t i = 3; i < n && o + 8 < cap; ++i)
+            o += (size_t)snprintf(out + o, cap - o, " %s", w[i]);
+        if (tail_ma && o + 4 < cap) snprintf(out + o, cap - o, " %s", "吗");
+    }
+    ok = 1;
+done:
+    ai_free_words(w, n);
+    return ok;
 }
 
 /* §6.267 **做不到的"功能请求"要明说**：`说点别的` / `讲个笑话` / `唱首歌` 这类，
@@ -4696,17 +4741,6 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         const char *sr = agent_self_route(input, out, out_cap);
         if (sr) { ai->turns++; return strlen(out); }
     }
-    /* §6.275 「你 会 X 吗」：图里没这条事实就明说（别再让帧层渲染成"我会试着 X"）。
-     * ⚠ 必须排在 self_route **之后**：`你能做什么` / `你会什么语言` 得先被能力/语言那条接走
-     * （第一版放前面，把「你能做什么」答成"做什 这 件 事 我 没 记 过"）。 */
-    if (!ai->ask_pending) {
-        char ab[256];
-        if (agent_self_ability(ai, input, ab, sizeof ab)) {
-            snprintf(out, out_cap, "%s", ab);
-            ai->turns++;
-            return strlen(out);
-        }
-    }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
         int bk = agent_bare_reply(input);
@@ -4798,6 +4832,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->turns++;
         return strlen(out);
     }
+    {   /* §6.281 宾语前置：「猫 你 喜欢 吗」⇒ 「你 喜欢 猫 吗」*/
+        char tp[192];
+        if (agent_rewrite_topic(ai, input_eff, tp, sizeof tp)) {
+            snprintf(decl_in, sizeof decl_in, "%s", tp);
+            input_eff = decl_in;
+        }
+    }
     {   /* §6.278 句中指代：「猫 属于 动物，它 会 飞 吗」⇒ 「猫 会 飞 吗」*/
         char cf[224];
         if (agent_rewrite_coref(ai, input_eff, cf, sizeof cf)) {
@@ -4817,6 +4858,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (agent_rewrite_where(input_eff, wh, sizeof wh)) {
             snprintf(decl_in, sizeof decl_in, "%s", wh);
             input_eff = decl_in;
+        }
+    }
+    /* §6.275/§6.281 「你 会 X 吗」：**用改写后的句子**判（`游泳 你 会 吗` 会被还原成
+     * `你 会 游泳 吗`）。位置必须在 self_route 之后、分词之前 —— self_route 先接走
+     * "你能做什么/你会什么语言"，改写块又在这两处之间。 */
+    if (!ai->ask_pending) {
+        char ab[256];
+        if (agent_self_ability(ai, input_eff, ab, sizeof ab)) {
+            snprintf(out, out_cap, "%s", ab);
+            ai->turns++;
+            return strlen(out);
         }
     }
     char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)

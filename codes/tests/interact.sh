@@ -851,6 +851,19 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "你 -\[会\]-> 游泳" \
     && chk "教过之后 A-不-A 照样答得出" 1 \
     || chk "教过之后" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "56 §6.281 宾语前置（猫你喜欢吗 / 游泳你会吗）"
+out=$(run "猫你喜欢吗" "游泳你会吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 喜欢 猫" \
+    && chk "「猫你喜欢吗」⇒ 还原成「你喜欢猫吗」答得出" 1 \
+    || chk "宾语前置（喜欢）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 敢 说 会" \
+    && chk "「游泳你会吗」⇒ 能力问句也认得（不再\"我会试着游泳\"）" 1 \
+    || chk "宾语前置（会）" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫你属于什么")
+printf '%s\n' "$out" | grep -q "猫你" \
+    && chk "「猫你属于什么」不再被当成新词「猫你」" 0 "$(printf '%s\n' "$out" | grep -a 猫你 | head -1)" \
+    || chk "不再把\"猫你\"当新词" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
