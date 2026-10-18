@@ -284,6 +284,8 @@ static inline const char *aip_reply_lookup(const char *input) {
  * 搬到数据行里就会失真。 */
 static inline int aip_kw_line_match(const char *line, const char *b) {
     if (!line || !b) return 0;
+    /* §6.293 行首 `^` = **整句精确匹配**（否则 `为什么` 这种会把所有含它的问句都抢走）。 */
+    if (line[0] == '^') return strcmp(line + 1, b) == 0;
     const char *p = line;
     while (*p) {
         int ok = 0;

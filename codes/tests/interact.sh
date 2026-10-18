@@ -944,6 +944,19 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "刚才 我们 聊 了" \
     && chk "「刚才说到哪了」（不在旧清单里）⇒ 也能答" 1 \
     || chk "历史问句族" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "64 §6.293 第三组留出集：同义句式的补句（数据行）"
+out=$(run "猫属于动物" "那猫是动物吗" "猫还喜欢什么")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[属于\]-> 动物" \
+    && chk "「那猫是动物吗」⇒ 属于 问句" 1 \
+    || chk "那是Y吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "猫 喜欢" \
+    && chk "「猫还喜欢什么」（还 是填充词）⇒ 照常答" 1 \
+    || chk "还R什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "教考拉属于动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 考拉 属于 动物" \
+    && chk "单个「教」也算引导语（教考拉属于动物）" 1 \
+    || chk "lead 教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
