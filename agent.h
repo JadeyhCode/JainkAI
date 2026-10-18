@@ -5299,15 +5299,21 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         while (*q == ' ' || *q == '\t') q++;
         static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches"};
 
-        size_t ll = 0;
-        for (size_t i = 0; lead[i] && !ll; ++i)
-            if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
-        /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
-        if (!ll) ll = aip_pat_prefix(g_lead, g_lead_n, q);
-        if (ll) {
+        /* §6.339 引导语可能**连着两个**（`难道 请注意 …` / `请问 麻烦你 …`）：
+         * 以前只剥一次，剩下的那个引导语会让整句掉兜底。最多剥三层。 */
+        for (int layer = 0; layer < 3; ++layer) {
+            size_t ll = 0;
+            for (size_t i = 0; lead[i] && !ll; ++i)
+                if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
+            /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
+            if (!ll) ll = aip_pat_prefix(g_lead, g_lead_n, q);
+            if (!ll) break;
             const char *rest = q + ll;
             while (*rest == ' ' || *rest == '\t') rest++;
-            if (*rest) { snprintf(decl_in, sizeof decl_in, "%s", rest); input_eff = decl_in; }
+            if (!*rest) break;
+            snprintf(decl_in, sizeof decl_in, "%s", rest);
+            input_eff = decl_in;
+            q = decl_in;
         }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */
