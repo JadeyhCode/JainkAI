@@ -896,6 +896,78 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
         if (!strcmp(words[i], "为什么") || !strcmp(words[i], "为啥") ||
             !strcmp(words[i], "为何")) { wi = i; break; }
     if (wi == n) return NULL;
+    /* §6.276 **「为什么 他 以为 A R B」——他人视角**：依据不是我的图，而是**他的信念表**。
+     * 这条以前整句掉兜底（实测答「这个我 不 太 懂」）。归属先摆明（归他、不进我的知识），
+     * 再说我图里记的是同一条还是反的 —— 白箱项目该能这样答。 */
+    if (wi + 3 < n) {
+        static const char *vthink[] = {"以为", "认为", "觉得", NULL};
+        int hitv = 0;
+        for (size_t k = 0; vthink[k]; ++k)
+            if (!strcmp(words[wi + 2], vthink[k])) hitv = 1;
+        if (hitv) {
+            const char *who = words[wi + 1];
+            Token *W = pool_find(ai->pool, who);
+            char *r2[8]; size_t rn2 = 0;
+            for (size_t i = wi + 3; i < n && rn2 < 8; ++i) r2[rn2++] = words[i];
+            while (rn2 > 3 && (!strcmp(r2[rn2 - 1], "呢") || !strcmp(r2[rn2 - 1], "吗"))) rn2--;
+            char jb2[64];
+            const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
+            uint8_t rid2 = 0;
+            int neg2 = 0, q2 = 0;
+            if (rn2 >= 3 && rel_parse(ai, r2, rn2, jb2, sizeof jb2, &aw2, &rid2, &neg2,
+                                      &bw2, &q2, &rw2, 0) && aw2 && bw2 && rid2) {
+                Token *A2 = pool_find(ai->pool, aw2), *B2 = pool_find(ai->pool, bw2);
+                if (A2 && B2) {
+                    int found = 0;
+                    for (size_t i = 0; i < ai->others_n && !found; ++i) {
+                        OtherModel *om = &ai->others[i];
+                        if (!om->who || (W && om->who != W)) continue;
+                        for (size_t k = 0; k < om->n_bel; ++k) {
+                            HypoFact *f = &om->bel[k];
+                            if (f->a != A2 || f->rid != rid2 || f->b != B2) continue;
+                            found = 1;
+                            break;
+                        }
+                    }
+                    int truth = 0;
+                    {
+                        Proof p1, p2;
+                        rel_solve(ai, A2, rid2, B2, 0, &p1);
+                        truth = p1.status;
+                        if (!truth) { rel_solve(ai, A2, rid2, B2, 1, &p2); truth = p2.status; }
+                    }
+                    char bf[640];
+                    size_t o = 0;
+                    o += (size_t)snprintf(bf + o, sizeof bf - o,
+                                          "「%s 以为 %s %s%s %s」—— 这 是 %s 的 看法，归 %s，"
+                                          "不 进 我 的 知识。",
+                                          who, aw2, neg2 ? "不 " : "",
+                                          rw2 ? rw2 : "?", bw2, who, who);
+                    if (!found)
+                        o += (size_t)snprintf(bf + o, sizeof bf - o,
+                                              "我 这 儿 没 记 过 %s 说 过 这 条 —— 你 先 说 一 句"
+                                              "「%s 以为 %s %s%s %s」我 就 记 下。",
+                                              who, who, aw2, neg2 ? "不 " : "",
+                                              rw2 ? rw2 : "?", bw2);
+                    else if (truth == (neg2 ? -1 : 1))
+                        o += (size_t)snprintf(bf + o, sizeof bf - o, "这 条 我 图 里 也 记 着。");
+                    else if (truth == 0)
+                        o += (size_t)snprintf(bf + o, sizeof bf - o, "我 图 里 没 记 过 这 条（不 编）。");
+                    else
+                        o += (size_t)snprintf(bf + o, sizeof bf - o,
+                                              "我 图 里 记 的 是 反 的：%s %s%s %s。",
+                                              aw2, neg2 ? "" : "不 ",
+                                              rw2 ? rw2 : "?", bw2);
+                    (void)q2;
+                    if (out_conf) *out_conf = 0.8f;
+                    if (handled) *handled = 1;
+                    char *rr = (char *)malloc(strlen(bf) + 1);
+                    if (rr) memcpy(rr, bf, strlen(bf) + 1);
+                    return rr;
+                }
+            }
+        }
+    }
     /* 拼出 A R B（去掉"为什么"这个 token；"不"留在关系词前会被 rel_parse 认）*/
     char *rest[8]; size_t rn = 0;
     for (size_t i = 0; i < n; ++i) {

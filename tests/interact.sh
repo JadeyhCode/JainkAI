@@ -764,6 +764,23 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "你 -\[会\]-> 游泳" \
     && chk "教完问回来 ⇒ 对" 1 \
     || chk "问回来" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "51 §6.276 「为什么他以为…」：他人视角——归属先摆明，再说我图里记的是同一条还是反的"
+out=$(run "他以为猫属于植物" "为什么他以为猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "归 他，不 进 我 的 知识" \
+    && chk "「为什么他以为…」⇒ 先说清这是他的看法（不再\"这个我不太懂\"）" 1 \
+    || chk "为什么他以为" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 图 里 记 的 是 反 的" \
+    && chk "和我的知识相反 ⇒ 指出是反的" 1 \
+    || chk "指出反的" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "为什么他以为猫属于动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 记 过 他 说 过 这 条" \
+    && chk "没听他说过 ⇒ 明说没记过（不编他的看法）" 1 \
+    || chk "没记过" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "他以为猫属于动物" "为什么他以为猫属于动物")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "这 条 我 图 里 也 记 着" \
+    && chk "他的看法和我一致 ⇒ 说明一致" 1 \
+    || chk "一致" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
