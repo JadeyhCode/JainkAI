@@ -72,6 +72,39 @@ static inline int agent_open_slot_word(const char *w) {
 /* §6.148 **占位词也可能是两个词**：分词器会把「哪些」「哪种」「哪个」切开
  * （实测「哪些 属于 动物」整句掉流水线，而「谁 属于 动物」能答）。
  * 所以跟填充词一样按**连写**比 —— 返回占位短语占几个词（1 或 2），0 = 这儿不是占位词。 */
+/* §6.305 **[syn] 同义词表**（`patterns.txt`）：`[syn] 猫咪=猫`。
+ * 在**分词之前**做字符串替换（长的先替），于是"猫咪""猫儿"这些变体走的是同一条知识，
+ * 不用为每个变体加一条行、更不用改代码。替换是**逐位置最长匹配**，不会误替别的词里面。 */
+#define AIP_SYN_MAX 64
+static char g_syn_from[AIP_SYN_MAX][48], g_syn_to[AIP_SYN_MAX][48];
+static size_t g_syn_n;
+static inline int aip_apply_syn(const char *in, char *out, size_t cap) {
+    if (!in || !out || !cap || !g_syn_n) return 0;
+    size_t o = 0;
+    int changed = 0;
+    const char *p = in;
+    while (*p) {
+        size_t best = 0, bi = 0;
+        for (size_t i = 0; i < g_syn_n; ++i) {
+            size_t l = strlen(g_syn_from[i]);
+            if (l > best && strncmp(p, g_syn_from[i], l) == 0) { best = l; bi = i; }
+        }
+        if (best) {
+            size_t tl = strlen(g_syn_to[bi]);
+            if (o + tl + 1 >= cap) return changed;
+            memcpy(out + o, g_syn_to[bi], tl);
+            o += tl;
+            p += best;
+            changed = 1;
+        } else {
+            if (o + 2 >= cap) return changed;
+            out[o++] = *p++;
+        }
+    }
+    out[o] = 0;
+    return changed;
+}
+
 /* §6.288 **形状表**（`patterns.txt` 的 `[shape]` 桶）：把"改写规则"也变成数据行。
  *     [shape] $1@k 你 $2@r 吗 = 你 $2 $1 吗
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
@@ -235,6 +268,19 @@ static inline void aip_patterns_load(void) {
         char *e = val + strlen(val);
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         if (!*val) continue;
+        if (!strcmp(kind, "syn")) {
+            char *eq = strchr(val, '=');
+            if (!eq || g_syn_n >= AIP_SYN_MAX) continue;
+            *eq = 0;
+            const char *to = eq + 1;
+            while (*to == ' ' || *to == '\t') to++;
+            if (!*val || !*to || strlen(val) >= sizeof g_syn_from[0] ||
+                strlen(to) >= sizeof g_syn_to[0]) continue;
+            snprintf(g_syn_from[g_syn_n], sizeof g_syn_from[0], "%s", val);
+            snprintf(g_syn_to[g_syn_n], sizeof g_syn_to[0], "%s", to);
+            g_syn_n++;
+            continue;
+        }
         if (!strcmp(kind, "shape")) {
             char *eq = strchr(val, '=');
             if (!eq) continue;
@@ -290,8 +336,8 @@ static inline void aip_patterns_load(void) {
     }
     fclose(f);
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -4977,6 +5023,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 用栈上的缓冲拼，不动 `input`（历史记录仍记用户原话）。 */
     char decl_in[256];
     const char *input_eff = input;
+    {   /* §6.305 同义词归一（数据表）：`猫咪` ⇒ `猫`，后面的所有判据都只认规范词 */
+        char sb[224];
+        if (aip_apply_syn(input, sb, sizeof sb)) input_eff = (snprintf(decl_in, sizeof decl_in, "%s", sb), decl_in);
+    }
     {
         const char *q = input;
         while (q && (*q == ' ' || *q == '\t')) q++;
