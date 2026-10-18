@@ -15,6 +15,9 @@ N=${2:-100}
 TMP=${TMPDIR:-/tmp}/cp.$$
 trap 'rm -f "$TMP.q" "$TMP.fails"' EXIT INT TERM
 
+if [ -f tests/corpus_q100.txt ] && [ "$N" = 100 ]; then
+    grep -v '^#' tests/corpus_q100.txt > "$TMP.q"
+else
 python3 - "$N" > "$TMP.q" <<'PY'
 import re,sys
 n=int(sys.argv[1])
@@ -31,6 +34,7 @@ for q in qs:
     seen.add(q); out.append(q)
 print("\n".join(out[:n]))
 PY
+fi
 
 fallback=0; fact=0; unknown=0; n=0; : > "$TMP.fails"
 while IFS= read -r q; do
