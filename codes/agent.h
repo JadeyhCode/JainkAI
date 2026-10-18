@@ -688,6 +688,53 @@ static inline size_t agent_norm_conj(char *const *words, size_t n, char **out, s
     return m;
 }
 
+/* §6.254 **「忘 掉 X R Y」/「删 掉 X R Y」**：认出"要求删除"并**如实说明删不了**。
+ * 为什么不做删除：`micro.h` 的 `MOD_REMOVE_ASSOC` 里有一条**硬底线** ——
+ * 观测到的关系边不许被剪（`micro_edge_removable()` 只放行 DERIVED 缓存）。
+ * 所以正确行为是：说清规则 + 给出可行的替代（改口 `X 不 R Y` 或 `::rel X` 查看）。 */
+static inline char *agent_forget_request(AI *ai, char *const *words, size_t n, float *out_conf) {
+    if (!ai || !words || n < 4) return NULL;
+    static const char *mk[] = {"忘", "忘掉", "忘记", "删", "删掉", "删除", "别记", "别",
+                               "清楚", "清掉", NULL};
+    size_t off = 0;
+    int hit = 0;
+    for (; off < n && off < 3; ++off) {
+        for (size_t i = 0; mk[i]; ++i)
+            if (!strcmp(words[off], mk[i])) { hit = 1; break; }
+        if (hit) break;
+    }
+    if (!hit) return NULL;
+    size_t rest = off + 1;
+    {   /* 「忘 掉 …」/「删 掉 …」/「别 记 …」里的"掉/记"要跳过 */
+        static const char *skip[] = {"掉", "记", "了", "掉 了", NULL};
+        for (size_t i = 0; skip[i] && rest < n; ++i)
+            if (!strcmp(words[rest], skip[i])) { rest++; break; }
+    }
+    if (n - rest < 3) return NULL;
+    char jb[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int neg = 0, q = 0;
+    if (!rel_parse(ai, words + rest, n - rest, jb, sizeof jb, &aw, &rid, &neg, &bw, &q, &rw, 0))
+        return NULL;
+    if (q || !aw || !bw || !rid) return NULL;
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw);
+    int have = A && B && (neg ? rel_direct_neg(A, rid, B) : rel_direct(A, rid, B));
+    char buf[320];
+    if (have)
+        snprintf(buf, sizeof buf,
+                 "这 条 我 删 不 了 —— 观测 到 的 知识 不 许 剪（硬 底线）。"
+                 "如果 你 的 意思 是「%s 不 %s %s」，就 这么 说，我 会 当「改口」记 下；"
+                 "想 看 我 到底 记 了 什么 可以 查 一下。",
+                 aw, rw, bw);
+    else
+        snprintf(buf, sizeof buf, "我 图 里 没 有「%s %s %s」，不 用 删。", aw, rw, bw);
+    if (out_conf) *out_conf = 0.6f;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 /* §6.239 **「A 和 B 都 R C」**（并列主语）：学的时候拆成两条，问的时候两边都查。
  * 实测 `猫 和 狗 都 是 动物 吗` 以前掉兜底（「这个我 不 太 懂」）—— 并列主语没接住。 */
 static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out_is_q,
@@ -3857,6 +3904,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_belief(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    if (!resp) {
+        float rc = 0.5f;
+        resp = agent_forget_request(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {

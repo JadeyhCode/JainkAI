@@ -427,6 +427,24 @@ if printf '%s\n' "$out" | grep -q "写后读回校验 = 开"; then chk "::verify
 if printf '%s\n' "$last" | grep -q "不符 0 次"; then chk "校验过的写入全都能读回（不符 0）" 1; else chk "校验不符 0" 0 "$last"; fi
 if printf '%s\n' "$last" | grep -q "校验过 0 次"; then chk "校验计数真的在动（不是没校验）" 0 "$last"; else chk "校验计数真的在动" 1; fi
 
+echo "㉛ §6.254 「忘 掉 / 删 掉 X R Y」：如实说删不了，并给替代"
+out=$(run "忘 掉 猫 属于 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "这 条 我 删 不 了" \
+    && chk "要求删除 ⇒ 说清硬底线（不假装删了）" 1 \
+    || chk "要求删除 ⇒ 说清硬底线" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "删 掉 猫 属于 动物" "猫 属于 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 猫 -\[属于\]-> 动物" \
+    && chk "说完也没真删（再问还是 对）" 1 \
+    || chk "说完也没真删" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "忘 掉 猫 属于 石头")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 图 里 没 有" \
+    && chk "本来没这条 ⇒ 说「不用删」" 1 \
+    || chk "本来没这条" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "忘记 猫 属于 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "这 条 我 删 不 了" \
+    && chk "「忘记」也认" 1 \
+    || chk "「忘记」也认" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
