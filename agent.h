@@ -1824,6 +1824,49 @@ static inline int agent_repeat_request(const char *input) {
 /* §6.203 **裸短回话**（没有挂着的追问时）：整句只是 对/不 对/嗯/好/不会 这类词。
  * 以前这种输入会掉进生成流水线，答出「对 自己 你 故意 的」「不会 到 回来 在 说 行 不」这种词串。
  * 返回 1=肯定、2=否定、0=不是裸短回话（照常走流水线）。 */
+/* §6.261 「自我/能力」类问题的**统一路由**（顺序 = 优先级，具体 → 宽泛）：
+ *   ① 实现事实（语言/年龄/位置/出处/感情）   [最具体，必须先问]
+ *   ② 能做什么（清单）
+ *   ③ 你是谁 / 你叫什么
+ *   ④ 日期时刻（没有时钟）
+ *   ⑤ 天气预报（没有数据）
+ *   ⑥ 联网 / 算术（能力边界）
+ * 返回非 NULL 表示已经答完（out 里有内容）。 */
+static inline const char *agent_self_route(const char *input, char *out, size_t cap) {
+    const char *sf = agent_self_fact(input);
+    if (sf) { snprintf(out, cap, "%s", sf); return out; }
+    if (agent_self_capability(input)) {
+        snprintf(out, cap,
+                 "就 三 件 事：① 回答 图 里 记 着 的 关系（「猫 属于 动物 吗」「谁 会 飞」）；"
+                 "② 你 教 一 句 我 就 记 住（「考拉 属于 动物」「我 叫 小明」）；"
+                 "③ 多 跳 推 理 / 假设 / 记 别人 的 看法（「如果 猫 会 飞」「他 以为 …」）。"
+                 "不 会 的 我 直说：不 联 网、不 会 算 术、不 知道 天气 和 日期。");
+        return out;
+    }
+    if (agent_self_identity(input)) {
+        snprintf(out, cap,
+                 "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
+                 "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
+        return out;
+    }
+    if (agent_clock_unknown(input)) {
+        snprintf(out, cap,
+                 "我 没有 时 钟，也 不 联 网 —— 具体 几 号/几 点 我 不 知道（你 看 一下 手机 更 准）。");
+        return out;
+    }
+    if (agent_weather_unknown(input)) {
+        snprintf(out, cap,
+                 "天气 我 不 知道 —— 我 没有 天气 数据，也 连 不 上 网。"
+                 "（这 类 问题 我 只 能 说 不 会，不 编。）");
+        return out;
+    }
+    {
+        const char *cap2 = agent_capability_unknown(input);
+        if (cap2) { snprintf(out, cap, "%s", cap2); return out; }
+    }
+    return NULL;
+}
+
 static inline int agent_bare_reply(const char *input) {
     if (!input) return 0;
     char buf[64];
@@ -3764,48 +3807,12 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->turns++;
         return strlen(out);
     }
-    /* §6.260 关于"我"的具体问题（语言/年龄/位置/出处/感情） */
+    /* §6.261 **"自我/能力"类问题统一路由**（以前是散在 agent_step 里的 6 个 if 块）。
+     * 顺序就是优先级，**从具体到宽泛** —— 踩过的坑：`你 会 什么 语言` 被"你会什么"（能做什么）
+     * 先抢走。现在顺序写在一处、带编号，加新判据时看这张表就知道该插在哪。 */
     {
-        const char *sf = agent_self_fact(input);
-        if (sf) { snprintf(out, out_cap, "%s", sf); ai->turns++; return strlen(out); }
-    }
-    /* §6.259 "你能做什么"：给一份短而准的清单 */
-    if (agent_self_capability(input)) {
-        snprintf(out, out_cap,
-                 "就 三 件 事：① 回答 图 里 记 着 的 关系（「猫 属于 动物 吗」「谁 会 飞」）；"
-                 "② 你 教 一 句 我 就 记 住（「考拉 属于 动物」「我 叫 小明」）；"
-                 "③ 多 跳 推 理 / 假设 / 记 别人 的 看法（「如果 猫 会 飞」「他 以为 …」）。"
-                 "不 会 的 我 直说：不 联 网、不 会 算 术、不 知道 天气 和 日期。");
-        ai->turns++;
-        return strlen(out);
-    }
-    /* §6.258 自述身份（统一口径） */
-    if (agent_self_identity(input)) {
-        snprintf(out, out_cap,
-                 "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
-                 "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
-        ai->turns++;
-        return strlen(out);
-    }
-    /* §6.258b 日期/时刻：没有时钟就明说 */
-    if (agent_clock_unknown(input)) {
-        snprintf(out, out_cap,
-                 "我 没有 时 钟，也 不 联 网 —— 具体 几 号/几 点 我 不 知道（你 看 一下 手机 更 准）。");
-        ai->turns++;
-        return strlen(out);
-    }
-    /* §6.257 能力边界（联网/算术）：明说"不会" */
-    {
-        const char *cap = agent_capability_unknown(input);
-        if (cap) { snprintf(out, out_cap, "%s", cap); ai->turns++; return strlen(out); }
-    }
-    /* §6.256 天气/预报：没有数据就明说（不编） */
-    if (agent_weather_unknown(input)) {
-        snprintf(out, out_cap,
-                 "天气 我 不 知道 —— 我 没有 天气 数据，也 连 不 上 网。"
-                 "（这 类 问题 我 只 能 说 不 会，不 编。）");
-        ai->turns++;
-        return strlen(out);
+        const char *sr = agent_self_route(input, out, out_cap);
+        if (sr) { ai->turns++; return strlen(out); }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {

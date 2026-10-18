@@ -530,6 +530,20 @@ printf '%s\n' "$out" | reps | sed -n 5p | grep -q "我 没有 感情" \
     && chk "问感情 ⇒ 明确说没有（主语不再搞反）" 1 \
     || chk "问感情 ⇒ 明确说没有" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 
+echo "㊳ §6.261 自我/能力路由：八种问法各答各的（不被相邻判据抢走）"
+out=$(run "你 会 什么 语言" "你 能 做 什么" "你 是 谁" "今天 几 号" "明天 会 下雨 吗" "你 上 网 吗" "一 加 一 等于 几" "你 多 大 了")
+want="只 有 中文|就 三 件 事|JainkAI|没有 时 钟|天气 我 不 知道|我 不 联 网|算 术 我 不 会|我 没 有 年龄"
+i=0
+old_ifs="$IFS"; IFS='|'
+for w in $want; do
+    i=$((i+1))
+    got=$(printf '%s\n' "$out" | reps | sed -n "${i}p")
+    printf '%s\n' "$got" | grep -q "$w" \
+        && chk "路由 $i ⇒ $w" 1 \
+        || chk "路由 $i ⇒ $w" 0 "$got"
+done
+IFS="$old_ifs"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
