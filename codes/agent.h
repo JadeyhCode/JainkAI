@@ -1569,6 +1569,93 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
  * （答出「狗 睡觉 吗 喜欢 地 事情 点」）。与 §6.239 对称：学的时候拆两条、问的时候两边查。 */
 /* §6.245 **选择问句「A R B1 或 B2 吗」**：选择不是并列，不能拆成两条学；
  * 但问的时候可以**分别查**：只要有一边成立就答「对」并说清是哪边。 */
+/* §6.279 **主语并列/选择（2~4 项）**：`猫 或 狗 属于 动物 吗` / `猫 、 狗 、 鸟 都 属于 动物 吗`。
+ * 以前只认两项且只认 `和/、`（`conj_both`）；`或` 连两项都不接（`or_ask` 只认**宾语**并列）。
+ * 做法：主语侧要求 `项 分隔 项 [分隔 项…]`，每项一个词；逐项查同一关系，再整体回答
+ * （全对 / 全不对 / 分开报）。`都/也` 可有可无。 */
+static inline char *agent_multi_subj(AI *ai, char *const *words, size_t n,
+                                     int *out_is_q, float *out_conf) {
+    if (!ai || ai->rel_off || !words || n < 5) return NULL;
+    size_t last = n;
+    int is_q = 0;
+    while (last > 0 && (!strcmp(words[last - 1], "吗") || !strcmp(words[last - 1], "呢"))) {
+        last--; is_q = 1;
+    }
+    if (!is_q || last < 5) return NULL;
+    size_t sp[4], ns = 0;
+    for (size_t k = 1; k + 2 < last; ++k) {
+        const char *w = words[k];
+        int sep = !strcmp(w, "或") || !strcmp(w, "或者") || !strcmp(w, "、") ||
+                  !strcmp(w, "和") || !strcmp(w, "跟") || !strcmp(w, "与") || !strcmp(w, "以及");
+        if (!sep) continue;
+        if (ns < 4) sp[ns] = k;
+        ns++;
+    }
+    if (ns < 1 || ns > 3) return NULL;
+    if (sp[0] != 1) return NULL;                       /* 第一项就是一个词 */
+    for (size_t j = 0; j + 1 < ns; ++j)
+        if (sp[j + 1] != sp[j] + 2) return NULL;       /* 中间各项也都是一个词 */
+    size_t r0 = sp[ns - 1] + 2;                       /* 分隔符后是**最后一项**，再后才是谓语 */
+    if (r0 + 1 >= last) return NULL;
+    size_t ri = r0;
+    if (!strcmp(words[ri], "都") || !strcmp(words[ri], "也")) ri++;
+    if (ri + 1 >= last) return NULL;
+    uint8_t rid = rel_id_of(ai, words[ri], 0);
+    if (!rid && !strcmp(words[ri], "是")) rid = REL_IS_A;
+    if (!rid) return NULL;
+    char bw[64];
+    size_t bl = 0;
+    for (size_t k = ri + 1; k < last; ++k) {
+        size_t wl = strlen(words[k]);
+        if (bl + wl + 1 >= sizeof bw) return NULL;
+        memcpy(bw + bl, words[k], wl); bl += wl;
+    }
+    bw[bl] = 0;
+    if (!agent_obj_ok(bw)) return NULL;
+    Token *B = pool_find(ai->pool, bw);
+    size_t nit = ns + 1;
+    int val[4], known[4];
+    size_t n_yes = 0, n_no = 0, n_un = 0;
+    for (size_t j = 0; j < nit; ++j) {
+        const char *nm = (j == 0) ? words[0] : words[sp[j - 1] + 1];
+        if (!agent_subj_ok(nm)) return NULL;
+        Token *A = pool_find(ai->pool, nm);
+        known[j] = 0; val[j] = 0;
+        if (A && B) {
+            if (rel_direct(A, rid, B))       { val[j] = 1;  known[j] = 1; n_yes++; }
+            else if (rel_direct_neg(A, rid, B)) { val[j] = -1; known[j] = 1; n_no++; }
+        }
+        if (!known[j]) n_un++;
+    }
+    const char *rn = rel_name_of(ai, rid);
+    if (!rn) return NULL;
+    char buf[320];
+    size_t o = 0;
+    if (n_yes == nit)
+        o += (size_t)snprintf(buf + o, sizeof buf - o, "对 ， ");
+    else if (n_no == nit)
+        o += (size_t)snprintf(buf + o, sizeof buf - o, "不 对 ， ");
+    for (size_t j = 0; j < nit; ++j) {
+        const char *nm = (j == 0) ? words[0] : words[sp[j - 1] + 1];
+        if (n_yes == nit)
+            o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s", j ? " 、 " : "", nm);
+        else if (n_no == nit)
+            o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s", j ? " 、 " : "", nm);
+        else
+            o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s%s", j ? " ； " : "",
+                                  nm, known[j] ? (val[j] > 0 ? "：对" : "：不 对") : "：图里 没 记 过");
+    }
+    if (n_yes == nit)
+        o += (size_t)snprintf(buf + o, sizeof buf - o, " 都 %s %s", rn, bw);
+    else if (n_no == nit)
+        o += (size_t)snprintf(buf + o, sizeof buf - o, " 都 不 %s %s", rn, bw);
+    if (out_conf) *out_conf = (n_un == 0) ? 0.8f : 0.55f;
+    if (out_is_q) *out_is_q = 1;
+    char *r = (char *)malloc(strlen(buf) + 1);
+    if (r) memcpy(r, buf, strlen(buf) + 1);
+    return r;
+}
+
 static inline char *agent_or_ask(AI *ai, char *const *words, size_t n, int *out_is_q,
                                  float *out_conf) {
     if (!ai || ai->rel_off || !words || n < 5) return NULL;
@@ -4921,6 +5008,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (!resp) resp = agent_conj_obj(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
         if (!resp) resp = agent_or_ask(ai, words, n, &cq, &rc);
+        if (resp) conf = rc;
+        if (!resp) resp = agent_multi_subj(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {

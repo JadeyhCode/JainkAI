@@ -818,6 +818,22 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 是 一 边 倒" \
     && chk "并明说\"不是一边倒\"" 1 \
     || chk "不是一边倒" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "54 §6.279 主语并列/选择 2~4 项（或/、/和）"
+out=$(run "猫或狗属于动物吗" "猫或狗或鸟属于动物吗" "猫或狗会飞吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ， 猫 、 狗 都 属于 动物" \
+    && chk "「猫或狗属于动物吗」（两项\"或\"）⇒ 对" 1 \
+    || chk "两项或" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 、 狗 、 鸟 都 属于 动物" \
+    && chk "三项\"或\"也答得出" 1 \
+    || chk "三项或" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "都 不 会 飞" \
+    && chk "全都不成立 ⇒ 都 不（不是逐项复读）" 1 \
+    || chk "全都不成立" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "猫或狗或鸟会飞吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "鸟：对" \
+    && chk "有对有不对 ⇒ 逐项分开报" 1 \
+    || chk "逐项分开报" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
