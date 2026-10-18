@@ -85,6 +85,11 @@ static inline int agent_open_slot_word(const char *w) {
 typedef struct { char w[AIP_PAT_LEN]; } AipPat;
 static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
+/* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
+#define AIP_REPLY_MAX 64
+static char g_reply_kw[AIP_REPLY_MAX][96];
+static char g_reply_txt[AIP_REPLY_MAX][192];
+static size_t g_reply_n;
 static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
 
 static inline AipPat *aip_pat_bucket(const char *kind, size_t *n) {
@@ -120,7 +125,21 @@ static inline void aip_patterns_load(void) {
         while (*val == ' ' || *val == '\t') val++;
         char *e = val + strlen(val);
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
-        if (!*val || strlen(val) >= AIP_PAT_LEN) continue;
+        if (!*val) continue;
+        if (!strcmp(kind, "reply")) {
+            char *eq = strchr(val, '=');
+            if (!eq || g_reply_n >= AIP_REPLY_MAX) continue;
+            *eq = 0;
+            char *txt = eq + 1;
+            while (*txt == ' ' || *txt == '\t') txt++;
+            if (!*txt || strlen(txt) >= sizeof g_reply_txt[0]) continue;
+            if (strlen(val) >= sizeof g_reply_kw[0]) continue;
+            snprintf(g_reply_kw[g_reply_n], sizeof g_reply_kw[0], "%s", val);
+            snprintf(g_reply_txt[g_reply_n], sizeof g_reply_txt[0], "%s", txt);
+            g_reply_n++;
+            continue;
+        }
+        if (strlen(val) >= AIP_PAT_LEN) continue;   /* 其余桶是单词语义，太长不要 */
         AipPat *arr = aip_pat_bucket(kind, NULL);
         size_t *cnt = aip_pat_count(kind);
         if (!arr || !cnt || *cnt >= AIP_PAT_MAX) continue;
@@ -142,6 +161,30 @@ static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
     if (!arr || !s) return 0;
     for (size_t i = 0; i < n; ++i) if (!strcmp(arr[i].w, s)) return 1;
     return 0;
+}
+/* [reply] 桶：关键词**全部**出现（逗号分隔）就回后面那句话。 */
+static inline const char *aip_reply_lookup(const char *input) {
+    if (!input || !g_reply_n) return NULL;
+    char b[200];
+    size_t bl = 0;
+    for (const char *q = input; *q && bl + 1 < sizeof b; ++q)
+        if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') b[bl++] = *q;
+    b[bl] = 0;
+    if (!bl) return NULL;
+    for (size_t i = 0; i < g_reply_n; ++i) {
+        const char *p = g_reply_kw[i];
+        int ok = 1;
+        while (*p && ok) {
+            char kw[48];
+            size_t kl = 0;
+            while (*p && *p != ',' && kl + 1 < sizeof kw) kw[kl++] = *p++;
+            kw[kl] = 0;
+            if (*p == ',') p++;
+            if (kl && !strstr(b, kw)) ok = 0;
+        }
+        if (ok) return g_reply_txt[i];
+    }
+    return NULL;
 }
 
 static inline size_t agent_open_slot_len(char *const *w, size_t n) {
@@ -4819,6 +4862,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         const char *sr = agent_self_route(input, out, out_cap);
         if (sr) { ai->turns++; return strlen(out); }
+    }
+    /* §6.284 **[reply] 桶**（patterns.txt）：关键词全中就给一句现成答复。
+     * 位置在 self_route 之后、分词/学习之前 —— 所以它能**挡住"被误学成事实"的说法**
+     * （实测 `放首歌听听` 以前会被记成一条边）。 */
+    if (!ai->ask_pending) {
+        const char *dr = aip_reply_lookup(input);
+        if (dr) { snprintf(out, out_cap, "%s", dr); ai->turns++; return strlen(out); }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {

@@ -877,6 +877,21 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "换 个 说 法" \
     && chk "数据表里的含糊回话（前缀匹配）生效" 1 \
     || chk "数据表含糊回话" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "58 §6.284 [reply] 桶：关键词全中就给现成答复（加一行数据，不改代码）"
+out=$(run "给我讲个段子" "放首歌听听" "我开玩笑的")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 讲 段子" \
+    && chk "数据表补上「讲段子」这种说法" 1 \
+    || chk "讲段子" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 会 放 歌" \
+    && chk "「放首歌听听」不再被学成事实（先被数据表挡住）" 1 \
+    || chk "放首歌" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "开 玩 笑" \
+    && chk "「我开玩笑的」有得体答复" 1 \
+    || chk "开玩笑" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | grep -q "记下 了 ： 放 首 歌" \
+    && chk "没有再把「放首歌听听」学成边" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "没学成边" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
