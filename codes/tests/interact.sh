@@ -934,6 +934,16 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "猫 属于 动物" \
 printf '%s\n' "$out" | reps | sed -n 4p | grep -q "猫 属于 动物" \
     && chk "「帮我看下猫属于什么」⇒ 动物" 1 || chk "帮我看下" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+echo "63 §6.292 通用小修：repeat 放到改写之后 + 历史问句不再靠整句清单"
+out=$(run "猫属于动物" "能再说一次吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "刚才 说 的 是" \
+    && chk "「能再说一次吗」⇒ 复述上一句（改写后再判 repeat）" 1 \
+    || chk "repeat 顺序" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫属于动物" "刚才说到哪了")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "刚才 我们 聊 了" \
+    && chk "「刚才说到哪了」（不在旧清单里）⇒ 也能答" 1 \
+    || chk "历史问句族" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

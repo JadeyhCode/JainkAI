@@ -2736,12 +2736,25 @@ static inline int agent_history_kind(const char *input) {
         j[jl++] = *q;
     }
     j[jl] = 0;
+    /* §6.292 **通用判据**（不再靠整句清单）：只要含"聊到哪/说到哪/聊了什么/说了什么/说啥"
+     * 这一族词，就按"刚才聊了什么"处理；再看是问**我说**的还是**我们聊**的。 */
+    {
+        int fam = strstr(j, "聊到哪") || strstr(j, "说到哪") || strstr(j, "聊了") ||
+                  strstr(j, "说了") || strstr(j, "说什么") || strstr(j, "说啥") ||
+                  strstr(j, "聊到哪儿") || strstr(j, "说到哪儿");
+        /* 「我不明白你说什么」里也有"说什么"，但那是"没听懂"，不是问历史 */
+        if (strstr(j, "不明白") || strstr(j, "听不懂") || strstr(j, "没听懂") ||
+            strstr(j, "没听清")) fam = 0;
+        if (fam) {
+            if (strstr(j, "我说的") || strstr(j, "我说了") || strstr(j, "我说啥") ||
+                strstr(j, "我刚才说") || strstr(j, "刚才我说") || strstr(j, "我说的是"))
+                return 2;
+            return 1;
+        }
+    }
     static const char *list[] = {"我们刚才聊了什么", "刚才聊了什么", "我们刚才说了什么",
-                                 "刚才说了什么", "我们聊了什么", "我们聊到哪了", "聊到哪了",
-                                 "我们说到哪了", "刚才说到哪了", "我们聊到哪儿了", NULL};
-    static const char *mine[] = {"我刚才说了什么", "我刚才说什么", "你记得我刚才说什么吗",
-                                 "我刚才说啥", "刚才我说的什么", "我刚才说的什么",
-                                 "我刚才说的是什么", "我说了什么", "我刚才说啥了", NULL};
+                                 "刚才说了什么", "我们聊了什么", NULL};
+    static const char *mine[] = {"我刚才说了什么", "我刚才说什么", "我问你什么", NULL};
     for (size_t i = 0; list[i]; ++i) if (strcmp(j, list[i]) == 0) return 1;
     for (size_t i = 0; mine[i]; ++i) if (strcmp(j, mine[i]) == 0) return 2;
     return 0;
@@ -4760,13 +4773,6 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             return strlen(out);
         }
     }
-    /* §6.216 「再说一遍」：原样重复上一句答复（不用生成） */
-    if (!ai->ask_pending && agent_repeat_request(input)) {
-        if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
-        else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
-        ai->turns++;
-        return strlen(out);
-    }
     /* §6.284/§6.285 **[reply] 桶**（patterns.txt）：关键词行命中就给一句现成答复。
      * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
      * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
@@ -4880,6 +4886,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             snprintf(decl_in, sizeof decl_in, "%s", tp);
             input_eff = decl_in;
         }
+    }
+    /* §6.216/§6.292 「再说一遍」：**用改写后的句子**判 —— 以前它在改写之前跑，
+     * 所以 `能再说一次吗`（被形状行改写成 `再 说 一 遍`）永远接不住。 */
+    if (!ai->ask_pending && agent_repeat_request(input_eff)) {
+        if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
+        else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
+        ai->turns++;
+        return strlen(out);
     }
     {   /* §6.278 句中指代：「猫 属于 动物，它 会 飞 吗」⇒ 「猫 会 飞 吗」*/
         char cf[224];
