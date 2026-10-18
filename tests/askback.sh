@@ -287,6 +287,27 @@ printf '%s\n' "$out" | reps | grep -q "那 我 就 这 么 记 着" \
     && chk "重载后回「对」不触发确认" 0 "$(printf '%s\n' "$out" | reps | grep "记 着")" \
     || chk "重载后回「对」不触发确认" 1
 
+echo "⑤ §6.250 极性矩阵：正/否定问句 × 四种回话（猜出来的答案 = 桌子 不会 飞）"
+# 对桌子 会 飞 这类"没把握"的问题，模型固定猜「不会」。四种回话各教出什么，全钉住。
+#   Q 桌子 会 飞 吗     : 会→会飞  不 会→不会飞  对→不会飞(确认猜测)  不 对→会飞
+#   Q 桌子 不 会 飞 吗 : 会→会飞  不 会→不会飞  对→不会飞              不 对→会飞
+i=0
+for q in "桌子 会 飞 吗" "桌子 不 会 飞 吗"; do
+    for a in "会" "不 会" "对" "不 对"; do
+        i=$((i+1))
+        case "$a" in
+            "会"|"不 对") want="会" ;;
+            *)            want="不 会" ;;
+        esac
+        out=$(run 1 "$q" "$a" "桌子 会 飞 吗")
+        got=$(printf '%s\n' "$out" | reps | sed -n 3p)
+        case "$got" in
+            *"$want"*) chk "矩阵 $i：$q + $a ⇒ 记成「$want」" 1 ;;
+            *)         chk "矩阵 $i：$q + $a ⇒「$want」" 0 "$got" ;;
+        esac
+    done
+done
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1

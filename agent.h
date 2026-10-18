@@ -1999,10 +1999,12 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                 ai->n_cot++;
                 der_say(ai, d, ai->der_style, resp0, sizeof resp0);
                 ai->n_rel_guess++;
-                /* §6.172b 记**猜的极性**：回「对」要按"我猜的那句"来教，不是按问句。
-                 * 实测会踩：猜「桌子 不 会 飞」、用户回「对」—— 按问句极性会教成「会 飞」。 */
+                /* §6.172b/§6.250 记**猜的极性**：回「对」要按"我猜的那句"来教。
+                 * ⚠ 以前写成 `问句极性 ^ (truth>0 ? 0 : 1)` —— 对**否定问句**会算反
+                 * （`桌子 不 会 飞 吗` + 猜"不会" ⇒ fact_neg=0）。`d->truth` 本身就是
+                 * "A R B 还是 A 不 R B"，直接用它的符号。 */
                 agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1,
-                                  (is_neg ? 1 : 0) ^ (d->truth > 0 ? 0 : 1));
+                                  (d->truth < 0 ? 1 : 0));
                 if (out_conf) *out_conf = mconf;
                 char *r = (char *)malloc(strlen(resp0) + 1);
                 if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -2025,7 +2027,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
                                d, line, sizeof line, gresp, sizeof gresp, &gc)) {
             ai->n_rel_guess++;
             agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1,
-                              (is_neg ? 1 : 0) ^ (d->truth > 0 ? 0 : 1));   /* §6.172b */
+                              (d->truth < 0 ? 1 : 0));   /* §6.172b */
             if (out_conf) *out_conf = gc;
             char *r = (char *)malloc(strlen(gresp) + 1);
             if (r) memcpy(r, gresp, strlen(gresp) + 1);
@@ -3348,7 +3350,7 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     /* 判词的基准极性：**kind=2**（我给了确定答案）用"我说的那句"（fact_neg，§6.172b）；
      * **kind=1**（我没把握/是猜的）用**问句本身的极性**（ask_neg）—— 猜出来的那句话
      * 极性在图上没有落点，实测按 fact_neg 会反（`桌子 不 会 飞 吗` 回「对」教成「会 飞」）。 */
-    int base = (ai->ask_kind == 2) ? fact_neg : (int)ai->ask_neg;
+    int base = fact_neg;    /* §6.250 fact_neg 修对之后，两种 kind 都用它 */
     int tneg;
     if (saw_answer && !saw_judge) tneg = no ? 1 : 0;
     else                          tneg = base ^ (no ? 1 : 0);
