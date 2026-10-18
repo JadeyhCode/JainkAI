@@ -240,11 +240,26 @@ static inline void aip_patterns_load(void) {
             if (!eq || g_shape_n >= AIP_SHAPE_MAX) continue;
             *eq = 0;
             const char *rhs = eq + 1;
+            /* §6.295 **行内注释**：数据行末尾的 ` # …` 要剥掉。不剥的话它会变成规则的一部分
+             * （实测「反过来呢」改写出 "动物 属于 猫 吗 # 分词把…" ⇒ 整句掉兜底）。 */
+            {
+                char *h = strstr(val, " #");
+                if (h) *h = 0;
+                while (*val && (val[strlen(val) - 1] == ' ' || val[strlen(val) - 1] == '\t'))
+                    val[strlen(val) - 1] = 0;
+            }
             while (*rhs == ' ' || *rhs == '\t') rhs++;
-            if (!*rhs || strlen(val) >= sizeof g_shape_l[0] ||
-                strlen(rhs) >= sizeof g_shape_r[0]) continue;
+            if (!*rhs || strlen(val) >= sizeof g_shape_l[0]) continue;
             snprintf(g_shape_l[g_shape_n], sizeof g_shape_l[0], "%s", val);
             snprintf(g_shape_r[g_shape_n], sizeof g_shape_r[0], "%s", rhs);
+            {   /* rhs 的行内注释同样剥掉，并去掉尾空格 */
+                char *h = strstr(g_shape_r[g_shape_n], " #");
+                if (h) *h = 0;
+                size_t L = strlen(g_shape_r[g_shape_n]);
+                while (L && (g_shape_r[g_shape_n][L - 1] == ' ' ||
+                             g_shape_r[g_shape_n][L - 1] == '\t'))
+                    g_shape_r[g_shape_n][--L] = 0;
+            }
             g_shape_n++;
             continue;
         }
@@ -3147,6 +3162,31 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         char *r = (char *)malloc(strlen(resp0) + 1);
         if (r) memcpy(r, resp0, strlen(resp0) + 1);
         return r;
+    }
+
+    /* §6.295 **反向类属是错的**（antisymmetry）：`动物 属于 猫 吗` 以前答"推不出来"
+     * （因为 动物 自己没有 属于 边），但**反向成立本身就否定了正向**：
+     * 猫 属于 动物 ⇒ 动物 不属于 猫。这是通用规则，不是为某句话加的 if。 */
+    if (!solved && rid == REL_IS_A && !want) {
+        Proof rp;
+        rel_solve(ai, B, REL_IS_A, A, 0, &rp);
+        if (rp.status > 0) {
+            char why[220];
+            proof_text(ai, &rp, why, sizeof why);
+            snprintf(resp0, sizeof resp0,
+                     "不 对 ， %s 不 属于 %s —— 反 过 来 才 成 立：%s", aw, bw,
+                     why[0] ? why : "有 依据");
+            der_reset(d);
+            der_goal(d, A, rid, B);
+            der_conclude(d, -1, 80);
+            d->has_claim = 1;
+            der_source(d, "反向类属（antisymmetry）");
+            if (out_conf) *out_conf = 0.8f;
+            ai->n_rel_no++;
+            char *r = (char *)malloc(strlen(resp0) + 1);
+            if (r) memcpy(r, resp0, strlen(resp0) + 1);
+            return r;
+        }
     }
 
     /* §6.125 **记忆里的猜测**（默认关）：先前类比推出来的结论，这一轮可以拿来当输入 ——

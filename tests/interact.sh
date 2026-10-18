@@ -963,6 +963,15 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[属于\]-> 动物" \
     && chk "「算是动物吗」（主语省略）⇒ 用上一轮主语补全" 1 \
     || chk "主语省略" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "66 §6.295 反向类属：动物 属于 猫 吗 ⇒ 不对（反过来才成立）"
+out=$(run "动物 属于 猫 吗" "猫属于动物" "反过来呢")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对 ， 动物 不 属于 猫" \
+    && chk "「动物 属于 猫 吗」⇒ 不对 + 理由（不再说推不出来）" 1 \
+    || chk "反向类属" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "动物 不 属于 猫" \
+    && chk "「反过来呢」⇒ 靠会话变量 + 反向类属答得出" 1 \
+    || chk "反过来呢" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
