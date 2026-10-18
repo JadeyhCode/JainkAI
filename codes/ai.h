@@ -870,6 +870,8 @@ typedef struct {
     /* §6.237 维护段再细分（巩固 / GC / 睡眠）——`::segreport` 一起打出来。 */
     uint64_t mnt_ns[3];
     uint32_t mnt_hits[3];
+    /* §6.255 指代消解：句首「它/它们/这个/那个」⇒ 换成上一轮的主语 */
+    char     last_subject[40];
     /* §6.253 抽象分片：睡眠的"抽象那一步"摊到多轮（每轮扫一段 i） */
     size_t   abs_i;
     size_t   abs_made;

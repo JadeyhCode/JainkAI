@@ -445,6 +445,20 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "这 条 我 删 不 了" \
     && chk "「忘记」也认" 1 \
     || chk "「忘记」也认" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㉜ §6.255 句首指代（它/它们/这个/那个）"
+out=$(run "猫 属于 动物" "它 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[不 会\]-> 飞" \
+    && chk "「它」指回上一轮主语（猫）" 1 \
+    || chk "「它」指回上一轮主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "狗 属于 动物" "它 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "狗 -\[不 会\]-> 飞" \
+    && chk "换主语后「它」跟着换（狗）" 1 \
+    || chk "换主语后「它」跟着换" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "它 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "它" \
+    && chk "没上文时「它」不瞎替换（原样）" 1 \
+    || chk "没上文时「它」不瞎替换" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

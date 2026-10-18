@@ -3703,8 +3703,31 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     size_t n;
     /* §6.120：**逐字模式**（默认关）时不分词 —— 先顺序接地，再把字符当"词"；
      * 关着时一个字都不变（还是 `ai_tokenize`，用户明确要求现在不要撤分词器）。 */
-    char **words = ai->char_stream ? ai_char_tokenize(ai, input, &n)
-                                   : ai_tokenize(ai, input, &n);
+    /* §6.255 **指代消解**（句首 它/它们/这个/那个 + 上一轮主语）：
+     * 实测 `猫 属于 动物` 之后问 `它 会 飞 吗`，答复是「我 不 确定 它 会 不 会 飞」——
+     * 代词没落地，等于没回答。这里在**分词之前**把代词换成上一轮的主语
+     * （只换句首那一处；`他/她` 不换 —— 那是"他者模型"的人，不是指代）。
+     * 用栈上的缓冲拼，不动 `input`（历史记录仍记用户原话）。 */
+    char decl_in[256];
+    const char *input_eff = input;
+    {
+        const char *q = input;
+        while (q && (*q == ' ' || *q == '\t')) q++;
+        static const char *pron[] = {"它们", "它", "这个", "那个", NULL};
+        if (q && ai->last_subject[0]) {
+            for (size_t i = 0; pron[i]; ++i) {
+                size_t pl = strlen(pron[i]);
+                if (strncmp(q, pron[i], pl) != 0) continue;
+                if (q[pl] && q[pl] != ' ' && q[pl] != '\t') continue;
+                const char *rest = q + pl;
+                snprintf(decl_in, sizeof decl_in, "%s%s", ai->last_subject, rest);
+                input_eff = decl_in;
+                break;
+            }
+        }
+    }
+    char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)
+                                   : ai_tokenize(ai, input_eff, &n);
     /* 视角切换会把 words/n 往后挪两个词，但**释放必须用原始的指针** ——
      * 不然 free 的是数组中间，是堆破坏（不是崩一下就完的那种）。 */
     char **words_alloc = words;
@@ -4404,6 +4427,18 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         (void)ai_narrate_apply(ai);            /* §6.141：与 `::narrate now` 同一处实现 */
 
     ai_seg_lap(ai, AI_SEG_NARR, &seg_t);
+    /* §6.255 记"这一轮的主语"，供下一句的指代用（代词/虚词不记）。
+     * **必须放在最后**：`鲸鱼 会 游泳` 这种新词是 natcoin 在**后面**才造出来的，
+     * 分词刚结束时 `pool_find(鲸鱼)` 还是 NULL ⇒ 记录会漏（实测：下一句「它」指不回去）。 */
+    if (words && n >= 1 && words[0] && words[0][0] && input_eff == input) {
+        static const char *skip0[] = {"我", "你", "您", "他", "她", "它", "我们", "你们",
+                                      "他们", "这", "那", "这个", "那个", "什么", "谁",
+                                      NULL};
+        int skip = 0;
+        for (size_t i = 0; skip0[i]; ++i) if (!strcmp(words[0], skip0[i])) { skip = 1; break; }
+        if (!skip && pool_find(ai->pool, words[0]) && strlen(words[0]) < sizeof ai->last_subject)
+            snprintf(ai->last_subject, sizeof ai->last_subject, "%s", words[0]);
+    }
     free(resp);
     ai_free_words(words_alloc, n_alloc);
     ai->view_who = NULL;      /* 视角只对这一轮有效 */
