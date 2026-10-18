@@ -1397,6 +1397,9 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     }
     B[ob] = 0;
     if (!A[0] || !B[0] || strcmp(A, B) == 0) return NULL;
+    /* §6.264 **`在` 不归造词这条路**：`我 在 想 事情` 会被造出「想事情」这个"地点"（实测垃圾）。
+     * 地点有它自己的路（`agent_learn_locative`：`A V 在 B` / `A 在 B V`），这里不掺和。 */
+    if (rid == REL_AT) return NULL;
     /* §6.227 **虚词不当宾语**（`我 住 在 很` 会学成 `我住 在 很`）+ **代词不能跟别的词拼成主语**
      * （`我 住 在 …` 的主语是 我+住 两截 ⇒ 拼出来的「我住」是垃圾词）。 */
     if (fr_is_func(B)) return NULL;

@@ -1577,8 +1577,13 @@ static inline void ai_switches_init(AI *ai) {
     { const char *rn = getenv("AIP_RELNAT");
       if (rn && rn[0] == '1') ai->rel_nat = 1;
       else if (rn && rn[0] == '0') ai->rel_nat = 0; }
-    ai->nat_coin = 0;                /* §6.173 默认**关**（反向测量：AIP_NATCOIN=1）*/
-    { const char *nc = getenv("AIP_NATCOIN"); if (nc && nc[0] == '1') ai->nat_coin = 1; }
+    /* §6.264 **造词默认翻成开**：用户最自然的教法就是「考拉 属于 动物」，以前因为新词学不进、
+     * 得先 `::natcoin on`。反向整包（`AIP_NATCOIN=1`）早就 42/42，翻之前又把 `在` 从造词里摘掉
+     * （`我 在 想 事情` 会造出"想事情"这种垃圾地点）。退回老行为：`AIP_NATCOIN=0` 或 `::natcoin off`。 */
+    ai->nat_coin = 1;
+    { const char *nc = getenv("AIP_NATCOIN");
+      if (nc && nc[0] == '1') ai->nat_coin = 1;
+      else if (nc && nc[0] == '0') ai->nat_coin = 0; }
     /* §6.202 **追问回话默认翻成开**：它说「没把握」之后，你回一句「会/不会/对/不对」
      * 就当教学写进图；给了确定答案之后，回「不对」就改口。以前默认关 ⇒ 这条路等于不存在。
      * 翻之前先修了两处（`::thinklearn off` 时不落标记、空行不作废追问），

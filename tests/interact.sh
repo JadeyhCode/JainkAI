@@ -560,6 +560,23 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 我 -\[喜欢\]-> 猫
     && chk "学进来的那条查得到" 1 \
     || chk "学进来的那条查得到" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "㊵ §6.264 造词默认开（新词直接教得进）；`在` 不归造词"
+out=$(run "教你考拉属于动物" "考拉属于动物吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 考拉 属于 动物（新词当场造）" \
+    && chk "默认就能教新词（不用先开开关）" 1 \
+    || chk "默认就能教新词" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 考拉 -\[属于\]-> 动物" \
+    && chk "教完就能问回来" 1 \
+    || chk "教完就能问回来" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "我 在 想 事情")
+printf '%s\n' "$out" | grep -q "记下 了 ： 我 在 想事情" \
+    && chk "「我 在 想 事情」不该被造出「想事情」这种地点" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "「我 在 想 事情」不该被造出地点" 1
+out=$(run "::natcoin off" "教你袋鼠会跳")
+printf '%s\n' "$out" | grep -q "记下 了 ： 袋鼠" \
+    && chk "::natcoin off 关得回去" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "::natcoin off 关得回去" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
