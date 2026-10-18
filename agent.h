@@ -234,7 +234,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         nn++;
     }
     if (getenv("AIP_SHAPEDBG")) {
-        fprintf(stderr, "[shape] 输入 %zu 词:", n);
+        fprintf(stderr, "[shape] 输入分词 %zu:", n);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, " %s", ww[z]);
         fprintf(stderr, "\n");
     }
@@ -265,7 +265,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
                 bind[k] = ww[i];
             } else if (strcmp(pat, ww[i]) != 0) ok = 0;
         }
-        if (!ok) { if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 接近但没匹配: %s\n", g_shape_l[r]); continue; }
+        if (!ok) { if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 近失: %s\n", g_shape_l[r]); continue; }
         char rbuf[96];
         snprintf(rbuf, sizeof rbuf, "%.95s", g_shape_r[r]);
         size_t o = 0;
@@ -287,7 +287,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
             if (o + 8 >= cap) { bad = 1; break; }
         }
         if (getenv("AIP_SHAPEDBG"))
-            fprintf(stderr, "[shape] rule=%s => %s (ok=%d)\n", g_shape_l[r], out, !bad);
+            fprintf(stderr, "[shape] 命中: %s => %s%s\n", g_shape_l[r], out, bad ? "（改写失败）" : "");
         if (!bad && o) { ai_free_words(w, n); return 1; }
     }
     ai_free_words(w, n);
