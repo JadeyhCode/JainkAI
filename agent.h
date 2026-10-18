@@ -332,9 +332,11 @@ static inline size_t *aip_pat_count(const char *kind) {
 static inline void aip_patterns_load(AI *ai) {
     if (g_pat_loaded) return;
     g_pat_loaded = 1;
-    /* §6.306 **数据消融开关**：`AIP_NODATA=1` 时不读 patterns.txt（所有桶为空）。
-     * 用来量"当前能力里有多少来自数据行、多少来自内核本身"——不是运行开关。 */
-    if (getenv("AIP_NODATA")) return;
+    /* §6.306 **数据消融开关**：`AIP_NODATA=1` 时不读 patterns.txt（所有桶为空）；
+     * §6.333 `AIP_NODATA=<桶名>`（lead/slot/confuse/reply/shape/syn/affix）只关掉**那一桶**，
+     * 用来量"每个族各贡献多少"——不是运行开关。 */
+    const char *nd = getenv("AIP_NODATA");
+    if (nd && *nd && !strcmp(nd, "1")) return;
     g_lead_n = g_slot_n = g_confuse_n = 0;
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
@@ -353,6 +355,7 @@ static inline void aip_patterns_load(AI *ai) {
         char *e = val + strlen(val);
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         if (!*val) continue;
+        if (nd && *nd && !strcmp(nd, kind)) continue;   /* §6.333 单桶消融 */
         if (!strcmp(kind, "affix")) {
             char *eq = strchr(val, '=');
             if (!eq || g_aff_n >= AIP_AFFIX_MAX) continue;
