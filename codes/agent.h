@@ -3558,6 +3558,39 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         }
     }
 
+    /* §6.330 **层级里没记到的一层，要说"不确定"而不是"不懂"**：
+     * `猫 属于 动物`、`哺乳动物 属于 动物`（数据），问 `猫 属于 哺乳动物 吗` ——
+     * 图里没有这一层，但两者在**同一棵分类树**上 ⇒ 负结论不成立、正结论也没有，
+     * 诚实的答复是"我 不 确定"，而不是"这个我 不 太 懂"。 */
+    if (!solved && rid == REL_IS_A && A && bw && rw) {
+        uint16_t bit = REL_BIT(REL_IS_A);
+        for (size_t i = 0; i < A->count; ++i) {
+            AssocEntry *at = &A->assocs[i];
+            if (!at->rel || !(at->rel & bit) || at->nrel) continue;
+            Token *C = at->main;
+            if (!C || C == B) continue;
+            Proof hp;
+            int related = 0;
+            rel_solve(ai, B, REL_IS_A, C, 0, &hp);
+            if (hp.status > 0) related = 1;
+            if (!related) {
+                rel_solve(ai, C, REL_IS_A, B, 0, &hp);
+                if (hp.status > 0) related = 1;
+            }
+            if (!related) continue;
+            char rb[240];
+            snprintf(rb, sizeof rb,
+                     "我 不 确定 %s %s 不 %s %s —— 分类 是 层级 的（%s 属于 %s），"
+                     "这 一 层 图 里 没 记 过（不 编）。",
+                     aw, rw, rw, bw, aw, C->name ? C->name : "?");
+            agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);
+            if (out_conf) *out_conf = 0.35f;
+            char *rr = (char *)malloc(strlen(rb) + 1);
+            if (rr) memcpy(rr, rb, strlen(rb) + 1);
+            return rr;
+        }
+    }
+
     /* §6.298 **宾语是"人"的多值问题答不出来时，明说不知道**。
      * 实测 `猫 喜欢 你 吗` 被检索/类比答成「我 喜欢 你 喜欢 的 动物」——比拒答糟得多。
      * 只在宾语是人称代词时走这条：别的未知（`老虎 会 飞 吗`）仍交给类比去"大概"，
