@@ -18,7 +18,7 @@ printf '%-22s %10s %10s %8s\n' "度量" "有数据" "无数据" "数据贡献"
 tot_on=0; tot_off=0; tot_all=0
 for f in tests/holdout.txt tests/holdout2.txt tests/holdout3.txt \
          tests/holdout4.txt tests/holdout5.txt tests/holdout6.txt tests/holdout7.txt tests/holdout8.txt tests/holdout9.txt tests/holdout10.txt tests/holdout11.txt tests/holdout12.txt tests/holdout13.txt tests/holdout14.txt \
-         tests/conv.txt tests/conv2.txt tests/conv3.txt; do
+         tests/conv.txt tests/conv2.txt tests/conv3.txt tests/conv4.txt; do
     case "$f" in
         *conv*.txt) run=tests/conv.sh ;;
         *) run=tests/holdout.sh ;;
