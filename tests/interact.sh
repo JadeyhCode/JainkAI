@@ -972,6 +972,16 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "动物 不 属于 猫" \
     && chk "「反过来呢」⇒ 靠会话变量 + 反向类属答得出" 1 \
     || chk "反过来呢" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "67 §6.296 带着内容的纠正：说错了 X 不 R Y ⇒ 改口（数据行）"
+out=$(run "猫属于动物吗" "说错了猫不属于动物")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "改 过来 了" \
+    && chk "「说错了猫不属于动物」⇒ 改口（不再\"不太懂\"）" 1 \
+    || chk "说错了" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫会飞吗" "错了猫不会飞")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -qE "改 过来 了|猫 不 会 飞" \
+    && chk "「错了猫不会飞」⇒ 也当纠正/陈述处理" 1 \
+    || chk "错了" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
