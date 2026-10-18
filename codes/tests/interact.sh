@@ -503,6 +503,15 @@ out=$(run "我 住 在 一个 地方" "我 在 哪")
 printf '%s\n' "$out" | grep -q "一个地方" && c=0 || c=1
 [ "$c" -eq 1 ] && chk "占位地名（一个地方）不学" 1 || chk "占位地名不学" 0 "$(printf '%s\n' "$out" | grep -a 一个地方 | head -1)"
 
+echo "㊱ §6.259 「你能做什么」给能力清单（不是闲聊模板）"
+out=$(run "你能做什么" "你 会 什么" "你能干什么")
+n=$(printf '%s\n' "$out" | reps | grep -c "就 三 件 事" || true)
+[ "$n" -eq 3 ] && chk "三种问法都给同一份清单" 1 \
+    || chk "能力清单三种问法一致" 0 "$(printf '%s\n' "$out" | reps | head -3 | tr '\n' '|')"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 的 我 直说" \
+    && chk "清单里同时说清做不到的（不联网/不会算术/不知道天气）" 1 \
+    || chk "清单里说清做不到的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

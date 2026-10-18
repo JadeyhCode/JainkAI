@@ -721,6 +721,18 @@ static inline int agent_weather_unknown(const char *input) {
 /* §6.258 **自述身份**：统一成一句，别再各说各的。
  * 实测 `你 叫 什么 名字` ⇒「我 是 一 直 在 听 你 说 的 人」、`你 是 谁` ⇒「我 是 你 的 伙伴」、
  * `你 叫 什么` ⇒「我 是 一 直 在 学 的 东西」—— 三句三个说法，且都没说**它是什么**。 */
+/* §6.259 **"你能做什么"** —— 用户最常问的一句，也是"可用"的门面。
+ * 以前回「我 一直 在 这里 …」（闲聊模板）。现在给一份**短、准、带例子**的能力清单，
+ * 并且明说做不到的（不联网/不会算术/不知道天气）。 */
+static inline int agent_self_capability(const char *input) {
+    if (!input) return 0;
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return 0;
+    return strstr(b, "你能做什么") || strstr(b, "你会什么") || strstr(b, "你能干什么") ||
+           strstr(b, "你能干嘛") || strstr(b, "你有什么用") || strstr(b, "你能帮我做什么") ||
+           strstr(b, "你能做什么事");
+}
+
 static inline int agent_self_identity(const char *input) {
     if (!input) return 0;
     char b[256];
@@ -3726,6 +3738,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!ai->ask_pending && agent_repeat_request(input)) {
         if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
         else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
+        ai->turns++;
+        return strlen(out);
+    }
+    /* §6.259 "你能做什么"：给一份短而准的清单 */
+    if (agent_self_capability(input)) {
+        snprintf(out, out_cap,
+                 "就 三 件 事：① 回答 图 里 记 着 的 关系（「猫 属于 动物 吗」「谁 会 飞」）；"
+                 "② 你 教 一 句 我 就 记 住（「考拉 属于 动物」「我 叫 小明」）；"
+                 "③ 多 跳 推 理 / 假设 / 记 别人 的 看法（「如果 猫 会 飞」「他 以为 …」）。"
+                 "不 会 的 我 直说：不 联 网、不 会 算 术、不 知道 天气 和 日期。");
         ai->turns++;
         return strlen(out);
     }
