@@ -15,7 +15,13 @@ SET=${2:-tests/holdout.txt}
 [ -x "$BIN" ] || { echo "FAIL: 缺可执行文件 $BIN"; exit 1; }
 [ -f "$MODEL" ] || { echo "FAIL: 缺模型 $MODEL"; exit 1; }
 
-pass=0; fail=0; bad=""
+# §6.324 `AIP_DUAL=1`：同一份题再跑另一个模型，**列出两个模型答复不一致的行** ——
+# 用来查"分词/知识差异"（`属于` vs `属+于`、`鲸鱼` vs `鲸+鱼`）。不影响本模型的判分。
+OTHER=model.bin
+[ "$MODEL" = "model.bin" ] && OTHER=session.bin
+
+pass=0; fail=0; bad=""; div=0
+rm -f /tmp/holdout_dual.tsv
 while IFS='	' read -r q want setup; do
     case "$q" in '#'*|'') continue ;; esac
     [ -n "$want" ] || continue
@@ -26,6 +32,14 @@ while IFS='	' read -r q want setup; do
         printf '%s\n::quit\n' "$q"
     } | timeout 30 "$BIN" --model "$MODEL" > /tmp/holdout_one.log 2>&1
     out=$(sed -n 's/.*AI > //p' /tmp/holdout_one.log | tail -1)
+    if [ -n "${AIP_DUAL:-}" ] && [ -f "$OTHER" ]; then
+        {   if [ -n "$setup" ]; then printf '%s\n' "$setup" | tr ';' '\n'; fi
+            printf '%s\n::quit\n' "$q"
+        } | timeout 30 "$BIN" --model "$OTHER" > /tmp/holdout_two.log 2>&1
+        out2=$(sed -n 's/.*AI > //p' /tmp/holdout_two.log | tail -1)
+        printf '%s\t%s\t%s\n' "$q" "$out" "$out2" >> /tmp/holdout_dual.tsv
+        [ "$out" = "$out2" ] || div=$((div+1))
+    fi
     case "$want" in
     !*)  # `!片段` = 答复里**不许**出现（查"学出垃圾"）
         if printf '%s\n' "$out" | grep -qE "${want#!}"; then fail=$((fail+1)); bad="$bad
@@ -43,3 +57,9 @@ done < "$SET"
 echo "留出集：$pass 通过 / $((pass+fail)) 条"
 [ -n "$bad" ] && printf '%s\n' "$bad"
 echo "PASS holdout（$pass/$((pass+fail))）"
+if [ -n "${AIP_DUAL:-}" ] && [ -f /tmp/holdout_dual.tsv ]; then
+    echo "双模型对照（$MODEL vs $OTHER）：$div 行答复不同"
+    awk -F'\t' -v m="$MODEL" -v o="$OTHER" \
+        '$2 != $3 { printf "  ≠ %s\n      %s: %s\n      %s: %s\n", $1, m, $2, o, $3 }' \
+        /tmp/holdout_dual.tsv | head -20
+fi
