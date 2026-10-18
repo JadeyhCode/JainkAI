@@ -164,8 +164,8 @@ for f in tests/*.sh; do
     b=${f#tests/}; b=${b%.sh}
     case "$b" in
         # 这些是**工具**不是套件：不进 suites.txt（新加工具脚本记得加到这里）
-        all|pool|prebuilt|probes_build|switches_ab|switches_sample|selfcheck|*_ab|meas_*|train_model|holdout|conv|attrib|datacheck) continue ;;
-        # holdout/conv/attrib/datacheck 是**度量/检查**不是套件：它们允许失败（失败清单就是待办），永远"PASS"。
+        all|pool|prebuilt|probes_build|switches_ab|switches_sample|selfcheck|*_ab|meas_*|train_model|holdout|conv|attrib|datacheck|capacity) continue ;;
+        # holdout/conv/attrib/datacheck/capacity 是**度量/检查**不是套件：它们允许失败（失败清单就是待办），永远"PASS"。
     esac
     if ! grep -qE "^${b}\|" tests/suites.txt; then
         say FAIL "套件脚本 $f 没进 tests/suites.txt"
