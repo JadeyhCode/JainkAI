@@ -870,6 +870,9 @@ typedef struct {
     /* §6.237 维护段再细分（巩固 / GC / 睡眠）——`::segreport` 一起打出来。 */
     uint64_t mnt_ns[3];
     uint32_t mnt_hits[3];
+    /* §6.253 抽象分片：睡眠的"抽象那一步"摊到多轮（每轮扫一段 i） */
+    size_t   abs_i;
+    size_t   abs_made;
     /* §6.248 写后读回校验（默认关；`::verifywrites on` / AIP_VERIFYWRITES=1 打开） */
     int      verify_writes;
     size_t   n_verify_ok;
@@ -4083,11 +4086,15 @@ static inline size_t ai_jaccard(const Token *a, const Token *b) {
     size_t uni = a->count + b->count - inter;
     return uni ? (inter * 100) / uni : 0;
 }
-static inline void ai_form_abstractions(AI *ai) {
+/* §6.253 **可分片调用**：从 `from` 扫到 `to`（不含），最多再建 `max_new - *made_io` 个抽象。
+ * 分成多步的目的是**把一次 ~200 ms 的步骤摊到多轮**（睡眠本来就是"每轮一步"）。
+ * 等价性：外层 i 仍**升序**、每建一个就 break 内层、上限仍是 3 ⇒ 结果与一次跑完相同。 */
+static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
+                                             size_t max_new, size_t *made_io) {
     if (!ai || !ai->pool) return;
     TokenPool *p = ai->pool;
-    size_t created = 0;
-    const size_t MAX_NEW = 3;
+    size_t created = made_io ? *made_io : 0;
+    const size_t MAX_NEW = max_new;
     /* §6.238 **候选集倒排**（精确剪枝，不改结果）：jaccard≥70 要求两边共享**很多**邻居，
      * 至少 1 个（两侧出度都 ≥3 时其实 ≥3 个）。原来的二重循环对**每一对**都算
      * `ai_jaccard`（O(出度²)）。这里先建"谁指向 m"的倒排表（O(E)），再只对**与 a 共享邻居**
@@ -4138,7 +4145,8 @@ static inline void ai_form_abstractions(AI *ai) {
         free(cur);
     }
 
-    for (size_t i = 0; i < p->count && created < MAX_NEW; ++i) {
+    size_t lim = (to < p->count) ? to : p->count;
+    for (size_t i = from; i < lim && created < MAX_NEW; ++i) {
         Token *a = p->tokens[i];
         if (a->is_garbage || !a->name || a->parent) continue;
         if (a->name[0] == '[' || a->count < 3) continue;
@@ -4188,7 +4196,14 @@ static inline void ai_form_abstractions(AI *ai) {
             break;
         }
     }
+    if (made_io) *made_io = created;
     free(in_off); free(in_src); free(seen); free(cand);
+}
+
+/* 老入口（一次跑完）：probe/测试仍用它 */
+static inline void ai_form_abstractions(AI *ai) {
+    size_t made = 0;
+    ai_form_abstractions_slice(ai, 0, ai && ai->pool ? ai->pool->count : 0, 3, &made);
 }
 
 /* ============================ 睡眠（增量） ============================ */
@@ -4218,10 +4233,21 @@ static inline void ai_sleep_step(AI *ai) {
         }
         return;
     }
+    /* §6.253 **抽象分片**：以前这一步一次跑完（1412 词实测 ~200 ms，某一轮特别卡）。
+     * 现在每轮只扫一段（约 1/8 词表），总结果与一次跑完相同（外层 i 升序 + 上限 3）。
+     * 用 `sleep_in_abstraction` 当"进入抽象阶段"的标记，用 `abs_i` 当游标。 */
     if (!ai->sleep_in_abstraction) {
-        ai_form_abstractions(ai);
         ai->sleep_in_abstraction = 1;
-        return;
+        ai->abs_i = 0;
+        ai->abs_made = 0;
+    }
+    {
+        size_t n = ai->pool ? ai->pool->count : 0;
+        size_t step = n / 8 + 1;
+        size_t to = ai->abs_i + step;
+        ai_form_abstractions_slice(ai, ai->abs_i, to, 3, &ai->abs_made);
+        ai->abs_i = to;
+        if (ai->abs_i < n && ai->abs_made < 3) return;   /* 还没扫完/没到上限 ⇒ 下一轮继续 */
     }
     ai->sleep_target = 0;
     ai->sleep_cursor = 0;
