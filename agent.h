@@ -1082,6 +1082,62 @@ static inline const char *agent_measure_question(const char *input) {
     return NULL;
 }
 
+/* §6.275 **「你 会 X 吗」不能答成"我会试着 X"**：实测 `你会游泳吗` 走帧层，渲染出
+ * 「我 会 试 着 游泳」—— 一个程序声称会游泳，比拒答更糟。做法：问的是"你能做某件事吗"时，
+ * **图里有这条事实才让正常路径答**；没有就明说"我是程序，这件事我没记过"。
+ * 只认「你 会/能/可以 … 吗」这一种形状，别的一律不碰。 */
+static inline int agent_self_ability(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !input || !out || cap < 32) return 0;
+    char b[200];
+    if (!agent_nosp(input, b, sizeof b)) return 0;
+    /* 只接**问句**：`你 会 游泳` 是陈述（教它"AI 会游泳"），不能被这条抢掉 ——
+     * 第一版没这道判断，结果教不进去（实测「你 会 游泳」直接回"这件事我不敢说会"）。 */
+    {
+        size_t bl = strlen(b);
+        int isq = 0;
+        if (bl >= 3 && (!strcmp(b + bl - 3, "吗") || !strcmp(b + bl - 3, "么") ||
+                        !strcmp(b + bl - 3, "呢") || !strcmp(b + bl - 3, "？"))) isq = 1;
+        if (bl >= 1 && b[bl - 1] == '?') isq = 1;
+        if (!isq) return 0;
+    }
+    const char *st = NULL;
+    static const char *pre[] = {"你可以", "你会", "你能", NULL};
+    for (size_t i = 0; pre[i]; ++i) {
+        size_t n = strlen(pre[i]);
+        if (strncmp(b, pre[i], n) == 0) { st = b + n; break; }
+    }
+    if (!st) return 0;
+    size_t l = strlen(st);
+    while (l) {
+        const char *tail = st + l;
+        if (l >= 3 && (!strncmp(tail - 3, "吗", 3) || !strncmp(tail - 3, "么", 3) ||
+                       !strncmp(tail - 3, "呢", 3))) l -= 3;
+        else if (tail[-1] == '?') l -= 1;
+        else if (l >= 3 && !strncmp(tail - 3, "？", 3)) l -= 3;
+        else break;
+    }
+    if (l == 0) return 0;                      /* 「你会吗」这种没有内容，交给别的路径 */
+    /* 带疑问词的是"你会什么/你会做什么"，不是"会不会某件事" ⇒ 不接。 */
+    for (size_t i = 0; i < l; ) {
+        if (ai_token_has_question_word(st + i)) return 0;
+        unsigned char c = (unsigned char)st[i];
+        i += ((c & 0xE0) == 0xE0) ? 3 : 1;
+    }
+    char obj[64];
+    if (l >= sizeof obj) return 0;
+    memcpy(obj, st, l); obj[l] = 0;
+    Token *b0 = pool_find(ai->pool, obj);
+    uint8_t rid = rel_id_of(ai, "会", 0);
+    if (b0 && rid) {
+        Token *me = pool_find(ai->pool, "你");
+        if (me && (rel_direct(me, rid, b0) || rel_direct_neg(me, rid, b0))) return 0;
+    }
+    snprintf(out, cap,
+             "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「你 会 %.40s」。"
+             "你 想 教 我 就 说「你 会 %.40s」，我 就 记 下（存盘 之后 还 在）。", obj, obj);
+    return 1;
+}
+
 /* §6.270 **对话胶水**（不好意思 / 你觉得呢 / 然后呢 / 你记得我吗…）：
  * 这些不是知识问题，以前大多掉生成流水线出词串（实测「意思 别 上 谁 有 样 时候」、
  * 「你 当 时 也 是 没 办 法」）。原则：**能答实的就答**（能记住/记得住），
@@ -4289,6 +4345,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         const char *sr = agent_self_route(input, out, out_cap);
         if (sr) { ai->turns++; return strlen(out); }
+    }
+    /* §6.275 「你 会 X 吗」：图里没这条事实就明说（别再让帧层渲染成"我会试着 X"）。
+     * ⚠ 必须排在 self_route **之后**：`你能做什么` / `你会什么语言` 得先被能力/语言那条接走
+     * （第一版放前面，把「你能做什么」答成"做什 这 件 事 我 没 记 过"）。 */
+    if (!ai->ask_pending) {
+        char ab[256];
+        if (agent_self_ability(ai, input, ab, sizeof ab)) {
+            snprintf(out, out_cap, "%s", ab);
+            ai->turns++;
+            return strlen(out);
+        }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {

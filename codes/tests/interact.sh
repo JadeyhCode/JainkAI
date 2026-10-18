@@ -748,6 +748,22 @@ n=$(printf '%s\n' "$out" | reps | grep -c "记下 了" || true)
 [ "$n" -eq 3 ] && chk "合法的复合/长句照旧学得进（没误伤）" 1 \
     || chk "合法复合没误伤" 0 "$(printf '%s\n' "$out" | reps | head -3 | tr '\n' '|')"
 
+echo "㊿ §6.275 「你会 X 吗」：没记过就明说，教一句就认（不再\"我会试着 X\"）"
+out=$(run "你会游泳吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 敢 说 会" \
+    && chk "「你会游泳吗」⇒ 明说没记过（不再\"我会试着游泳\"）" 1 \
+    || chk "你会游泳吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "试 着" \
+    && chk "不再出现\"我会试着 X\"这种假装" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "不再假装会" 1
+out=$(run "你会游泳" "你会游泳吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 你 会 游泳" \
+    && chk "陈述句「你会游泳」照样能教（没被这条抢掉）" 1 \
+    || chk "教你会游泳" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "你 -\[会\]-> 游泳" \
+    && chk "教完问回来 ⇒ 对" 1 \
+    || chk "问回来" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
