@@ -622,6 +622,37 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对 ，" \
     && chk "没上文时「那狗呢」不瞎补全（不编出「对，…」）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
     || chk "没上文时不瞎补全" 1
 
+echo "㊹ §6.269 能力问句如实说 + 否定的「什么」问句 + 规则句明说学不进 + 反问我能不能保证"
+out=$(run "你会算术吗" "帮我查一下北京天气" "你会写诗吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "算 术 我 不 会" \
+    && chk "「你会算术吗」⇒ 明说不会（不再答\"你应该会算术\"）" 1 \
+    || chk "算术能力问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "天气 我 不 知道" \
+    && chk "「帮你查一下北京天气」⇒ 明说没有天气数据" 1 \
+    || chk "天气请求式问法" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "这 个 我 真 不 会" \
+    && chk "「你会写诗吗」⇒ 明说不会（不再答\"我会试着写诗\"）" 1 \
+    || chk "写诗能力问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "我不喜欢猫" "我不喜欢什么" "谁不喜欢猫")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 不 喜欢 猫" \
+    && chk "否定的「什么」问句答得出（分词把「不喜欢」当一个词也认）" 1 \
+    || chk "否定的什么问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 喜欢 猫 的 有 ： 我" \
+    && chk "否定的反查「谁不喜欢猫」答得出" 1 \
+    || chk "否定的反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "教你会飞的动物是鸟")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "一 条 规则" \
+    && chk "规则句（…的…是…）明说学不进，不再出词串" 1 \
+    || chk "规则句明说学不进" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "我在哪")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "你 还 没 告诉 我 你 在 哪" \
+    && chk "还没教过地点时「我在哪」给怎么教（不再像复述问题）" 1 \
+    || chk "我在哪给怎么教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "你确定吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "每 条 都 能 追" \
+    && chk "「你确定吗」⇒ 给可核查的保证（不再答\"我没什么事我有空\"）" 1 \
+    || chk "你确定吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

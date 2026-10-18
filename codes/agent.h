@@ -197,6 +197,22 @@ static inline int agent_norm_name_q(char *const *w, size_t n, char **nw, size_t 
     return 0;
 }
 
+/* §6.269 分词会把「不 喜欢」**合成一个词**「不喜欢」：占位问句里 `words[1]` 因此不是
+ * `不` 也不是关系词 ⇒ `A 不 R 什么` / `谁 不 R B` 整句掉闲聊（实测「我 不 喜欢 什么」
+ * 答「你 想 说 的 时候 再 说」）。这里统一剥掉词首的「不」再查关系 id，并带出否定标志。 */
+static inline uint8_t agent_rid_maybe_neg(AI *ai, const char *w, int *neg) {
+    uint8_t rid = w ? rel_id_of(ai, w, 0) : 0;
+    if (!rid && w) {
+        const char *no = "不";
+        size_t nl = strlen(no);                 /* UTF-8：3 字节 */
+        if (strncmp(w, no, nl) == 0) {
+            rid = rel_id_of(ai, w + nl, 0);
+            if (rid && neg) *neg = 1;
+        }
+    }
+    return rid;
+}
+
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
@@ -260,23 +276,37 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
     size_t last = n;
     while (last > 0 && (strcmp(words[last - 1], "呢") == 0 || strcmp(words[last - 1], "吗") == 0))
         last--;
-    size_t sl1 = (last >= 3) ? agent_open_slot_len(words + 2, last - 2) : 0;
-    if (sl1 && (last == 2 + sl1 || last == 2 + sl1 + 1)) {
-        const char *hint = (last == 2 + sl1 + 1) ? words[2 + sl1] : NULL;   /* 类别提示（可为空）*/
+    /* §6.269 `A 不 R 什么`（「我 不 喜欢 什么」）—— shape 一 以前只认 `A R 什么`，
+     * `words[1]` 是 `不`（不是关系词）⇒ 整句掉闲聊（实测答「你 想 说 的 时候 再 说」，
+     * 明明图里有「我 不 喜欢 猫」）。`不` 只认紧跟主语的那一个，别的位置不动。 */
+    size_t qn = (last >= 4 && strcmp(words[1], "不") == 0) ? 1 : 0;
+    size_t rpos = 1 + qn;
+    size_t sl1 = (last >= rpos + 2) ? agent_open_slot_len(words + rpos + 1, last - rpos - 1) : 0;
+    if (sl1 && (last == rpos + 1 + sl1 || last == rpos + 1 + sl1 + 1)) {
+        const char *hint = (last == rpos + 1 + sl1 + 1) ? words[rpos + 1 + sl1] : NULL;   /* 类别提示（可为空）*/
         Token *a = pool_find(ai->pool, words[0]);
-        uint8_t rid = rel_id_of(ai, words[1], 0);
+        int rneg = 0;
+        uint8_t rid = agent_rid_maybe_neg(ai, words[rpos], &rneg);
+        if (qn) rneg = 1;
         if (!a || rid == 0) return NULL;
         Token *out[8];
         uint8_t from_hyp[8];
-        size_t got = rel_next_cands(ai, a, rid, 0, out, from_hyp,
+        size_t got = rel_next_cands(ai, a, rid, rneg, out, from_hyp,
                                     (size_t)(sizeof out / sizeof out[0]));
         char buf[256];
         size_t off = 0;
-        off += (size_t)snprintf(buf + off, sizeof buf - off, "我 记 的 是 ： %s %s ",
-                                a->name ? a->name : "?", words[1]);
+        const char *rd1 = words[rpos];
+        if (rneg && strncmp(rd1, "不", strlen("不")) == 0) rd1 += strlen("不");
+        off += (size_t)snprintf(buf + off, sizeof buf - off, "我 记 的 是 ： %s %s%s ",
+                                a->name ? a->name : "?", rneg ? "不 " : "", rd1);
         if (got == 0) {
+            /* §6.269 第一人称"地点没记"时给一句怎么教：实测「我 在 哪」答成
+             * 「我 记 的 是 ： 我 在 什么 ， 图里 没 记 过」—— 像在复述问题，用户拿不到下一步。 */
+            if (!rneg && a->name && strcmp(a->name, "我") == 0 && rid == REL_AT)
+                snprintf(buf + off, sizeof buf - off,
+                         "什么 ， 你 还 没 告诉 我 你 在 哪 —— 说 一 句「我 在 上海」我 就 记 住（不 编）");
             /* §6.147：带类别提示时把提示原样带回这句里（「… 属于 什么 动物 ， 图里 没 记 过」）*/
-            if (hint) snprintf(buf + off, sizeof buf - off, "什么 %s ， 图里 没 记 过（不 编）", hint);
+            else if (hint) snprintf(buf + off, sizeof buf - off, "什么 %s ， 图里 没 记 过（不 编）", hint);
             else      snprintf(buf + off, sizeof buf - off, "什么 ， 图里 没 记 过（不 编）");
         } else {
             for (size_t i = 0; i < got && i < 4; ++i)
@@ -308,15 +338,19 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         const char *catw = has_cat ? words[base] : NULL;
         Token *cat = catw ? pool_find(ai->pool, catw) : NULL;
         if (has_cat && !cat) return NULL;               /* 类别词不在图里 ⇒ 不接（不猜）*/
-        uint8_t rid = rel_id_of(ai, words[base + (has_cat ? 1 : 0)], 0);
+        uint8_t rid = agent_rid_maybe_neg(ai, words[base + (has_cat ? 1 : 0)], &oq_neg);
         Token *b = pool_find(ai->pool, words[base + (has_cat ? 2 : 1)]);
         if (rid == 0 || !b) return NULL;
         char buf[256];
         size_t off = 0, hits = 0;
+        /* §6.269 关系词可能**自带**「不」（单 token「不喜欢」）⇒ 文案里别再补一个「不」 */
+        const char *rdisp = words[base + (has_cat ? 1 : 0)];
+        if (oq_neg && strncmp(rdisp, "不", strlen("不")) == 0) rdisp += strlen("不");
+        const char *bdisp = words[base + (has_cat ? 2 : 1)];
         if (cat) off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 （只算 %s） ： ",
-                                         oq_neg ? "不 " : "", words[base + 1], words[base + 2], catw);
+                                         oq_neg ? "不 " : "", rdisp, bdisp, catw);
         else     off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 ： ",
-                                         oq_neg ? "不 " : "", words[base], words[base + 1]);
+                                         oq_neg ? "不 " : "", rdisp, bdisp);
         /* §6.149 **先量后改**：`scanned < 64` 会让"第 64 个内容词之后"的答案**永远查不到**。
          * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
          * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
@@ -734,8 +768,12 @@ static inline int agent_weather_unknown(const char *input) {
     int has_weather = strstr(b, "天气") || strstr(b, "下雨") || strstr(b, "下雪") ||
                       strstr(b, "气温") || strstr(b, "温度") || strstr(b, "晴");
     if (!has_weather) return 0;
+    /* §6.269 请求式问法（「帮你 查 一下 北京 天气」）也要认：以前只认时间词/吗，
+     * 实测这句掉进「这个我 不 太 懂」。 */
     return strstr(b, "明天") || strstr(b, "今天") || strstr(b, "现在") ||
-           strstr(b, "未来") || strstr(b, "外面") || strstr(b, "会不会") || strstr(b, "吗");
+           strstr(b, "未来") || strstr(b, "外面") || strstr(b, "会不会") || strstr(b, "吗") ||
+           strstr(b, "查") || strstr(b, "看看") || strstr(b, "怎么样") ||
+           strstr(b, "如何") || strstr(b, "预报");
 }
 
 /* §6.258 **自述身份**：统一成一句，别再各说各的。
@@ -895,7 +933,49 @@ static inline const char *agent_unsupported_request(const char *input) {
         strstr(b, "聊点别的"))
         return "这 个 我 真 不 会 —— 我 只 能 回答 图 里 记 着 的 关系、记 你 教 我 的 东西，"
                "不 会 讲 笑 话/唱 歌。你 想 聊 知识 的话 我 在。";
+    /* §6.269 其它**生成类**请求（写诗/画画/写代码/翻译）：实测「你 会 写 诗 吗」⇒
+     * 「我 会 试 着 写诗」（把"你会写诗"当关系猜了）。只在**请求口气**里认，
+     * 免得把知识句（「画画 属于 艺术」）当成请求。 */
+    {
+        int ask = strstr(b, "你") || strstr(b, "帮我") || strstr(b, "给 我") ||
+                  strstr(b, "吗") || strstr(b, "吧") || strstr(b, "？") || strstr(b, "?");
+        if (ask && (strstr(b, "写诗") || strstr(b, "作诗") || strstr(b, "写歌") ||
+                    strstr(b, "写 首") || strstr(b, "画画") || strstr(b, "画张") ||
+                    strstr(b, "画 个") || strstr(b, "写代码") || strstr(b, "编程") ||
+                    strstr(b, "翻译") || strstr(b, "写作文")))
+            return "这 个 我 真 不 会 —— 我 只 能 回答 图 里 记 着 的 关系、记 你 教 我 的 东西，"
+                   "不 会 写 诗/画 画/翻 译 这 类 生 成。你 想 聊 知识 的话 我 在。";
+    }
     return NULL;
+}
+
+/* §6.269 **规则句不是事实**：`教你 会飞 的 动物 是 鸟` / `教你 猫 的 主人 是 小明` 这类
+ * 「…的…是…」是**规则/定义**，本项目的学习链只认「A 关系 B」这一种。以前它掉进生成流水线，
+ * 答出词串（实测「鸟 睡觉 吗 只 你 开」）。这里在**剥掉引导语之后**认出来并明说学不进，
+ * 同时给出可行的教法（先教两条事实，多跳推理会用上）。只对**带引导语的教法**生效，
+ * 不碰普通陈述句。`名字`句（「我 的 名字 是 小明」）由名字那条路管，先放过。 */
+static inline int agent_rule_teach(const char *s) {
+    if (!s) return 0;
+    char b[200];
+    if (!agent_nosp(s, b, sizeof b)) return 0;
+    if (!strstr(b, "的") || !strstr(b, "是")) return 0;
+    if (strstr(b, "名字") || strstr(b, "叫")) return 0;
+    if (strstr(b, "吗") || strstr(b, "呢") || strstr(b, "？") || strstr(b, "?")) return 0;
+    return 1;
+}
+
+/* §6.269 **「你 确定 吗」**：用户对我刚给的说法要一句保证。以前掉闲聊
+ * （实测答「我 没 什么 事 我 有 空」，紧接着「再 说 一 遍」就把这句废话复读一遍）。
+ * 这里给的是**可核查**的保证（能追、能改），不吹"绝对对"。 */
+static inline const char *agent_confirm_request(const char *input) {
+    if (!input) return NULL;
+    char b[200];
+    if (!agent_nosp(input, b, sizeof b)) return NULL;
+    int ask = strstr(b, "你确定") || strstr(b, "你肯定") || strstr(b, "真的吗") ||
+              strstr(b, "真的假的") || strstr(b, "没骗我") || strstr(b, "确定吗");
+    if (!ask) return NULL;
+    return "我 说 的 都 是 图 里 记 着 的，每 条 都 能 追 —— 想 看 依据 就 问「为什么 …」；"
+           "我 说 错 了 你 说「不 对」，我 就 改。";
 }
 
 static inline const char *agent_self_fact(const char *input) {
@@ -949,6 +1029,13 @@ static inline const char *agent_capability_unknown(const char *input) {
         (strstr(input, "加") || strstr(input, "减") || strstr(input, "乘") ||
          strstr(input, "除") || strstr(input, "＋") || strstr(input, "＋") ||
          strstr(input, "+") || strstr(input, "-")))
+        return "算 术 我 不 会（没 有 算术 能力）—— 这 个数 你 自己 算 更 快，也 不 会 错。";
+    /* §6.269 「你 会 算术 吗」以前**只靠 `等于` 认**，所以这句掉进猜测 ⇒ 答
+     * 「你 应该 会 算术」（还把主语当成知识问题猜了）。能力问句带 你/吗 时明说不会；
+     * `算术 属于 数学` 这种知识句（没有 你/吗）不走这儿。 */
+    if ((strstr(input, "算术") || strstr(input, "算数") || strstr(input, "算 术")) &&
+        (strstr(input, "你") || strstr(input, "吗") || strstr(input, "帮我") ||
+         strstr(input, "能给 我")))
         return "算 术 我 不 会（没 有 算术 能力）—— 这 个数 你 自己 算 更 快，也 不 会 错。";
     return NULL;
 }
@@ -2035,6 +2122,10 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
     {
         const char *un = agent_unsupported_request(input);
         if (un) { snprintf(out, cap, "%s", un); return out; }
+    }
+    {
+        const char *cf = agent_confirm_request(input);
+        if (cf) { snprintf(out, cap, "%s", cf); return out; }
     }
     if (agent_clock_unknown(input)) {
         snprintf(out, cap,
@@ -4074,7 +4165,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
         const char *q = input_eff;
         while (*q == ' ' || *q == '\t') q++;
-        static const char *lead[] = {"告诉你", "教你", "告诉 你", "教 你", " teaches"};
+        static const char *lead[] = {"告诉你", "教你", "教我", "告诉 你", "教 你", "教 我", " teaches"};
 
         for (size_t i = 0; lead[i]; ++i) {
             size_t ll = strlen(lead[i]);
@@ -4086,6 +4177,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             input_eff = decl_in;
             break;
         }
+    }
+    /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */
+    if (agent_rule_teach(input_eff) && input_eff != input) {
+        snprintf(out, out_cap,
+                 "这 是 一 条 规则（「…的…是…」），我 只 学 事 实：「A 关系 B」。"
+                 "你 先 教「鸟 会 飞」和「鸟 属于 动物」，多 跳 推 理 会 用 上 它 们。");
+        ai->turns++;
+        return strlen(out);
     }
     {   /* §6.268 「那狗呢 / 狗呢」⇒ 「狗 <上一句的关系> <上一句的宾语> 吗」*/
         char el[160];
