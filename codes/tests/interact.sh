@@ -957,6 +957,12 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 考拉 属于 
     && chk "单个「教」也算引导语（教考拉属于动物）" 1 \
     || chk "lead 教" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "65 §6.294 数据行能用会话变量：主语省略/镜像省略"
+out=$(run "猫属于什么" "算是动物吗")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[属于\]-> 动物" \
+    && chk "「算是动物吗」（主语省略）⇒ 用上一轮主语补全" 1 \
+    || chk "主语省略" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

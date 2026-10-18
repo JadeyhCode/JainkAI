@@ -81,6 +81,14 @@ static inline int agent_open_slot_word(const char *w) {
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
+/* §6.294 **上一轮学到的那条事实**（供数据行做"反过来呢"这类镜像改写）。 */
+static char g_lf_a[40], g_lf_r[40], g_lf_b[40];
+static inline void aip_note_fact(const char *a, const char *r, const char *b) {
+    if (!a || !r || !b) return;
+    snprintf(g_lf_a, sizeof g_lf_a, "%s", a);
+    snprintf(g_lf_r, sizeof g_lf_r, "%s", r);
+    snprintf(g_lf_b, sizeof g_lf_b, "%s", b);
+}
 
 /* 返回 1 = 命中并写出了新句子 */
 static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t cap) {
@@ -100,6 +108,15 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
      * 这里把"以吗结尾的长词"拆成 词 + 吗（通用预处理，不属于任何一条规则）。 */
     const char *ww[12];
     size_t nn = n;
+    /* §6.294 **会话变量**（数据行能用）：$S = 上一轮主语，$P = 上一轮问题的宾语，
+     * $R = 上一轮问题的关系名。它们是**读**会话状态，不引入新的语义判断。 */
+    const char *sess[6];
+    sess[0] = ai->last_subject[0] ? ai->last_subject : NULL;
+    sess[1] = ai->last_q_b[0] ? ai->last_q_b : NULL;
+    sess[2] = ai->last_q_rid ? rel_name_of(ai, ai->last_q_rid) : NULL;
+    sess[3] = g_lf_a[0] ? g_lf_a : NULL;      /* $A = 上一轮学到的主语 */
+    sess[4] = g_lf_r[0] ? g_lf_r : NULL;      /* $W = 上一轮学到的关系 */
+    sess[5] = g_lf_b[0] ? g_lf_b : NULL;      /* $O = 上一轮学到的宾语 */
     char lastbuf[32];
     for (size_t i = 0; i < n && i < 12; ++i) ww[i] = w[i];
     if (nn && nn < 12 && strlen(ww[nn - 1]) > strlen("吗") &&
@@ -121,6 +138,14 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         int ok = 1;
         for (size_t i = 0; i < nl && ok; ++i) {
             const char *pat = lt[i];
+            if (pat[0] == '$' && (pat[1] == 'S' || pat[1] == 'P' || pat[1] == 'R' ||
+                                  pat[1] == 'A' || pat[1] == 'W' || pat[1] == 'O')) {
+                const char *v = sess[pat[1] == 'S' ? 0 : (pat[1] == 'P' ? 1 :
+                                    (pat[1] == 'R' ? 2 : (pat[1] == 'A' ? 3 :
+                                    (pat[1] == 'W' ? 4 : 5))))];
+                if (!v || strcmp(v, ww[i]) != 0) ok = 0;
+                continue;
+            }
             if (pat[0] == '$' && pat[1] >= '1' && pat[1] <= '9') {
                 size_t k = (size_t)(pat[1] - '1');
                 const char *con = pat + 2;           /* @k / @r / 空 */
@@ -136,7 +161,13 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         int bad = 0;
         for (char *tok = strtok(rbuf, " "); tok; tok = strtok(NULL, " ")) {
             const char *val = tok;
-            if (tok[0] == '$' && tok[1] >= '1' && tok[1] <= '9') {
+            if (tok[0] == '$' && (tok[1] == 'S' || tok[1] == 'P' || tok[1] == 'R' ||
+                                  tok[1] == 'A' || tok[1] == 'W' || tok[1] == 'O')) {
+                val = sess[tok[1] == 'S' ? 0 : (tok[1] == 'P' ? 1 :
+                             (tok[1] == 'R' ? 2 : (tok[1] == 'A' ? 3 :
+                             (tok[1] == 'W' ? 4 : 5))))];
+                if (!val) { bad = 1; break; }
+            } else if (tok[0] == '$' && tok[1] >= '1' && tok[1] <= '9') {
                 size_t k = (size_t)(tok[1] - '1');
                 val = bind[k];
                 if (!val) { bad = 1; break; }
@@ -1666,6 +1697,8 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
         if (B) wb = (ai_write_rel(ai, B, C, rid, 0, AI_WSRC_RELATION) == 0);
         if (!wa && !wb) return NULL;
         ai->n_rel_learned++;
+        if (wa) aip_note_fact(aw, rw, cw);
+        else    aip_note_fact(bw, rw, cw);
         if (wa && wb)
             snprintf(buf, sizeof buf, "记下 了 ： %s 和 %s 都 %s %s", aw, bw, rw, cw);
         else if (wa)
@@ -1970,6 +2003,7 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
         }
         if (!learned) return NULL;
         ai->n_rel_learned++;
+        aip_note_fact(aw, words[1], items[0]);
         if (skipped)
             snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）",
                      aw, words[1], wrote, missed);
@@ -2328,6 +2362,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     if (ai_write_rel(ai, ta, tb, rid, neg, AI_WSRC_RELATION) != 0) return NULL;
     ai->n_rel_learned++;
     ai->n_learned++;
+    aip_note_fact(ta->name, words[ri], tb->name);
     char resp0[192];
     snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s（新词当场造）",
              ta->name, neg_sep ? "不 " : "", words[ri], tb->name);
@@ -4938,12 +4973,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
         uint8_t rid2 = 0;
         int neg2 = 0, q2 = 0;
-        if (rel_parse(ai, words, n, jb, sizeof jb, &aw2, &rid2, &neg2, &bw2, &q2, &rw2, 0) &&
-            q2 && rid2 && bw2 && strlen(bw2) < sizeof ai->last_q_b) {
+        int rp = rel_parse(ai, words, n, jb, sizeof jb, &aw2, &rid2, &neg2, &bw2, &q2, &rw2, 0);
+        if (rp && q2 && rid2 && bw2 && strlen(bw2) < sizeof ai->last_q_b) {
             ai->last_q_rid = rid2;
             ai->last_q_neg = (uint8_t)(neg2 ? 1 : 0);
             snprintf(ai->last_q_b, sizeof ai->last_q_b, "%s", bw2);
         }
+        /* §6.294 **陈述句也记一条"上一句事实"**：`反过来呢` 的数据行要用它。
+         * 放在这里（所有路径之前、一处）比在每个学习/答复路径里分别记可靠 ——
+         * 实测「猫属于动物」走的是"我知道"那条答复路径，学习路径根本没跑。 */
+        if (rp && !q2 && rid2 && aw2 && bw2)
+            aip_note_fact(aw2, rw2 ? rw2 : "属于", bw2);
     }
     /* 视角切换会把 words/n 往后挪两个词，但**释放必须用原始的指针** ——
      * 不然 free 的是数组中间，是堆破坏（不是崩一下就完的那种）。 */
