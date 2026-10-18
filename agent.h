@@ -183,7 +183,7 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
  * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
  * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
-#define AIP_SHAPE_MAX 64   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
+#define AIP_SHAPE_MAX 96   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
@@ -233,6 +233,11 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         ww[nn] = "吗";
         nn++;
     }
+    if (getenv("AIP_SHAPEDBG")) {
+        fprintf(stderr, "[shape] 输入 %zu 词:", n);
+        for (size_t z = 0; z < n; ++z) fprintf(stderr, " %s", ww[z]);
+        fprintf(stderr, "\n");
+    }
     for (size_t r = 0; r < g_shape_n; ++r) {
         char lbuf[96];
         snprintf(lbuf, sizeof lbuf, "%.95s", g_shape_l[r]);
@@ -260,7 +265,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
                 bind[k] = ww[i];
             } else if (strcmp(pat, ww[i]) != 0) ok = 0;
         }
-        if (!ok) continue;
+        if (!ok) { if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 接近但没匹配: %s\n", g_shape_l[r]); continue; }
         char rbuf[96];
         snprintf(rbuf, sizeof rbuf, "%.95s", g_shape_r[r]);
         size_t o = 0;
