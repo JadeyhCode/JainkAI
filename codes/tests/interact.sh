@@ -892,6 +892,19 @@ printf '%s\n' "$out" | grep -q "记下 了 ： 放 首 歌" \
     && chk "没有再把「放首歌听听」学成边" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
     || chk "没学成边" 1
 
+echo "59 §6.288 形状表：语序改写变成数据行（加一行 = 多认一种语序）"
+out=$(run "猫你属于什么" "狗你属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "猫 属于 动物" \
+    && chk "数据行「主语+你+关系+什么」生效（猫你属于什么）" 1 \
+    || chk "形状表（开放问句前置）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "狗 属于 动物" \
+    && chk "换一个主语也走同一条数据行" 1 \
+    || chk "形状表换主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "猫你喜欢吗" "游泳你会吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 喜欢 猫" \
+    && chk "是非问句的前置语序也由数据行给（猫你喜欢吗）" 1 \
+    || chk "形状表（是非问句）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

@@ -72,6 +72,84 @@ static inline int agent_open_slot_word(const char *w) {
 /* §6.148 **占位词也可能是两个词**：分词器会把「哪些」「哪种」「哪个」切开
  * （实测「哪些 属于 动物」整句掉流水线，而「谁 属于 动物」能答）。
  * 所以跟填充词一样按**连写**比 —— 返回占位短语占几个词（1 或 2），0 = 这儿不是占位词。 */
+/* §6.288 **形状表**（`patterns.txt` 的 `[shape]` 桶）：把"改写规则"也变成数据行。
+ *     [shape] $1@k 你 $2@r 吗 = 你 $2 $1 吗
+ * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
+ * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
+ * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
+#define AIP_SHAPE_MAX 8
+#define AIP_SHAPE_TOK 8
+static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
+static size_t g_shape_n;
+
+/* 返回 1 = 命中并写出了新句子 */
+static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !input || !out || cap < 32 || !g_shape_n) return 0;
+    char c[192];
+    {   /* 这里在 agent_nosp 定义之前（数据层在文件前部），自己拼一份去空格副本 */
+        size_t bl = 0;
+        for (const char *q = input; *q && bl + 1 < sizeof c; ++q)
+            if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') c[bl++] = *q;
+        c[bl] = 0;
+        if (!bl) return 0;
+    }
+    size_t n = 0;
+    char **w = ai_tokenize(ai, c, &n);
+    if (!w) return 0;
+    /* §6.288 分词会把句尾「会吗/能吗」并成一个词 —— 规则里写的是 `$2@r 吗`，
+     * 这里把"以吗结尾的长词"拆成 词 + 吗（通用预处理，不属于任何一条规则）。 */
+    const char *ww[12];
+    size_t nn = n;
+    char lastbuf[32];
+    for (size_t i = 0; i < n && i < 12; ++i) ww[i] = w[i];
+    if (nn && nn < 12 && strlen(ww[nn - 1]) > strlen("吗") &&
+        strcmp(ww[nn - 1] + strlen(ww[nn - 1]) - strlen("吗"), "吗") == 0) {
+        size_t l = strlen(ww[nn - 1]) - strlen("吗");
+        snprintf(lastbuf, sizeof lastbuf, "%.*s", (int)l, ww[nn - 1]);
+        ww[nn - 1] = lastbuf;
+        ww[nn] = "吗";
+        nn++;
+    }
+    for (size_t r = 0; r < g_shape_n; ++r) {
+        char lbuf[96];
+        snprintf(lbuf, sizeof lbuf, "%.95s", g_shape_l[r]);
+        char *lt[AIP_SHAPE_TOK]; size_t nl = 0;
+        for (char *tok = strtok(lbuf, " "); tok && nl < AIP_SHAPE_TOK; tok = strtok(NULL, " "))
+            lt[nl++] = tok;
+        if (nl != nn) continue;
+        const char *bind[AIP_SHAPE_TOK] = {0};
+        int ok = 1;
+        for (size_t i = 0; i < nl && ok; ++i) {
+            const char *pat = lt[i];
+            if (pat[0] == '$' && pat[1] >= '1' && pat[1] <= '9') {
+                size_t k = (size_t)(pat[1] - '1');
+                const char *con = pat + 2;           /* @k / @r / 空 */
+                if (strchr(con, 'k') && !pool_find(ai->pool, ww[i])) ok = 0;
+                if (strchr(con, 'r') && rel_id_of(ai, ww[i], 0) == 0) ok = 0;
+                bind[k] = ww[i];
+            } else if (strcmp(pat, ww[i]) != 0) ok = 0;
+        }
+        if (!ok) continue;
+        char rbuf[96];
+        snprintf(rbuf, sizeof rbuf, "%.95s", g_shape_r[r]);
+        size_t o = 0;
+        int bad = 0;
+        for (char *tok = strtok(rbuf, " "); tok; tok = strtok(NULL, " ")) {
+            const char *val = tok;
+            if (tok[0] == '$' && tok[1] >= '1' && tok[1] <= '9') {
+                size_t k = (size_t)(tok[1] - '1');
+                val = bind[k];
+                if (!val) { bad = 1; break; }
+            }
+            o += (size_t)snprintf(out + o, cap - o, "%s%s", o ? " " : "", val);
+            if (o + 8 >= cap) { bad = 1; break; }
+        }
+        if (!bad && o) { ai_free_words(w, n); return 1; }
+    }
+    ai_free_words(w, n);
+    return 0;
+}
+
 /* §6.283 **把"说法层"的表搬进数据文件**（`patterns.txt`）：引导语 / 占位词 / 含糊回话
  * 这三张表以前写死在代码里，加一种说法就得改 C。现在从 `patterns.txt` 读：
  *     [lead] 请注意
@@ -126,6 +204,19 @@ static inline void aip_patterns_load(void) {
         char *e = val + strlen(val);
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         if (!*val) continue;
+        if (!strcmp(kind, "shape")) {
+            char *eq = strchr(val, '=');
+            if (!eq || g_shape_n >= AIP_SHAPE_MAX) continue;
+            *eq = 0;
+            const char *rhs = eq + 1;
+            while (*rhs == ' ' || *rhs == '\t') rhs++;
+            if (!*rhs || strlen(val) >= sizeof g_shape_l[0] ||
+                strlen(rhs) >= sizeof g_shape_r[0]) continue;
+            snprintf(g_shape_l[g_shape_n], sizeof g_shape_l[0], "%s", val);
+            snprintf(g_shape_r[g_shape_n], sizeof g_shape_r[0], "%s", rhs);
+            g_shape_n++;
+            continue;
+        }
         if (!strcmp(kind, "reply")) {
             char *eq = strchr(val, '=');
             if (!eq || g_reply_n >= AIP_REPLY_MAX) continue;
@@ -148,8 +239,8 @@ static inline void aip_patterns_load(void) {
     }
     fclose(f);
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -1333,44 +1424,6 @@ static inline int agent_rewrite_coref(AI *ai, const char *in, char *out, size_t 
  * 以前掉闲聊；更糟的是 `猫 你 喜欢 什么` 会被当成"新词 猫你"（§6.272 的多字主语兜底误报）。
  * 只处理**是非问句**（句尾 吗/呢，或谓语被并成「会吗」）：把 `[X][你][R][吗]` 还原成
  * `你 R X 吗`。`X` 必须在词池里，且第二个词是代词 —— 别的一律不动。 */
-static inline int agent_rewrite_topic(AI *ai, const char *in, char *out, size_t cap) {
-    if (!ai || !in || !out || cap < 32) return 0;
-    char c[192];
-    if (!agent_nosp(in, c, sizeof c)) return 0;
-    size_t n = 0;
-    char **w = ai_tokenize(ai, c, &n);
-    if (!w || n < 3 || n > 8) { if (w) ai_free_words(w, n); return 0; }
-    int ok = 0;
-    static const char *pr[] = {"你", "您", "他", "她", NULL};
-    int is_pr = 0;
-    for (size_t i = 0; pr[i]; ++i) if (!strcmp(w[1], pr[i])) is_pr = 1;
-    const char *r = w[2];
-    char rbuf[16];
-    size_t rl = strlen(r);
-    int tail_ma = 0;
-    /* 「会吗/能吗」被并成一个词：拆开 */
-    if (rl > strlen("吗") && strcmp(r + rl - strlen("吗"), "吗") == 0) {
-        snprintf(rbuf, sizeof rbuf, "%.*s", (int)(rl - strlen("吗")), r);
-        r = rbuf;
-        tail_ma = 1;
-    }
-    uint8_t rid = rel_id_of(ai, r, 0);
-    if (!is_pr || !rid) goto done;
-    if (!pool_find(ai->pool, w[0])) goto done;
-    /* 句尾必须带「吗/呢」，否则不是是非问句（`猫 你 喜欢 什么` 不动） */
-    if (!tail_ma && strcmp(w[n - 1], "吗") != 0 && strcmp(w[n - 1], "呢") != 0) goto done;
-    {
-        size_t o = 0;
-        o += (size_t)snprintf(out + o, cap - o, "%s %s %s", w[1], r, w[0]);
-        for (size_t i = 3; i < n && o + 8 < cap; ++i)
-            o += (size_t)snprintf(out + o, cap - o, " %s", w[i]);
-        if (tail_ma && o + 4 < cap) snprintf(out + o, cap - o, " %s", "吗");
-    }
-    ok = 1;
-done:
-    ai_free_words(w, n);
-    return ok;
-}
 
 /* §6.267 **做不到的"功能请求"要明说**：`说点别的` / `讲个笑话` / `唱首歌` 这类，
  * 以前会掉进生成流水线出词串（实测「的 想 出来 在 哭 会」「话 有 每 在 上 人 我们」）。 */
@@ -4820,9 +4873,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->turns++;
         return strlen(out);
     }
-    {   /* §6.281 宾语前置：「猫 你 喜欢 吗」⇒ 「你 喜欢 猫 吗」*/
+    {   /* §6.288 形状表（`patterns.txt` 的 `[shape]` 桶）：整句等长的语序改写。
+         * 以前这里是写死的 `agent_rewrite_topic`；现在规则在数据里（加一种语序 = 加一行）。 */
         char tp[192];
-        if (agent_rewrite_topic(ai, input_eff, tp, sizeof tp)) {
+        if (aip_shape_rewrite(ai, input_eff, tp, sizeof tp)) {
             snprintf(decl_in, sizeof decl_in, "%s", tp);
             input_eff = decl_in;
         }
