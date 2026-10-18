@@ -905,6 +905,12 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 喜欢 猫" \
     && chk "是非问句的前置语序也由数据行给（猫你喜欢吗）" 1 \
     || chk "形状表（是非问句）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "60 §6.289 数据行把「到底 + 属不属于」还原成普通问句（留出集 24→25）"
+out=$(run "猫到底属不属于动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "猫 -\[属于\]-> 动物" \
+    && chk "「猫到底属不属于动物」⇒ 对（到/底、属不属于 都由数据行还原）" 1 \
+    || chk "到底+属不属于" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
