@@ -834,6 +834,23 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "鸟：对" \
     && chk "有对有不对 ⇒ 逐项分开报" 1 \
     || chk "逐项分开报" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "55 §6.280 多字并列项（洗衣机/冰箱）+ A-不-A（你会不会游泳）"
+out=$(run "洗衣机或冰箱属于电器吗" "洗衣机、冰箱、电视都属于电器吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "洗衣机：图里 没 记 过" \
+    && chk "多字并列项也逐项报（洗衣机/冰箱）" 1 \
+    || chk "多字并列项" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "电视：图里 没 记 过" \
+    && chk "三项多字并列（末尾\"都\"不算进名字）" 1 \
+    || chk "三项多字并列" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "你会不会游泳")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 敢 说 会" \
+    && chk "「你会不会游泳」⇒ 明说没记过（不再出闲聊）" 1 \
+    || chk "你会不会游泳" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+out=$(run "你会游泳" "你会不会游泳")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "你 -\[会\]-> 游泳" \
+    && chk "教过之后 A-不-A 照样答得出" 1 \
+    || chk "教过之后" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

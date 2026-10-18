@@ -1293,10 +1293,15 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
         if (bl >= 3 && (!strcmp(b + bl - 3, "吗") || !strcmp(b + bl - 3, "么") ||
                         !strcmp(b + bl - 3, "呢") || !strcmp(b + bl - 3, "？"))) isq = 1;
         if (bl >= 1 && b[bl - 1] == '?') isq = 1;
+        /* A-不-A 问句（`你会不会游泳`）句尾没有语气词，也算问句。 */
+        if (!isq && (!strncmp(b, "你会不会", strlen("你会不会")) ||
+                     !strncmp(b, "你能不能", strlen("你能不能"))))
+            isq = 1;
         if (!isq) return 0;
     }
     const char *st = NULL;
-    static const char *pre[] = {"你可以", "你会", "你能", NULL};
+    /* 长的、带「不会」的放前面：`你会不会` 必须先于 `你会` 匹配，否则宾语会剩下「不会游泳」。 */
+    static const char *pre[] = {"你会不会", "你能不能", "你可以", "你会", "你能", NULL};
     for (size_t i = 0; pre[i]; ++i) {
         size_t n = strlen(pre[i]);
         if (strncmp(b, pre[i], n) == 0) { st = b + n; break; }
@@ -1321,11 +1326,22 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
     char obj[64];
     if (l >= sizeof obj) return 0;
     memcpy(obj, st, l); obj[l] = 0;
+    /* 宾语里有关系词 ⇒ 这是在问"你能不能属于某类"，不是能力问句（交给知识那条路）。 */
+    if (rel_id_of(ai, obj, 0) != 0 || !strcmp(obj, "属于") || !strcmp(obj, "是") ||
+        !strncmp(obj, "属于", strlen("属于")) || !strncmp(obj, "是", strlen("是"))) return 0;
     Token *b0 = pool_find(ai->pool, obj);
     uint8_t rid = rel_id_of(ai, "会", 0);
     if (b0 && rid) {
         Token *me = pool_find(ai->pool, "你");
-        if (me && (rel_direct(me, rid, b0) || rel_direct_neg(me, rid, b0))) return 0;
+        /* 图里有这条事实就直接答（A-不-A 形状关系层解析不出来，别指望流水线）。 */
+        if (me && rel_direct(me, rid, b0)) {
+            snprintf(out, cap, "对 ， 你 -[会]-> %.40s", obj);
+            return 1;
+        }
+        if (me && rel_direct_neg(me, rid, b0)) {
+            snprintf(out, cap, "不 对 ， 你 -[不 会]-> %.40s", obj);
+            return 1;
+        }
     }
     snprintf(out, cap,
              "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「你 会 %.40s」。"
@@ -1592,12 +1608,40 @@ static inline char *agent_multi_subj(AI *ai, char *const *words, size_t n,
         ns++;
     }
     if (ns < 1 || ns > 3) return NULL;
-    if (sp[0] != 1) return NULL;                       /* 第一项就是一个词 */
-    for (size_t j = 0; j + 1 < ns; ++j)
-        if (sp[j + 1] != sp[j] + 2) return NULL;       /* 中间各项也都是一个词 */
-    size_t r0 = sp[ns - 1] + 2;                       /* 分隔符后是**最后一项**，再后才是谓语 */
-    if (r0 + 1 >= last) return NULL;
-    size_t ri = r0;
+    /* §6.280 每一项允许**多词**（`洗衣机` → 洗/衣/机、`冰箱` → 冰/箱）：
+     * 但每项要么拼成一个池里的词，要么全是单字实词（与 natcoin 同一套判据）。 */
+    size_t istart[5], iend[5];
+    istart[0] = 0;
+    for (size_t j = 0; j < ns; ++j) { iend[j] = sp[j]; istart[j + 1] = sp[j] + 1; }
+    /* 谓语：从最后一个分隔符往后找**第一个关系词**；它前面那段是最后一项 */
+    size_t ri = sp[ns - 1] + 1;
+    while (ri < last && !rel_id_of(ai, words[ri], 0) && strcmp(words[ri], "是") != 0) {
+        if (strcmp(words[ri], "都") != 0 && strcmp(words[ri], "也") != 0 &&
+            !rel_one_cjk(words[ri]) && !pool_find(ai->pool, words[ri])) return NULL;
+        ri++;
+    }
+    if (ri >= last) return NULL;
+    iend[ns] = ri;
+    /* 最后一项后面可能挂着 `都/也`（`… 电视 都 属于 …`）—— 不算进名字里。 */
+    while (iend[ns] > istart[ns] &&
+           (!strcmp(words[iend[ns] - 1], "都") || !strcmp(words[iend[ns] - 1], "也")))
+        iend[ns]--;
+    if (iend[ns] <= istart[ns]) return NULL;
+    /* §6.280 每一项允许**多词**（`洗衣机` → 洗/衣/机、`冰箱` → 冰/箱）：
+     * 但每项要么拼成一个池里的词，要么全是单字实词（与 natcoin 同一套判据）。 */
+    for (size_t j = 0; j <= ns; ++j) {
+        if (istart[j] >= iend[j]) return NULL;
+        size_t bytes = 0;
+        int allsingle = 1;
+        for (size_t k = istart[j]; k < iend[j]; ++k) {
+            size_t wl = strlen(words[k]);
+            bytes += wl;
+            if (!rel_one_cjk(words[k])) allsingle = 0;
+            if (wl > 12) return NULL;
+        }
+        if (bytes > 16) return NULL;
+        if (!allsingle && bytes > 12) return NULL;
+    }
     if (!strcmp(words[ri], "都") || !strcmp(words[ri], "也")) ri++;
     if (ri + 1 >= last) return NULL;
     uint8_t rid = rel_id_of(ai, words[ri], 0);
@@ -1615,9 +1659,17 @@ static inline char *agent_multi_subj(AI *ai, char *const *words, size_t n,
     Token *B = pool_find(ai->pool, bw);
     size_t nit = ns + 1;
     int val[4], known[4];
+    char item[4][48];
     size_t n_yes = 0, n_no = 0, n_un = 0;
     for (size_t j = 0; j < nit; ++j) {
-        const char *nm = (j == 0) ? words[0] : words[sp[j - 1] + 1];
+        size_t no = 0;
+        for (size_t k = istart[j]; k < iend[j]; ++k) {
+            size_t wl = strlen(words[k]);
+            if (no + wl + 1 >= sizeof item[j]) return NULL;
+            memcpy(item[j] + no, words[k], wl); no += wl;
+        }
+        item[j][no] = 0;
+        const char *nm = item[j];
         if (!agent_subj_ok(nm)) return NULL;
         Token *A = pool_find(ai->pool, nm);
         known[j] = 0; val[j] = 0;
@@ -1636,7 +1688,7 @@ static inline char *agent_multi_subj(AI *ai, char *const *words, size_t n,
     else if (n_no == nit)
         o += (size_t)snprintf(buf + o, sizeof buf - o, "不 对 ， ");
     for (size_t j = 0; j < nit; ++j) {
-        const char *nm = (j == 0) ? words[0] : words[sp[j - 1] + 1];
+        const char *nm = item[j];
         if (n_yes == nit)
             o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s", j ? " 、 " : "", nm);
         else if (n_no == nit)
