@@ -78,12 +78,75 @@ static inline int agent_open_slot_word(const char *w) {
 #define AIP_SYN_MAX 64
 static char g_syn_from[AIP_SYN_MAX][48], g_syn_to[AIP_SYN_MAX][48];
 static size_t g_syn_n;
-static inline int aip_apply_syn(const char *in, char *out, size_t cap) {
-    if (!in || !out || !cap || !g_syn_n) return 0;
+/* §6.307 **[affix] 词缀变体**：`[affix] 小=pre` / `[affix] 儿=post`。
+ * 命中后**先查基词在不在词池**，在才替换（`小鲸鱼` ⇒ `鲸鱼`，`老狗` ⇒ `狗`）。 */
+#define AIP_AFFIX_MAX 16
+static char g_aff[AIP_AFFIX_MAX][16];
+static char g_aff_kind[AIP_AFFIX_MAX];      /* 'p' = 前缀，'s' = 后缀 */
+static size_t g_aff_n;
+/* 取一个 UTF-8 字符的字节数（只处理 1~4 字节） */
+static inline size_t aip_u8len(const char *s) {
+    unsigned char c = (unsigned char)s[0];
+    if (c < 0x80) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
+    if (!in || !out || !cap || (!g_syn_n && !g_aff_n)) return 0;
     size_t o = 0;
     int changed = 0;
     const char *p = in;
     while (*p) {
+        /* §6.307 词缀：先试前缀（剥掉后基词要在池里），再试后缀 */
+        if (ai) {
+            int hit_affix = 0;
+            for (size_t i = 0; i < g_aff_n && !hit_affix; ++i) {
+                size_t al = strlen(g_aff[i]);
+                if (g_aff_kind[i] == 'p') {
+                    if (strncmp(p, g_aff[i], al) != 0) continue;
+                    const char *base = p + al;
+                    size_t bl = 0;
+                    for (int k = 0; k < 3 && base[bl]; ++k) {   /* 基词 2~4 个汉字 */
+                        bl += aip_u8len(base + bl);
+                        if (bl < 6) continue;                  /* §6.307 **单字基词不剥**：
+                                                                * 否则 `小明`/`小红`/`小刚` 会被剥成 明/红/刚
+                                                                * （interact/belief 当场红） */
+                        char tmp[32], whole[40];
+                        if (bl >= sizeof tmp) break;
+                        memcpy(tmp, base, bl); tmp[bl] = 0;
+                        if (al + bl < sizeof whole) {          /* 整个变体本身就是词 ⇒ 不动 */
+                            memcpy(whole, p, al); memcpy(whole + al, base, bl);
+                            whole[al + bl] = 0;
+                            if (pool_find(ai->pool, whole)) continue;
+                        }
+                        if (pool_find(ai->pool, tmp)) {
+                            size_t tl = bl;
+                            if (o + tl + 1 >= cap) return changed;
+                            memcpy(out + o, base, tl); o += tl; p = base + tl;
+                            changed = 1; hit_affix = 1; break;
+                        }
+                    }
+                } else if (g_aff_kind[i] == 's') {
+                    size_t bl = 0;
+                    for (int k = 0; k < 3 && p[bl]; ++k) {
+                        bl += aip_u8len(p + bl);
+                        char tmp[32];
+                        if (bl >= sizeof tmp) break;
+                        memcpy(tmp, p, bl); tmp[bl] = 0;
+                        if (strncmp(p + bl, g_aff[i], al) != 0) continue;
+                        if (!pool_find(ai->pool, tmp)) continue;
+                        size_t tl = bl;
+                        if (o + tl + 1 >= cap) return changed;
+                        memcpy(out + o, p, tl); o += tl; p += bl + al;
+                        changed = 1; hit_affix = 1; break;
+                    }
+                }
+            }
+            if (hit_affix) continue;
+        }
         size_t best = 0, bi = 0;
         for (size_t i = 0; i < g_syn_n; ++i) {
             size_t l = strlen(g_syn_from[i]);
@@ -271,6 +334,19 @@ static inline void aip_patterns_load(void) {
         char *e = val + strlen(val);
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         if (!*val) continue;
+        if (!strcmp(kind, "affix")) {
+            char *eq = strchr(val, '=');
+            if (!eq || g_aff_n >= AIP_AFFIX_MAX) continue;
+            *eq = 0;
+            const char *k = eq + 1;
+            while (*k == ' ' || *k == '\t') k++;
+            if (!*val || (!strcmp(k, "pre") == 0 && !strcmp(k, "post") == 0)) continue;
+            if (strlen(val) >= sizeof g_aff[0]) continue;
+            snprintf(g_aff[g_aff_n], sizeof g_aff[0], "%s", val);
+            g_aff_kind[g_aff_n] = (!strcmp(k, "pre")) ? 'p' : 's';
+            g_aff_n++;
+            continue;
+        }
         if (!strcmp(kind, "syn")) {
             char *eq = strchr(val, '=');
             if (!eq || g_syn_n >= AIP_SYN_MAX) continue;
@@ -339,8 +415,8 @@ static inline void aip_patterns_load(void) {
     }
     fclose(f);
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -5026,9 +5102,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 用栈上的缓冲拼，不动 `input`（历史记录仍记用户原话）。 */
     char decl_in[256];
     const char *input_eff = input;
-    {   /* §6.305 同义词归一（数据表）：`猫咪` ⇒ `猫`，后面的所有判据都只认规范词 */
-        char sb[224];
-        if (aip_apply_syn(input, sb, sizeof sb)) input_eff = (snprintf(decl_in, sizeof decl_in, "%s", sb), decl_in);
+    {   /* §6.305/§6.307 同义词 + 词缀归一（数据表）：`猫咪` ⇒ `猫`、`小鲸鱼` ⇒ `鲸鱼`。
+     * 跑**最多 3 遍直到不再变化**：`小猫咪` 第一遍变成「猫咪」（前缀剥掉 小），
+     * 第二遍才被同义词表收成「猫」——只跑一遍会卡在半成品上。 */
+        char sb[224], sb2[224];
+        const char *cur = input;
+        for (int pass = 0; pass < 3; ++pass) {
+            char *dst = (pass % 2 == 0) ? sb : sb2;
+            if (!aip_apply_syn(ai, cur, dst, sizeof sb)) break;
+            cur = dst;
+        }
+        if (cur != input) input_eff = (snprintf(decl_in, sizeof decl_in, "%s", cur), decl_in);
     }
     {
         const char *q = input;
