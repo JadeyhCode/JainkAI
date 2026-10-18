@@ -1382,32 +1382,6 @@ done:
 
 /* §6.267 **做不到的"功能请求"要明说**：`说点别的` / `讲个笑话` / `唱首歌` 这类，
  * 以前会掉进生成流水线出词串（实测「的 想 出来 在 哭 会」「话 有 每 在 上 人 我们」）。 */
-static inline const char *agent_unsupported_request(const char *input) {
-    if (!input) return NULL;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return NULL;
-    if (strstr(b, "讲个笑话") || strstr(b, "说个笑话") || strstr(b, "讲笑话") ||
-        strstr(b, "说笑话") || strstr(b, "讲个故事") || strstr(b, "唱首歌") ||
-        strstr(b, "唱个歌") || strstr(b, "说点别的") || strstr(b, "换个话题") ||
-        strstr(b, "聊点别的"))
-        return "这 个 我 真 不 会 —— 我 只 能 回答 图 里 记 着 的 关系、记 你 教 我 的 东西，"
-               "不 会 讲 笑 话/唱 歌。你 想 聊 知识 的话 我 在。";
-    /* §6.269 其它**生成类**请求（写诗/画画/写代码/翻译）：实测「你 会 写 诗 吗」⇒
-     * 「我 会 试 着 写诗」（把"你会写诗"当关系猜了）。只在**请求口气**里认，
-     * 免得把知识句（「画画 属于 艺术」）当成请求。 */
-    {
-        int ask = strstr(b, "你") || strstr(b, "帮我") || strstr(b, "给 我") ||
-                  strstr(b, "吗") || strstr(b, "吧") || strstr(b, "？") || strstr(b, "?");
-        if (ask && (strstr(b, "写诗") || strstr(b, "作诗") || strstr(b, "写歌") ||
-                    strstr(b, "写 首") || strstr(b, "画画") || strstr(b, "画张") ||
-                    strstr(b, "画 个") || strstr(b, "写代码") || strstr(b, "编程") ||
-                    strstr(b, "翻译") || strstr(b, "写作文")))
-            return "这 个 我 真 不 会 —— 我 只 能 回答 图 里 记 着 的 关系、记 你 教 我 的 东西，"
-                   "不 会 写 诗/画 画/翻 译 这 类 生 成。你 想 聊 知识 的话 我 在。";
-    }
-    return NULL;
-}
-
 /* §6.269 **规则句不是事实**：`教你 会飞 的 动物 是 鸟` / `教你 猫 的 主人 是 小明` 这类
  * 「…的…是…」是**规则/定义**，本项目的学习链只认「A 关系 B」这一种。以前它掉进生成流水线，
  * 答出词串（实测「鸟 睡觉 吗 只 你 开」）。这里在**剥掉引导语之后**认出来并明说学不进，
@@ -1528,35 +1502,6 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
  * 这些不是知识问题，以前大多掉生成流水线出词串（实测「意思 别 上 谁 有 样 时候」、
  * 「你 当 时 也 是 没 办 法」）。原则：**能答实的就答**（能记住/记得住），
  * 答不了的**明说不编**（没有看法、不记人）—— 比闲聊模板有用，也不假装理解。 */
-static inline const char *agent_social_glue(const char *input) {
-    if (!input) return NULL;
-    char b[200];
-    if (!agent_nosp(input, b, sizeof b)) return NULL;
-    if (strstr(b, "不好意思") || strstr(b, "对不起") || strstr(b, "抱歉"))
-        return "没 关系 —— 我 不 记 这 个，只 记 你 教 我 的 知识。";
-    if (strstr(b, "你觉得呢") || strstr(b, "你说呢") || strstr(b, "你怎么看") ||
-        strstr(b, "你的看法"))
-        return "我 没有 看法 —— 我 只 会 说 图 里 记 着 的。你 把 问 题 说 清，我 就 查。";
-    if (strstr(b, "你记得我吗") || strstr(b, "你还记得我"))
-        return "我 不 记 得 你 —— 我 只 记 图 里 的 知识，不 记 人（不 编）。";
-    if (strstr(b, "你能记住吗") || strstr(b, "你记得住吗") || strstr(b, "你能记吗"))
-        return "能 —— 你 说 一 句「考拉 属于 动物」，我 就 记 住；存盘 之后 下次 还 在。";
-    if (strstr(b, "我不知道") || strcmp(b, "不知道") == 0 || strstr(b, "我也不确定") ||
-        strcmp(b, "不确定") == 0)
-        return "没 事 —— 你 问 的 我 也 不 都 知道。你 说 个 词 或 一 句 话，我 查 图，或者 记 下 你 教 的。";
-    if (strstr(b, "你听懂了吗") || strstr(b, "你听明白了吗") || strstr(b, "你理解了吗"))
-        return "我 只 能 按 图 里 的 关系 理解 —— 你 再 说 一 遍，或者 换 个 说 法，我 再 试。";
-    if (strstr(b, "这个怎么说") || strstr(b, "这怎么说") || strstr(b, "怎么念"))
-        return "你 是 想 问 某 个 词 怎么 说 吧 —— 把 那个 词 说 出 来，我 查 图，或者 你 教 我 一 句。";
-    if (strstr(b, "你好吗") || strstr(b, "你还好吗") || strstr(b, "最近怎么样") ||
-        strcmp(b, "在吗") == 0 || strstr(b, "在不在"))
-        return "我 挺 好 的 —— 一直 在 这儿。你 想 查 什 么，或者 教 我 一 句 都 行。";
-    if (strstr(b, "然后呢") || strstr(b, "还有呢") || strstr(b, "再来一个") ||
-        strstr(b, "换个问题") || strstr(b, "换个说法") || strstr(b, "接下来呢"))
-        return "你 想 问 哪 个 词 / 哪 件 事 ？ 我 记 得 的 都 能 追（也 可 以 先 教 我 一 句）。";
-    return NULL;
-}
-
 static inline const char *agent_self_fact(const char *input) {
     if (!input) return NULL;
     char b[256];
@@ -2837,14 +2782,6 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
                  "我 叫 JainkAI —— 一个 白箱 的 中文 对话 内核。"
                  "我 的 回答 全部 来自 图 里 记 的 知识（每条 都 能 追）；不 会 的 就 说 不 会。");
         return out;
-    }
-    {
-        const char *gl = agent_social_glue(input);
-        if (gl) { snprintf(out, cap, "%s", gl); return out; }
-    }
-    {
-        const char *un = agent_unsupported_request(input);
-        if (un) { snprintf(out, cap, "%s", un); return out; }
     }
     {
         const char *cf = agent_confirm_request(input);
