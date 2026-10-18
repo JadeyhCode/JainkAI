@@ -109,11 +109,13 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
                     if (strncmp(p, g_aff[i], al) != 0) continue;
                     const char *base = p + al;
                     size_t bl = 0;
-                    for (int k = 0; k < 3 && base[bl]; ++k) {   /* 基词 2~4 个汉字 */
+                    for (int k = 0; k < 3 && base[bl]; ++k) {   /* 基词 1~4 个汉字 */
                         bl += aip_u8len(base + bl);
-                        if (bl < 6) continue;                  /* §6.307 **单字基词不剥**：
-                                                                * 否则 `小明`/`小红`/`小刚` 会被剥成 明/红/刚
-                                                                * （interact/belief 当场红） */
+                        /* §6.307 **前缀不给单字基词**：否则 `小明`/`小红`/`小刚`
+                         * 会被剥成 明/红/刚（interact/belief 当场红）。
+                         * §6.310 **后缀可以**：`猫们` ⇒ `猫`，而 `我们/他们` 是词池里的词、
+                         * 会被下面的"整词在池就不动"挡住。 */
+                        if (g_aff_kind[i] == 'p' && bl < 6) continue;
                         char tmp[32], whole[40];
                         if (bl >= sizeof tmp) break;
                         memcpy(tmp, base, bl); tmp[bl] = 0;
@@ -138,6 +140,14 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
                         memcpy(tmp, p, bl); tmp[bl] = 0;
                         if (strncmp(p + bl, g_aff[i], al) != 0) continue;
                         if (!pool_find(ai->pool, tmp)) continue;
+                        /* §6.310 **人称代词 + 们 不剥**：`他们` 剥成 `他` 会把"复数立场"
+                         * 数错（interact 53/54 当场红）。`猫们` 照剥。 */
+                        if (g_aff_kind[i] == 's' && !strcmp(g_aff[i], "们")) {
+                            static const char *pron1[] = {"他", "她", "它", "我", "你", "咱", NULL};
+                            int is_pron = 0;
+                            for (size_t z = 0; pron1[z]; ++z) if (!strcmp(tmp, pron1[z])) is_pron = 1;
+                            if (is_pron) continue;
+                        }
                         size_t tl = bl;
                         if (o + tl + 1 >= cap) return changed;
                         memcpy(out + o, p, tl); o += tl; p += bl + al;
