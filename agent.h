@@ -213,6 +213,32 @@ static inline uint8_t agent_rid_maybe_neg(AI *ai, const char *w, int *neg) {
     return rid;
 }
 
+/* §6.273 **多字生词的拼法**：分词把没见过的词按单字切（`石家庄` → 石/家/庄，
+ * `笔记本` → 笔/记/本）。形状 = 前面若干**单字实词**（最多 4 个）+ 末词（单字，或已在池里的多字词）。
+ * 为什么末词放开：`笔记本电脑` = 笔/记/本 + 电脑。为什么不无限放开：`开猫 真的` 这种
+ * （两字词 + 填充词）必须挡住 —— optest 有一条「不是写死的填充词 ⇒ 不接」钉着。 */
+static inline int agent_loc_char(const char *w) {
+    static const char *loc[] = {"上", "下", "里", "中", "外", NULL};
+    for (size_t i = 0; loc[i]; ++i) if (w && strcmp(w, loc[i]) == 0) return 1;
+    return 0;
+}
+
+static inline int agent_compound_ok(AI *ai, char *const *w, size_t k) {
+    if (!ai || !w || k < 2 || k > 4) return 0;
+    size_t bytes = 0;
+    for (size_t i = 0; i < k; ++i) {
+        size_t l = strlen(w[i]);
+        /* 地名首字（`上`海/`中`国）本身在虚词表里，但作为复合词首字是合法的
+         * （与 §6.272 学习侧那条例外同一份名单）。 */
+        if (i == 0 && agent_loc_char(w[i])) { bytes += l; continue; }
+        if (i + 1 == k) {
+            if (!rel_one_cjk(w[i]) && !pool_find(ai->pool, w[i])) return 0;
+        } else if (!rel_one_cjk(w[i])) return 0;
+        bytes += l;
+    }
+    return bytes >= 6 && bytes <= 12;
+}
+
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
@@ -347,10 +373,9 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
                 so += l;
             }
             subj[so] = 0;
-            /* 只认**两个汉字**的拼法（`上海/夸克/鲸鱼`）——这正是"分词把生词切成单字"的形状。
-             * 放宽到任意长度会把 `开猫 真的 属于 什么` 这类（填充词混在里面）也接住，
-             * 与 optest 的「不是写死的填充词 ⇒ 不接」冲突（实测那条当场红）。 */
-            if (so != 6) return NULL;
+            /* §6.272/§6.273 拼法要合法（前面全是单字、末词在池里、2~4 字）。
+             * 不放宽到任意长度：`开猫 真的 属于 什么` 这类会被接住（optest 当场红）。 */
+            if (!agent_compound_ok(ai, words, rj)) return NULL;
             Token *a2 = pool_find(ai->pool, subj);
             char buf[256];
             if (!a2) {
@@ -1637,7 +1662,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
  * `大学生 属于 人` 分词成 `[大][学生]` —— 都只差这一条。两整词（`学校`+`学习`）仍然拒，
  * 那正是会拼出垃圾节点的形状。 */
 static inline int agent_nat_side_ok(AI *ai, char *const *words, size_t from, size_t cnt) {
-    if (!ai || cnt < 1 || cnt > 3) return 0;
+    if (!ai || cnt < 1 || cnt > 4) return 0;   /* §6.273：4 字词（`电子产品`）也要教得进 */
     size_t whole = 0;
     for (size_t i = 0; i < cnt; ++i) {
         const char *w = words[from + i];
@@ -1666,7 +1691,7 @@ static inline int agent_nat_side_ok(AI *ai, char *const *words, size_t from, siz
  * 返回要说的确认话（调用方 free），不认就 NULL。 */
 static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
                                          float *out_conf) {
-    if (!ai || ai->rel_off || !ai->nat_coin || !words || n < 3 || n > 7) return NULL;
+    if (!ai || ai->rel_off || !ai->nat_coin || !words || n < 3 || n > 9) return NULL;
     if (ai_has_question_word(words, n)) return NULL;
     for (size_t i = 0; i < n; ++i)
         if (!words[i] || !words[i][0] || words[i][0] == '[') return NULL;

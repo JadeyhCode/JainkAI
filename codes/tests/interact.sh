@@ -713,6 +713,28 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "上海 在 什么 ， 图里 
     && chk "多字主语接上「在」问句（问的是地点，不是\"不太懂\"）" 1 \
     || chk "多字主语+在" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "㊽ §6.273 三/四字生词（石家庄/笔记本/电子产品）：不认识就说，教一句就接上"
+out=$(run "石家庄在哪" "笔记本属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "还 不 认识 「石家庄」" \
+    && chk "「石家庄在哪」（三字）⇒ 明说还不认识" 1 \
+    || chk "石家庄在哪" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "还 不 认识 「笔记本」" \
+    && chk "「笔记本属于什么」（三字）⇒ 明说还不认识" 1 \
+    || chk "笔记本属于什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "笔记本属于电子产品" "笔记本属于什么" "石家庄属于城市" "石家庄属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 笔记本 属于 电子产品" \
+    && chk "四字宾语（电子产品）学得进" 1 \
+    || chk "四字宾语" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "笔记本 属于 电子产品" \
+    && chk "教完问得回来（笔记本）" 1 \
+    || chk "问回来（笔记本）" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "记下 了 ： 石家庄 属于 城市" \
+    && chk "三字主语（石家庄）学得进" 1 \
+    || chk "三字主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "石家庄 属于 城市" \
+    && chk "教完问得回来（石家庄）" 1 \
+    || chk "问回来（石家庄）" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
