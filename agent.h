@@ -288,6 +288,9 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         int rneg = 0;
         uint8_t rid = agent_rid_maybe_neg(ai, words[rpos], &rneg);
         if (qn) rneg = 1;
+        /* §6.270 试过但**证不出正例**：分词会把生词切成单字（`上海` → 上/海），
+         * 短语形状根本进不到这里，所以「主语不认识」这条分支一直是死代码 ⇒ 撤掉
+         * （纪律：证不出正例的改动不留）。真正要修的是分词/生词那一层。 */
         if (!a || rid == 0) return NULL;
         Token *out[8];
         uint8_t from_hyp[8];
@@ -978,6 +981,51 @@ static inline const char *agent_confirm_request(const char *input) {
            "我 说 错 了 你 说「不 对」，我 就 改。";
 }
 
+/* §6.270 **量/尺度问题**（「太阳 有 多大」「这 条 路 多 远」）：分词把「多大」切成两个单字，
+ * 疑问词那关看不出它是问句（逐词检查只认整词）⇒ 不走 `ai_has_question_word` 那条拒答，
+ * 掉进逐词游走（实测答「大 了」）。这里按**原始字符串**认这一类，并明说记不了数量。 */
+static inline const char *agent_measure_question(const char *input) {
+    if (!input) return NULL;
+    char b[200];
+    if (!agent_nosp(input, b, sizeof b)) return NULL;
+    static const char *mk[] = {"有多大", "多高", "多重", "多远", "多久", "多长",
+                               "多快", "多贵", "多深", "多宽", "多厚", NULL};
+    for (size_t i = 0; mk[i]; ++i)
+        if (strstr(b, mk[i]))
+            return "具 体 数 量 我 不 会 量 —— 我 只 记「A 关系 B」的 事实，不 记 尺 度 和 数 字（不 编）。";
+    return NULL;
+}
+
+/* §6.270 **对话胶水**（不好意思 / 你觉得呢 / 然后呢 / 你记得我吗…）：
+ * 这些不是知识问题，以前大多掉生成流水线出词串（实测「意思 别 上 谁 有 样 时候」、
+ * 「你 当 时 也 是 没 办 法」）。原则：**能答实的就答**（能记住/记得住），
+ * 答不了的**明说不编**（没有看法、不记人）—— 比闲聊模板有用，也不假装理解。 */
+static inline const char *agent_social_glue(const char *input) {
+    if (!input) return NULL;
+    char b[200];
+    if (!agent_nosp(input, b, sizeof b)) return NULL;
+    if (strstr(b, "不好意思") || strstr(b, "对不起") || strstr(b, "抱歉"))
+        return "没 关系 —— 我 不 记 这 个，只 记 你 教 我 的 知识。";
+    if (strstr(b, "你觉得呢") || strstr(b, "你说呢") || strstr(b, "你怎么看") ||
+        strstr(b, "你的看法"))
+        return "我 没有 看法 —— 我 只 会 说 图 里 记 着 的。你 把 问 题 说 清，我 就 查。";
+    if (strstr(b, "你记得我吗") || strstr(b, "你还记得我"))
+        return "我 不 记 得 你 —— 我 只 记 图 里 的 知识，不 记 人（不 编）。";
+    if (strstr(b, "你能记住吗") || strstr(b, "你记得住吗") || strstr(b, "你能记吗"))
+        return "能 —— 你 说 一 句「考拉 属于 动物」，我 就 记 住；存盘 之后 下次 还 在。";
+    if (strstr(b, "我不知道") || strcmp(b, "不知道") == 0 || strstr(b, "我也不确定") ||
+        strcmp(b, "不确定") == 0)
+        return "没 事 —— 你 问 的 我 也 不 都 知道。你 说 个 词 或 一 句 话，我 查 图，或者 记 下 你 教 的。";
+    if (strstr(b, "你听懂了吗") || strstr(b, "你听明白了吗") || strstr(b, "你理解了吗"))
+        return "我 只 能 按 图 里 的 关系 理解 —— 你 再 说 一 遍，或者 换 个 说 法，我 再 试。";
+    if (strstr(b, "这个怎么说") || strstr(b, "这怎么说") || strstr(b, "怎么念"))
+        return "你 是 想 问 某 个 词 怎么 说 吧 —— 把 那个 词 说 出 来，我 查 图，或者 你 教 我 一 句。";
+    if (strstr(b, "然后呢") || strstr(b, "还有呢") || strstr(b, "再来一个") ||
+        strstr(b, "换个问题") || strstr(b, "换个说法") || strstr(b, "接下来呢"))
+        return "你 想 问 哪 个 词 / 哪 件 事 ？ 我 记 得 的 都 能 追（也 可 以 先 教 我 一 句）。";
+    return NULL;
+}
+
 static inline const char *agent_self_fact(const char *input) {
     if (!input) return NULL;
     char b[256];
@@ -1559,6 +1607,10 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     for (size_t i = 0; i < n; ++i)
         if (!words[i] || !words[i][0] || words[i][0] == '[') return NULL;
 
+    /* §6.270 **问句不当事实学**：`太阳 有 多大` 以前走这条路被学成一条边
+     * （实测记下「太阳 有 多大」，还造了个词「多大」）。与 `agent_learn_relation`
+     * 里那条 `ai_has_question_word` 守卫同一条原则，这里补一道。 */
+    if (ai_has_question_word(words, n)) return NULL;
     /* 找第一个**已知核心关系词**（不调用 allow_new ⇒ 绝不登记新谓语） */
     size_t ri = 0;
     uint8_t rid = 0;
@@ -1599,6 +1651,10 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     }
     B[ob] = 0;
     if (!A[0] || !B[0] || strcmp(A, B) == 0) return NULL;
+    /* §6.270 拼出来的 A/B 也要过疑问词那关：分词把「多大」切成 多/大 两个**单字**，
+     * 逐词检查看不出它是问句（单字不过 `strlen>=6` 那道），拼起来才看得见。
+     * 实测 `太阳 有 多大` 就是这么被学成「太阳 --[有]--> 多大」的。 */
+    if (ai_token_has_question_word(A) || ai_token_has_question_word(B)) return NULL;
     /* §6.264 **`在` 不归造词这条路**：`我 在 想 事情` 会被造出「想事情」这个"地点"（实测垃圾）。
      * 地点有它自己的路（`agent_learn_locative`：`A V 在 B` / `A 在 B V`），这里不掺和。 */
     if (rid == REL_AT) return NULL;
@@ -2055,9 +2111,11 @@ static inline int agent_history_kind(const char *input) {
     }
     j[jl] = 0;
     static const char *list[] = {"我们刚才聊了什么", "刚才聊了什么", "我们刚才说了什么",
-                                 "刚才说了什么", "我们聊了什么", NULL};
+                                 "刚才说了什么", "我们聊了什么", "我们聊到哪了", "聊到哪了",
+                                 "我们说到哪了", "刚才说到哪了", "我们聊到哪儿了", NULL};
     static const char *mine[] = {"我刚才说了什么", "我刚才说什么", "你记得我刚才说什么吗",
-                                 "我刚才说啥", NULL};
+                                 "我刚才说啥", "刚才我说的什么", "我刚才说的什么",
+                                 "我刚才说的是什么", "我说了什么", "我刚才说啥了", NULL};
     for (size_t i = 0; list[i]; ++i) if (strcmp(j, list[i]) == 0) return 1;
     for (size_t i = 0; mine[i]; ++i) if (strcmp(j, mine[i]) == 0) return 2;
     return 0;
@@ -2120,6 +2178,10 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
         return out;
     }
     {
+        const char *gl = agent_social_glue(input);
+        if (gl) { snprintf(out, cap, "%s", gl); return out; }
+    }
+    {
         const char *un = agent_unsupported_request(input);
         if (un) { snprintf(out, cap, "%s", un); return out; }
     }
@@ -2141,6 +2203,10 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
     {
         const char *cap2 = agent_capability_unknown(input);
         if (cap2) { snprintf(out, cap, "%s", cap2); return out; }
+    }
+    {
+        const char *mq = agent_measure_question(input);
+        if (mq) { snprintf(out, cap, "%s", mq); return out; }
     }
     return NULL;
 }
@@ -2164,7 +2230,9 @@ static inline int agent_bare_reply(const char *input) {
         static const char *pron[] = {"我们", "我", "你", "您", "他", "她", "它", NULL};
         for (size_t i = 0; pron[i]; ++i) {
             size_t pl = strlen(pron[i]);
-            if (strncmp(b, pron[i], pl) == 0 && (b[pl] == ' ' || b[pl] == '\t')) {
+            /* §6.270 无空格也要剥（`我不明白`）：以前要求代词后面有空格，真人输入没空格
+             * ⇒ 「我 不 明白」掉生成流水线，答出「明白 故意 的」。仍然**只给 confuse 组用**。 */
+            if (strncmp(b, pron[i], pl) == 0) {
                 char *q = b + pl;
                 while (*q == ' ' || *q == '\t') q++;
                 bp = q;
@@ -4165,7 +4233,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
         const char *q = input_eff;
         while (*q == ' ' || *q == '\t') q++;
-        static const char *lead[] = {"告诉你", "教你", "教我", "告诉 你", "教 你", "教 我", " teaches"};
+        static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches"};
 
         for (size_t i = 0; lead[i]; ++i) {
             size_t ll = strlen(lead[i]);

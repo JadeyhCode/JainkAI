@@ -65,7 +65,11 @@ static inline int ai_is_question_word(const char *w) {
  * 否则「酒吧」「茶几」这种词会被误判成问句（宁可不学，也别错学；但也别把正常词挡了）。 */
 static const char *const AI_QUESTION_SUBSTR[] = {
     "什么", "怎么", "为什么", "多少", "如何", "干什么",
-    "是不是", "有没有", "对不对", "好不好", NULL
+    "是不是", "有没有", "对不对", "好不好",
+    /* §6.270 「多大/多久/多远/多高…」也是疑问词 —— 以前不在表里，实测
+     * `太阳 有 多大` 被当成**事实学进去**（图里多一条 `太阳 --[有]--> 多大`）。 */
+    "多大", "多久", "多远", "多高", "多长", "多快", "多贵", "多重", "多深",
+    NULL
 };
 static inline int ai_token_has_question_word(const char *w) {
     if (!w || !w[0]) return 0;

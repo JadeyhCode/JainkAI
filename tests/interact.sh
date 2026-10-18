@@ -653,6 +653,35 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "每 条 都 能 追" \
     && chk "「你确定吗」⇒ 给可核查的保证（不再答\"我没什么事我有空\"）" 1 \
     || chk "你确定吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㊺ §6.270 对话胶水 + 问句不当事实学 + 量/尺度问题"
+out=$(run "不好意思" "你觉得呢" "你记得我吗" "我不明白")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 关系" \
+    && chk "「不好意思」⇒ 没关系（不再出词串）" 1 \
+    || chk "不好意思" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 没有 看法" \
+    && chk "「你觉得呢」⇒ 明说没有看法（不再答补白）" 1 \
+    || chk "你觉得呢" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 记 得 你" \
+    && chk "「你记得我吗」⇒ 明说不记人（不编）" 1 \
+    || chk "你记得我吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "换 个 说 法" \
+    && chk "「我不明白」（无空格）⇒ 当没听懂处理" 1 \
+    || chk "我不明白" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+out=$(run "记住猫喜欢吃鱼" "我们聊到哪了")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 猫 喜欢" \
+    && chk "「记住X」引导语剥掉（不再学成「记住猫」）" 1 \
+    || chk "记住引导语" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "刚才 我们 聊 了" \
+    && chk "「我们聊到哪了」⇒ 复述刚才几轮" 1 \
+    || chk "我们聊到哪了" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "太阳有多大" "太阳有多大")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+    && chk "「太阳有多大」⇒ 明说记不了数量" 1 \
+    || chk "量/尺度问题" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | grep -q "记下 了 ： 太阳" \
+    && chk "问句不当事实学（太阳 有 多大 不记）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "问句不当事实学" 1
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
