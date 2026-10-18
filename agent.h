@@ -945,6 +945,9 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
     /* 信念表里找：单数只查这个人；复数把**所有**说过这条的人并起来 */
     int found = 0;
     size_t n_who = 0;
+    size_t n_yes = 0, n_no = 0;                 /* §6.278 复数里分清"说是什么/说不是什么" */
+    const char *yes_name[2] = {NULL, NULL};
+    const char *no_name[2] = {NULL, NULL};
     const char *names[3]; names[0] = names[1] = names[2] = NULL;
     for (size_t i = 0; i < ai->others_n; ++i) {
         OtherModel *om = &ai->others[i];
@@ -962,6 +965,13 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
                             strcmp(om->who->name ? om->who->name : "", "所有人"))) {
                 if (n_who < 3) names[n_who] = om->who->name;
                 n_who++;
+                if (f->neg) {
+                    if (n_no < 2) no_name[n_no] = om->who->name;
+                    n_no++;
+                } else {
+                    if (n_yes < 2) yes_name[n_yes] = om->who->name;
+                    n_yes++;
+                }
             }
             break;
         }
@@ -979,10 +989,18 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
                           "「%.24s 以为 %.24s %.24s%.24s %.24s」—— 这 是 %.24s 的 看法，"
                           "归 %.24s，不 进 我 的 知识。",
                           who, aw2, neg2 ? "不 " : "", rw2 ? rw2 : "?", bw2, who, who);
-    if (plural && n_who)
-        o += (size_t)snprintf(bf + o, sizeof bf - o, "（有 %zu 个 人 这么 想%s%.16s%s）",
-                              n_who, names[0] ? "：" : "", names[0] ? names[0] : "",
-                              n_who > 1 ? " 等" : "");
+    if (plural && n_who) {
+        if (n_yes && n_no)
+            o += (size_t)snprintf(bf + o, sizeof bf - o,
+                                  "（%zu 个 人 说 是（%.16s 等），%zu 个 人 说 不 是（%.16s 等）——"
+                                  "不 是 一 边 倒）",
+                                  n_yes, yes_name[0] ? yes_name[0] : "?", n_no,
+                                  no_name[0] ? no_name[0] : "?");
+        else
+            o += (size_t)snprintf(bf + o, sizeof bf - o, "（有 %zu 个 人 这么 想%s%.16s%s）",
+                                  n_who, names[0] ? "：" : "", names[0] ? names[0] : "",
+                                  n_who > 1 ? " 等" : "");
+    }
     if (!found)
         o += (size_t)snprintf(bf + o, sizeof bf - o,
                               "我 这 儿 没 记 过 %.24s 说 过 这 条 —— 你 先 说 一 句"
@@ -1131,6 +1149,59 @@ static inline int agent_rewrite_where(const char *in, char *out, size_t cap) {
     if (pos == (size_t)-1 || pos == 0) return 0;
     c[pos] = 0;
     snprintf(out, cap, "%s 在 什么%s", c, has_ma ? " 吗" : "");
+    return 1;
+}
+
+/* §6.278 **句中指代**（`猫 属于 动物，它 会 飞 吗`）：第二个分句的 `它/他们/这个` 指谁？
+ * 实测整句掉兜底（答「这个我 不 太 懂」）。做法：逗号前的分句用 `rel_parse` 解析出 A R B，
+ * 再按**关系类型**挑先行词 ——
+ *   · 类属关系（`属于/是`）：`它` 指 **主语**（「猫属于动物，它会飞吗」= 猫）；
+ *   · 其它关系：`它` 指 **宾语**（「我喜欢猫，它很可爱」= 猫）。
+ * 只替换第二个分句**句首**那一个代词；替换后整句就是普通问句，走原流水线。
+ * 逗号前的分句**不额外学**（它通常已经记着；要学请单独说一句）。 */
+static inline int agent_rewrite_coref(AI *ai, const char *in, char *out, size_t cap) {
+    if (!ai || !in || !out || cap < 32) return 0;
+    char c[192];
+    if (!agent_nosp(in, c, sizeof c)) return 0;
+    /* 找第一个分句分隔符（，；。) */
+    static const char *sep[] = {"，", "；", "。", ",", ";", NULL};
+    size_t sp = (size_t)-1, sl = 0;
+    for (size_t i = 0; sep[i]; ++i) {
+        const char *q = strstr(c, sep[i]);
+        if (!q) continue;
+        size_t off = (size_t)(q - c);
+        if (sp == (size_t)-1 || off < sp) { sp = off; sl = strlen(sep[i]); }
+    }
+    if (sp == (size_t)-1 || sp == 0) return 0;
+    const char *cl2 = c + sp + sl;
+    static const char *pron[] = {"他们", "她们", "它们", "它", "这个", "那个", NULL};
+    size_t pl = 0;
+    for (size_t i = 0; pron[i]; ++i)
+        if (strncmp(cl2, pron[i], strlen(pron[i])) == 0) { pl = strlen(pron[i]); break; }
+    if (!pl) return 0;
+    /* 第一个分句解析出 A R B */
+    char c1[160];
+    if (sp >= sizeof c1) return 0;
+    memcpy(c1, c, sp); c1[sp] = 0;
+    size_t n1 = 0;
+    char **w1 = ai_tokenize(ai, c1, &n1);
+    if (!w1 || n1 < 3) { if (w1) ai_free_words(w1, n1); return 0; }
+    char jb[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int neg = 0, q = 0;
+    int okp = rel_parse(ai, w1, n1, jb, sizeof jb, &aw, &rid, &neg, &bw, &q, &rw, 0);
+    /* ⚠ `aw/bw` 指向的是 ai_tokenize 分配的**词串**，free 之后就是悬垂指针 ——
+     * 第一版直接 `${aw}${cl2+pl}` 拼出去，实测拼出乱码（`�59��\`）。先拷出来。 */
+    char abuf[64], bbuf[64];
+    abuf[0] = bbuf[0] = 0;
+    if (okp && aw) snprintf(abuf, sizeof abuf, "%s", aw);
+    if (okp && bw) snprintf(bbuf, sizeof bbuf, "%s", bw);
+    ai_free_words(w1, n1);
+    if (!okp || !abuf[0] || !rid) return 0;
+    const char *ante = abuf;
+    if (rid != REL_IS_A && bbuf[0]) ante = bbuf;
+    snprintf(out, cap, "%s%s", ante, cl2 + pl);
     return 1;
 }
 
@@ -4587,6 +4658,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                  "你 先 教「鸟 会 飞」和「鸟 属于 动物」，多 跳 推 理 会 用 上 它 们。");
         ai->turns++;
         return strlen(out);
+    }
+    {   /* §6.278 句中指代：「猫 属于 动物，它 会 飞 吗」⇒ 「猫 会 飞 吗」*/
+        char cf[224];
+        if (agent_rewrite_coref(ai, input_eff, cf, sizeof cf)) {
+            snprintf(decl_in, sizeof decl_in, "%s", cf);
+            input_eff = decl_in;
+        }
     }
     {   /* §6.268 「那狗呢 / 狗呢」⇒ 「狗 <上一句的关系> <上一句的宾语> 吗」*/
         char el[160];

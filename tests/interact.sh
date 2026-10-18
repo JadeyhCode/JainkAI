@@ -802,6 +802,22 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "归 他，不 进 我 的 知
     && chk "「为什么他说…」也按他的看法答" 1 \
     || chk "为什么他说" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "53 §6.278 句中指代（它）+ 复数的立场要分开数"
+out=$(run "猫属于动物，它会飞吗" "猫属于动物。它会飞吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "猫 -\[不 会\]-> 飞" \
+    && chk "「猫属于动物，它会飞吗」⇒ 它=猫，答得出（不再\"这个我不太懂\"）" 1 \
+    || chk "句中指代（逗号）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[不 会\]-> 飞" \
+    && chk "句号分隔也认" 1 \
+    || chk "句中指代（句号）" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "他以为猫属于植物" "她以为猫不属于植物" "为什么他们都以为猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "1 个 人 说 是" \
+    && chk "复数里一正一反 ⇒ 分开数（不再\"2 个人都这么想\"）" 1 \
+    || chk "复数立场分开数" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 是 一 边 倒" \
+    && chk "并明说\"不是一边倒\"" 1 \
+    || chk "不是一边倒" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
