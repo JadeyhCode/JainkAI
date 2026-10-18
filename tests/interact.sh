@@ -735,6 +735,19 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -q "石家庄 属于 城市" \
     && chk "教完问得回来（石家庄）" 1 \
     || chk "问回来（石家庄）" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+echo "㊾ §6.274 长句不许误学（整句上限放宽到 9 之后补的看护）"
+out=$(run "猫喜欢鱼属于狗" "猫属于狗属于猫" "猫属于狗每天叫")
+printf '%s\n' "$out" | grep -q "记下 了 ： 猫" \
+    && chk "分句被当成宾语 ⇒ 不学（猫喜欢鱼属于狗 / 狗每天叫）" 0 "$(printf '%s\n' "$out" | grep -a "记下 了" | head -1)" \
+    || chk "分句不当宾语学" 1
+printf '%s\n' "$out" | grep -q "属于 狗属于猫" \
+    && chk "宾语里再夹关系词 ⇒ 不学" 0 "$(printf '%s\n' "$out" | grep -a "属于 狗属于猫" | head -1)" \
+    || chk "宾语夹关系词不学" 1
+out=$(run "石家庄属于城市" "笔记本属于电子产品" "我表弟是大学生")
+n=$(printf '%s\n' "$out" | reps | grep -c "记下 了" || true)
+[ "$n" -eq 3 ] && chk "合法的复合/长句照旧学得进（没误伤）" 1 \
+    || chk "合法复合没误伤" 0 "$(printf '%s\n' "$out" | reps | head -3 | tr '\n' '|')"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

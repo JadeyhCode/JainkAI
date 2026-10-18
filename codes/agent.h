@@ -1797,9 +1797,28 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
             }
         }
     }
-    if (nb > 1)
-        for (size_t i = 0; i < nb; ++i)
-            if (fr_is_func(words[ri + 1 + i])) return NULL;
+    /* §6.274 **多词那一侧不许夹关系词**：以前只在有代词时查主语侧，
+     * 宾语侧完全不查 ⇒ 实测学出「猫 喜欢 鱼属于狗」「猫 属于 狗属于猫」
+     * 「猫 属于 狗每天叫」（都是把**另一个分句**当成了名字）。主语侧同样补上
+     * —— 顺带挡住「我住 属于 城市」（住 是动态关系）。
+     * 单侧只有 1 个词时不用查（形状一 already 保证它是实词或池里的词）。 */
+    if (nb > 1) {
+        for (size_t i = 0; i < nb; ++i) {
+            const char *w = words[ri + 1 + i];
+            if (fr_is_func(w)) return NULL;
+            if (rel_id_of(ai, w, 0)) return NULL;
+            /* §6.274 形状必须是"干净复合词"：**前面全是单字，末词单字或池里多字词**。
+             * 中间夹一个多字词就是分句（`狗 每天 叫`），不是名字。 */
+            if (i + 1 < nb && !rel_one_cjk(w)) return NULL;
+        }
+        if (!rel_one_cjk(words[ri + nb]) && !pool_find(ai->pool, words[ri + nb])) return NULL;
+    }
+    if (na > 1)
+        for (size_t i = 0; i < na; ++i)
+            if (rel_id_of(ai, words[i], 0)) return NULL;
+    /* 试过但**证不出正例**：想再收一道"代词 + 单字 ⇒ 不是名字"（挡 `我住`），
+     * 但 `我表弟` 在这种模型里正好切成 我/表/弟 三个单字 ⇒ 把合法复合也挡了
+     * （interact ㊶ 当场红）。要挡 `我住` 需要词性，现有信息分不开 ⇒ 不留在树上。 */
     if (!pool_find(ai->pool, A) && strlen(A) > 12) return NULL;   /* 别造超长怪词 */
     if (!pool_find(ai->pool, B) && strlen(B) > 12) return NULL;
     Token *ta = pool_token_intern(ai->pool, A);
