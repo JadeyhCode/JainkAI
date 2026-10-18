@@ -75,6 +75,11 @@ static inline int agent_open_slot_word(const char *w) {
 /* §6.305 **[syn] 同义词表**（`patterns.txt`）：`[syn] 猫咪=猫`。
  * 在**分词之前**做字符串替换（长的先替），于是"猫咪""猫儿"这些变体走的是同一条知识，
  * 不用为每个变体加一条行、更不用改代码。替换是**逐位置最长匹配**，不会误替别的词里面。 */
+/* §6.336 **[tail] 句尾语气词**：`呢/吧/啊/呀` 这类只影响语气、不影响语义的尾巴。
+ * 先说清楚为什么不做成 `[lead]`：lead 只剥**句首**；尾巴得单独一个桶。 */
+#define AIP_TAIL_MAX 12
+static char g_tail[AIP_TAIL_MAX][12];
+static size_t g_tail_n;
 #define AIP_SYN_MAX 64
 static char g_syn_from[AIP_SYN_MAX][48], g_syn_to[AIP_SYN_MAX][48];
 static size_t g_syn_n;
@@ -176,6 +181,27 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
     }
     out[o] = 0;
     return changed;
+}
+
+/* §6.336 剥句尾语气词（只剥一个；剥完还要非空） */
+static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
+    if (!in || !out || !cap) return 0;
+    size_t L = strlen(in);
+    if (L < 4) return 0;
+    for (size_t i = 0; i < g_tail_n; ++i) {
+        /* §6.336 `[tail] 吗呢=吗`：剥掉 `吗呢` 再补一个 `吗`（双语气词很常见） */
+        char pat[sizeof g_tail[0]], rep[sizeof g_tail[0]];
+        snprintf(pat, sizeof pat, "%.*s", (int)(sizeof pat - 1), g_tail[i]);
+        char *eq = strchr(pat, '=');
+        rep[0] = 0;
+        if (eq) { *eq = 0; snprintf(rep, sizeof rep, "%.*s", (int)(sizeof rep - 1), eq + 1); }
+        size_t tl = strlen(pat);
+        if (!tl || L <= tl) continue;
+        if (strcmp(in + L - tl, pat) != 0) continue;
+        snprintf(out, cap, "%.*s%s", (int)(L - tl), in, rep);
+        return 1;
+    }
+    return 0;
 }
 
 /* §6.288 **形状表**（`patterns.txt` 的 `[shape]` 桶）：把"改写规则"也变成数据行。
@@ -369,6 +395,12 @@ static inline void aip_patterns_load(AI *ai) {
             g_aff_n++;
             continue;
         }
+        if (!strcmp(kind, "tail")) {
+            if (g_tail_n >= AIP_TAIL_MAX || strlen(val) >= sizeof g_tail[0]) continue;
+            snprintf(g_tail[g_tail_n], sizeof g_tail[0], "%s", val);
+            g_tail_n++;
+            continue;
+        }
         if (!strcmp(kind, "syn")) {
             char *eq = strchr(val, '=');
             if (!eq || g_syn_n >= AIP_SYN_MAX) continue;
@@ -502,8 +534,8 @@ static inline void aip_patterns_load(AI *ai) {
     }
     fclose(f);
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -5235,6 +5267,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             cur = dst;
         }
         if (cur != input) input_eff = (snprintf(decl_in, sizeof decl_in, "%s", cur), decl_in);
+    }
+    {   /* §6.336 句尾语气词（`…呢/吧/啊/呀`）：剥掉再走后面的判据 */
+        char tb[224];
+        if (aip_strip_tail(input_eff, tb, sizeof tb))
+            input_eff = (snprintf(decl_in, sizeof decl_in, "%s", tb), decl_in);
     }
     {
         const char *q = input;
