@@ -1002,6 +1002,19 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "假设 下" \
     && chk "两步：先「如果猫会飞」再「它会游泳吗」⇒ 在假设下推理" 1 \
     || chk "两步假设" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "70 §6.312 「教我」不能当子串：带内容的教学要真的记住"
+out=$(run "教我考拉属于动物" "考拉属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -qE "记下|我 知道" \
+    && chk "「教我考拉属于动物」⇒ 真的学习（不被闲聊行抢走）" 1 \
+    || chk "教我+内容" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "动物" \
+    && chk "随后「考拉属于什么」⇒ 动物" 1 \
+    || chk "教我后的追问" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "教我")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "考拉 属于 动物" \
+    && chk "光说「教我」⇒ 给一句示范（闲聊行仍在）" 1 \
+    || chk "教我（单独）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
