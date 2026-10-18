@@ -982,6 +982,16 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -qE "改 过来 了|猫 不 会 �
     && chk "「错了猫不会飞」⇒ 也当纠正/陈述处理" 1 \
     || chk "错了" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "68 §6.301 多轮之后还听得懂（holdout5 的样本）+ 独占关系"没这类边"要明说"
+out=$(run "猫属于动物" "猫会飞吗" "为什么" "猫属于什么" "它会飞吗")
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "猫 -\[不 会\]-> 飞" \
+    && chk "四轮之后「它会飞吗」仍指得回鲸鱼" 1 \
+    || chk "多轮指代" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+out=$(run "猪属于动物吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "图里 没 记 过 猪 属于 什么" \
+    && chk "「猪属于动物吗」（没有这类边）⇒ 明说没记过" 1 \
+    || chk "没这类边" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

@@ -3306,6 +3306,28 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
      * 判据放在这里而不是去认答复文本里的"不确定"：答复可能是检索来的句子
      * （样例会话里就有一条「我 不 确定 X 会 不 会 Y」），拿文本当信号会误判。
      * 只在 `as_other == 0`（不是"站在他立场"）时记：那条路是别人的信念。 */
+    /* §6.301 **独占关系 + 主语根本没有这类边 ⇒ 明说"图里没记过"**。
+     * 实测 `猪 属于 动物 吗` 以前答"不太懂"——猪 在词池里但没有一条 属于 边，
+     * 闭世界判据（要有同类边才敢说"不对"）不成立、反向也不成立 ⇒ 落到兜底。
+     * 诚实答复应该是"我不知道它属于什么"，而不是"我不懂你在问什么"。 */
+    if (!solved && rel_is_excl(ai, rid) && A && bw && rw) {
+        uint16_t bit = REL_BIT(rid);
+        int has_edge = 0;
+        for (size_t i = 0; i < A->count && !has_edge; ++i)
+            if (A->assocs[i].rel & bit) has_edge = 1;
+        if (!has_edge) {
+            char rb[220];
+            snprintf(rb, sizeof rb,
+                     "我 不 知道 %s %s 不 %s %s —— 图里 没 记 过 %s %s 什么（不 编）。",
+                     aw, rw, rw, bw, aw, rw);
+            agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);
+            if (out_conf) *out_conf = 0.35f;
+            char *r = (char *)malloc(strlen(rb) + 1);
+            if (r) memcpy(r, rb, strlen(rb) + 1);
+            return r;
+        }
+    }
+
     /* §6.298 **宾语是"人"的多值问题答不出来时，明说不知道**。
      * 实测 `猫 喜欢 你 吗` 被检索/类比答成「我 喜欢 你 喜欢 的 动物」——比拒答糟得多。
      * 只在宾语是人称代词时走这条：别的未知（`老虎 会 飞 吗`）仍交给类比去"大概"，
@@ -4942,7 +4964,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             for (size_t i = 0; pron[i]; ++i) {
                 size_t pl = strlen(pron[i]);
                 if (strncmp(q, pron[i], pl) != 0) continue;
-                if (q[pl] && q[pl] != ' ' && q[pl] != '\t') continue;
+                /* §6.301 无空格也要认「它」（真人输入不带空格）。
+                 * 只对 它/它们 放宽：`这个/那个` 放宽会把「那个猫」替换成「猫猫」。 */
+                if (!strcmp(pron[i], "这个") || !strcmp(pron[i], "那个")) {
+                    if (q[pl] && q[pl] != ' ' && q[pl] != '\t') continue;
+                }
                 const char *rest = q + pl;
                 snprintf(decl_in, sizeof decl_in, "%s%s", ai->last_subject, rest);
                 input_eff = decl_in;
