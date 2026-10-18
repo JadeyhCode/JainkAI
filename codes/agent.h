@@ -87,8 +87,8 @@ static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
 #define AIP_REPLY_MAX 64
-static char g_reply_kw[AIP_REPLY_MAX][96];
-static char g_reply_txt[AIP_REPLY_MAX][192];
+static char g_reply_kw[AIP_REPLY_MAX][128];
+static char g_reply_txt[AIP_REPLY_MAX][384];   /* §6.285 天气/时钟那几句超过 192 字节，被静默丢过 */
 static size_t g_reply_n;
 static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
 
@@ -111,7 +111,7 @@ static inline void aip_patterns_load(void) {
     g_lead_n = g_slot_n = g_confuse_n = 0;
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
-    char line[256];
+    char line[1024];                    /* §6.285 一行可能含关键词+整句答复，256 会截断 */
     while (fgets(line, sizeof line, f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -147,7 +147,17 @@ static inline void aip_patterns_load(void) {
         (*cnt)++;
     }
     fclose(f);
+    if (getenv("AIP_PATDBG"))
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n);
 }
+/* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
+ * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
+static inline void aip_patterns_report(void) {
+    fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu\n",
+            g_lead_n, g_slot_n, g_confuse_n, g_reply_n);
+}
+
 /* 前缀命中：返回匹配长度（0 = 没中）。 */
 static inline size_t aip_pat_prefix(const AipPat *arr, size_t n, const char *s) {
     if (!arr || !s) return 0;
@@ -162,7 +172,8 @@ static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
     for (size_t i = 0; i < n; ++i) if (!strcmp(arr[i].w, s)) return 1;
     return 0;
 }
-/* [reply] 桶：关键词**全部**出现（逗号分隔）就回后面那句话。 */
+static inline int aip_kw_line_match(const char *line, const char *b);
+/* [reply] 桶：关键词行命中就回后面那句话（行语法见 aip_kw_line_match）。 */
 static inline const char *aip_reply_lookup(const char *input) {
     if (!input || !g_reply_n) return NULL;
     char b[200];
@@ -171,20 +182,37 @@ static inline const char *aip_reply_lookup(const char *input) {
         if (*q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') b[bl++] = *q;
     b[bl] = 0;
     if (!bl) return NULL;
-    for (size_t i = 0; i < g_reply_n; ++i) {
-        const char *p = g_reply_kw[i];
-        int ok = 1;
-        while (*p && ok) {
+    for (size_t i = 0; i < g_reply_n; ++i)
+        if (aip_kw_line_match(g_reply_kw[i], b)) return g_reply_txt[i];
+    return NULL;
+}
+
+/* §6.285 关键词行语法：**组之间 `,` = AND，组内 `|` = OR**。
+ *     `天气|下雨 , 明天|今天`  ⇒（天气 或 下雨）且（明天 或 今天）
+ * 为什么要 OR：能力/天气/时钟这几条判据本来就是"或"的组合，只有 AND 表达不了，
+ * 搬到数据行里就会失真。 */
+static inline int aip_kw_line_match(const char *line, const char *b) {
+    if (!line || !b) return 0;
+    const char *p = line;
+    while (*p) {
+        int ok = 0;
+        for (;;) {
+            /* §6.285 组内/组间允许写作方便的空格（`天气|下雨 , 明天`）—— 比较前要剥掉，
+             * 否则 `等于 ` 这种带尾空格的词永远匹配不上（实测所有带逗号的行走不到）。 */
+            while (*p == ' ' || *p == '\t') p++;
             char kw[48];
             size_t kl = 0;
-            while (*p && *p != ',' && kl + 1 < sizeof kw) kw[kl++] = *p++;
+            while (*p && *p != '|' && *p != ',' && kl + 1 < sizeof kw) kw[kl++] = *p++;
+            while (kl && (kw[kl - 1] == ' ' || kw[kl - 1] == '\t')) kl--;
             kw[kl] = 0;
-            if (*p == ',') p++;
-            if (kl && !strstr(b, kw)) ok = 0;
+            if (kl && strstr(b, kw)) ok = 1;
+            if (*p == '|') { p++; continue; }
+            break;
         }
-        if (ok) return g_reply_txt[i];
+        if (!ok) return 0;
+        if (*p == ',') p++;
     }
-    return NULL;
+    return 1;
 }
 
 static inline size_t agent_open_slot_len(char *const *w, size_t n) {
@@ -969,21 +997,6 @@ static inline int agent_nosp(const char *in, char *buf, size_t cap) {
     return (int)o;
 }
 
-static inline int agent_weather_unknown(const char *input) {
-    if (!input) return 0;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return 0;
-    int has_weather = strstr(b, "天气") || strstr(b, "下雨") || strstr(b, "下雪") ||
-                      strstr(b, "气温") || strstr(b, "温度") || strstr(b, "晴");
-    if (!has_weather) return 0;
-    /* §6.269 请求式问法（「帮你 查 一下 北京 天气」）也要认：以前只认时间词/吗，
-     * 实测这句掉进「这个我 不 太 懂」。 */
-    return strstr(b, "明天") || strstr(b, "今天") || strstr(b, "现在") ||
-           strstr(b, "未来") || strstr(b, "外面") || strstr(b, "会不会") || strstr(b, "吗") ||
-           strstr(b, "查") || strstr(b, "看看") || strstr(b, "怎么样") ||
-           strstr(b, "如何") || strstr(b, "预报");
-}
-
 /* §6.258 **自述身份**：统一成一句，别再各说各的。
  * 实测 `你 叫 什么 名字` ⇒「我 是 一 直 在 听 你 说 的 人」、`你 是 谁` ⇒「我 是 你 的 伙伴」、
  * `你 叫 什么` ⇒「我 是 一 直 在 学 的 东西」—— 三句三个说法，且都没说**它是什么**。 */
@@ -1572,40 +1585,9 @@ static inline int agent_self_identity(const char *input) {
 }
 
 /* §6.258b **日期/时刻**：没有时钟就明说（与天气同一条原则）*/
-static inline int agent_clock_unknown(const char *input) {
-    if (!input) return 0;
-    char b[256];
-    if (!agent_nosp(input, b, sizeof b)) return 0;
-    int ask = strstr(b, "几号") || strstr(b, "几点") || strstr(b, "星期几") ||
-              strstr(b, "礼拜几") || strstr(b, "哪一年") || strstr(b, "几月");
-    return ask && (strstr(b, "今天") || strstr(b, "现在") || strstr(b, "明天") ||
-                   strstr(b, "昨天") || strstr(b, "今年") || strstr(b, "当前"));
-}
-
 /* §6.257 **能力边界要如实说**（与 §6.256 同一条原则：不会就说不会，别用闲聊模板糊过去）。
  * 实测：`你 上 网 吗` ⇒「这个我 不 太 懂」；`一 加 一 等于 几` ⇒「别 硬 撑 我 陪 你」——
  * 都不是"不会"的明说。这两件事是**确定没有**的能力，明说比含糊更诚实。 */
-static inline const char *agent_capability_unknown(const char *input) {
-    if (!input) return NULL;
-    if (strstr(input, "上 网") || strstr(input, "上网") || strstr(input, "联网") ||
-        strstr(input, "联 网") || strstr(input, "搜索") || strstr(input, "百度") ||
-        strstr(input, "谷歌") || strstr(input, "查 一下 网"))
-        return "我 不 联 网，也 没 有 实时 数据 —— 只 能 用 我 自己 图 里 的 东西 回答。";
-    if (strstr(input, "等于") &&
-        (strstr(input, "加") || strstr(input, "减") || strstr(input, "乘") ||
-         strstr(input, "除") || strstr(input, "＋") || strstr(input, "＋") ||
-         strstr(input, "+") || strstr(input, "-")))
-        return "算 术 我 不 会（没 有 算术 能力）—— 这 个数 你 自己 算 更 快，也 不 会 错。";
-    /* §6.269 「你 会 算术 吗」以前**只靠 `等于` 认**，所以这句掉进猜测 ⇒ 答
-     * 「你 应该 会 算术」（还把主语当成知识问题猜了）。能力问句带 你/吗 时明说不会；
-     * `算术 属于 数学` 这种知识句（没有 你/吗）不走这儿。 */
-    if ((strstr(input, "算术") || strstr(input, "算数") || strstr(input, "算 术")) &&
-        (strstr(input, "你") || strstr(input, "吗") || strstr(input, "帮我") ||
-         strstr(input, "能给 我")))
-        return "算 术 我 不 会（没 有 算术 能力）—— 这 个数 你 自己 算 更 快，也 不 会 错。";
-    return NULL;
-}
-
 /* §6.254 **「忘 掉 X R Y」/「删 掉 X R Y」**：认出"要求删除"并**如实说明删不了**。
  * 为什么不做删除：`micro.h` 的 `MOD_REMOVE_ASSOC` 里有一条**硬底线** ——
  * 观测到的关系边不许被剪（`micro_edge_removable()` 只放行 DERIVED 缓存）。
@@ -2867,21 +2849,6 @@ static inline const char *agent_self_route(const char *input, char *out, size_t 
     {
         const char *cf = agent_confirm_request(input);
         if (cf) { snprintf(out, cap, "%s", cf); return out; }
-    }
-    if (agent_clock_unknown(input)) {
-        snprintf(out, cap,
-                 "我 没有 时 钟，也 不 联 网 —— 具体 几 号/几 点 我 不 知道（你 看 一下 手机 更 准）。");
-        return out;
-    }
-    if (agent_weather_unknown(input)) {
-        snprintf(out, cap,
-                 "天气 我 不 知道 —— 我 没有 天气 数据，也 连 不 上 网。"
-                 "（这 类 问题 我 只 能 说 不 会，不 编。）");
-        return out;
-    }
-    {
-        const char *cap2 = agent_capability_unknown(input);
-        if (cap2) { snprintf(out, cap, "%s", cap2); return out; }
     }
     {
         const char *mq = agent_measure_question(input);
@@ -4856,19 +4823,20 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         ai->turns++;
         return strlen(out);
     }
+    /* §6.284/§6.285 **[reply] 桶**（patterns.txt）：关键词行命中就给一句现成答复。
+     * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
+     * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
+     * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
+    if (!ai->ask_pending) {
+        const char *dr = aip_reply_lookup(input);
+        if (dr) { snprintf(out, out_cap, "%s", dr); ai->turns++; return strlen(out); }
+    }
     /* §6.261 **"自我/能力"类问题统一路由**（以前是散在 agent_step 里的 6 个 if 块）。
      * 顺序就是优先级，**从具体到宽泛** —— 踩过的坑：`你 会 什么 语言` 被"你会什么"（能做什么）
      * 先抢走。现在顺序写在一处、带编号，加新判据时看这张表就知道该插在哪。 */
     {
         const char *sr = agent_self_route(input, out, out_cap);
         if (sr) { ai->turns++; return strlen(out); }
-    }
-    /* §6.284 **[reply] 桶**（patterns.txt）：关键词全中就给一句现成答复。
-     * 位置在 self_route 之后、分词/学习之前 —— 所以它能**挡住"被误学成事实"的说法**
-     * （实测 `放首歌听听` 以前会被记成一条边）。 */
-    if (!ai->ask_pending) {
-        const char *dr = aip_reply_lookup(input);
-        if (dr) { snprintf(out, out_cap, "%s", dr); ai->turns++; return strlen(out); }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
