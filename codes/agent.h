@@ -887,6 +887,124 @@ static inline int agent_self_capability(const char *input) {
 /* §6.266 **"为什么 A R B"**：白箱项目的看家本事应该能在自然语言里用 ——
  * 以前 `为什么猫属于动物` ⇒「这个我 不 太 懂」（只有 `::why` 命令能看依据）。
  * 做法：剥掉"为什么"、按 A/R/B 解析、用 `rel_solve` 找证明链（正反都试），再用 `proof_text` 说出来。 */
+/* §6.277 **「为什么 他 以为 A R B」的三种语序 + 复数合并**：
+ *   ① 为什么 + 他 + 以为 …      （已支持，§6.276）
+ *   ② 他 + 为什么 + 以为 …      （为什么在中间，以前掉兜底）
+ *   ③ 为什么 + 他们/大家 + 都 + 以为 …（把**所有**说过这条的人并起来）
+ * 依据始终是**他的信念表**（`OtherModel.bel[]`），不是我的图 —— 归属先说清，
+ * 再说我图里的真值（同一条 / 反的 / 没记过）。 */
+static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
+                                    float *out_conf, int *handled) {
+    if (!ai || !words || n < 4) return NULL;
+    size_t ei = n;
+    for (size_t i = 0; i < n; ++i)
+        if (!strcmp(words[i], "以为") || !strcmp(words[i], "认为") ||
+            !strcmp(words[i], "觉得") || !strcmp(words[i], "说")) { ei = i; break; }
+    if (ei == n || ei < 1 || ei + 2 >= n) return NULL;
+    /* who：从 以为 往前找，跳过语序/填充词（为什么 在中间时也能找到人） */
+    size_t hj = ei;
+    int found_who = 0;
+    while (hj > 0) {
+        hj--;
+        const char *w = words[hj];
+        if (!strcmp(w, "为什么") || !strcmp(w, "为啥") || !strcmp(w, "为何") ||
+            !strcmp(w, "都") || !strcmp(w, "也") || !strcmp(w, "还") ||
+            !strcmp(w, "是") || !strcmp(w, "就") || !strcmp(w, "又") ||
+            !strcmp(w, "到底") || !strcmp(w, "究竟")) continue;
+        found_who = 1;
+        break;
+    }
+    if (!found_who) return NULL;
+    /* §6.277 名字被切成两个单字（`小明` → 小/明）：往前再吃一个单字实词拼成名字。
+     * 代词/虚词不参与（`他` 在虚词表里，`rel_one_cjk` 返回 0）。 */
+    char namebuf[24];
+    const char *who = words[hj];
+    if (hj > 0 && rel_one_cjk(words[hj]) && rel_one_cjk(words[hj - 1])) {
+        snprintf(namebuf, sizeof namebuf, "%s%s", words[hj - 1], words[hj]);
+        who = namebuf;
+    }
+    if (who[0] == '[') return NULL;
+    /* 复数：他们/她们/大家/所有人/人们 */
+    int plural = !strcmp(who, "他们") || !strcmp(who, "她们") ||
+                 !strcmp(who, "大家") || !strcmp(who, "所有人") ||
+                 !strcmp(who, "人们");
+    char *r2[8]; size_t rn2 = 0;
+    for (size_t i = ei + 1; i < n && rn2 < 8; ++i) r2[rn2++] = words[i];
+    while (rn2 > 3 && (!strcmp(r2[rn2 - 1], "呢") || !strcmp(r2[rn2 - 1], "吗"))) rn2--;
+    if (rn2 < 3) return NULL;
+    char jb2[64];
+    const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
+    uint8_t rid2 = 0;
+    int neg2 = 0, q2 = 0;
+    if (!rel_parse(ai, r2, rn2, jb2, sizeof jb2, &aw2, &rid2, &neg2, &bw2, &q2, &rw2, 0))
+        return NULL;
+    if (!aw2 || !bw2 || !rid2) return NULL;
+    Token *A2 = pool_find(ai->pool, aw2), *B2 = pool_find(ai->pool, bw2);
+    if (!A2 || !B2) return NULL;
+    Token *W = pool_find(ai->pool, who);
+    /* 信念表里找：单数只查这个人；复数把**所有**说过这条的人并起来 */
+    int found = 0;
+    size_t n_who = 0;
+    const char *names[3]; names[0] = names[1] = names[2] = NULL;
+    for (size_t i = 0; i < ai->others_n; ++i) {
+        OtherModel *om = &ai->others[i];
+        if (!om->who) continue;
+        if (!plural && W && om->who != W) continue;
+        for (size_t k = 0; k < om->n_bel; ++k) {
+            HypoFact *f = &om->bel[k];
+            if (f->a != A2 || f->rid != rid2 || f->b != B2) continue;
+            found = 1;
+            /* 复数合并时**不把「他们」自己算进人数**（那是一个代词，不是一个人）。 */
+            if (!plural || (strcmp(om->who->name ? om->who->name : "", "他们") &&
+                            strcmp(om->who->name ? om->who->name : "", "她们") &&
+                            strcmp(om->who->name ? om->who->name : "", "大家") &&
+                            strcmp(om->who->name ? om->who->name : "", "人们") &&
+                            strcmp(om->who->name ? om->who->name : "", "所有人"))) {
+                if (n_who < 3) names[n_who] = om->who->name;
+                n_who++;
+            }
+            break;
+        }
+    }
+    int truth = 0;
+    {
+        Proof p1, p2;
+        rel_solve(ai, A2, rid2, B2, 0, &p1);
+        truth = p1.status;
+        if (!truth) { rel_solve(ai, A2, rid2, B2, 1, &p2); truth = p2.status; }
+    }
+    char bf[640];
+    size_t o = 0;
+    o += (size_t)snprintf(bf + o, sizeof bf - o,
+                          "「%.24s 以为 %.24s %.24s%.24s %.24s」—— 这 是 %.24s 的 看法，"
+                          "归 %.24s，不 进 我 的 知识。",
+                          who, aw2, neg2 ? "不 " : "", rw2 ? rw2 : "?", bw2, who, who);
+    if (plural && n_who)
+        o += (size_t)snprintf(bf + o, sizeof bf - o, "（有 %zu 个 人 这么 想%s%.16s%s）",
+                              n_who, names[0] ? "：" : "", names[0] ? names[0] : "",
+                              n_who > 1 ? " 等" : "");
+    if (!found)
+        o += (size_t)snprintf(bf + o, sizeof bf - o,
+                              "我 这 儿 没 记 过 %.24s 说 过 这 条 —— 你 先 说 一 句"
+                              "「%.24s 以为 %.24s %.24s%.24s %.24s」我 就 记 下。",
+                              who, who, aw2, neg2 ? "不 " : "",
+                              rw2 ? rw2 : "?", bw2);
+    else if (truth == (neg2 ? -1 : 1))
+        o += (size_t)snprintf(bf + o, sizeof bf - o, "这 条 我 图 里 也 记 着。");
+    else if (truth == 0)
+        o += (size_t)snprintf(bf + o, sizeof bf - o, "我 图 里 没 记 过 这 条（不 编）。");
+    else
+        o += (size_t)snprintf(bf + o, sizeof bf - o,
+                              "我 图 里 记 的 是 反 的：%.24s %.24s%.24s %.24s。",
+                              aw2, neg2 ? "" : "不 ", rw2 ? rw2 : "?", bw2);
+    (void)q2;
+    if (out_conf) *out_conf = 0.8f;
+    if (handled) *handled = 1;
+    char *rr = (char *)malloc(strlen(bf) + 1);
+    if (rr) memcpy(rr, bf, strlen(bf) + 1);
+    return rr;
+}
+
 static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
                                        float *out_conf, int *handled) {
     if (handled) *handled = 0;
@@ -896,77 +1014,11 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
         if (!strcmp(words[i], "为什么") || !strcmp(words[i], "为啥") ||
             !strcmp(words[i], "为何")) { wi = i; break; }
     if (wi == n) return NULL;
-    /* §6.276 **「为什么 他 以为 A R B」——他人视角**：依据不是我的图，而是**他的信念表**。
-     * 这条以前整句掉兜底（实测答「这个我 不 太 懂」）。归属先摆明（归他、不进我的知识），
-     * 再说我图里记的是同一条还是反的 —— 白箱项目该能这样答。 */
-    if (wi + 3 < n) {
-        static const char *vthink[] = {"以为", "认为", "觉得", NULL};
-        int hitv = 0;
-        for (size_t k = 0; vthink[k]; ++k)
-            if (!strcmp(words[wi + 2], vthink[k])) hitv = 1;
-        if (hitv) {
-            const char *who = words[wi + 1];
-            Token *W = pool_find(ai->pool, who);
-            char *r2[8]; size_t rn2 = 0;
-            for (size_t i = wi + 3; i < n && rn2 < 8; ++i) r2[rn2++] = words[i];
-            while (rn2 > 3 && (!strcmp(r2[rn2 - 1], "呢") || !strcmp(r2[rn2 - 1], "吗"))) rn2--;
-            char jb2[64];
-            const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
-            uint8_t rid2 = 0;
-            int neg2 = 0, q2 = 0;
-            if (rn2 >= 3 && rel_parse(ai, r2, rn2, jb2, sizeof jb2, &aw2, &rid2, &neg2,
-                                      &bw2, &q2, &rw2, 0) && aw2 && bw2 && rid2) {
-                Token *A2 = pool_find(ai->pool, aw2), *B2 = pool_find(ai->pool, bw2);
-                if (A2 && B2) {
-                    int found = 0;
-                    for (size_t i = 0; i < ai->others_n && !found; ++i) {
-                        OtherModel *om = &ai->others[i];
-                        if (!om->who || (W && om->who != W)) continue;
-                        for (size_t k = 0; k < om->n_bel; ++k) {
-                            HypoFact *f = &om->bel[k];
-                            if (f->a != A2 || f->rid != rid2 || f->b != B2) continue;
-                            found = 1;
-                            break;
-                        }
-                    }
-                    int truth = 0;
-                    {
-                        Proof p1, p2;
-                        rel_solve(ai, A2, rid2, B2, 0, &p1);
-                        truth = p1.status;
-                        if (!truth) { rel_solve(ai, A2, rid2, B2, 1, &p2); truth = p2.status; }
-                    }
-                    char bf[640];
-                    size_t o = 0;
-                    o += (size_t)snprintf(bf + o, sizeof bf - o,
-                                          "「%s 以为 %s %s%s %s」—— 这 是 %s 的 看法，归 %s，"
-                                          "不 进 我 的 知识。",
-                                          who, aw2, neg2 ? "不 " : "",
-                                          rw2 ? rw2 : "?", bw2, who, who);
-                    if (!found)
-                        o += (size_t)snprintf(bf + o, sizeof bf - o,
-                                              "我 这 儿 没 记 过 %s 说 过 这 条 —— 你 先 说 一 句"
-                                              "「%s 以为 %s %s%s %s」我 就 记 下。",
-                                              who, who, aw2, neg2 ? "不 " : "",
-                                              rw2 ? rw2 : "?", bw2);
-                    else if (truth == (neg2 ? -1 : 1))
-                        o += (size_t)snprintf(bf + o, sizeof bf - o, "这 条 我 图 里 也 记 着。");
-                    else if (truth == 0)
-                        o += (size_t)snprintf(bf + o, sizeof bf - o, "我 图 里 没 记 过 这 条（不 编）。");
-                    else
-                        o += (size_t)snprintf(bf + o, sizeof bf - o,
-                                              "我 图 里 记 的 是 反 的：%s %s%s %s。",
-                                              aw2, neg2 ? "" : "不 ",
-                                              rw2 ? rw2 : "?", bw2);
-                    (void)q2;
-                    if (out_conf) *out_conf = 0.8f;
-                    if (handled) *handled = 1;
-                    char *rr = (char *)malloc(strlen(bf) + 1);
-                    if (rr) memcpy(rr, bf, strlen(bf) + 1);
-                    return rr;
-                }
-            }
-        }
+    /* §6.276/§6.277 他人视角（`为什么他以为` / `他为什么以为` / `他们都以为`）
+     * 先走自己的路：依据是**他的信念表**，不是我的图。 */
+    {
+        char *ow = agent_why_other(ai, words, n, out_conf, handled);
+        if (ow) return ow;
     }
     /* 拼出 A R B（去掉"为什么"这个 token；"不"留在关系词前会被 rel_parse 认）*/
     char *rest[8]; size_t rn = 0;
@@ -2914,17 +2966,29 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
                                        float *out_conf) {
     if (!ai || !words || n < 4 || n > 8) return NULL;
     static const char *verbs[] = {"以为", "认为", "觉得", "说", NULL};
-    int vi = -1;
-    for (size_t i = 0; verbs[i]; ++i)
-        if (strcmp(words[1], verbs[i]) == 0) { vi = (int)i; break; }
-    if (vi < 0) return NULL;
-    if (strcmp(words[0], "我") == 0) return NULL;   /* 我自己的看法不是「别人」的 */
+    /* §6.277 名字被切成两个单字（`小明 以为 …` → 小/明/以为）：认**两字名字**。
+     * 只在前两个词都是单字实词、第三词是看法动词时才这么解，别的形状不动。 */
+    size_t vp = 0;                 /* 看法动词的位置 */
+    int two_char_name = 0;
+    {
+        int hit = 0;
+        for (size_t i = 0; verbs[i]; ++i)
+            if (!strcmp(words[1], verbs[i])) { hit = 1; break; }
+        if (hit) vp = 1;
+        else if (n >= 5 && rel_one_cjk(words[0]) && rel_one_cjk(words[1])) {
+            for (size_t i = 0; verbs[i]; ++i)
+                if (!strcmp(words[2], verbs[i])) { hit = 1; break; }
+            if (hit) { vp = 2; two_char_name = 1; }
+        }
+        if (!hit) return NULL;
+    }
+    if (!two_char_name && strcmp(words[0], "我") == 0) return NULL;  /* 我自己的看法不是「别人」的 */
     const char *aw = NULL, *bw = NULL, *rw = NULL;
     uint8_t rid = 0;
     int is_q = 0, is_neg = 0;
     char jbuf[64];
     /* 只认**陈述**；「他 觉得 X 吗」是问他的立场，交给视角那条路 */
-    if (!rel_parse(ai, words + 2, n - 2, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
+    if (!rel_parse(ai, words + vp + 1, n - vp - 1, jbuf, sizeof jbuf, &aw, &rid, &is_neg,
                    &bw, &is_q, &rw, 0)) return NULL;
     if (is_q) return NULL;
     /* §6.228 **宾语/谓语是虚词就不记**（`他 以为 猫 属于 很`）。⚠ 主语不查：
@@ -2932,7 +2996,10 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
      * belief 的"同义改写"断言当场红。 */
     if (fr_is_func(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;          /* §6.229 `他 以为 很 属于 猫` 不该记 */
-    Token *who = pool_token_intern(ai->pool, words[0]);
+    char whoname[24];
+    if (two_char_name) snprintf(whoname, sizeof whoname, "%s%s", words[0], words[1]);
+    else snprintf(whoname, sizeof whoname, "%s", words[0]);
+    Token *who = pool_token_intern(ai->pool, whoname);
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!who || !A || !B || A == B) return NULL;
@@ -2941,7 +3008,8 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
     {
         char note[160];
         snprintf(note, sizeof note, "%s %s %s%s %s（存在他名下，不进我的知识）",
-                 who->name ? who->name : "他", vi == 3 ? "说" : "以为",
+                 who->name ? who->name : "他",
+                 (vp == 1 && !strcmp(words[1], "说")) ? "说" : "以为",
                  aw, is_neg ? "不 " : "", bw);
         cot_push(ai, COT_HYP, 1, 75, "记下他的看法（归属给他，不是我的知识）", note);
         ai->n_cot++;
@@ -2949,7 +3017,7 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
     char resp0[240];
     /* 他的看法和我的知识相反时如实说出来 —— 这正是「归属」的意义所在 */
     int mine_pos = rel_direct(A, rid, B), mine_neg = rel_direct_neg(A, rid, B);
-    const char *wv = (vi == 3) ? "说" : "以为";   /* 他说的是「说」，就别说成「以为」 */
+    const char *wv = (vp == 1 && !strcmp(words[1], "说")) ? "说" : "以为";   /* 他说的是「说」，就别说成「以为」 */
     if (is_neg ? mine_pos : mine_neg)
         snprintf(resp0, sizeof resp0,
                  "记下 了 ： %s %s %s %s%s %s —— 可 我 知道 实际 上 不 是 这样",

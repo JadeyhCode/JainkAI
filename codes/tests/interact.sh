@@ -781,6 +781,27 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "这 条 我 图 里 也 记 �
     && chk "他的看法和我一致 ⇒ 说明一致" 1 \
     || chk "一致" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+echo "52 §6.277 他人视角的三种语序 + 两字名字 + 复数合并"
+out=$(run "他以为猫属于植物" "他为什么以为猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "归 他，不 进 我 的 知识" \
+    && chk "「他为什么以为…」（为什么在中间）也答得出" 1 \
+    || chk "他为什么以为" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "小明以为猫属于植物" "为什么小明以为猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 小明 以为 猫 属于 植物" \
+    && chk "两字名字的看法学得进（小明以为…）" 1 \
+    || chk "小明以为" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "归 小明" \
+    && chk "问小明也答得出（名字没被切成\"明\"）" 1 \
+    || chk "问小明" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+out=$(run "小明以为猫属于植物" "他以为猫属于植物" "为什么他们都以为猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "有 2 个 人" \
+    && chk "复数合并：他们 => 数出两个人" 1 \
+    || chk "复数合并" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "他说猫属于植物" "为什么他说猫属于植物")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "归 他，不 进 我 的 知识" \
+    && chk "「为什么他说…」也按他的看法答" 1 \
+    || chk "为什么他说" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
