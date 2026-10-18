@@ -250,6 +250,9 @@ static inline size_t *aip_pat_count(const char *kind) {
 static inline void aip_patterns_load(void) {
     if (g_pat_loaded) return;
     g_pat_loaded = 1;
+    /* §6.306 **数据消融开关**：`AIP_NODATA=1` 时不读 patterns.txt（所有桶为空）。
+     * 用来量"当前能力里有多少来自数据行、多少来自内核本身"——不是运行开关。 */
+    if (getenv("AIP_NODATA")) return;
     g_lead_n = g_slot_n = g_confuse_n = 0;
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
