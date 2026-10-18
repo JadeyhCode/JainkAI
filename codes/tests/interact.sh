@@ -923,6 +923,17 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "狗 -\[不 会\]-> 飞" \
     && chk "「…它会飞吗」指代先行词正确" 1 \
     || chk "它指代" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "62 §6.291 第二组留出集（holdout2）：同义句式靠数据行接上"
+out=$(run "猫是不是动物" "猫算动物吗" "猫这种动物属于什么" "帮我看下猫属于什么")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "猫 -\[属于\]-> 动物" \
+    && chk "「猫是不是动物」⇒ 对" 1 || chk "是不是" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 -\[属于\]-> 动物" \
+    && chk "「猫算动物吗」⇒ 对（算 当系词）" 1 || chk "算" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "猫 属于 动物" \
+    && chk "「猫这种动物属于什么」⇒ 动物" 1 || chk "这种" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "猫 属于 动物" \
+    && chk "「帮我看下猫属于什么」⇒ 动物" 1 || chk "帮我看下" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
