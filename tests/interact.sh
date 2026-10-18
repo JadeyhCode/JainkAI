@@ -544,6 +544,22 @@ for w in $want; do
 done
 IFS="$old_ifs"
 
+echo "㊴ §6.262/§6.263 不带空格的「在哪」+ 引导语「教你/告诉你」"
+out=$(run "我 住 在 上海" "我在哪" "我住哪")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 我 在 上海" \
+    && chk "「我在哪」（无空格）答得出" 1 \
+    || chk "「我在哪」（无空格）" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 我 在 上海" \
+    && chk "「我住哪」也答得出" 1 \
+    || chk "「我住哪」" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(run "告诉你我喜欢猫" "我喜欢猫吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ： 我 喜欢 猫" \
+    && chk "引导语「告诉你」剥掉后照常学" 1 \
+    || chk "引导语剥掉后照常学" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 我 -\[喜欢\]-> 猫" \
+    && chk "学进来的那条查得到" 1 \
+    || chk "学进来的那条查得到" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

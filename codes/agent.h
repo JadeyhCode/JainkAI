@@ -225,6 +225,25 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
             for (size_t i = 0; i < qpos; ++i) nw[i] = words[i];
             nw[qpos] = (char *)"什么";
             words = nw; n = qpos + 1;
+        } else if (qpos < n && qpos == 1 && words[0]) {
+            /* §6.262 **关系词被分词吞进了前一个 token**：不带空格写「我在哪」「我住哪」时，
+             * 分词器给出 [我在][哪] / [我住][哪]（`我在` 在词池里是最大匹配）⇒ 上面那条判据
+             * `rel_id_of("我在")` 不成立、整句掉兜底。这里把后缀 在/住 剥出来当关系词。
+             * ⚠ 就地改 `words[0]`（截断成主语）—— 它是 ai_tokenize 分配的、后面统一 free，安全。 */
+            const char *w = words[0];
+            size_t wl = strlen(w);
+            static const char *suf[] = {"在", "住", NULL};
+            for (size_t i = 0; suf[i]; ++i) {
+                size_t sl = strlen(suf[i]);
+                if (wl <= sl || strcmp(w + wl - sl, suf[i]) != 0) continue;
+                ((char *)w)[wl - sl] = 0;
+                if (!w[0]) return NULL;
+                nw[0] = (char *)w;
+                nw[1] = (char *)"在";      /* 住 也问"在哪"（住的地方就是地点）*/
+                nw[2] = (char *)"什么";
+                words = nw; n = 3;
+                break;
+            }
         }
     }
     /* §6.145 剥掉问法外壳（填充词/前缀）——剥完再按原来的形状判定 */
@@ -737,6 +756,33 @@ static inline int agent_self_capability(const char *input) {
  * 这些都不是图里的知识，而是**实现事实**；以前分别答成
  * 「就三件事…」（语言被打成了"能做什么"）、「我 没 有 生 日 但 我 可 以 有」（年龄）、
  * 「这个我 不 太 懂」（住哪/谁做的）、「你 有 感情」（感情，还把主语搞反了）。 */
+/* §6.262 **不带空格的"在哪"问句要在分词前拆开**：`我在哪` 分词成 [我在][哪]（`我在` 是
+ * 词池里的最大匹配），关系层只认 `[A][在][什么]` ⇒ 整句掉兜底。这里在**字符串层**重写成
+ * `A 在 什么`（带空格），不动 token 数组（往 token 数组里插指针会破坏 free 的所有权）。
+ * `我住哪` 同理（住的地方就是地点）。 */
+static inline int agent_rewrite_where(const char *in, char *out, size_t cap) {
+    if (!in || !out || cap == 0) return 0;
+    char c[192];
+    if (!agent_nosp(in, c, sizeof c)) return 0;
+    size_t cl = strlen(c);
+    int has_ma = 0;
+    if (cl >= 3 && strcmp(c + cl - 3, "吗") == 0) { has_ma = 1; cl -= 3; }
+    size_t pos = (size_t)-1;
+    static const char *pat[] = {"住在哪里", "住在哪儿", "住在哪", "在哪里", "在哪儿", "在哪",
+                                "住哪里", "住哪儿", "住哪", NULL};
+    for (size_t i = 0; pat[i]; ++i) {
+        size_t pl = strlen(pat[i]);
+        if (cl < pl) continue;
+        if (strcmp(c + cl - pl, pat[i]) != 0) continue;
+        pos = cl - pl;
+        break;
+    }
+    if (pos == (size_t)-1 || pos == 0) return 0;
+    c[pos] = 0;
+    snprintf(out, cap, "%s 在 什么%s", c, has_ma ? " 吗" : "");
+    return 1;
+}
+
 static inline const char *agent_self_fact(const char *input) {
     if (!input) return NULL;
     char b[256];
@@ -3740,6 +3786,9 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
 }
 
 
+/* §6.262 前置声明（定义在下面"自我/能力"那一块附近）*/
+static inline int agent_rewrite_where(const char *in, char *out, size_t cap);
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -3878,6 +3927,30 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 input_eff = decl_in;
                 break;
             }
+        }
+    }
+    {   /* §6.263 「教你 / 告诉你 / 教我」这种**引导语**先剥掉（不做这步，后面的学习链
+         * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
+        const char *q = input_eff;
+        while (*q == ' ' || *q == '\t') q++;
+        static const char *lead[] = {"告诉你", "教你", "告诉 你", "教 你", " teaches"};
+
+        for (size_t i = 0; lead[i]; ++i) {
+            size_t ll = strlen(lead[i]);
+            if (strncmp(q, lead[i], ll) != 0) continue;
+            const char *rest = q + ll;
+            while (*rest == ' ' || *rest == '\t') rest++;
+            if (!*rest) break;
+            snprintf(decl_in, sizeof decl_in, "%s", rest);
+            input_eff = decl_in;
+            break;
+        }
+    }
+    {   /* §6.262 「X在哪 / X住哪」⇒ 「X 在 什么」（必须在分词前：`我在` 会被当成一个词）*/
+        char wh[224];
+        if (agent_rewrite_where(input_eff, wh, sizeof wh)) {
+            snprintf(decl_in, sizeof decl_in, "%s", wh);
+            input_eff = decl_in;
         }
     }
     char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)
