@@ -77,7 +77,7 @@ static inline int agent_open_slot_word(const char *w) {
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
  * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
  * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
-#define AIP_SHAPE_MAX 32   /* §6.290 原来 8 条，新加的规则被静默丢弃（又是"上限太小"）*/
+#define AIP_SHAPE_MAX 64   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
@@ -237,7 +237,12 @@ static inline void aip_patterns_load(void) {
         if (!*val) continue;
         if (!strcmp(kind, "shape")) {
             char *eq = strchr(val, '=');
-            if (!eq || g_shape_n >= AIP_SHAPE_MAX) continue;
+            if (!eq) continue;
+            if (g_shape_n >= AIP_SHAPE_MAX) {
+                fprintf(stderr, "[patterns] ⚠ [shape] 超过上限 %d，这一行被丢弃：%.60s\n",
+                        AIP_SHAPE_MAX, val);
+                continue;
+            }
             *eq = 0;
             const char *rhs = eq + 1;
             /* §6.295 **行内注释**：数据行末尾的 ` # …` 要剥掉。不剥的话它会变成规则的一部分
@@ -1368,7 +1373,23 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
  * 返回 1 表示重写过（out 里是新的输入串）。 */
 static inline int agent_rewrite_ellipsis(const AI *ai, const char *in, char *out, size_t cap) {
     if (!ai || !in || !out || cap == 0) return 0;
-    if (!ai->last_q_rid || !ai->last_q_b[0]) return 0;
+    /* §6.304 **陈述句之后的「那 X 呢」**：`last_q_*` 只有问句才记，于是
+     * 「猫属于动物 / 那狗呢」以前掉兜底。退回到"上一轮学到的那条事实"（g_lf_*）。
+     * ⚠ 别把这条写成 [shape]：形状行跑在 §6.268 之前，会把"上一句是问句"的情况也吃掉
+     * （实测 holdout5 从 12 掉到 11）。 */
+    uint8_t rid_eff = ai->last_q_rid;
+    const char *b_eff = ai->last_q_b;
+    int neg_eff = ai->last_q_neg;
+    char fb_b[40];
+    fb_b[0] = 0;
+    if (!rid_eff || !b_eff[0]) {
+        if (!g_lf_r[0] || !g_lf_b[0]) return 0;
+        rid_eff = rel_id_of((AI *)ai, g_lf_r, 0);
+        if (!rid_eff) return 0;
+        snprintf(fb_b, sizeof fb_b, "%s", g_lf_b);
+        b_eff = fb_b;
+        neg_eff = 0;
+    }
     char c[128];
     if (!agent_nosp(in, c, sizeof c)) return 0;
     size_t cl = strlen(c);
@@ -1382,9 +1403,9 @@ static inline int agent_rewrite_ellipsis(const AI *ai, const char *in, char *out
     if (cl == 0 || cl > sizeof subj - 1) return 0;
     memcpy(subj, p, cl); subj[cl] = 0; sl = cl;
     (void)sl;
-    const char *rn = rel_name_of(ai, ai->last_q_rid);
+    const char *rn = rel_name_of(ai, rid_eff);
     if (!rn) return 0;
-    snprintf(out, cap, "%s %s%s %s 吗", subj, ai->last_q_neg ? "不 " : "", rn, ai->last_q_b);
+    snprintf(out, cap, "%s %s%s %s 吗", subj, neg_eff ? "不 " : "", rn, b_eff);
     return 1;
 }
 
@@ -5067,8 +5088,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         /* §6.294 **陈述句也记一条"上一句事实"**：`反过来呢` 的数据行要用它。
          * 放在这里（所有路径之前、一处）比在每个学习/答复路径里分别记可靠 ——
          * 实测「猫属于动物」走的是"我知道"那条答复路径，学习路径根本没跑。 */
-        if (rp && !q2 && rid2 && aw2 && bw2)
+        if (rp && !q2 && rid2 && aw2 && bw2) {
             aip_note_fact(aw2, rw2 ? rw2 : "属于", bw2);
+            /* §6.304 **陈述句也更新"上一句语境"**：否则「猫属于动物 / 狗属于动物 /
+             * 鲸鱼属于哺乳动物 / 那鲸鱼呢」会用**很久以前**的问句（狗属于动物）补全，
+             * 补成「鲸鱼 属于 动物」——实测就是这么错的。最近的这一轮说了什么，就用什么。 */
+            if (bw2[0] && strlen(bw2) < sizeof ai->last_q_b) {
+                ai->last_q_rid = rid2;
+                ai->last_q_neg = (uint8_t)(neg2 ? 1 : 0);
+                snprintf(ai->last_q_b, sizeof ai->last_q_b, "%s", bw2);
+            }
+        }
     }
     /* 视角切换会把 words/n 往后挪两个词，但**释放必须用原始的指针** ——
      * 不然 free 的是数组中间，是堆破坏（不是崩一下就完的那种）。 */
