@@ -183,7 +183,7 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
  * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
  * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
-#define AIP_SHAPE_MAX 96   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
+#define AIP_SHAPE_MAX 256   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
@@ -327,7 +327,7 @@ static inline size_t *aip_pat_count(const char *kind) {
     if (!strcmp(kind, "confuse")) return &g_confuse_n;
     return NULL;
 }
-static inline void aip_patterns_load(void) {
+static inline void aip_patterns_load(AI *ai) {
     if (g_pat_loaded) return;
     g_pat_loaded = 1;
     /* §6.306 **数据消融开关**：`AIP_NODATA=1` 时不读 patterns.txt（所有桶为空）。
@@ -408,6 +408,71 @@ static inline void aip_patterns_load(void) {
                     g_shape_r[g_shape_n][--L] = 0;
             }
             g_shape_n++;
+            /* §6.322 **自动生成"分词变体"**：规则里的多字实词（如 `属于`）在词池里
+             * 有时是一个 token、有时被切成 `属`+`于`。与其让写规则的人两种都写一遍
+             * （已经踩过 N 次），这里在加载时**自动再存一条"逐字拆开"的变体**。
+             * 只对**第一个**多字实词做（限制变体数量），rhs 不变 —— 语义完全一样。 */
+            {
+                char buf[sizeof g_shape_l[0]];
+                snprintf(buf, sizeof buf, "%s", g_shape_l[g_shape_n - 1]);
+                char *toks[12]; size_t nt = 0;
+                for (char *tk = strtok(buf, " "); tk && nt < 12; tk = strtok(NULL, " "))
+                    toks[nt++] = tk;
+                for (size_t j = 0; j < nt && g_shape_n < AIP_SHAPE_MAX; ++j) {
+                    if (toks[j][0] == '$') continue;
+                    size_t L = strlen(toks[j]);
+                    if (L < 6) continue;                     /* 不足两个汉字 */
+                    char var[sizeof g_shape_l[0]]; size_t o = 0;
+                    for (size_t k = 0; k < nt; ++k) {
+                        if (k == j) {
+                            for (size_t q = 0; q < L; ) {
+                                size_t cl = aip_u8len(toks[j] + q);
+                                o += (size_t)snprintf(var + o, sizeof var - o, "%s%.*s",
+                                                      o ? " " : "", (int)cl, toks[j] + q);
+                                q += cl;
+                                if (o + 8 >= sizeof var) { o = sizeof var; break; }
+                            }
+                        } else {
+                            o += (size_t)snprintf(var + o, sizeof var - o, "%s%s",
+                                                  o ? " " : "", toks[k]);
+                        }
+                        if (o + 8 >= sizeof var) break;
+                    }
+                    if (o + 1 >= sizeof var) break;
+                    snprintf(g_shape_l[g_shape_n], sizeof g_shape_l[0], "%s", var);
+                    snprintf(g_shape_r[g_shape_n], sizeof g_shape_r[0], "%s", g_shape_r[g_shape_n - 1]);
+                    g_shape_n++;
+                    break;                                   /* 只拆第一个 */
+                }
+                /* 反向：相邻两个**单字实词**能拼成一个已知词（`属`+`于` ⇒ `属于`）时，
+                 * 再生成一条"合并"变体 —— 否则规则写"拆开版"时，词池里是合并 token 就永远匹配不上。 */
+                if (g_shape_n < AIP_SHAPE_MAX) {
+                    for (size_t j = 0; j + 1 < nt; ++j) {
+                        if (toks[j][0] == '$' || toks[j + 1][0] == '$') continue;
+                        if (strlen(toks[j]) != 3 || strlen(toks[j + 1]) != 3) continue;  /* 各 1 个汉字 */
+                        char joined[16];
+                        snprintf(joined, sizeof joined, "%s%s", toks[j], toks[j + 1]);
+                        if (!pool_find(ai->pool, joined) && !rel_id_of(ai, joined, 0)) continue;
+                        char jv[sizeof g_shape_l[0]]; size_t o2 = 0;
+                        for (size_t k = 0; k < nt; ++k) {
+                            if (k == j) {
+                                o2 += (size_t)snprintf(jv + o2, sizeof jv - o2, "%s%s",
+                                                       o2 ? " " : "", joined);
+                                k++;
+                            } else {
+                                o2 += (size_t)snprintf(jv + o2, sizeof jv - o2, "%s%s",
+                                                       o2 ? " " : "", toks[k]);
+                            }
+                            if (o2 + 8 >= sizeof jv) break;
+                        }
+                        if (o2 + 1 >= sizeof jv) break;
+                        snprintf(g_shape_l[g_shape_n], sizeof g_shape_l[0], "%s", jv);
+                        snprintf(g_shape_r[g_shape_n], sizeof g_shape_r[0], "%s", g_shape_r[g_shape_n - 1]);
+                        g_shape_n++;
+                        break;
+                    }
+                }
+            }
             continue;
         }
         if (!strcmp(kind, "reply")) {
@@ -4685,9 +4750,11 @@ static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
 static inline Agent *agent_new(AgentPerceiveFn perceive, AgentActFn act, void *user) {
     Agent *a = (Agent *)calloc(1, sizeof *a);
     if (!a) return NULL;
-    aip_patterns_load();                 /* §6.283 说法层：patterns.txt（缺文件也无妨） */
     a->brain = ai_new();
     if (!a->brain) { free(a); return NULL; }
+    /* §6.283/§6.322 说法层：patterns.txt（缺文件也无妨）。**在 ai_new 之后**加载：
+     * §6.322 生成"分词变体"时要查词池（`属于` 是池里的词还是两个单字）。 */
+    aip_patterns_load(a->brain);
     a->perceive = perceive; a->act = act; a->user = user;
     a->verbose = 1;
     return a;
