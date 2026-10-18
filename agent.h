@@ -281,6 +281,8 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
             o += (size_t)snprintf(out + o, cap - o, "%s%s", o ? " " : "", val);
             if (o + 8 >= cap) { bad = 1; break; }
         }
+        if (getenv("AIP_SHAPEDBG"))
+            fprintf(stderr, "[shape] rule=%s => %s (ok=%d)\n", g_shape_l[r], out, !bad);
         if (!bad && o) { ai_free_words(w, n); return 1; }
     }
     ai_free_words(w, n);
