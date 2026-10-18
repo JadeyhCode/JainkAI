@@ -308,6 +308,23 @@ for q in "桌子 会 飞 吗" "桌子 不 会 飞 吗"; do
     done
 done
 
+echo "⑥ §6.251 含糊回话（嗯 / 好的 / 行了 / 嗯 嗯 / 可以）都算**同意我刚才那句**"
+for a in "嗯" "好的" "行了" "嗯 嗯" "可以"; do
+    out=$(run 1 "桌子 会 飞 吗" "$a" "桌子 会 飞 吗")
+    got=$(printf '%s\n' "$out" | reps | sed -n 3p)
+    case "$got" in
+        *"不 会"*) chk "回「$a」⇒ 记成 不 会（同意我的猜测）" 1 ;;
+        *)         chk "回「$a」⇒ 不 会" 0 "$got" ;;
+    esac
+done
+out=$(run 1 "桌子 会 飞 吗" "会" "桌子 会 飞 吗")
+got=$(printf '%s\n' "$out" | reps | sed -n 3p)
+if printf '%s\n' "$got" | grep -q "桌子 -\[会\]-> 飞"; then
+    chk "对照：回「会」⇒ 会 飞（能力问句的肯定回答）" 1
+else
+    chk "回「会」⇒ 会 飞" 0 "$got"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL askback（追问回话）"
     exit 1

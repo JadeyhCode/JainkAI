@@ -3318,10 +3318,13 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     }
     if (n < 1 || n > 3) junk = 1;
     if (!junk) {
-        static const char *ay[] = {"会", "能", "可以", NULL};
+        /* §6.251 `可以` 挪到**判词**：「桌子 会 飞 吗」回「可以」不是"能飞"，是"行吧/同意"；
+         * 能力问句的肯定回答是「会/能」。 */
+        static const char *ay[] = {"会", "能", NULL};
         static const char *an[] = {"不 会", "不会", "不 能", "不能", NULL};
         static const char *jy[] = {"对", "是", "嗯", "好", "行", "没 错", "没错",
-                                   "对 的", "是 的", NULL};
+                                   "对 的", "是 的", "可以", "好 的", "行 了",
+                                   "嗯 嗯", "嗯嗯", NULL};
         static const char *jn[] = {"不 对", "不对", "不 是", "不是", "不", "没",
                                    "没 有", "没有", "错", NULL};
         for (size_t i = 0; ay[i]; ++i) if (!strcmp(j, ay[i])) { yes = 1; saw_answer = 1; }
