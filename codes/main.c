@@ -541,6 +541,7 @@ typedef enum {
     CMD_RELINFER,
     CMD_RELNAT,
     CMD_SEGREPORT,
+    CMD_VERIFYWRITES,
     CMD_REVISE,             /* 观测改口语义开关（默认开） */
     CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
     CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
@@ -670,6 +671,9 @@ static const CmdDef CMDS[] = {
       CMD_REL },
     { "why", NULL, 2, "基本",
       "问 A 关系 B 成不成立，并打出推导路径", CMD_WHY },
+    { "verifywrites", "on|off", CARG_OPT, "调试/诊断",
+      "写后读回校验（默认关，§6.248）：ai_write_rel 声称成功就立刻用读路径复核，\n"
+      "不符就记数 —— 用来兜住「报了没学进去」那一类错", CMD_VERIFYWRITES },
     { "segreport", NULL, 0, "调试/诊断",
       "打印 `AIP_SEGTIME=1` 收集到的 11 段耗时（段名 / 次数 / 总毫秒 / 均毫秒）——\n"
       "以前**只收集不打印**，钩子形同虚设", CMD_SEGREPORT },
@@ -1450,6 +1454,12 @@ static void cmd_asm_check(AI *ai, const char *arg) {
     printf("  干跑**不 intern**：打错的原语名不会被当场造成符号节点。\n");
 }
 
+/* §6.248 写后读回校验的钩子：`ai_write_rel` 声称成功之后，用**读路径**复核一遍。
+ * 放在 main.c 是因为 rel_direct/rel_direct_neg 在 rel.h（ai.h 之后才 include）。 */
+static int aip_rel_verify(const Token *a, const Token *b, uint8_t rid, int neg) {
+    return neg ? rel_direct_neg((Token *)a, rid, (Token *)b) : rel_direct((Token *)a, rid, (Token *)b);
+}
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -1489,6 +1499,7 @@ int main(int argc, char **argv) {
         if (m) {
             ai_free(a->brain);
             a->brain = m;
+            a->brain->rel_verify_hook = aip_rel_verify;    /* §6.248 */
             loaded = 1;
             printf("[已加载模型 %s]\n", model_path);
         } else {
@@ -2183,6 +2194,7 @@ int main(int argc, char **argv) {
                 if (m) {
                     ai_free(a->brain);
                     a->brain = m;
+                    m->rel_verify_hook = aip_rel_verify;   /* §6.248 */
                     printf("[已加载模型 %s]\n", path);
                     ai_stats(a->brain);
                 } else {
@@ -2888,6 +2900,19 @@ int main(int argc, char **argv) {
                        : "开放（知识库里没写就是不知道，默认）");
                 printf("  开放：推不出否定时说「不知道」；否定靠**公理**（比如「属于」独占）。\n");
                 printf("  闭合：「没写就是假」，答得快但会自信地说错。\n");
+                continue;
+            }
+            case CMD_VERIFYWRITES: {
+                const char *arg = (cmd[12] == ' ') ? cmd + 13 : NULL;
+                while (arg && *arg == ' ') arg++;
+                if (arg && *arg) {
+                    if (strcmp(arg, "on") == 0) a->brain->verify_writes = 1;
+                    else if (strcmp(arg, "off") == 0) a->brain->verify_writes = 0;
+                    else { printf("[用法] ::verifywrites on|off\n"); continue; }
+                }
+                printf("[写后读回校验 = %s]（校验过 %zu 次，不符 %zu 次）\n",
+                       a->brain->verify_writes ? "开" : "关（默认）",
+                       a->brain->n_verify_ok, a->brain->n_verify_miss);
                 continue;
             }
             case CMD_SEGREPORT: {

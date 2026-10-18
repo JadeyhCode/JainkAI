@@ -34,7 +34,8 @@ chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1${3:+（�
 # 一个进程里跑完整个对话：run <输入行...>（固定带两个开关）
 run() {
     { printf '::askback on\n::natcoin on\n'; for q in "$@"; do printf '%s\n' "$q"; done; printf '::quit\n'; } \
-        | "$BIN" "$MODEL" 2>&1
+        | "$BIN" --model "$MODEL" 2>&1     # §6.248 修正：位置参数会被当成**语料**（实测 `./build_aip model.bin`
+                                     # 走的是"预训练 1343 行"，不是加载模型）=> 必须用 --model
 }
 reps() { sed -n 's/.*AI > //p'; }          # 只留 AI 的答复
 nth()  { reps | sed -n "$1p"; }            # 第几条答复（从 1 数）
@@ -418,6 +419,13 @@ out=$(run "考拉 和 猫 都 是 动物" "猫 属于 动物 吗")
 printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 猫 -\[属于\]-> 动物" \
     && chk "报的那条确实学进去了（写后能读回）" 1 \
     || chk "报的那条能读回" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
+echo "㉚ §6.248 写后读回校验（可选开关）"
+out=$(run "::verifywrites on" "::natcoin on" "麒麟 属于 神兽" "::verifywrites")
+last=$(printf '%s\n' "$out" | grep -a 写后读回 | tail -1)
+if printf '%s\n' "$out" | grep -q "写后读回校验 = 开"; then chk "::verifywrites on 生效" 1; else chk "::verifywrites on" 0; fi
+if printf '%s\n' "$last" | grep -q "不符 0 次"; then chk "校验过的写入全都能读回（不符 0）" 1; else chk "校验不符 0" 0 "$last"; fi
+if printf '%s\n' "$last" | grep -q "校验过 0 次"; then chk "校验计数真的在动（不是没校验）" 0 "$last"; else chk "校验计数真的在动" 1; fi
 
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"

@@ -870,6 +870,11 @@ typedef struct {
     /* §6.237 维护段再细分（巩固 / GC / 睡眠）——`::segreport` 一起打出来。 */
     uint64_t mnt_ns[3];
     uint32_t mnt_hits[3];
+    /* §6.248 写后读回校验（默认关；`::verifywrites on` / AIP_VERIFYWRITES=1 打开） */
+    int      verify_writes;
+    size_t   n_verify_ok;
+    size_t   n_verify_miss;
+    int    (*rel_verify_hook)(const Token *a, const Token *b, uint8_t rid, int neg);
     /* §6.139 脏思考检查器（默认**开**，用户点名要"强制停止"）：输出里连续重复词/句就截停。
      * `AIP_DIRTY=0` 或 `::dirty off` 退回。 */
     int    dirty_guard;
@@ -1693,6 +1698,8 @@ static inline AI *ai_new(void) {
     ai->assoc_slot_off = 0;         /* 结构化帧默认允许读关联链产物（见 frame.h Gate B） */
     ai->coin_off = 0;               /* 默认允许现场造词（见 frame.h fr_coin） */
     ai->seg_off = 0;                /* 默认允许换切分找帧（见 frame.h fr_generate） */
+    ai->verify_writes = 0;          /* §6.248 默认关（反向测量：AIP_VERIFYWRITES=1 或 ::verifywrites on）*/
+    { const char *vw = getenv("AIP_VERIFYWRITES"); if (vw && vw[0] == '1') ai->verify_writes = 1; }
     ai->relay_off = 0;              /* 默认允许中转词容错（见 frame.h FR_RELAY） */
     ai->fall_off = 0;               /* 默认允许降级答复（见 frame.h fr_try_fall） */
     ai->rel_off = 0;                /* 默认允许关系层（见 rel.h） */
@@ -5293,9 +5300,25 @@ static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
 /* 关系事实（知识）：记一笔；`route_writes` 打开时**走受审通道**。
  * 两条路的语义相同（MOD_TAG_REL 内部就是 token_tag_rel），差别只在
  * 谁来审查、什么时候落地 —— 所以这是一次**可测量**的开关，不是改行为。 */
+static inline int ai_write_rel_raw(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s);
+
 static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
     if (!ai || !a || !b || rid == 0) return -1;
     ai_write_count(ai, s);
+    int rc = ai_write_rel_raw(ai, a, b, rid, neg, s);
+    /* §6.248 **写后读回校验**（可选，`::verifywrites on` / `AIP_VERIFYWRITES=1`，默认关）：
+     * 声称写成功就立刻用读路径查一遍。这是"报了没学进去"那类错的**机制**兜底
+     * （人工清单只能保证这一版）。默认关的理由：每次学习多一次查图，且生产路径不需要。 */
+    if (rc == 0 && ai->verify_writes && ai->rel_verify_hook) {
+        /* 读路径在 rel.h（ai.h 之后才 include）⇒ 走**函数指针**，由 main.c 装上 */
+        if (!ai->rel_verify_hook(a, b, rid, neg)) ai->n_verify_miss++;
+        ai->n_verify_ok++;
+    }
+    return rc;
+}
+
+static inline int ai_write_rel_raw(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
+    (void)s;
     Micro *mk = micro_of(ai);
     if (ai->route_writes && mk && !mk->safe.mod_off) {
         ModIntent m;
