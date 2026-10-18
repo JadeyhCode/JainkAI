@@ -512,6 +512,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 的 我 直说" \
     && chk "清单里同时说清做不到的（不联网/不会算术/不知道天气）" 1 \
     || chk "清单里说清做不到的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "㊲ §6.260 关于「我」的具体问题（语言/年龄/位置/出处/感情）"
+out=$(run "你 会 什么 语言" "你 多 大 了" "你 住 在 哪" "谁 做 的 你" "你 有 感情 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "只 有 中文" \
+    && chk "问语言 ⇒ 只说中文（且不再被打成\"能做什么\"）" 1 \
+    || chk "问语言 ⇒ 只说中文" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 没 有 年龄" \
+    && chk "问年龄 ⇒ 没有年龄（不是\"没有生日但可以有\"）" 1 \
+    || chk "问年龄 ⇒ 没有年龄" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没有 物理 位置" \
+    && chk "问住处 ⇒ 没有物理位置" 1 \
+    || chk "问住处 ⇒ 没有物理位置" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "单 头 文件" \
+    && chk "问出处 ⇒ 说清是什么实现" 1 \
+    || chk "问出处 ⇒ 说清实现" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "我 没有 感情" \
+    && chk "问感情 ⇒ 明确说没有（主语不再搞反）" 1 \
+    || chk "问感情 ⇒ 明确说没有" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

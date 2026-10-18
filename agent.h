@@ -733,6 +733,29 @@ static inline int agent_self_capability(const char *input) {
            strstr(b, "你能做什么事");
 }
 
+/* §6.260 **关于"我"的几个具体问题**：语言/年龄/位置/出处/感情。
+ * 这些都不是图里的知识，而是**实现事实**；以前分别答成
+ * 「就三件事…」（语言被打成了"能做什么"）、「我 没 有 生 日 但 我 可 以 有」（年龄）、
+ * 「这个我 不 太 懂」（住哪/谁做的）、「你 有 感情」（感情，还把主语搞反了）。 */
+static inline const char *agent_self_fact(const char *input) {
+    if (!input) return NULL;
+    char b[256];
+    if (!agent_nosp(input, b, sizeof b)) return NULL;
+    if (strstr(b, "什么语言") || strstr(b, "哪国语言") || strstr(b, "哪些语言"))
+        return "现在 只 有 中文（分词 + 关系 图 都 是 中文 的）。";
+    if (strstr(b, "你多大") || strstr(b, "你几岁") || strstr(b, "你的年龄"))
+        return "我 没 有 年龄 —— 我 是 一 个 程序，不 会 长 大；"
+               "「多 大」对 我 只 能 理解 成「模型 里 有 多少 东西」，那 个 你 可 以 让 我 报 统计。";
+    if (strstr(b, "你住在哪") || strstr(b, "你在哪住") || strstr(b, "你家在哪"))
+        return "我 没有 物理 位置 —— 我 跑 在 这 个 进程 里。";
+    if (strstr(b, "谁做的你") || strstr(b, "谁写的你") || strstr(b, "谁创造了你") ||
+        strstr(b, "谁开发你"))
+        return "我 是 一 个 C11 单 头 文件 的 实现（JainkAI）：知识 在 图 里，回答 全 部 可 追。";
+    if (strstr(b, "你有感情吗") || strstr(b, "你有情绪吗") || strstr(b, "你会难过吗"))
+        return "没有 —— 我 没有 感情。不过 我 会 记 住 你 说 过 的 事，也 会 在 你 难过 的 时候 少 说 废话。";
+    return NULL;
+}
+
 static inline int agent_self_identity(const char *input) {
     if (!input) return 0;
     char b[256];
@@ -3740,6 +3763,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
         ai->turns++;
         return strlen(out);
+    }
+    /* §6.260 关于"我"的具体问题（语言/年龄/位置/出处/感情） */
+    {
+        const char *sf = agent_self_fact(input);
+        if (sf) { snprintf(out, out_cap, "%s", sf); ai->turns++; return strlen(out); }
     }
     /* §6.259 "你能做什么"：给一份短而准的清单 */
     if (agent_self_capability(input)) {
