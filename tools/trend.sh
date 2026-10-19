@@ -41,18 +41,51 @@ def pcts(line):
 print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
     sha8(BIN), sha8("patterns.txt"), sha8(MODEL), 1 if FAST else 0,
     datetime.date.today().isoformat()))
-print("## 1. 语料问句四样本")
+print("## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）")
 print()
-print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 |")
-print("|---|---|---|---|---|")
+print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 固定答复行占比 |")
+print("|---|---|---|---|---|---|")
 for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
           "tests/corpus_q100c.txt", "tests/corpus_q100d.txt"]:
     line = run(["sh", "tests/corpusprobe.sh", MODEL, "0", f]).splitlines()
     got = pcts(line[0]) if line else None
+    # §6.417 答复来源：用 patuse 的逐句 LOG 数"命中了 reply 行"的比例
+    share = "?"
+    try:
+        qs = [l.split("\t")[0].strip() for l in open(f, encoding="utf-8")
+              if l.strip() and not l.startswith("#")]
+        env2 = dict(os.environ); env2["AIP_PATUSE_LOG"] = "1"
+        pu = subprocess.run(["./build_patuse", MODEL], input="\n".join(qs) + "\n",
+                            capture_output=True, text=True, errors="replace", env=env2).stdout
+        hit = miss = 0
+        for l in pu.splitlines():
+            if l.startswith("LOG|"):
+                if "|row=-1|" in l:
+                    miss += 1
+                else:
+                    hit += 1
+        if hit + miss:
+            share = "%.0f%%" % (100.0 * hit / (hit + miss))
+    except Exception:
+        pass
     if got:
-        print("| `%s` | %s | %s%% | %s%% | %s%% |" % (os.path.basename(f), *got))
+        print("| `%s` | %s | %s%% | %s%% | %s%% | %s |" % (os.path.basename(f), *got, share))
     else:
-        print("| `%s` | ? | ? | ? | ? |" % os.path.basename(f))
+        print("| `%s` | ? | ? | ? | ? | %s |" % (os.path.basename(f), share))
+
+# §6.417 **A vs B 差距**（调参集 vs 分布外）：每轮看这一行，就是"有没有过拟合"的体温计
+try:
+    def fb(ff):
+        ll = run(["sh", "tests/corpusprobe.sh", MODEL, "0", ff]).splitlines()
+        gg = pcts(ll[0]) if ll else None
+        return float(gg[3].rstrip("%")) if gg else None
+    fa, fb_ = fb("tests/corpus_q100.txt"), fb("tests/corpus_q100b.txt")
+    if fa is not None and fb_ is not None:
+        print()
+        print("**A vs B 兜底差**：A %.1f%% / B %.1f%% ⇒ **差 %.1f 个百分点**（差越小越不像过拟合）"
+              % (fa, fb_, fb_ - fa))
+except Exception:
+    pass
 
 print()
 print("## 2. 数据层规模")
