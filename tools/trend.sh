@@ -43,35 +43,54 @@ print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
     datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）")
 print()
-print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 固定答复行占比 |")
-print("|---|---|---|---|---|---|")
+print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 固定答复占比 | 其中真答复 | 其中边界声明 |")
+print("|---|---|---|---|---|---|---|---|")
 for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
           "tests/corpus_q100c.txt", "tests/corpus_q100d.txt"]:
     line = run(["sh", "tests/corpusprobe.sh", MODEL, "0", f]).splitlines()
     got = pcts(line[0]) if line else None
-    # §6.417 答复来源：用 patuse 的逐句 LOG 数"命中了 reply 行"的比例
+    # §6.418 答复来源再拆一层：**真·现成答复** vs **能力/边界声明**（都在 reply 桶里）
     share = "?"
+    real_share = "?"
+    bound_share = "?"
     try:
         qs = [l.split("\t")[0].strip() for l in open(f, encoding="utf-8")
               if l.strip() and not l.startswith("#")]
         env2 = dict(os.environ); env2["AIP_PATUSE_LOG"] = "1"
         pu = subprocess.run(["./build_patuse", MODEL], input="\n".join(qs) + "\n",
                             capture_output=True, text=True, errors="replace", env=env2).stdout
-        hit = miss = 0
+        # 读 patterns.txt 里 [reply] 行的文本（行号 = 加载顺序 = LOG 里的 row 下标）
+        texts = [l.split("=", 1)[1].strip() for l in open("patterns.txt", encoding="utf-8")
+                 if l.startswith("[reply]") and "=" in l]
+        BOUND = re.compile(r"不 会|不 认 识|不 知 道|没 有|不 记|不 联 网|不 能|做 不 到|不 敢|"
+                           r"不 编|不 太 懂|只 能|没 办 法")
+        hit = miss = real = bound = 0
         for l in pu.splitlines():
-            if l.startswith("LOG|"):
-                if "|row=-1|" in l:
-                    miss += 1
-                else:
-                    hit += 1
+            if not l.startswith("LOG|"):
+                continue
+            if "|row=-1|" in l:
+                miss += 1
+                continue
+            hit += 1
+            m = re.search(r"\|row=(\d+)\|", l)
+            idx = int(m.group(1)) if m else -1
+            txt = texts[idx] if 0 <= idx < len(texts) else ""
+            if BOUND.search(txt):
+                bound += 1
+            else:
+                real += 1
         if hit + miss:
             share = "%.0f%%" % (100.0 * hit / (hit + miss))
+            real_share = "%.0f%%" % (100.0 * real / (hit + miss))
+            bound_share = "%.0f%%" % (100.0 * bound / (hit + miss))
     except Exception:
         pass
     if got:
-        print("| `%s` | %s | %s%% | %s%% | %s%% | %s |" % (os.path.basename(f), *got, share))
+        print("| `%s` | %s | %s%% | %s%% | %s%% | %s | %s | %s |" % (
+            os.path.basename(f), *got, share, real_share, bound_share))
     else:
-        print("| `%s` | ? | ? | ? | ? | %s |" % (os.path.basename(f), share))
+        print("| `%s` | ? | ? | ? | ? | %s | %s | %s |" % (
+            os.path.basename(f), share, real_share, bound_share))
 
 # §6.417 **A vs B 差距**（调参集 vs 分布外）：每轮看这一行，就是"有没有过拟合"的体温计
 try:
