@@ -197,6 +197,24 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑪ agent_step 的早退都走 agent_say（§6.404）=="
+# §6.401-403 的教训：早退路径不写 last_reply，"再说一遍"就复述不出来。
+# 这里数一下：`agent_say(ai, out)` 的调用数必须 = 10，裸 `return strlen(out);` 必须 = 3
+# （3 条已定性：空闲主动说话 / 空闲沉默 / 主出口 —— 见 agent.h 的注释）。
+# 数字变了就 FAIL：新增早退要么改走 agent_say，要么把理由写进注释并**同步改这里的期望**。
+if [ -f agent.h ]; then
+    n_say=$(grep -c 'agent_say(ai, out)' agent.h || true)
+    n_raw=$(grep -c 'return strlen(out);' agent.h || true)
+    if [ "$n_say" = "10" ] && [ "$n_raw" = "3" ]; then
+        say OK "早退出口核对：agent_say 10 处 / 裸 return 3 处（与注释一致）"
+    else
+        say FAIL "早退出口变了：agent_say=$n_say（期望 10）/ 裸 return=$n_raw（期望 3）—— 新早退请走 agent_say，或改注释并同步这里"
+        bad=1
+    fi
+else
+    say NOTE "没有 agent.h ⇒ 跳过"
+fi
+
 echo "== ⑩ docs/trend.md 的数字是不是过期了（二进制指纹变了就提示，§6.401）=="
 # §6.400 的生成器在 trend.md 里写了一行 `<!-- trend-meta: binary=xxxxxxxx … -->`。
 # 二进制一旦重编，那张表就可能过期；这里比对指纹，不一致就**提示**（不是失败：

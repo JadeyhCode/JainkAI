@@ -671,6 +671,17 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "我 刚才 说 的 是" \
     && chk "裸短回话（嗯）之后「再说一遍」⇒ 复述「嗯，好」" 1 \
     || chk "裸回话后复述" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.404 在场/可用性一族（在听吗/方便吗/醒了吗/睡了吗）
+echo "㉜ §6.404 在场/可用性问句"
+out=$(run "你 有 在 听 吗" "你 现在 方便 吗" "你 醒 了 吗" "你 还 没 醒 吗" "你 睡 了 吗")
+for k in 1 2 3 4 5; do
+    if has "$(printf '%s\n' "$out" | reps | sed -n "${k}p")" "我 一 直 在"; then
+        chk "在场问句第 $k 条 ⇒ 我一直在（不睡觉/不用等方便）" 1
+    else
+        chk "在场问句第 $k 条" 0 "$(printf '%s\n' "$out" | reps | sed -n "${k}p")"
+    fi
+done
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
