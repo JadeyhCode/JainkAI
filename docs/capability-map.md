@@ -53,6 +53,7 @@
 | `sh tests/attrib.sh` | 数据消融总量（有数据 vs `AIP_NODATA=1`） |
 | `sh tests/bucketabl.sh` | 按桶消融（每族贡献、几行换一项） |
 | `sh tests/datacheck.sh` | 数据行会不会把"学得到"变成"学不到" |
+| `sh tests/datahealth.sh` | **一条命令跑完** 桶计数 + 行使用率 + 误伤（§6.359） |
 | `./build_patuse session.bin < 输入` | 每条 `[reply]` 命中了多少次（找"从不用"的行） |
 | `sh tests/capacity.sh` | 一次会话灌 N 条新事实（60 条：全记住、358 ms） |
 | `AIP_PATDBG=1` / `AIP_SHAPEDBG=1` | 桶计数与超限警告 / 形状引擎逐条（输入分词、近失、命中） |
