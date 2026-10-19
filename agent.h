@@ -367,7 +367,10 @@ static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
 #define AIP_REPLY_MAX 128
-static char g_reply_kw[AIP_REPLY_MAX][128];
+/* §6.370 关键词串**按行存整串**（`组,组|组`），不是单个词 —— 128 字节装不下
+ * 一个"时间词族"（今天|现在|明天|昨天|今年|当前|后天|前天|今晚|明早|本周|这周）：
+ * 实测超长的行会被**静默跳过**（`reply=55` 而文件里 56 行）。放到 512，并加 ⚠ 警告。*/
+static char g_reply_kw[AIP_REPLY_MAX][512];
 static char g_reply_txt[AIP_REPLY_MAX][1024];  /* §6.285/§6.287 长答复（能力清单）曾被 384 静默丢掉 */
 static size_t g_reply_n;
 static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
@@ -556,7 +559,11 @@ static inline void aip_patterns_load(AI *ai) {
             char *txt = eq + 1;
             while (*txt == ' ' || *txt == '\t') txt++;
             if (!*txt || strlen(txt) >= sizeof g_reply_txt[0]) continue;
-            if (strlen(val) >= sizeof g_reply_kw[0]) continue;
+            if (strlen(val) >= sizeof g_reply_kw[0]) {
+                fprintf(stderr, "[patterns] ⚠ [reply] 关键词串太长（%zu 字节 ≥ %zu），这一行被丢弃：%.60s\n",
+                        strlen(val), sizeof g_reply_kw[0], val);
+                continue;
+            }
             snprintf(g_reply_kw[g_reply_n], sizeof g_reply_kw[0], "%s", val);
             snprintf(g_reply_txt[g_reply_n], sizeof g_reply_txt[0], "%s", txt);
             g_reply_n++;
@@ -4800,6 +4807,97 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
  * 让原来的求解器 / 验证器 / 链式渲染原样用上 —— 他的信念和归他的假设因此
  * 走**同一条**代码路径，不需要为它开特例。答完立刻原样撤回：
  * 恢复点用 depth 记，所以中间从哪儿 return 都不会漏（这就是要包一层的原因）。 */
+/* §6.370 **数量 / 年龄 / 比较**：结构听懂了，但图里只有"有/没有"，没有数目和程度。
+ * 实测 `猫 有 几 条 腿` ⇒「这个我 不 太 懂」——可图里明明记着「动物 有 腿」，
+ * 该说的是"我知道它有腿，但没记几条"。同理 `猫 比 狗 大 吗` 是**比较**这层能力没有。
+ * 和 §6.369 一样放在**最后兜底**，只在其它路径都失败后才说话。*/
+/* 一条边上的继承：`猫 有 腿` 在图里是 `猫→动物→腿`，直接查不到，要顺一层 属于 */
+static inline int agent_has_attr(AI *ai, Token *A, Token *B) {
+    (void)ai;
+    if (!A || !B) return 0;
+    if (rel_direct(A, REL_HAS, B)) return 1;
+    uint16_t is_a = REL_BIT(REL_IS_A);
+    for (size_t i = 0; i < A->count; ++i) {
+        AssocEntry *e = &A->assocs[i];
+        if (!(e->rel & is_a) || !e->main) continue;
+        if (rel_direct(e->main, REL_HAS, B)) return 1;
+    }
+    return 0;
+}
+
+static inline int agent_quantity_compare_note(AI *ai, char *const *words, size_t n,
+                                              char *out, size_t cap) {
+    if (!ai || !words || n < 3 || n > 7 || !out || cap == 0) return 0;
+    /* 主语可能不止一个词（`一 年 有 几个 月`）：用 有 之前的所有词拼出来 */
+    for (size_t i = 1; i + 1 < n; ++i) {
+        if (strcmp(words[i], "有") != 0) continue;
+        char subj[64];
+        size_t so = 0;
+        for (size_t k = 0; k < i; ++k) {
+            size_t l = strlen(words[k]);
+            if (so + l + 1 >= sizeof subj) { so = 0; break; }
+            memcpy(subj + so, words[k], l);
+            so += l;
+        }
+        subj[so] = 0;
+        if (!subj[0]) return 0;
+        Token *AA = pool_find(ai->pool, subj);
+        /* ① `A 有 几 <量词> <名词>` / `A 有 几 <名词>`（`几天` 这种没有量词） */
+        if (strcmp(words[i + 1], "几") == 0 && i + 2 < n) {
+            int has_q = 0;
+            const char *q = "";
+            const char *nm = words[i + 2];
+            if (i + 3 < n && strcmp(words[i + 3], "吗") != 0 &&
+                strcmp(words[i + 3], "呢") != 0 && strcmp(words[i + 3], "?") != 0) {
+                has_q = 1;
+                q = words[i + 2];
+                nm = words[i + 3];
+            }
+            Token *B = pool_find(ai->pool, nm);
+            int has = (AA && B) ? agent_has_attr(ai, AA, B) : 0;
+            char how[48];
+            if (has_q) snprintf(how, sizeof how, "几 %s %s", q, nm);
+            else       snprintf(how, sizeof how, "几 %s", nm);
+            if (has)
+                snprintf(out, cap,
+                         "我 不 知 道 %.20s 有 %.40s —— 图 里 只 记 了 %.20s 有 %.16s ， 没 记 数 目（不 编）。",
+                         subj, how, subj, nm);
+            else
+                snprintf(out, cap,
+                         "我 不 知 道 %.20s 有 %.40s —— 图 里 没 记 过 数 目（不 编）。",
+                         subj, how);
+            return 1;
+        }
+        /* ①' 分词把"几个"并成一个词 */
+        if (strcmp(words[i + 1], "几个") == 0 && i + 2 < n) {
+            snprintf(out, cap, "我 不 知 道 %.20s 有 几 个 %.16s —— 图 里 没 记 过 数 目（不 编）。",
+                     subj, words[i + 2]);
+            return 1;
+        }
+    }
+    /* ② `A 几 岁 了 / 几 岁 吗` */
+    if (n >= 3 && strcmp(words[1], "几") == 0 && strcmp(words[2], "岁") == 0) {
+        snprintf(out, cap, "我 不 知 道 %.20s 几 岁 —— 图 里 没 记 过 年龄（不 编）。", words[0]);
+        return 1;
+    }
+    /* ③ 比较：`A 比 B <形容词> 吗/呢` 或 `A 和/跟 B 哪个 <形容词>` */
+    for (size_t i = 1; i + 2 < n; ++i) {
+        if (strcmp(words[i], "比") == 0) {
+            snprintf(out, cap,
+                     "我 还 不 会 比 较 两 个 东西 的 大 小 / 轻 重 —— 图 里 只 记 关系 ， 不 记 程度（不 编）。");
+            return 1;
+        }
+        if ((strcmp(words[i], "和") == 0 || strcmp(words[i], "跟") == 0) &&
+            i + 2 < n && strcmp(words[i + 2], "哪个") == 0) {
+            snprintf(out, cap,
+                     "我 还 不 会 比 较 两 个 东西 —— 你 得 分 开 问 ： %.20s 属 于 什 么 、 %.20s 有 什 么（不 编）。",
+                     words[0], words[i + 1]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* §6.369 **听懂了的"不知道"**：两个已知实体 + 已知关系 + 图里没有这条边。
  * 实测 `狗 吃 猫 吗` 以前掉兜底（「这个我 不 太 懂」）——可这句话完全听懂了，
  * 只是图里没记。掉兜底等于告诉用户"我没理解你"，那是**假**的。
@@ -5988,7 +6086,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (is_question || ai->last_retrieval_cov < 25 || ai->last_token_ratio < 50) {
             /* 没匹配上又是问题（或相似度低到没有意义）→ 诚实拒答，别瞎编 */
             char unknown[220];
-            if (agent_unknown_relation_note(ai, words, n, unknown, sizeof unknown)) {
+            if (agent_quantity_compare_note(ai, words, n, unknown, sizeof unknown)) {
+                /* §6.370 数量/年龄/比较：结构听懂了，答"没记数目/不会比较" */
+                resp = (char *)malloc(strlen(unknown) + 1);
+                if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
+                conf = 0.35f;
+                cot_push(ai, COT_ADMIT, 0, 30, "听懂了，但没有数目/程度",
+                         "结构认出来了，图里不存这一类");
+                ai->n_cot++;
+                if (!ai->last_der.has_claim)
+                    der_source(&ai->last_der, "不确定（数量/比较没有记录）");
+            } else if (agent_unknown_relation_note(ai, words, n, unknown, sizeof unknown)) {
                 /* §6.369 但**听懂了、只是图里没有**时，说"不确定"比说"我不太懂"准确 */
                 resp = (char *)malloc(strlen(unknown) + 1);
                 if (resp) memcpy(resp, unknown, strlen(unknown) + 1);

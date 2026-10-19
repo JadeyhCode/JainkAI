@@ -256,6 +256,22 @@ printf '%s\n' "$out" | reps | sed -n 5p | grep -q "是不是 不 吃 猫" \
     && chk "否定的未知关系也说得清楚（狗 不 吃 猫 吗）" 1 \
     || chk "否定式" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 
+# §6.370 数量 / 年龄 / 比较 / 时间词族
+echo "⑪ §6.370 数量·年龄·比较说清「没记数目/不会比较」；时间词族走「没有时钟」"
+out=$(run "猫 有 几 条 腿" "猫 几 岁 了" "猫 比 狗 大 吗" "后天 星期几")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "只 记 了 猫 有 腿" \
+    && chk "「猫有几条腿」⇒ 不知道数目，但说得出图里有「猫有腿」" 1 \
+    || chk "数量（继承）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 年龄" \
+    && chk "「猫几岁了」⇒ 没记过年龄" 1 \
+    || chk "年龄" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 会 比 较" \
+    && chk "「猫比狗大吗」⇒ 不会比较（不是「不太懂」）" 1 \
+    || chk "比较" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没有 时 钟" \
+    && chk "「后天星期几」⇒ 没有时钟（时间词族都能命中）" 1 \
+    || chk "时间词族" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
