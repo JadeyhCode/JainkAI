@@ -203,14 +203,16 @@ echo "== ⑩ docs/trend.md 的数字是不是过期了（二进制指纹变了�
 # 快照过期不等于代码错，但它不该被当成现状引用）。
 if [ -f docs/trend.md ] && [ -x ./build_aip ]; then
     meta=$(sed -n 's/.*trend-meta: \(.*\) -->.*/\1/p' docs/trend.md | head -1)
-    want=$(printf '%s' "$meta" | sed -n 's/.*binary=\([0-9a-f]*\).*/\1/p')
-    have=$(sha256sum ./build_aip 2>/dev/null | cut -c1-8)
-    if [ -z "$want" ]; then
+    wb=$(printf '%s' "$meta" | sed -n 's/.*binary=\([0-9a-f]*\).*/\1/p')
+    wd=$(printf '%s' "$meta" | sed -n 's/.*data=\([0-9a-f]*\).*/\1/p')
+    hb=$(sha256sum ./build_aip 2>/dev/null | cut -c1-8)
+    hd=$(sha256sum patterns.txt 2>/dev/null | cut -c1-8)
+    if [ -z "$wb" ]; then
         say NOTE "trend.md 里没有 trend-meta 指纹（旧版生成器？）"
-    elif [ "$want" = "$have" ]; then
-        say OK "trend.md 的二进制指纹与当前 build_aip 一致（$have）"
+    elif [ "$wb" = "$hb" ] && [ "$wd" = "$hd" ]; then
+        say OK "trend.md 的指纹与当前一致（binary=$hb data=$hd）"
     else
-        say NOTE "trend.md 的数字可能过期：生成时 binary=$want，当前 build_aip=$have —— 重跑 sh tools/trend.sh"
+        say NOTE "trend.md 的数字可能过期：生成时 binary=$wb data=$wd，当前 binary=$hb data=$hd —— 重跑 sh tools/trend.sh"
     fi
 else
     say NOTE "没有 docs/trend.md 或 build_aip ⇒ 跳过"

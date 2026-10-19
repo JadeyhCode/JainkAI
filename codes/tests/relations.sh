@@ -660,6 +660,17 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "我 说 的 都 是 图 里 �
     && chk "「你跟我说实话吧」⇒ 同一答复" 1 \
     || chk "实话" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.402 早退路径统一出口：数据行/裸短回话的答复也要能被「再说一遍」复述
+echo "㉛ §6.402 早退也要记住说了什么"
+out=$(run "天气 怎么样" "再说一遍" "嗯" "再说一遍")
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "我 刚才 说 的 是" \
+    && has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "天气 我 不 知道" \
+    && chk "数据行答复（天气）之后「再说一遍」⇒ 复述天气答复" 1 \
+    || chk "数据行后复述" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "我 刚才 说 的 是" \
+    && chk "裸短回话（嗯）之后「再说一遍」⇒ 复述「嗯，好」" 1 \
+    || chk "裸回话后复述" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

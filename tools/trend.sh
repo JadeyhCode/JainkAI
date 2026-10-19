@@ -38,8 +38,8 @@ def pcts(line):
         return None
     return m.group(1), m.group(3), m.group(5), m.group(7)
 
-print("<!-- trend-meta: binary=%s model=%s fast=%d generated=%s -->" % (
-    sha8(BIN), sha8(MODEL), 1 if FAST else 0,
+print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
+    sha8(BIN), sha8("patterns.txt"), sha8(MODEL), 1 if FAST else 0,
     datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本")
 print()

@@ -5582,6 +5582,16 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
 /* §6.262 前置声明（定义在下面"自我/能力"那一块附近）*/
 static inline int agent_rewrite_where(const char *in, char *out, size_t cap);
 
+/* §6.402 **早退也要记住说了什么**：agent_step 里有 13 条早退，以前只有末尾那条写 `last_reply`
+ * ⇒ 凡走数据行/裸短回话/重复请求的答复，「再说一遍」「没听懂」都复述不出来（§6.401 只补了两条）。
+ * 这里收成一个出口：记原文（空串和"……"不记）+ 轮次自增，返回长度。*/
+static inline size_t agent_say(AI *ai, char *out) {
+    if (ai && out && out[0] && strcmp(out, "……") != 0)
+        snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
+    if (ai) ai->turns++;
+    return strlen(out ? out : "");
+}
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -5609,8 +5619,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             int done = (ai->ask_kind == 2) ? agent_correct_reply(ai, input, out, out_cap)
                                            : agent_askback_reply(ai, input, out, out_cap);
             if (done) {
-                ai->turns++;
-                return strlen(out);
+                return agent_say(ai, out);
             }
         }
         agent_ask_drop(ai);
@@ -5638,8 +5647,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                     }
                 }
             }
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         }
     }
     /* §6.284/§6.285 **[reply] 桶**（patterns.txt）：关键词行命中就给一句现成答复。
@@ -5650,12 +5658,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         const char *dr = aip_reply_lookup(input);
         if (dr) {
             snprintf(out, out_cap, "%s", dr);
-            /* §6.401 **早退也要记住说了什么**：这条路径在主循环末尾之前 return，
-             * 以前不写 `last_reply` ⇒ 紧接着说「再说一遍」会答「我还 没 说 过 什么」。*/
-            if (out[0] && strcmp(out, "……") != 0)
-                snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         }
     }
     /* §6.261 **"自我/能力"类问题统一路由**（以前是散在 agent_step 里的 6 个 if 块）。
@@ -5663,7 +5666,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 先抢走。现在顺序写在一处、带编号，加新判据时看这张表就知道该插在哪。 */
     {
         const char *sr = agent_self_route(input, out, out_cap);
-        if (sr) { ai->turns++; return strlen(out); }
+        if (sr) { return agent_say(ai, out); }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
@@ -5671,22 +5674,18 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (bk == 1) {
             const char *r = "嗯 ， 好";
             snprintf(out, out_cap, "%s", r);
-            snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);   /* §6.401 早退也记住 */
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         } else if (bk == 2) {
             const char *r = "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句";
             snprintf(out, out_cap, "%s", r);
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         } else if (bk == 3) {
             /* 「没听懂」：把上一句再说一遍（比答词串有用得多）*/
             if (ai->last_reply[0])
                 snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
             else
                 snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         }
     }
     /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
@@ -5798,8 +5797,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         snprintf(out, out_cap,
                  "这 是 一 条 规则（「…的…是…」），我 只 学 事 实：「A 关系 B」。"
                  "你 先 教「鸟 会 飞」和「鸟 属于 动物」，多 跳 推 理 会 用 上 它 们。");
-        ai->turns++;
-        return strlen(out);
+        return agent_say(ai, out);
     }
     {   /* §6.288 形状表（`patterns.txt` 的 `[shape]` 桶）：整句等长的语序改写。
          * 以前这里是写死的 `agent_rewrite_topic`；现在规则在数据里（加一种语序 = 加一行）。 */
@@ -5814,8 +5812,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!ai->ask_pending && agent_repeat_request(input_eff)) {
         if (ai->last_reply[0]) snprintf(out, out_cap, "我 刚才 说 的 是 ： %s", ai->last_reply);
         else                   snprintf(out, out_cap, "我 还 没 说 过 什么");
-        ai->turns++;
-        return strlen(out);
+        return agent_say(ai, out);
     }
     {   /* §6.278 句中指代：「猫 属于 动物，它 会 飞 吗」⇒ 「猫 会 飞 吗」*/
         char cf[224];
@@ -5845,8 +5842,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         char ab[256];
         if (agent_self_ability(ai, input_eff, ab, sizeof ab)) {
             snprintf(out, out_cap, "%s", ab);
-            ai->turns++;
-            return strlen(out);
+            return agent_say(ai, out);
         }
     }
     char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)

@@ -14362,3 +14362,40 @@ sh tools/trend.sh --fast     # 只跑四样本 + 数据层（约 1 分钟）
   所以可能还有别的早退路径没记（这是"已知未普查"，不是"已修完"）。
 - 复述的是"发出去的原文"，`interact` 那条断言因此必须放宽成两种答复都接受 ——
   **这是行为变化**，不是纯修 bug。
+
+## §6.402 把 13 条早退收成一个出口 `agent_say()`；指纹扩到数据文件
+
+**① 早退统一出口**：§6.401 只补了 2 条早退的 `last_reply`，这轮**普查**了 `agent_step`：
+里面共 **13 条** `return strlen(out)`，除末尾那条外都不写 `last_reply` ⇒ 数据行/裸短回话/
+重复请求这些答复都复述不出来。
+
+做法：新增
+
+```c
+static inline size_t agent_say(AI *ai, char *out) {
+    if (ai && out && out[0] && strcmp(out, "……") != 0)
+        snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
+    if (ai) ai->turns++;
+    return strlen(out ? out : "");
+}
+```
+
+把 13 处里的 **10 处**（`ai->turns++; return …;` 的各种缩进形态）换成 `return agent_say(ai, out);`，
+并删掉 §6.401 手写的两段补丁（已由 helper 统一处理）。末尾那条保留原样（它后面还有维护逻辑）。
+
+**② 指纹扩到数据**：`tools/trend.sh` 的 meta 行加 `data=<patterns.txt sha8>`；
+`selfcheck` ⑩ 同时比 `binary` 与 `data`——**数据改了、快照没重跑**现在也会 `[NOTE]`。
+
+**证据**
+- `天气 怎么样` + `再说一遍` ⇒ 复述天气答复；`嗯` + `再说一遍` ⇒ 复述「嗯，好」；
+- `你能做什么` + `我不明白` ⇒ 「没讲清吗？我再说一遍：…」；
+- `relations` 新增 2 条断言（数据行后复述 / 裸回话后复述）；
+- `selfcheck` ⑩：改 `patterns.txt` 一个字节 ⇒
+  `[NOTE] 生成时 data=26c210a2，当前 data=cacc8e61`；改回即 `[OK]`；
+- 整包 **45/45**；`trend.md` 已按新二进制重生成（`binary=ac8d87a9 data=26c210a2`）。
+
+**照实说**
+- 只换了 `ai->turns++; return strlen(out);` 这种形态；若还有别的 `return` 写法（例如
+  `return 0` 或带表达式的 return）没被匹配，它们仍然不记 `last_reply` —— 我没有逐行读完 13 条以外的地方。
+- `agent_say` 不记空串和 `"……"`（沿用原来的规则），所以"沉默一轮"之后说"再说一遍"仍会答
+  「我 还 没 说 过 什么」——这是**有意**的。
