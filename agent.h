@@ -804,9 +804,11 @@ static unsigned long g_reply_hit[AIP_REPLY_MAX];
 /* §6.420 **答复来源标签**：给每次 `agent_step` 的最终答复标一个**代码路径**。
  * 为什么需要：§6.419 试过按答复文本猜来源，一条正则就让"边界声明"从 31% 跳到 58% —— 不可靠。
  * 只有路径自己知道答案是从哪来的（reply 桶 / 自我路由 / 裸回话 / 关系层 / 生成兜底）。*/
-enum { AI_SRC_OTHER = 0, AI_SRC_REPLY, AI_SRC_SELF, AI_SRC_BARE, AI_SRC_RELATION, AI_SRC_FALLBACK };
+enum { AI_SRC_OTHER = 0, AI_SRC_REPLY, AI_SRC_SELF, AI_SRC_BARE, AI_SRC_RELATION,
+       AI_SRC_FALLBACK, AI_SRC_FRAME, AI_SRC_RETRIEVAL, AI_SRC_NOTE };
 static int g_last_src = AI_SRC_OTHER;
-static const char *const g_src_names[] = { "other", "reply", "self", "bare", "relation", "fallback" };
+static const char *const g_src_names[] = { "other", "reply", "self", "bare", "relation",
+                                           "fallback", "frame", "retrieval", "note" };
 static inline const char *ai_src_name(int s) {
     return (s >= 0 && s < (int)(sizeof g_src_names / sizeof g_src_names[0])) ? g_src_names[s] : "?";
 }
@@ -6303,7 +6305,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                     free(g);
                     g = NULL;
                 }
-                if (g) { resp = g; conf = tr.used_fall ? 0.35f : 0.8f; }
+                if (g) { resp = g; conf = tr.used_fall ? 0.35f : 0.8f; g_last_src = AI_SRC_FRAME; }
                 /* 把帧层的实情报进链里：骨架 → 校验 → 降级，三步咬合。
                  * 没有这一步，思维链就只是把四种策略并列念一遍。 */
                 if (tr.ask_matched) {
@@ -6365,6 +6367,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             (void)0;
             if (!resp && ok) {
                 resp = ai_tokens_to_text(hit->out, hit->out_n);
+                if (resp) g_last_src = AI_SRC_RETRIEVAL;   /* §6.422 整句检索 */
                 conf = 0.5f + (float)sc / 200.0f;      /* 越像越有把握 */
                 if (conf > 0.95f) conf = 0.95f;
             }
@@ -6383,6 +6386,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             /* 没匹配上又是问题（或相似度低到没有意义）→ 诚实拒答，别瞎编 */
             char unknown[220];
             if (agent_identity_note(ai, words, n, unknown, sizeof unknown)) {
+                g_last_src = AI_SRC_NOTE;
                 /* §6.386 `X 是谁`：没人名记录时给一句有用的话（不是词串，也不是干巴巴的"不懂"）*/
                 resp = (char *)malloc(strlen(unknown) + 1);
                 if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
@@ -6392,6 +6396,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (!ai->last_der.has_claim)
                     der_source(&ai->last_der, "不确定（没有名字记录）");
             } else if (agent_quantity_compare_note(ai, words, n, unknown, sizeof unknown)) {
+                g_last_src = AI_SRC_NOTE;
                 /* §6.370 数量/年龄/比较：结构听懂了，答"没记数目/不会比较" */
                 resp = (char *)malloc(strlen(unknown) + 1);
                 if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
@@ -6402,6 +6407,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (!ai->last_der.has_claim)
                     der_source(&ai->last_der, "不确定（数量/比较没有记录）");
             } else if (agent_unknown_relation_note(ai, words, n, unknown, sizeof unknown)) {
+                g_last_src = AI_SRC_NOTE;
                 /* §6.369 但**听懂了、只是图里没有**时，说"不确定"比说"我不太懂"准确 */
                 resp = (char *)malloc(strlen(unknown) + 1);
                 if (resp) memcpy(resp, unknown, strlen(unknown) + 1);

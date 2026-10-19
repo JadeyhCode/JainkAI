@@ -48,21 +48,23 @@ print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
     datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）")
 print()
-print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 数据行答复 | 关系层 | 兜底池 | 自我/裸/未标注 |")
-print("|---|---|---|---|---|---|---|---|---|")
+print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 数据行 | 关系层 | 兜底池 | 框架 | 检索/说明 | 自我/裸 | 未标注 |")
+print("|---|---|---|---|---|---|---|---|---|---|---|---|")
 for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
           "tests/corpus_q100c.txt", "tests/corpus_q100d.txt"]:
     line = run(["sh", "tests/corpusprobe.sh", MODEL, "0", f]).splitlines()
     got = pcts(line[0]) if line else None
     # §6.420 答复来源：用**代码路径标签**（patuse 的 SRC 行），不再猜文本
     real_share = bound_share = share = other_share = "?"
+    self_share = bare_share = ret_share = "?"
     try:
         qs = [l.split("\t")[0].strip() for l in open(f, encoding="utf-8")
               if l.strip() and not l.startswith("#")]
         env2 = dict(os.environ); env2["AIP_PATUSE_SRC"] = "1"
         pu = subprocess.run(["./build_patuse", MODEL], input="\n".join(qs) + "\n",
                             capture_output=True, text=True, errors="replace", env=env2).stdout
-        cnt = {"reply": 0, "self": 0, "bare": 0, "relation": 0, "fallback": 0, "other": 0}
+        cnt = {"reply": 0, "self": 0, "bare": 0, "relation": 0, "fallback": 0,
+               "frame": 0, "retrieval": 0, "note": 0, "other": 0}
         for l in pu.splitlines():
             if l.startswith("SRC|"):
                 _, src, _inp = l.split("|", 2)
@@ -70,18 +72,24 @@ for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
         tot = sum(cnt.values())
         if tot:
             pct = lambda x: "%.0f%%" % (100.0 * x / tot)
-            real_share = pct(cnt["reply"])          # 数据行答复（含边界声明，未再细分）
-            bound_share = pct(cnt["relation"])
-            share = pct(cnt["fallback"])
-            other_share = pct(cnt["other"] + cnt["self"] + cnt["bare"])
+            real_share = pct(cnt["reply"])          # 数据行答复
+            bound_share = pct(cnt["relation"])      # 关系层
+            share = pct(cnt["fallback"])            # 兜底池
+
+            self_share = pct(cnt["self"] + cnt["bare"])
+            bare_share = pct(cnt["frame"])
+            other_share = pct(cnt["other"])
+            ret_share = pct(cnt["retrieval"] + cnt["note"])
     except Exception:
         pass
     if got:
-        print("| `%s` | %s | %s%% | %s%% | %s%% | %s | %s | %s | %s |" % (
-            os.path.basename(f), *got, real_share, bound_share, share, other_share))
+        print("| `%s` | %s | %s%% | %s%% | %s%% | %s | %s | %s | %s | %s | %s | %s |" % (
+            os.path.basename(f), *got, real_share, bound_share, share,
+            bare_share, ret_share, self_share, other_share))
     else:
-        print("| `%s` | ? | ? | ? | ? | %s | %s | %s | %s |" % (
-            os.path.basename(f), real_share, bound_share, share, other_share))
+        print("| `%s` | ? | ? | ? | ? | %s | %s | %s | %s | %s | %s | %s |" % (
+            os.path.basename(f), real_share, bound_share, share,
+            bare_share, ret_share, self_share, other_share))
 
 # §6.417 **A vs B 差距**（调参集 vs 分布外）：每轮看这一行，就是"有没有过拟合"的体温计
 try:

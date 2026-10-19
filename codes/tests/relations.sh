@@ -780,6 +780,18 @@ n3=$(printf '%s\n' "$srcs" | sed -n 3p)
 [ "$n3" = "fallback" ] && chk "「量子力学是什么」⇒ 来源标签 fallback（兜底池）" 1 \
     || chk "src fallback" 0 "实得 $n3"
 
+# §6.422 再钉三条：检索 / 框架 / 说明
+s2=$( { printf '::load %s\n::char off\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
+        printf '你好\n你喜欢雪吗\n猫有几条腿\n'
+        printf '::quit\n'; } | AIP_SRC_ECHO=1 "$BIN" 2>&1 | sed -n 's/.*\[src\] //p' )
+m1=$(printf '%s\n' "$s2" | sed -n 1p); m2=$(printf '%s\n' "$s2" | sed -n 2p); m3=$(printf '%s\n' "$s2" | sed -n 3p)
+[ "$m1" = "retrieval" ] && chk "「你好」⇒ 来源标签 retrieval（整句检索）" 1 \
+    || chk "src retrieval" 0 "实得 $m1"
+[ "$m2" = "frame" ] && chk "「你喜欢雪吗」⇒ 来源标签 frame（问法骨架造句）" 1 \
+    || chk "src frame" 0 "实得 $m2"
+[ "$m3" = "note" ] && chk "「猫有几条腿」⇒ 来源标签 note（数量说明）" 1 \
+    || chk "src note" 0 "实得 $m3"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
