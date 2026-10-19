@@ -272,6 +272,23 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没有 时 钟" \
     && chk "「后天星期几」⇒ 没有时钟（时间词族都能命中）" 1 \
     || chk "时间词族" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.372 反问/强调问（难道 / 不是…吗）：纯形状行，删掉"难道"后照常判极性
+echo "⑫ §6.372 反问句：删掉强调标记，极性照常判；关掉 shape 桶就退回兜底"
+out=$(run "猫 难 道 不是 动物 吗" "猫 难 道 不会 飞 吗" "猫 不是 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对.*猫.*属于.*动物" \
+    && chk "「猫难道不是动物吗」⇒ 对（纠正嵌入式否定：猫属于动物）" 1 \
+    || chk "难道+不是" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对.*不 会.*飞" \
+    && chk "「猫难道不会飞吗」⇒ 对，猫不会飞" 1 \
+    || chk "难道+不会" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "「猫不是会飞吗」⇒ 不对（不再答出「不是会 不会」那种乱句）" 1 \
+    || chk "不是…吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+out=$(AIP_NODATA=shape run "猫 难 道 不是 动物 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+    && chk "关掉 shape 桶 ⇒ 同一句退回兜底（证明是那几行数据在起作用）" 1 \
+    || chk "shape 消融没退回" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
