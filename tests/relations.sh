@@ -818,6 +818,16 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "属于 动物 的 有" \
     && chk "「哪些东西属于动物」⇒ 东西不是类别，退化成什么属于动物" 1 \
     || chk "哪些东西" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.427 双断言确认句（…，…，对吗）
+echo "㊶ §6.427 一次只能答一个"
+out=$(run "猫 追 鱼 ， 狗 追 猫 ， 对 吗" "猫 属 于 动物 ， 狗 属 于 动物 ， 对 不 对")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "一 次 只 能 答 一 个" \
+    && chk "「猫追鱼，狗追猫，对吗」⇒ 说清一次只能答一个" 1 \
+    || chk "双断言 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "一 次 只 能 答 一 个" \
+    && chk "「猫属于动物，狗属于动物，对不对」⇒ 同一答复" 1 \
+    || chk "双断言 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
