@@ -5531,6 +5531,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         const char *q = input_eff;
         while (*q == ' ' || *q == '\t') q++;
         static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches"};
+        /* §6.373 **反问标记剥掉之后，句子仍然是问句**。
+         * 实测 `难不成 猫 会 飞`（没有 吗）被剥成「猫 会 飞」，然后当成**陈述**学进去，
+         * 还触发了改口 —— 把「猫 不会 飞」改写成「猫 会 飞」。这类标记不能"剥完当陈述"。*/
+        static const char *rhet[] = {"难道", "岂不是", "莫非", "难不成", "莫不是", "谁不知道", NULL};
+        int was_rhet = 0;
 
         /* §6.339 引导语可能**连着两个**（`难道 请注意 …` / `请问 麻烦你 …`）：
          * 以前只剥一次，剩下的那个引导语会让整句掉兜底。最多剥三层。 */
@@ -5541,12 +5546,25 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
             if (!ll) ll = aip_pat_prefix(g_lead, g_lead_n, q);
             if (!ll) break;
+            for (size_t i = 0; rhet[i]; ++i)
+                if (strncmp(q, rhet[i], strlen(rhet[i])) == 0) { was_rhet = 1; break; }
             const char *rest = q + ll;
             while (*rest == ' ' || *rest == '\t') rest++;
             if (!*rest) break;
             snprintf(decl_in, sizeof decl_in, "%s", rest);
             input_eff = decl_in;
             q = decl_in;
+        }
+        /* §6.373 剥掉的是反问标记 ⇒ 把问句性质补回去（没有 吗/呢 就补一个）。
+         * 这一条挡的是"反问句被当成陈述学进去/触发改口"，不是给某个说法加分支。 */
+        if (was_rhet && !strstr(input_eff, "吗") && !strstr(input_eff, "呢") &&
+            !strstr(input_eff, "?")) {
+            /* ⚠ 不能直接 snprintf(decl_in, "%s 吗", input_eff)：`input_eff` 可能**就是**
+             * decl_in（上一层刚写进去的）⇒ 源目的重叠，实测拼出来只剩一个「吗」。先拷到临时缓冲。*/
+            char rhet_tmp[256];
+            snprintf(rhet_tmp, sizeof rhet_tmp, "%.250s 吗", input_eff);
+            snprintf(decl_in, sizeof decl_in, "%s", rhet_tmp);
+            input_eff = decl_in;
         }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */

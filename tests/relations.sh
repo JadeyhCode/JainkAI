@@ -289,6 +289,29 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
     && chk "关掉 shape 桶 ⇒ 同一句退回兜底（证明是那几行数据在起作用）" 1 \
     || chk "shape 消融没退回" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+# §6.373 反问标记：剥掉标记后**仍然是问句**（不许当陈述学进去）
+echo "⑬ §6.373 反问标记（难不成/莫不是/谁不知道/岂/该不会）：答对且不污染知识"
+out=$(run "猫 属 于 动物 吗" "难不成 猫 会 飞" "猫 会 飞 吗" "猫 岂 是 动物" "猫 该 不会 飞 吧")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "「难不成猫会飞」⇒ 不对（以前会被当成陈述、触发改口）" 1 \
+    || chk "难不成" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "紧接着问「猫会飞吗」仍是「不对」⇒ 反问没把知识改掉" 1 \
+    || chk "知识被污染" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "对.*属 于\|对.*属于" \
+    && chk "「猫岂是动物」⇒ 对（不再造出「猫岂」这个新词）" 1 \
+    || chk "岂" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "对.*不 会" \
+    && chk "「猫该不会飞吧」⇒ 对，猫不会飞" 1 \
+    || chk "该不会" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+out=$(AIP_NODATA=lead run "难不成 猫 会 飞" "猫 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+    && chk "关掉 lead 桶 ⇒ 同一句掉兜底（说明 lead 行承重）" 1 \
+    || chk "lead 消融没变化" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "关掉 lead 桶时「猫会飞吗」仍不对 ⇒ 不被学进去是代码守卫，不是数据" 1 \
+    || chk "安全网依赖数据" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
