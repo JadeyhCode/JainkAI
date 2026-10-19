@@ -828,6 +828,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "一 次 只 能 答 一 个" \
     && chk "「猫属于动物，狗属于动物，对不对」⇒ 同一答复" 1 \
     || chk "双断言 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.428 肯定式「算」（上海算什么 / 考拉算动物）
+echo "㊷ §6.428 肯定式 算"
+out=$(run "上海 算 什么" "请注意 考拉 算 动物" "猫 算 什么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "还 不 认识" \
+    && chk "「上海算什么」⇒ 还不认识上海（不再兜底）" 1 \
+    || chk "上海算什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "考拉 属于 动物" \
+    && chk "「请注意考拉算动物」⇒ 学成 考拉属于动物" 1 \
+    || chk "考拉算动物" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 属于 动物" \
+    && chk "「猫算什么」⇒ 猫属于动物（问句形式也认）" 1 \
+    || chk "猫算什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
