@@ -34,7 +34,9 @@ int main(int argc, char **argv) {
         /* §6.406 **每句都当"没有挂着的追问"**：`[reply]` 桶只在 `!ask_pending` 时生效，
          * 而上一句若留下追问，这一句就会被跳过 ⇒ 行被误报"从未命中"（实测 `^你在么` 被误报）。
          * 探针只关心"这行能不能匹配"，所以每句前清掉挂起状态。*/
-        ai->ask_pending = 0;
+        /* §6.411 `AIP_PATUSE_KEEP_STATE=1` 时**保留**前态（默认清掉）：
+         * 默认清掉是为了让"这行能不能匹配"可复现；保留则能看出**顺序敏感**（追问链）。*/
+        if (!getenv("AIP_PATUSE_KEEP_STATE")) ai->ask_pending = 0;
         /* §6.410 `AIP_PATUSE_LOG=1`：记录**这一句命中了哪几行**（对比前后计数）。
          * 用途：查"同一句单独跑命中、连跑不命中"这类状态相关的怪事。*/
         static unsigned long prev_hit[AIP_REPLY_MAX];
