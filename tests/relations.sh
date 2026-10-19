@@ -361,6 +361,31 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对" \
     && chk "关掉 fill 桶 ⇒ 同一句不再正常作答（说明是那 6 行数据在起作用）" 0 \
     || chk "关掉 fill 桶就退回去（数据承重）" 1
 
+# §6.376 第二组副词填充（根本/简直/竟然/居然/毕竟/想必/显然）；语气副词（可能）故意不收
+echo "⑯ §6.376 第二组填充：真假照判；「可能」这类猜测语气不删"
+out=$(run "猫 根本 会 飞 吗" "猫 简直 会 飞 吗" "猫 竟然 会 飞 吗" "猫 居然 属于 动物 吗" "猫 毕竟 属于 动物 吗" "猫 显然 属于 动物 吗" "猫 想必 会 飞 吗" "猫 根本 会 飞" "猫 可能 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对.*不 会" \
+    && chk "「猫根本会飞吗」⇒ 不对（根本 是填充）" 1 \
+    || chk "根本" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "「猫简直会飞吗」⇒ 不对" 1 \
+    || chk "简直" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "对.*属 于\|对.*属于" \
+    && chk "「猫居然属于动物吗」⇒ 对" 1 \
+    || chk "居然" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "对.*属 于\|对.*属于" \
+    && chk "「猫毕竟属于动物吗」⇒ 对" 1 \
+    || chk "毕竟" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+printf '%s\n' "$out" | reps | sed -n 7p | grep -q "不 对.*不 会" \
+    && chk "「猫想必会飞吗」⇒ 不对" 1 \
+    || chk "想必" 0 "$(printf '%s\n' "$out" | reps | sed -n 7p)"
+printf '%s\n' "$out" | reps | sed -n 8p | grep -qE "记下 了|改 过来 了|我 知道" \
+    && chk "带填充的陈述仍当教学（猫根本会飞）" 1 \
+    || chk "陈述被误清" 0 "$(printf '%s\n' "$out" | reps | sed -n 8p)"
+printf '%s\n' "$out" | reps | sed -n 9p | grep -q "不 太 懂" \
+    && chk "「猫可能会飞吗」**故意**不删（猜测语气），仍是兜底" 1 \
+    || chk "语气副词被误删" 0 "$(printf '%s\n' "$out" | reps | sed -n 9p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
