@@ -110,3 +110,5 @@ exclusivity|sh tests/exclusivity.sh
 patcount|sh tests/patcount.sh
 # §6.371 长行/丢行自检：512 以内的长关键词要能加载、超长的必须喊、正常数据必须干净
 patlong|sh tests/patlong.sh
+# §6.378 每个数据桶都要"关掉就变"：死桶/探针没走它，套件当场红
+bucketload|sh tests/bucketload.sh
