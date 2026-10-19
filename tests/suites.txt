@@ -108,3 +108,5 @@ asmcheck|sh tests/asmcheck.sh
 exclusivity|sh tests/exclusivity.sh
 # §6.352 数据桶计数看护：五次"桶满了静默丢弃"之后加的（文件行数 vs 加载数；shape 含自动变体）
 patcount|sh tests/patcount.sh
+# §6.371 长行/丢行自检：512 以内的长关键词要能加载、超长的必须喊、正常数据必须干净
+patlong|sh tests/patlong.sh

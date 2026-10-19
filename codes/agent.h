@@ -375,6 +375,22 @@ static char g_reply_txt[AIP_REPLY_MAX][1024];  /* §6.285/§6.287 长答复（�
 static size_t g_reply_n;
 static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
 
+/* §6.371 **加载自检**：文件里有多少行、实际进表多少行，对不上就喊。
+ * 为什么要有：`[reply]` 的关键词串 128 字节上限、以及各种"太长/超上限"的 continue，
+ * 都是**静默丢行**（§6.284/§6.351/§6.370 各踩一次）。用户手动加一行，没人会去对计数。
+ * 口径：只比 1:1 的桶（lead/slot/confuse/reply/syn/affix/tail）。`shape` 会**自动生成变体**，
+ * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
+enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
+       AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_N };
+static const char *const g_bucket_names[AIP_BK_N] = {
+    "lead", "slot", "confuse", "reply", "syn", "affix", "tail"
+};
+static inline int aip_bucket_idx(const char *kind) {
+    for (int i = 0; i < AIP_BK_N; ++i)
+        if (!strcmp(kind, g_bucket_names[i])) return i;
+    return -1;
+}
+
 static inline AipPat *aip_pat_bucket(const char *kind, size_t *n) {
     if (!strcmp(kind, "lead"))    return g_lead;
     if (!strcmp(kind, "slot"))    return g_slot;
@@ -400,6 +416,7 @@ static inline void aip_patterns_load(AI *ai) {
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
     char line[1024];                    /* §6.285 一行可能含关键词+整句答复，256 会截断 */
+    size_t seen[AIP_BK_N] = {0};        /* §6.371 文件里每个桶有多少行（用于加载自检） */
     while (fgets(line, sizeof line, f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
@@ -415,6 +432,10 @@ static inline void aip_patterns_load(AI *ai) {
         while (e > val && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
         if (!*val) continue;
         if (nd && *nd && !strcmp(nd, kind)) continue;   /* §6.333 单桶消融 */
+        {   /* §6.371 计数（消融开关下不数：那时"少加载"是故意的） */
+            int bi = aip_bucket_idx(kind);
+            if (bi >= 0) seen[bi]++;
+        }
         if (!strcmp(kind, "affix")) {
             char *eq = strchr(val, '=');
             if (!eq || g_aff_n >= AIP_AFFIX_MAX) continue;
@@ -582,6 +603,18 @@ static inline void aip_patterns_load(AI *ai) {
         (*cnt)++;
     }
     fclose(f);
+    /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
+    {
+        size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
+                                g_syn_n, g_aff_n, g_tail_n};
+        for (int i = 0; i < AIP_BK_N; ++i) {
+            if (got[i] < seen[i])
+                fprintf(stderr,
+                        "[patterns] ⚠ [%s] 文件里 %zu 行、实际加载 %zu 行（%zu 行被丢弃，"
+                        "原因见上面的 ⚠ 或超长/超上限）\n",
+                        g_bucket_names[i], seen[i], got[i], seen[i] - got[i]);
+        }
+    }
     if (getenv("AIP_PATDBG"))
         fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n);
