@@ -38,6 +38,17 @@ scan_bad_rhs() {   # $1 = 数据文件；有违规行 → 打印并返回 1
     [ "$_bad" -eq 0 ] && return 0 || return 1
 }
 
+check_probes() {   # $1=数据文件 $2=bucketload 文件；缺探针 → 打印并返回 1
+    _miss=0
+    for k in $(grep -oE '^\[[a-z]+\]' "$1" | tr -d '[]' | sort -u); do
+        if grep -qE "^${k}\|" "$2" 2>/dev/null; then :; else
+            echo "  FAIL 桶 [$k] 没有探针：往 $(basename "$2") 的表里补一行「${k}|<探针输入>」"
+            _miss=$((_miss + 1))
+        fi
+    done
+    [ "$_miss" -eq 0 ] && return 0 || return 1
+}
+
 # ---- 自检：故意写坏一行，验证 ③ 会红 ----
 if [ "${1:-}" = "--selftest" ]; then
     tmp=$(mktemp -d)
@@ -51,7 +62,15 @@ if [ "${1:-}" = "--selftest" ]; then
     if scan_bad_rhs "$tmp/bad.txt" >/dev/null; then
         echo "FAIL selftest：违规行**没被抓到**（这条检查是摆设）"; exit 1
     fi
-    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到）"
+    # ② 也要能红：从探针表里删掉 fill 那一行，必须报"没有探针"
+    grep -v '^fill|' tests/bucketload.sh > "$tmp/bucketload_missing.sh" || true
+    if check_probes patterns.txt "$tmp/bucketload_missing.sh" >/dev/null; then
+        echo "FAIL selftest：删掉 fill 的探针后 ② 没红（检查是摆设）"; exit 1
+    fi
+    if ! check_probes patterns.txt tests/bucketload.sh >/dev/null; then
+        echo "FAIL selftest：真实探针表被判缺探针（误报）"; exit 1
+    fi
+    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到 / 缺探针被抓到）"
     exit 0
 fi
 
@@ -83,12 +102,11 @@ for k in $buckets; do
 done
 
 echo "② 每个桶在 bucketload.sh 里都要有探针（新桶必须补一行）"
-for k in $buckets; do
-    if grep -qE "^${k}\|" tests/bucketload.sh 2>/dev/null; then :; else
-        echo "  FAIL 桶 [$k] 没有探针：往 tests/bucketload.sh 的表里补一行「${k}|<探针输入>」"
-        fail=1
-    fi
-done
+if check_probes patterns.txt tests/bucketload.sh; then
+    echo "  OK 每个桶都有探针"
+else
+    fail=1
+fi
 
 echo "③ [shape] 的 rhs 不许指向早期判据才认的形状"
 if scan_bad_rhs patterns.txt; then
