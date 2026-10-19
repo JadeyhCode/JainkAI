@@ -682,6 +682,22 @@ for k in 1 2 3 4 5; do
     fi
 done
 
+# §6.405 征求看法 / 问"你还想知道什么"
+echo "㉝ §6.405 看法类与"下一步问什么""
+out=$(run "你 同 意 吗" "你 认 为 呢" "你 支 持 我 吗" "你 还 想 知 道 什么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 没有 看法" \
+    && chk "「你同意吗」⇒ 没有看法（不编意见）" 1 \
+    || chk "同意" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "我 没有 看法" \
+    && chk "「你认为呢」⇒ 没有看法" 1 \
+    || chk "认为" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "我 没有 看法" \
+    && chk "「你支持我吗」（带宾语）⇒ 没有看法" 1 \
+    || chk "支持我" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "就 三 件 事" \
+    && chk "「你还想知道什么」⇒ 能力菜单（不是兜底）" 1 \
+    || chk "还想知道什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
