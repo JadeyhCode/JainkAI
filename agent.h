@@ -689,6 +689,33 @@ static inline void aip_patterns_load(AI *ai) {
                         g_bucket_names[i], seen[i], got[i], seen[i] - got[i]);
         }
     }
+    /* §6.394 `@类名` 引用不存在时**启动就说**（否则答复行静默不命中，很难查）：
+     * 扫所有 [reply] 行的关键词组，找 `@名字`，和已加载的类表对一遍。*/
+    {
+        for (size_t i = 0; i < g_reply_n; ++i) {
+            const char *p = g_reply_kw[i];
+            while (*p) {
+                while (*p == ' ' || *p == '\t' || *p == ',' || *p == '|') p++;
+                if (*p != '@') {
+                    while (*p && *p != ',' && *p != '|') p++;
+                    continue;
+                }
+                char nm[AIP_CLASS_NAME_LEN];
+                size_t nl = 0;
+                ++p;
+                while (*p && *p != ',' && *p != '|' && nl + 1 < sizeof nm) nm[nl++] = *p++;
+                while (nl && (nm[nl - 1] == ' ' || nm[nl - 1] == '\t')) --nl;
+                nm[nl] = 0;
+                if (!nl) continue;
+                int found = 0;
+                for (size_t ci = 0; ci < g_class_n; ++ci)
+                    if (!strcmp(g_class_name[ci], nm)) { found = 1; break; }
+                if (!found)
+                    fprintf(stderr, "[patterns] ⚠ [reply] 第 %zu 行引用了不存在的词类 @%s"
+                                    "（答复行会永远匹配不上）\n", i + 1, nm);
+            }
+        }
+    }
     if (getenv("AIP_PATDBG"))
         fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n);

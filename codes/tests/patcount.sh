@@ -49,6 +49,27 @@ check_probes() {   # $1=数据文件 $2=bucketload 文件；缺探针 → 打印
     [ "$_miss" -eq 0 ] && return 0 || return 1
 }
 
+check_class_refs() {   # $1=数据文件；有未定义 @类名 → 打印并返回 1
+    _cls=$(grep -oE '^\[class\][^=]*=' "$1" | sed 's/^\[class\] *//; s/=$//' | tr -d ' ' | sort -u)
+    _bad=0
+    while IFS= read -r line; do
+        case "$line" in \[reply\]*) ;; *) continue ;; esac
+        lhs=${line%%=*}
+        lhs=${lhs#\[reply\] }
+        for tok in $(printf '%s' "$lhs" | tr ',|' '  '); do
+            case "$tok" in
+            @*)
+                nm=${tok#@}
+                if ! printf '%s\n' "$_cls" | grep -qx -- "$nm"; then
+                    echo "  FAIL [reply] 引用了不存在的词类 @$nm：$line"
+                    _bad=$((_bad + 1))
+                fi ;;
+            esac
+        done
+    done < "$1"
+    [ "$_bad" -eq 0 ] && return 0 || return 1
+}
+
 # ---- 自检：故意写坏一行，验证 ③ 会红 ----
 if [ "${1:-}" = "--selftest" ]; then
     tmp=$(mktemp -d)
@@ -70,7 +91,16 @@ if [ "${1:-}" = "--selftest" ]; then
     if ! check_probes patterns.txt tests/bucketload.sh >/dev/null; then
         echo "FAIL selftest：真实探针表被判缺探针（误报）"; exit 1
     fi
-    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到 / 缺探针被抓到）"
+    # ④ 也要能红：临时加一条引用不存在词类的 [reply]
+    cp patterns.txt "$tmp/badclass.txt"
+    printf '[reply] @nope , 吗 = 不该 出现\n' >> "$tmp/badclass.txt"
+    if check_class_refs "$tmp/badclass.txt" >/dev/null; then
+        echo "FAIL selftest：引用不存在的词类没被发现（检查是摆设）"; exit 1
+    fi
+    if ! check_class_refs patterns.txt >/dev/null; then
+        echo "FAIL selftest：真实数据被误判引用了不存在的词类"; exit 1
+    fi
+    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到 / 缺探针被抓到 / 坏词类引用被抓到）"
     exit 0
 fi
 
@@ -116,5 +146,12 @@ else
 fi
 
 nb=$(printf '%s\n' "$buckets" | grep -c . || true)
+echo "④ [reply] 引用的词类都真实存在"
+if check_class_refs patterns.txt; then
+    echo "  OK 所有 @类名 都有 [class] 行"
+else
+    fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，每个桶都有承重探针，且没有指向早期判据的改写）"
 exit "$fail"
