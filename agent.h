@@ -5903,11 +5903,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (th->trace[k].why[0]) say = th->trace[k].why;
             if (say) {
                 snprintf(out, out_cap, "（空闲时想到的）%s", say);
+                /* §6.403 这是**主动说话**（用户听得到）⇒ 要能被"再说一遍"复述；
+                 * 但空闲轮不算一次用户对话，所以只记原文、不改 turns（和 agent_say 的区别）。*/
+                snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
                 ai_seg_lap(ai, AI_SEG_THINK, &seg_t);   /* 空轮：剩下的都算「思维」（think_idle）*/
                 ai_free_words(words_alloc, n_alloc);
                 return strlen(out);
             }
         }
+        /* §6.403 **故意不记**：`……` 是"这一轮我不说话"，把它记成 last_reply 会让
+         * 「再说一遍」复述一个省略号。这里也不增 turns —— 空闲轮不是一次对话。*/
         snprintf(out, out_cap, "……");
         ai_seg_lap(ai, AI_SEG_THINK, &seg_t);
         ai_free_words(words_alloc, n_alloc);
@@ -6656,6 +6661,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     free(resp);
     ai_free_words(words_alloc, n_alloc);
     ai->view_who = NULL;      /* 视角只对这一轮有效 */
+    /* §6.403 主出口不调 agent_say：上面 §6.216 已经写过 last_reply，而且末尾还要走维护逻辑
+     * （turns++ / consolidate），统一交给这里，避免一轮加两次 turns。*/
     return strlen(out);
 }
 

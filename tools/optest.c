@@ -3759,6 +3759,29 @@ static void test_remind_route(void) {
     }
 }
 
+/* ============================ 早退出口 agent_say（§6.403） ============================ */
+static void test_agent_say(void) {
+    printf("== agent_say：记原文，但空串/「……」不覆盖上一条 ==\n");
+    AI *ai = ai_new();
+    char out[64];
+    snprintf(ai->last_reply, sizeof ai->last_reply, "%s", "上 一 条 答 复");
+
+    snprintf(out, sizeof out, "%s", "新 答 复");
+    ok(agent_say(ai, out) == strlen(out), "返回长度 = strlen(out)");
+    ok(strcmp(ai->last_reply, "新 答 复") == 0, "普通答复会覆盖 last_reply");
+    ok(ai->turns == 1, "普通答复轮次 +1");
+
+    snprintf(out, sizeof out, "%s", "……");
+    ok(agent_say(ai, out) == strlen("……"), "「……」不崩、长度正确");
+    ok(strcmp(ai->last_reply, "新 答 复") == 0, "「……」（沉默）**不**覆盖上一条 last_reply");
+
+    out[0] = 0;
+    ok(agent_say(ai, out) == 0, "空串返回 0");
+    ok(strcmp(ai->last_reply, "新 答 复") == 0, "空串**不**覆盖上一条 last_reply");
+    ok(ai->turns == 3, "空串和「……」仍各算一轮（turns 只增不减）");
+    ai_free(ai);
+}
+
 int main(void) {
     test_table();
     test_insert_between();
@@ -3827,6 +3850,7 @@ int main(void) {
     test_dirty_guard();
     test_narrate();
     test_remind_route();
+    test_agent_say();
     printf("\nToken 行为 / 临时符号节点 / 修正的记忆 自测：%d 项通过，%d 项失败\n", passes, fails);
     return fails ? 1 : 0;
 }
