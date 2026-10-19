@@ -39,5 +39,10 @@ for k in $BUCKETS; do
     gain=$((bp - ap))
     if [ "$gain" -gt 0 ]; then ratio=$(awk -v r="$rows" -v g="$gain" 'BEGIN{printf "%.2f", r/g}'); else ratio="-"; fi
     printf '%-8s %10s %10s %6s %8s\n' "$k" "$ap/$bt" "$gain" "$rows" "$ratio"
+    # §6.381 贡献 ≤ 0 的桶：把"下一步怎么查"直接打出来（以前要手工再跑一遍 diff）
+    if [ "$gain" -le 0 ]; then
+        first=$(printf '%s\n' $SETS | head -1)
+        printf '         ↳ 贡献 ≤ 0：追差哪几条 → sh tests/abdiff.sh %s %s\n' "$first" "$k"
+    fi
 done
 echo "全开基线：$bp/$bt"

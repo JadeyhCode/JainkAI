@@ -446,6 +446,27 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "我 知道|记下 了|改 �
     && chk "带态度副词的陈述仍当教学（不再造「猫反正」这种词）" 1 \
     || chk "陈述" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.383 「多少」= 「几」：改写成已有数量路径，别掉兜底
+echo "⑳ §6.383 「多少」数量问句：改写成「几」再答"
+out=$(run "猫 有 多少 条 腿" "猫 有 多少 个 朋友" "一 周 有 多少 天" "猫 有 几 条 腿")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "只 记 了 猫 有 腿" \
+    && chk "「猫有多少条腿」⇒ 不知道数目，但说得出「猫有腿」" 1 \
+    || chk "多少+量词" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 数 目" \
+    && chk "「猫有多少个朋友」⇒ 没记过数目（几个 那一路）" 1 \
+    || chk "多少+个" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "一周 有 几 天" \
+    && chk "「一周有多少天」⇒ 两字主语也认（一/周 是被拆开的词）" 1 \
+    || chk "两字主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "只 记 了 猫 有 腿" \
+    && chk "「猫有几条腿」仍然正常（没被改写行弄坏）" 1 \
+    || chk "几形式" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+# 承重：这几条是 shape 行，关掉 shape 桶就该退回兜底
+out=$(AIP_NODATA=shape run "猫 有 多少 条 腿")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+    && chk "关掉 shape 桶 ⇒「猫有多少条腿」退回兜底（数据承重）" 1 \
+    || chk "shape 消融" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
