@@ -1015,6 +1015,20 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "考拉 属于 动物" \
     && chk "光说「教我」⇒ 给一句示范（闲聊行仍在）" 1 \
     || chk "教我（单独）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+echo "71 §6.366 第二人称开放问句**不复述用户的问题**（第三人称的"我记的是"照留）"
+out=$(run "你怕什么" "你喜欢什么" "猫怕什么")
+# ①② 不许出现「我 记 的 是 ： 你 …」（旧行为：把你的问题原样回给你）
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 记 的 是 ： 你" \
+    && chk "「你怕什么」不许回「我记的是：你怕什么」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
+    || chk "「你怕什么」不做回声" 1
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 记 的 是 ： 你" \
+    && chk "「你喜欢什么」不许回回声" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)" \
+    || chk "「你喜欢什么」不做回声" 1
+# ③ 第三人称必须保留原格式（别把修法扩过头）
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 猫 怕" \
+    && chk "第三人称「猫怕什么」仍答「我记的是：猫怕狗」" 1 \
+    || chk "第三人称格式被误伤" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1
