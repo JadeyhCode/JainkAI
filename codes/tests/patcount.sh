@@ -167,6 +167,29 @@ echo "⑤ 词类词覆盖（提示，不算失败）"
 class_word_coverage
 echo "  （上面有 [提示] 说明那些词还没被任何测例走过，不代表坏；要验就补探针）"
 
+# §6.414 [reply] 关键词里**不许有内部空格**：匹配时输入被去掉空格，关键词却按原文比 ⇒
+# `有 什么` 这种永远匹配不上（本轮踩了两次）。用 awk 按 , 和 | 切，**保留**组内空格再查。
+echo "⑥ [reply] 关键词没有内部空格"
+n_sp=$(awk -F'=' '
+    /^\[reply\]/ {
+        lhs = $1
+        sub(/^\[reply\][ \t]*/, "", lhs)
+        n = split(lhs, groups, ",")
+        for (i = 1; i <= n; i++) {
+            m = split(groups[i], alts, "|")
+            for (j = 1; j <= m; j++) {
+                t = alts[j]
+                gsub(/^[ \t]+|[ \t]+$/, "", t)
+                if (t ~ /[ \t]/) { print "  FAIL 关键词里有空格（永远不命中）：" $0; bad++ }
+            }
+        }
+    }
+    END { print bad + 0 > "/dev/stderr" }
+' patterns.txt 2>/tmp/pc_sp_count.txt)
+n_sp_n=$(cat /tmp/pc_sp_count.txt 2>/dev/null || echo 0)
+[ -n "$n_sp" ] && printf '%s\n' "$n_sp"
+[ "$n_sp_n" -eq 0 ] && echo "  OK 没有带内部空格的关键词"
+
 echo "④ [reply] 引用的词类都真实存在"
 if check_class_refs patterns.txt; then
     echo "  OK 所有 @类名 都有 [class] 行"

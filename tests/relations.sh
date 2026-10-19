@@ -714,6 +714,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "真 不 会" \
     && chk "「你写一首诗」⇒ 真不会（不编）" 1 \
     || chk "写诗" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.414 A 样本三族：地点问句 / 感知问句 / 自我需求
+echo "㉟ §6.414 地点/感知/自我需求三族"
+out=$(run "这 里 有 什么" "你 见 过 吗" "你 需 要 什么" "你 怕 什么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "你 说 的 是 哪 儿" \
+    && chk "「这里有什么」⇒ 反问是哪儿（不猜）" 1 \
+    || chk "地点" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 有 眼 睛 和 耳 朵" \
+    && chk "「你见过吗」⇒ 说清没有眼睛耳朵" 1 \
+    || chk "感知" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "只 想 把 图 里 的 事 记 准" \
+    && chk "「你需要什么」⇒ 只有一个目的" 1 \
+    || chk "需求" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "只 想 把 图 里 的 事 记 准" \
+    && chk "「你怕什么」⇒ 同一答复（不编恐惧）" 1 \
+    || chk "害怕" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
