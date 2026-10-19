@@ -382,9 +382,40 @@ printf '%s\n' "$out" | reps | sed -n 7p | grep -q "不 对.*不 会" \
 printf '%s\n' "$out" | reps | sed -n 8p | grep -qE "记下 了|改 过来 了|我 知道" \
     && chk "带填充的陈述仍当教学（猫根本会飞）" 1 \
     || chk "陈述被误清" 0 "$(printf '%s\n' "$out" | reps | sed -n 8p)"
-printf '%s\n' "$out" | reps | sed -n 9p | grep -q "不 太 懂" \
-    && chk "「猫可能会飞吗」**故意**不删（猜测语气），仍是兜底" 1 \
-    || chk "语气副词被误删" 0 "$(printf '%s\n' "$out" | reps | sed -n 9p)"
+# §6.377 之后：模态词**不删**，而是如实说"不会算概率"（删了会把"可能"答成"一定"）
+printf '%s\n' "$out" | reps | sed -n 9p | grep -q "不 会 算" \
+    && chk "「猫可能会飞吗」⇒ 如实说不会算概率（不删词、也不当确定事实答）" 1 \
+    || chk "模态答复" 0 "$(printf '%s\n' "$out" | reps | sed -n 9p)"
+
+# §6.377 模态词（可能/也许/大概）：不删、不学，如实说"不会算概率"
+echo "⑰ §6.377 模态词：不删词、不当事实学、如实说不会算概率"
+out=$(run "猫 可能 会 飞 吗" "猫 可能 会 飞" "猫 会 飞 吗" "明天 可能 下雨 吗" "猫 一定 会 飞 吗" "猫 应该 属于 动物 吧")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 算" \
+    && chk "「猫可能会飞吗」⇒ 不会算概率（不是「不对」，也不是兜底）" 1 \
+    || chk "模态问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对" \
+    && chk "模态问句**不许**当成确定事实答「不对」" 0 \
+    || chk "没把「可能」答成「一定」" 1
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "记 不 了" \
+    && chk "「猫可能会飞」（陈述）⇒ 明说记不了（不再造「猫可能」这种词）" 1 \
+    || chk "模态陈述" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "紧接着问「猫会飞吗」仍不对 ⇒ 模态陈述没污染知识" 1 \
+    || chk "知识被污染" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "天气" \
+    && chk "「明天可能下雨吗」仍走天气边界（模态行没抢走它）" 1 \
+    || chk "天气被抢" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "不 对.*不 会" \
+    && chk "「猫一定会飞吗」⇒ 不对（一定 是断言，可删）" 1 \
+    || chk "一定" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+printf '%s\n' "$out" | reps | sed -n 6p | grep -q "对.*属 于\|对.*属于" \
+    && chk "「猫应该属于动物吧」⇒ 对（应该 可删）" 1 \
+    || chk "应该" 0 "$(printf '%s\n' "$out" | reps | sed -n 6p)"
+# 数据承重：关掉 reply 桶，模态答复退回兜底（这两行是 [reply]，不是代码）
+out=$(AIP_NODATA=reply run "猫 可能 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 算" \
+    && chk "关掉 reply 桶 ⇒ 模态答复消失（说明是数据行在兜）" 0 \
+    || chk "关掉 reply 桶就退回（数据承重）" 1
 
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
