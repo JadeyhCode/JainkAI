@@ -854,6 +854,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 -[属于]-> 动物" \
     && chk "「岂不是猫属于动物吗」⇒ 同一处理" 1 \
     || chk "岂不是" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.431 转述：学内层事实，不造「我说猫」这种实体
+echo "㊹ §6.431 转述句学内层"
+out=$( { printf '::load %s\n::char off\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
+         printf '我说猫属于动物\n::rel 我说猫\n'
+         printf '::quit\n'; } | "$BIN" 2>&1 )
+first=$(printf '%s\n' "$out" | sed -n 's/.*AI > //p' | head -1)
+has "$first" "猫 属于 动物" \
+    && chk "「我说猫属于动物」⇒ 学内层「猫 属于 动物」" 1 \
+    || chk "转述学内层" 0 "$first"
+has "$first" "我说猫" \
+    && chk "「我说猫属于动物」**不该**学出「我说猫」这个实体" 0 \
+    || chk "没造 我说猫 实体" 1
+has "$out" "我说猫] 不在图里" \
+    && chk "::rel 我说猫 ⇒ 不在图里（没有垃圾节点）" 1 \
+    || chk "垃圾节点" 0 "$(printf '%s\n' "$out" | grep '我说猫' | head -1)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

@@ -1034,6 +1034,16 @@ static inline int agent_loc_char(const char *w) {
 
 static inline int agent_compound_ok(AI *ai, char *const *w, size_t k) {
     if (!ai || !w || k < 2 || k > 4) return 0;
+    /* §6.431 **传话动词不能拼进主语**：`我说猫属于动物` 会被拼成主语「我说猫」，
+     * 于是图上多出一个不存在的实体。含 说/认为/觉得/以为/问 的拼接一律不认；
+     * 这类句子交给转述路径（`他 说 A R B` 已经在 belief 里），没有就直接不学。*/
+    for (size_t i = 0; i < k; ++i) {
+        const char *x = w[i];
+        if (!x) continue;
+        if (!strcmp(x, "说") || !strcmp(x, "认为") || !strcmp(x, "觉得") ||
+            !strcmp(x, "以为") || !strcmp(x, "问") || !strcmp(x, "说过") ||
+            !strcmp(x, "我说") || !strcmp(x, "你说")) return 0;
+    }
     size_t bytes = 0;
     for (size_t i = 0; i < k; ++i) {
         size_t l = strlen(w[i]);
@@ -2674,6 +2684,11 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
+    /* §6.431 **传话动词不能被拼成主语**：`我说猫属于动物` 学成
+     * 「我说猫 --[属于]--> 动物」，图上就多一个不存在的实体（`::rel 我说猫` 能查到）。
+     * 主语里含 说/认为/觉得/以为/问 一律不学；这类句子归"转述"，不是事实。*/
+    if (strstr(aw, "说") || strstr(aw, "认为") || strstr(aw, "觉得") ||
+        strstr(aw, "以为") || strstr(aw, "问")) return NULL;
     /* §6.240b/§6.244 并列走 conj 那条，别学成「猫、狗」「猫以及狗」这种 blob
      * （顿号是 UTF-8 多字节，必须用 strstr，不是 strchr）*/
     if (strstr(bw, "、") || strstr(bw, "以及")) return NULL;
@@ -2834,9 +2849,17 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     size_t na = ri - (size_t)neg_sep, nb = n - ri - 1;
     if (!agent_nat_side_ok(ai, words, 0, na)) return NULL;
     if (!agent_nat_side_ok(ai, words, ri + 1, nb)) return NULL;
+    /* §6.431 **转述**：`我 说 猫 属于 动物` 的前两个词是"说话人+说"，
+     * 真正的主语从第 3 个词开始。跳过它们学内层事实（我/你说的 X R Y），
+     * 而不是把「我说猫」拼成一个实体。*/
+    size_t astart = 0;
+    if (na >= 3 && words[0] && words[1] &&
+        (!strcmp(words[0], "我") || !strcmp(words[0], "你") || !strcmp(words[0], "您")) &&
+        (!strcmp(words[1], "说") || !strcmp(words[1], "认为") || !strcmp(words[1], "觉得")))
+        astart = 2;
     char A[64], B[64];
     size_t oa = 0, ob = 0;
-    for (size_t i = 0; i < na; ++i) {
+    for (size_t i = astart; i < na; ++i) {
         size_t l = strlen(words[i]);
         if (oa + l + 1 >= sizeof A) return NULL;
         memcpy(A + oa, words[i], l); oa += l;
@@ -2928,6 +2951,14 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     /* 试过但**证不出正例**：想再收一道"代词 + 单字 ⇒ 不是名字"（挡 `我住`），
      * 但 `我表弟` 在这种模型里正好切成 我/表/弟 三个单字 ⇒ 把合法复合也挡了
      * （interact ㊶ 当场红）。要挡 `我住` 需要词性，现有信息分不开 ⇒ 不留在树上。 */
+    /* §6.431 **传话动词不能进名字**：`我 说 猫` 会被拼成实体「我说猫」。
+     * 这类句子是"转述"不是事实；交给 belief 路径或直接不学。*/
+    for (size_t i = astart; i < na; ++i) {
+        const char *w = words[i];
+        if (!w) continue;
+        if (!strcmp(w, "说") || !strcmp(w, "认为") || !strcmp(w, "觉得") ||
+            !strcmp(w, "以为") || !strcmp(w, "问") || !strcmp(w, "说过")) return NULL;
+    }
     if (!pool_find(ai->pool, A) && strlen(A) > 12) return NULL;   /* 别造超长怪词 */
     if (!pool_find(ai->pool, B) && strlen(B) > 12) return NULL;
     Token *ta = pool_token_intern(ai->pool, A);
