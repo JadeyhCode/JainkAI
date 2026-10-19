@@ -588,6 +588,22 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
     && chk "关掉 class 桶 ⇒ 这条答复消失（类表承重）" 0 \
     || chk "关掉 class 桶就退回（类表承重）" 1
 
+# §6.396 裸问法（只有一组关键词）：气温多少度 / 礼拜几 / 哪一年
+echo "㉗ §6.396 裸问法补行：只有一组关键词也能接住"
+out=$(run "气 温 多 少 度" "温 度 是 多 少" "礼 拜 几" "哪 一 年")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "天气 我 不 知道" \
+    && chk "「气温多少度」⇒ 天气边界（以前要求"天气词+语境词"两组都有）" 1 \
+    || chk "气温" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "天气 我 不 知道" \
+    && chk "「温度是多少」⇒ 天气边界" 1 \
+    || chk "温度" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没有 时 钟" \
+    && chk "「礼拜几」（裸问）⇒ 没有时钟" 1 \
+    || chk "礼拜几" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没有 时 钟" \
+    && chk "「哪一年」（裸问）⇒ 没有时钟" 1 \
+    || chk "哪一年" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

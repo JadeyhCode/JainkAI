@@ -49,6 +49,23 @@ check_probes() {   # $1=数据文件 $2=bucketload 文件；缺探针 → 打印
     [ "$_miss" -eq 0 ] && return 0 || return 1
 }
 
+# §6.396 词类词覆盖（**提示**，不算失败）：类里哪些词从没在任何测例/探针里出现过
+class_word_coverage() {   # 无参数；打印"未出现"的词
+    _blob=$(mktemp)
+    cat tests/*.txt tests/*.sh 2>/dev/null > "$_blob" || true
+    while IFS= read -r line; do
+        case "$line" in \[class\]*) ;; *) continue ;; esac
+        nm=${line#\[class\] }; nm=${nm%%=*}
+        words=${line#*=}
+        miss=""
+        for w in $(printf '%s' "$words" | tr ',' ' '); do
+            grep -Fq -- "$w" "$_blob" || miss="$miss $w"
+        done
+        [ -n "$miss" ] && echo "  [提示] 类 $nm 里这些词没在任何测例里出现：$miss"
+    done < patterns.txt
+    rm -f "$_blob"
+}
+
 check_class_refs() {   # $1=数据文件；有未定义 @类名 → 打印并返回 1
     _cls=$(grep -oE '^\[class\][^=]*=' "$1" | sed 's/^\[class\] *//; s/=$//' | tr -d ' ' | sort -u)
     _bad=0
@@ -146,6 +163,10 @@ else
 fi
 
 nb=$(printf '%s\n' "$buckets" | grep -c . || true)
+echo "⑤ 词类词覆盖（提示，不算失败）"
+class_word_coverage
+echo "  （上面有 [提示] 说明那些词还没被任何测例走过，不代表坏；要验就补探针）"
+
 echo "④ [reply] 引用的词类都真实存在"
 if check_class_refs patterns.txt; then
     echo "  OK 所有 @类名 都有 [class] 行"
