@@ -4,7 +4,7 @@
 > 二进制 / 数据 / 模型指纹，`tests/selfcheck.sh` 会比它们和当前的：不一致说明数字可能过期。
 > 手写段（口径变化、套件、已知边界）在文件后半。
 
-<!-- trend-meta: binary=7a4ef46f data=f0287494 model=74a932ae fast=0 generated=2026-10-20 -->
+<!-- trend-meta: binary=7a4ef46f data=d67105a3 model=74a932ae fast=0 generated=2026-10-20 -->
 ## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）
 
 | 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 数据行 | 关系层 | 兜底池 | 框架 | 检索/说明 | 自我/裸 | 未标注 |
@@ -24,7 +24,7 @@
 | `slot` | 1 | 1 |
 | `confuse` | 2 | 2 |
 | `reply` | 82 | 82 |
-| `shape` | 144 | 219 |
+| `shape` | 148 | 225 |
 | `syn` | 25 | 25 |
 | `affix` | 5 | 5 |
 | `tail` | 7 | 7 |

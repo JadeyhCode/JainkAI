@@ -870,6 +870,16 @@ has "$out" "我说猫] 不在图里" \
     && chk "::rel 我说猫 ⇒ 不在图里（没有垃圾节点）" 1 \
     || chk "垃圾节点" 0 "$(printf '%s\n' "$out" | grep '我说猫' | head -1)"
 
+# §6.432 转述 + 提问：剥掉"我说"再答
+echo "㊺ §6.432 转述+提问"
+out=$(run "我 说 猫 属 于 什么" "你 说 猫 会 飞 吗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "猫 属于 动物" \
+    && chk "「我说猫属于什么」⇒ 剥掉转述后答「猫属于动物」" 1 \
+    || chk "转述+问 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 会" \
+    && chk "「你说猫会飞吗」⇒ 剥掉转述后答「不会」" 1 \
+    || chk "转述+问 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
