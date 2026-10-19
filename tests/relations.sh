@@ -505,6 +505,27 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
     && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
+# §6.386 `X 是谁`（不空格时 是谁 一个词）：不学垃圾、不说词串，说清"没记名字"
+echo "㉓ §6.386 名字类问题：不学垃圾、不说词串"
+out=$(run "猫 是 谁" "猫是谁" "老鼠是谁" "天是谁" "小明是谁")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 记 过 名 字" \
+    && chk "「猫 是 谁」⇒ 没记过名字（带上已知类别）" 1 \
+    || chk "spaced 身份" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 属 于 动物\|猫 属于 动物" \
+    && chk "「猫是谁」（不空格，是谁 并成一个词）⇒ 同样能答" 1 \
+    || chk "unspaced 身份" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "记下 了" \
+    && chk "「小明是谁」**不许**被学成事实（以前答「记下 了 ： 小 明 是谁」）" 0 \
+    || chk "不把名字问题学成事实" 1
+# 注册过名字之后，两种写法都要能反查
+out=$(run "我 的 名字 是 小明" "小明 是 谁" "小明是谁")
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "叫 小明 的 有" \
+    && chk "注册名字后「小明 是 谁」⇒ 反查" 1 \
+    || chk "spaced 反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "叫 小明 的 有" \
+    && chk "注册名字后「小明是谁」（不空格）⇒ 也反查" 1 \
+    || chk "unspaced 反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

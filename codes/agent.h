@@ -840,11 +840,19 @@ static inline size_t agent_open_strip_shell(char *const *words, size_t n,
  * 答「我 的 愿 望 很 小」；`你 知道 我 的 名字 吗` 答「忘 了 别 的」）。
  * 只在**问句**上改（`A 的 名字 是 B` 那种陈述走学习侧，另有一处）。返回 1 = 改了。 */
 static inline int agent_norm_name_q(char *const *w, size_t n, char **nw, size_t *out_n) {
-    if (!w || !nw || !out_n || n < 3) return 0;
+    /* §6.386 下限从 3 放到 2：不空格时「是谁」是一个词，`X 是谁` 只有 2 个词。 */
+    if (!w || !nw || !out_n || n < 2) return 0;
     size_t last = n;
     while (last > 0 && (!strcmp(w[last - 1], "吗") || !strcmp(w[last - 1], "呢"))) last--;
     /* ① `X 是 谁` ⇒ `谁 叫 X`（反查）*/
     if (last == 3 && !strcmp(w[1], "是") && !strcmp(w[2], "谁")) {
+        nw[0] = (char *)"谁"; nw[1] = (char *)"叫"; nw[2] = w[0];
+        *out_n = 3; return 1;
+    }
+    /* §6.386 **真人输入不带空格**：分词把「是谁」并成**一个词**（`猫 是谁`，2 个词），
+     * 上面那条 last==3 的形状永远匹配不到 ⇒ 以前掉生成层，答出「是谁 我 比 人 放 松」这种词串。
+     * 这里按并词形态再认一次，落到同一条反查路上。*/
+    if (last == 2 && (!strcmp(w[1], "是谁") || !strcmp(w[1], "是啥"))) {
         nw[0] = (char *)"谁"; nw[1] = (char *)"叫"; nw[2] = w[0];
         *out_n = 3; return 1;
     }
@@ -939,7 +947,9 @@ static inline int agent_compound_ok(AI *ai, char *const *w, size_t k) {
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
-    if (!ai || !ai->rel_open || ai->rel_off || !words || n < 3 || n > 8) return NULL;
+    /* §6.386 下限从 3 放到 2：不空格时「是谁」是一个词，`X 是谁` 只有 2 个词，
+     * 名字归一（`agent_norm_name_q`）得先进得来才轮得到。 */
+    if (!ai || !ai->rel_open || ai->rel_off || !words || n < 2 || n > 8) return NULL;
     /* §6.212 名字类问法先归一到关系层认得的形状（`谁 叫 X` / `A 叫 什么`）。
      * ⚠ `nw` 必须声明在**函数作用域**：写进块里再 `words = nw` 会留下悬垂指针（实测崩）。 */
     char *nw[5]; size_t nn = 0;
@@ -5011,6 +5021,39 @@ static inline int agent_quantity_compare_note(AI *ai, char *const *words, size_t
  * 实测 `狗 吃 猫 吗` 以前掉兜底（「这个我 不 太 懂」）——可这句话完全听懂了，
  * 只是图里没记。掉兜底等于告诉用户"我没理解你"，那是**假**的。
  * 只在所有其它答复路径都失败之后才调用（所以已知事实、类比、检索、帧都不受影响）。*/
+/* §6.386 `X 是谁`（含不空格时并成一个词的「是谁」）：**图里没有名字**时给一句有用的话。
+ * 实测不空格时它以前掉生成层，答出「是谁 我 比 人 放 松」这种词串；加了问句词之后变兜底，
+ * 但"我不太懂"也不够 —— 用户想知道的是"这人/这东西是谁"。这里说清：没记名字；若知道类别就带上。
+ * 真注册过的名字走反查（`谁 叫 X`），不会到这里。*/
+static inline int agent_identity_note(AI *ai, char *const *words, size_t n,
+                                      char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0) return 0;
+    const char *subj = NULL;
+    if (n == 2 && (!strcmp(words[1], "是谁") || !strcmp(words[1], "是啥"))) subj = words[0];
+    else if (n == 3 && !strcmp(words[1], "是") &&
+             (!strcmp(words[2], "谁") || !strcmp(words[2], "啥"))) subj = words[0];
+    else if (n == 3 && (!strcmp(words[1], "是谁") || !strcmp(words[1], "是啥")) &&
+             (!strcmp(words[2], "呀") || !strcmp(words[2], "呢"))) subj = words[0];
+    if (!subj) return 0;
+    Token *A = pool_find(ai->pool, subj);
+    if (!A) return 0;                      /* 不认识这个实体 ⇒ 交给"我还 不 认识"那条 */
+    /* 类别：顺一层 属于 */
+    const char *cat = NULL;
+    for (size_t i = 0; i < A->count; ++i) {
+        AssocEntry *e = &A->assocs[i];
+        if (!(e->rel & REL_BIT(REL_IS_A)) || !e->main) continue;
+        cat = e->main->name;
+        break;
+    }
+    if (cat)
+        snprintf(out, cap,
+                 "我 不 知 道 %.20s 是 谁 —— 图 里 没 记 过 名 字（只 记 了 %.20s 属 于 %.20s）。",
+                 subj, subj, cat);
+    else
+        snprintf(out, cap, "我 不 知 道 %.20s 是 谁 —— 图 里 没 记 过 名 字（不 编）。", subj);
+    return 1;
+}
+
 static inline int agent_unknown_relation_note(AI *ai, char *const *words, size_t n,
                                               char *out, size_t cap) {
     if (!ai || !words || n < 4 || n > 7 || !out || cap == 0) return 0;
@@ -6214,7 +6257,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (is_question || ai->last_retrieval_cov < 25 || ai->last_token_ratio < 50) {
             /* 没匹配上又是问题（或相似度低到没有意义）→ 诚实拒答，别瞎编 */
             char unknown[220];
-            if (agent_quantity_compare_note(ai, words, n, unknown, sizeof unknown)) {
+            if (agent_identity_note(ai, words, n, unknown, sizeof unknown)) {
+                /* §6.386 `X 是谁`：没人名记录时给一句有用的话（不是词串，也不是干巴巴的"不懂"）*/
+                resp = (char *)malloc(strlen(unknown) + 1);
+                if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
+                conf = 0.4f;
+                cot_push(ai, COT_ADMIT, 0, 35, "名字类问题：图里没有这个名字", "说清没记名字，带上已知类别");
+                ai->n_cot++;
+                if (!ai->last_der.has_claim)
+                    der_source(&ai->last_der, "不确定（没有名字记录）");
+            } else if (agent_quantity_compare_note(ai, words, n, unknown, sizeof unknown)) {
                 /* §6.370 数量/年龄/比较：结构听懂了，答"没记数目/不会比较" */
                 resp = (char *)malloc(strlen(unknown) + 1);
                 if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
