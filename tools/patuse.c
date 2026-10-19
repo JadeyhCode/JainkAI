@@ -49,11 +49,11 @@ int main(int argc, char **argv) {
             int any = 0;
             for (size_t i = 0; i < g_reply_n; ++i) {
                 if (g_reply_hit[i] != prev_hit[i]) {
-                    printf("LOG|%s|row=%zu|%s\n", line, i, g_reply_txt[i]);
+                    printf("LOG|%s|row=%zu|%s\n", line, i, out);
                     any = 1;
                 }
             }
-            if (!any) printf("LOG|%s|row=-1\n", line);
+            if (!any) printf("LOG|%s|row=-1|%s\n", line, out);
             /* §6.410 **必须立刻 flush**：下一轮循环会把 fd 1 切到 /dev/null，
              * 而 stdout 是**块缓冲**的 —— 缓冲里的 LOG 行会在下次 flush 时写进 /dev/null 丢掉
              * （实测 4118 条输入只留下 1783 条 LOG，就是这个原因）。*/
