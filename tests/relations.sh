@@ -880,6 +880,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 会" \
     && chk "「你说猫会飞吗」⇒ 剥掉转述后答「不会」" 1 \
     || chk "转述+问 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.434 blind4 兜底里的一般化：算X对吧 / 我想知道X算什么 / 你以为
+echo "㊻ §6.434 算X对吧、我想知道、你以为"
+out=$(run "猫 算 动物 对 吧" "我 想 知 道 鲸 鱼 算 什 么" "你 以 为 猫 属 于 什 么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "猫 -[属于]-> 动物" \
+    && chk "「猫算动物对吧」⇒ 对，猫属于动物（不再被通用'对吧'改写）" 1 \
+    || chk "算X对吧" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "属于" \
+    && chk "「我想知道鲸鱼算什么」⇒ 属于什么（剥掉'我想知道'）" 1 \
+    || chk "我想知道" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 属于 动物" \
+    && chk "「你以为猫属于什么」⇒ 猫属于动物（'你以为'当引导语）" 1 \
+    || chk "你以为" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
