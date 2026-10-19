@@ -34,6 +34,16 @@ run() {   # <输入...>  → 打印回复行
 reps() { sed -n 's/.*AI > //p'; }
 nth()  { sed -n "${1}p"; }
 
+# §6.397 **空格无关的断言**：`has "<答复>" "<期望>"` —— 两边都去掉空格再比（字面子串）。
+# 为什么要有：这个月有 6 次断言写成「天 气 我 不 知 道」「没 有 时 钟」这种**逐字空格**的形式，
+# 而答复里 `天气`/`没有` 各是一个词 ⇒ 假红。新写的断言一律用 `has`，别再手写 grep -q。
+# （`grep -q` 仍保留给需要正则/行首锚点的断言。）
+has() {
+    _t=$(printf '%s' "$1" | tr -d ' \t')
+    _p=$(printf '%s' "$2" | tr -d ' \t')
+    case "$_t" in *"$_p"*) return 0 ;; *) return 1 ;; esac
+}
+
 echo "⓪ §6.144 关系别名可达（靠 lexicon.txt 把多字词保住整词）"
 # 别名只对**分词器不切开**的词有效：`喜爱` 不被切开才轮得到 `REL_ALIASES` 说话。
 out=$(run "我 喜爱 猫" "我 惧怕 狗" "::rel 我")
@@ -591,18 +601,38 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
 # §6.396 裸问法（只有一组关键词）：气温多少度 / 礼拜几 / 哪一年
 echo "㉗ §6.396 裸问法补行：只有一组关键词也能接住"
 out=$(run "气 温 多 少 度" "温 度 是 多 少" "礼 拜 几" "哪 一 年")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "天气 我 不 知道" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "天气我不知道" \
     && chk "「气温多少度」⇒ 天气边界（以前要求"天气词+语境词"两组都有）" 1 \
     || chk "气温" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "天气 我 不 知道" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "天气我不知道" \
     && chk "「温度是多少」⇒ 天气边界" 1 \
     || chk "温度" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没有 时 钟" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "没有时钟" \
     && chk "「礼拜几」（裸问）⇒ 没有时钟" 1 \
     || chk "礼拜几" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没有 时 钟" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "没有时钟" \
     && chk "「哪一年」（裸问）⇒ 没有时钟" 1 \
     || chk "哪一年" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
+# §6.397 用空格无关的 has() 写断言；同时补两个"从没被走过"的词类词：晴 / 这周
+echo "㉘ §6.397 has() 断言 + 晴/这周 两个未覆盖词"
+out=$(run "明天 会 晴 吗" "这周 会 下雨 吗" "这周 几号" "下雪 吗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "天气 我 不 知道" \
+    && chk "「明天会晴吗」⇒ 天气边界（晴 在 @weather 里）" 1 \
+    || chk "晴" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "天气 我 不 知道" \
+    && chk "「这周会下雨吗」⇒ 天气边界（这周 在 @timeword 里）" 1 \
+    || chk "这周" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "没有 时 钟" \
+    && chk "「这周几号」⇒ 没有时钟" 1 \
+    || chk "这周几号" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "天气 我 不 知道" \
+    && chk "「下雪吗」⇒ 天气边界" 1 \
+    || chk "下雪" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+# has() 自身：逐字空格也能匹配（这正是它存在的理由）
+has "天 气 我 不 知 道" "天气我 不知道" \
+    && chk "has() 对空格不敏感（逐字空格也不假红）" 1 \
+    || chk "has() 空格不敏感" 0
 
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
