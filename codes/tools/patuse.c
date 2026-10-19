@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdlib.h>
 
 int main(int argc, char **argv) {
     Agent *ag = agent_new(NULL, NULL, NULL);
@@ -60,6 +61,45 @@ int main(int argc, char **argv) {
     printf("输入 %zu 句；reply 行 %zu 条，从未命中 %zu 条\n", n, g_reply_n, dead);
     for (size_t i = 0; i < g_reply_n; ++i)
         if (!g_reply_hit[i]) printf("  未见: %s\n", g_reply_kw[i]);
+    /* §6.407 `AIP_PATUSE_PROBES=1`：给每条"从未命中"的行**造一条探针**（取第一个关键词，
+     * 去掉组间的 `,`/`|` 与空格外壳）⇒ 之后逐条在**新进程**里问一遍，就能区分
+     * "行坏了"和"只是没测过"。人工手写探针容易漏行（§6.406 是手写的），这里机械化。*/
+    if (getenv("AIP_PATUSE_PROBES")) {
+        for (size_t i = 0; i < g_reply_n; ++i) {
+            if (g_reply_hit[i]) continue;
+            /* 每个**组**（逗号分隔）取第一个选项（`|` 前），拼起来：
+             * `既,又` → `既又`；`而且,吗` → `而且吗`；`我们,吧` → `我们吧`；
+             * `写|作,诗|歌|词 , 你|帮我` → `写诗你`。这样每个组的条件都被包含，
+             * 能真正走到这一行（而不是因为少了一组条件而永远不命中）。 */
+            const char *p = g_reply_kw[i];
+            if (*p == '^') continue;          /* 精确行：整句才是条件，造不出来 */
+            char probe[96];
+            size_t pl = 0;
+            int first_in_group = 1;
+            while (*p && pl + 1 < sizeof probe) {
+                if (*p == ',') { first_in_group = 1; ++p; continue; }
+                if (*p == '|') {                   /* 跳过本组其余选项 */
+                    while (*p && *p != ',') ++p;
+                    continue;
+                }
+                if (first_in_group) {
+                    if (*p != ' ' && *p != '\t') probe[pl++] = *p;
+                    /* 只收第一个选项，直到分隔符 */
+                    const char *q = p + 1;
+                    while (*q && *q != '|' && *q != ',') {
+                        if (*q != ' ' && *q != '\t' && pl + 1 < sizeof probe) probe[pl++] = *q;
+                        ++q;
+                    }
+                    p = q;
+                    first_in_group = 0;
+                    continue;
+                }
+                ++p;
+            }
+            probe[pl] = 0;
+            if (pl) printf("PROBE|%s\n", probe);
+        }
+    }
     (void)ai;
     return 0;
 }
