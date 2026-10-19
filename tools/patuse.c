@@ -67,37 +67,52 @@ int main(int argc, char **argv) {
     if (getenv("AIP_PATUSE_PROBES")) {
         for (size_t i = 0; i < g_reply_n; ++i) {
             if (g_reply_hit[i]) continue;
-            /* 每个**组**（逗号分隔）取第一个选项（`|` 前），拼起来：
-             * `既,又` → `既又`；`而且,吗` → `而且吗`；`我们,吧` → `我们吧`；
-             * `写|作,诗|歌|词 , 你|帮我` → `写诗你`。这样每个组的条件都被包含，
-             * 能真正走到这一行（而不是因为少了一组条件而永远不命中）。 */
+            /* §6.408 探针 = 每组的第一个选项拼起来（`既,又`→`既又`）；整句精确行
+             * （行首 `^`）直接把 `^` 后面那串当探针——它本身就是一句话。
+             * 同时给出**期望**：这一行答复文本去掉空格后的前 8 个字符 —— 用来区分
+             * "真的由这一行答的" 和 "被别的行抢答了"。 */
             const char *p = g_reply_kw[i];
-            if (*p == '^') continue;          /* 精确行：整句才是条件，造不出来 */
             char probe[96];
             size_t pl = 0;
-            int first_in_group = 1;
-            while (*p && pl + 1 < sizeof probe) {
-                if (*p == ',') { first_in_group = 1; ++p; continue; }
-                if (*p == '|') {                   /* 跳过本组其余选项 */
-                    while (*p && *p != ',') ++p;
-                    continue;
-                }
-                if (first_in_group) {
-                    if (*p != ' ' && *p != '\t') probe[pl++] = *p;
-                    /* 只收第一个选项，直到分隔符 */
-                    const char *q = p + 1;
-                    while (*q && *q != '|' && *q != ',') {
-                        if (*q != ' ' && *q != '\t' && pl + 1 < sizeof probe) probe[pl++] = *q;
-                        ++q;
-                    }
-                    p = q;
-                    first_in_group = 0;
-                    continue;
-                }
+            if (*p == '^') {
                 ++p;
+                while (*p && *p != '|' && pl + 1 < sizeof probe) {
+                    if (*p != ' ') probe[pl++] = *p;
+                    ++p;
+                }
+            } else {
+                int first_in_group = 1;
+                while (*p && pl + 1 < sizeof probe) {
+                    if (*p == ',') { first_in_group = 1; ++p; continue; }
+                    if (*p == '|') {
+                        while (*p && *p != ',') ++p;
+                        continue;
+                    }
+                    if (first_in_group) {
+                        if (*p != ' ' && *p != '\t') probe[pl++] = *p;
+                        const char *q = p + 1;
+                        while (*q && *q != '|' && *q != ',') {
+                            if (*q != ' ' && *q != '\t' && pl + 1 < sizeof probe) probe[pl++] = *q;
+                            ++q;
+                        }
+                        p = q;
+                        first_in_group = 0;
+                        continue;
+                    }
+                    ++p;
+                }
             }
             probe[pl] = 0;
-            if (pl) printf("PROBE|%s\n", probe);
+            if (!pl) continue;
+            char expect[32];
+            size_t el = 0;
+            const char *t = g_reply_txt[i];
+            while (*t && el + 1 < sizeof expect && el < 8 * 3) {   /* 8 个汉字 ≈ 24 字节 */
+                if (*t != ' ') expect[el++] = *t;
+                ++t;
+            }
+            expect[el] = 0;
+            printf("PROBE|%s\t%s\n", probe, expect);
         }
     }
     (void)ai;
