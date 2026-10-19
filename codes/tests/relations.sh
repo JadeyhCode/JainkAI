@@ -430,6 +430,22 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "看 是 什 么 事" \
     && chk "「你能来吗」⇒ 仍给通用清单（这行没被误删）" 1 \
     || chk "你能来吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.382 第三组态度副词（反正/终归/总归/好歹/偏偏）
+echo "⑲ §6.382 第三组填充：态度副词删掉，真假照判"
+out=$(run "猫 反 正 不 会 飞 吗" "猫 终 归 属于 动物 吗" "猫 偏 偏 会 飞 吗" "猫 反 正 属于 动物")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "对.*不 会" \
+    && chk "「猫反正不会飞吗」⇒ 对" 1 \
+    || chk "反正" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对.*属 于\|对.*属于" \
+    && chk "「猫终归属于动物吗」⇒ 对" 1 \
+    || chk "终归" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "「猫偏偏会飞吗」⇒ 不对" 1 \
+    || chk "偏偏" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "我 知道|记下 了|改 过来 了" \
+    && chk "带态度副词的陈述仍当教学（不再造「猫反正」这种词）" 1 \
+    || chk "陈述" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
