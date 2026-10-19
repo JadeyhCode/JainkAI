@@ -410,15 +410,25 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 口径：只比 1:1 的桶（lead/slot/confuse/reply/syn/affix/tail）。`shape` 会**自动生成变体**，
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
-       AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_N };
+       AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
-    "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill"
+    "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
  * （`确 实` / `实 际 上`），所以按**词序列**匹配、整段删。*/
 static AipPat g_fill[AIP_PAT_MAX];
 static size_t g_fill_n;
+
+/* §6.393 **词类**（`[class] 名=词,词,…`）：答复行的关键词可以用 `@名` 引用一整类词，
+ * 这样"往类里加一个同义词"不用改答复行 —— 这是"加新说法只改数据"的下一步。
+ * 匹配语义：`@名` 命中 = 类里**任意一个词**出现在输入里（子串，和 `组内 a|b` 一致）。*/
+#define AIP_CLASS_MAX 32
+#define AIP_CLASS_NAME_LEN 32
+#define AIP_CLASS_WORDS_LEN 256
+static char g_class_name[AIP_CLASS_MAX][AIP_CLASS_NAME_LEN];
+static char g_class_words[AIP_CLASS_MAX][AIP_CLASS_WORDS_LEN];
+static size_t g_class_n;
 static inline int aip_bucket_idx(const char *kind) {
     for (int i = 0; i < AIP_BK_N; ++i)
         if (!strcmp(kind, g_bucket_names[i])) return i;
@@ -448,7 +458,7 @@ static inline void aip_patterns_load(AI *ai) {
      * 用来量"每个族各贡献多少"——不是运行开关。 */
     const char *nd = getenv("AIP_NODATA");
     if (nd && *nd && !strcmp(nd, "1")) return;
-    g_lead_n = g_slot_n = g_confuse_n = g_fill_n = 0;
+    g_lead_n = g_slot_n = g_confuse_n = g_fill_n = g_class_n = 0;
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
     char line[1024];                    /* §6.285 一行可能含关键词+整句答复，256 会截断 */
@@ -626,6 +636,23 @@ static inline void aip_patterns_load(AI *ai) {
             g_reply_n++;
             continue;
         }
+        if (!strcmp(kind, "class")) {   /* §6.393 `[class] 名=词,词,…` */
+            char *eq = strchr(val, '=');
+            if (!eq || g_class_n >= AIP_CLASS_MAX) continue;
+            *eq = 0;
+            const char *words = eq + 1;
+            while (*words == ' ' || *words == '\t') words++;
+            char name[64];
+            snprintf(name, sizeof name, "%s", val);
+            /* 名字和词表都去掉首尾空格 */
+            char *e2 = name + strlen(name);
+            while (e2 > name && (e2[-1] == ' ' || e2[-1] == '\t')) *--e2 = 0;
+            if (!name[0] || !*words || strlen(words) >= sizeof g_class_words[0]) continue;
+            snprintf(g_class_name[g_class_n], sizeof g_class_name[0], "%s", name);
+            snprintf(g_class_words[g_class_n], sizeof g_class_words[0], "%s", words);
+            g_class_n++;
+            continue;
+        }
         if (strlen(val) >= AIP_PAT_LEN) continue;   /* 其余桶是单词语义，太长不要 */
         AipPat *arr = aip_pat_bucket(kind, NULL);
         size_t *cnt = aip_pat_count(kind);
@@ -653,7 +680,7 @@ static inline void aip_patterns_load(AI *ai) {
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
-                                g_syn_n, g_aff_n, g_tail_n, g_fill_n};
+                                g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -663,8 +690,8 @@ static inline void aip_patterns_load(AI *ai) {
         }
     }
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n, g_fill_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -780,7 +807,22 @@ static inline int aip_kw_line_match(const char *line, const char *b) {
             while (*p && *p != '|' && *p != ',' && kl + 1 < sizeof kw) kw[kl++] = *p++;
             while (kl && (kw[kl - 1] == ' ' || kw[kl - 1] == '\t')) kl--;
             kw[kl] = 0;
-            if (kl && strstr(b, kw)) ok = 1;
+            if (kl && kw[0] == '@') {   /* §6.393 词类：类里任一词出现即命中 */
+                for (size_t ci = 0; ci < g_class_n; ++ci) {
+                    if (strcmp(g_class_name[ci], kw + 1) != 0) continue;
+                    const char *wp = g_class_words[ci];
+                    while (*wp) {
+                        char one[40];
+                        size_t ol = 0;
+                        while (*wp == ' ' || *wp == '\t' || *wp == ',') wp++;
+                        while (*wp && *wp != ',' && ol + 1 < sizeof one) one[ol++] = *wp++;
+                        while (ol && (one[ol - 1] == ' ' || one[ol - 1] == '\t')) --ol;
+                        one[ol] = 0;
+                        if (ol && strstr(b, one)) { ok = 1; break; }
+                    }
+                    break;
+                }
+            } else if (kl && strstr(b, kw)) ok = 1;
             if (*p == '|') { p++; continue; }
             break;
         }

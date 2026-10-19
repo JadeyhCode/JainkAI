@@ -568,6 +568,26 @@ printf '%s\n' "$out" | reps | sed -n 6p | grep -q "没 有 判 据" \
     && chk "「这个奇怪吗」**不许**被态度行误伤（`怪` 只收 `怪我`）" 0 \
     || chk "没有误伤「奇怪」" 1
 
+# §6.393 词类 `@attitude`：往类里加同义词，答复行不动也能命中
+echo "㉖ §6.393 词类引用：加词不加行"
+out=$(run "你 嫉 妒 我 吗" "你 记 恨 我 吗" "你 看 不 上 我 吗" "你 嫌 我 吗" "这 个 奇 怪 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+    && chk "「你嫉妒我吗」⇒ 命中（嫉妒 只在 [class] 里，答复行没改）" 1 \
+    || chk "class 追加词" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 有 判 据" \
+    && chk "「你记恨我吗」⇒ 命中" 1 \
+    || chk "class 记恨" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没 有 判 据" \
+    && chk "「你看不上我吗」⇒ 命中（三字词也行）" 1 \
+    || chk "class 看不上" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "没 有 判 据" \
+    && chk "「这个奇怪吗」仍**不**被误伤" 0 \
+    || chk "没有误伤奇怪" 1
+out=$(AIP_NODATA=class run "你 嫉 妒 我 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+    && chk "关掉 class 桶 ⇒ 这条答复消失（类表承重）" 0 \
+    || chk "关掉 class 桶就退回（类表承重）" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
