@@ -485,6 +485,26 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
     && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
+# §6.385 其余 的-字领属属性：身高/寿命/价格/颜色
+echo "㉒ §6.385 其它领属属性：都说"不记"，不掉兜底"
+out=$(run "猫 的 身 高 是 多少" "猫 的 寿 命 是 多少" "猫 的 颜 色 是 什么" "猫 一 般 多 少 钱")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+    && chk "「猫的身高是多少」⇒ 不会量" 1 \
+    || chk "身高" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 知 道 寿 命" \
+    && chk "「猫的寿命是多少」⇒ 不知道寿命" 1 \
+    || chk "寿命" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "颜 色 我 不 知 道" \
+    && chk "「猫的颜色是什么」⇒ 不知道颜色" 1 \
+    || chk "颜色" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "价 格 我 不 知 道" \
+    && chk "「猫一般多少钱」⇒ 不知道价格" 1 \
+    || chk "价格" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+out=$(AIP_NODATA=reply run "猫 的 身 高 是 多少")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+    && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
+    || chk "关掉 reply 桶就退回（数据承重）" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
