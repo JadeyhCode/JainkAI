@@ -792,6 +792,19 @@ m1=$(printf '%s\n' "$s2" | sed -n 1p); m2=$(printf '%s\n' "$s2" | sed -n 2p); m3
 [ "$m3" = "note" ] && chk "「猫有几条腿」⇒ 来源标签 note（数量说明）" 1 \
     || chk "src note" 0 "实得 $m3"
 
+# §6.423 盲测集 6 挖出的说法：算不算 / 归哪一类 / 是X吧
+echo "㊴ §6.423 新说法：算不算/归哪一类/是X吧"
+out=$(run "猫 算 不 算 动物" "猫 归 哪 类" "太阳 是 恒星 吧")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "属于" \
+    && chk "「猫算不算动物」⇒ 归到「属于」关系（不再掉语料复读）" 1 \
+    || chk "算不算" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 属于 动物" \
+    && chk "「猫归哪类」⇒ 属于什么" 1 \
+    || chk "归哪类" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "不 太 懂" \
+    && chk "「太阳是恒星吧」⇒ 恒星不在图里，诚实说不知道" 1 \
+    || chk "是X吧" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
