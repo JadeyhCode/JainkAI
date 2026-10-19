@@ -35,9 +35,28 @@ int main(int argc, char **argv) {
          * 而上一句若留下追问，这一句就会被跳过 ⇒ 行被误报"从未命中"（实测 `^你在么` 被误报）。
          * 探针只关心"这行能不能匹配"，所以每句前清掉挂起状态。*/
         ai->ask_pending = 0;
+        /* §6.410 `AIP_PATUSE_LOG=1`：记录**这一句命中了哪几行**（对比前后计数）。
+         * 用途：查"同一句单独跑命中、连跑不命中"这类状态相关的怪事。*/
+        static unsigned long prev_hit[AIP_REPLY_MAX];
+        int log_on = getenv("AIP_PATUSE_LOG") != NULL;
+        if (log_on) memcpy(prev_hit, g_reply_hit, sizeof prev_hit);
         if (devnull >= 0) dup2(devnull, 1);
         (void)agent_step(ag, line, out, sizeof out);
         if (save1 >= 0) dup2(save1, 1);
+        if (log_on) {
+            int any = 0;
+            for (size_t i = 0; i < g_reply_n; ++i) {
+                if (g_reply_hit[i] != prev_hit[i]) {
+                    printf("LOG|%s|row=%zu|%s\n", line, i, g_reply_txt[i]);
+                    any = 1;
+                }
+            }
+            if (!any) printf("LOG|%s|row=-1\n", line);
+            /* §6.410 **必须立刻 flush**：下一轮循环会把 fd 1 切到 /dev/null，
+             * 而 stdout 是**块缓冲**的 —— 缓冲里的 LOG 行会在下次 flush 时写进 /dev/null 丢掉
+             * （实测 4118 条输入只留下 1783 条 LOG，就是这个原因）。*/
+            fflush(stdout);
+        }
         n++;
     }
     if (devnull >= 0) close(devnull);
