@@ -526,6 +526,26 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "叫 小明 的 有" \
     && chk "注册名字后「小明是谁」（不空格）⇒ 也反查" 1 \
     || chk "unspaced 反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.391 情感/意愿/信用类：宾语换人称 + "没有判据"的如实答复
+echo "㉔ §6.391 情感类问句：宾语人称要对，答复说清没有判据"
+out=$(run "你 会 想 我 吗" "你 会 在 意 我 吗" "你 信 任 我 吗" "你 讨 厌 我 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 会 想你" \
+    && chk "「你会想我吗」⇒ 图里没记过「我会想**你**」（不是「我想我」）" 1 \
+    || chk "宾语人称" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 会 想我" \
+    && chk "不再出现「我 会 想我」这种自指" 0 \
+    || chk "没有自指宾语" 1
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没 有 判 据" \
+    && chk "「你信任我吗」⇒ 说清没有判据（不是兜底）" 1 \
+    || chk "信任" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没 有 判 据" \
+    && chk "「你讨厌我吗」⇒ 说清没有判据" 1 \
+    || chk "讨厌" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+out=$(AIP_NODATA=reply run "你 信 任 我 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+    && chk "关掉 reply 桶 ⇒ 这条答复消失（数据承重）" 0 \
+    || chk "关掉 reply 桶就退回（数据承重）" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

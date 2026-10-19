@@ -205,6 +205,31 @@ static inline const char *aip_pov_obj(const char *w) {
     if (!strcmp(w, "你") || !strcmp(w, "您")) return "我";
     return w;
 }
+
+/* §6.391 **宾语里的第一人称要换成第二人称**：`你 会 想 我 吗` 的答复以前写成
+ * 「图 里 没 记 过「我 会 想 我」」——主体换了、宾语没换，读着像"我会想我自己"。
+ * 规则：`我`→`你`、`我们`→`你们`，其余按 UTF-8 字符原样拷。*/
+static inline void aip_pov_flip_obj(const char *in, char *out, size_t cap) {
+    if (!in || !out || cap == 0) { if (out && cap) out[0] = 0; return; }
+    size_t o = 0;
+    const char *p = in;
+    while (*p) {
+        const char *rep = NULL;
+        size_t rl = 0;
+        if (!strncmp(p, "我们", 6))      { rep = "你们"; rl = 6; }
+        else if (!strncmp(p, "我", 3))   { rep = "你";   rl = 3; }
+        if (rep) {
+            if (o + rl + 1 >= cap) break;
+            memcpy(out + o, rep, rl); o += rl; p += rl;
+            continue;
+        }
+        size_t cl = aip_u8len(p);
+        if (o + cl + 1 >= cap) break;
+        memcpy(out + o, p, cl); o += cl; p += cl;
+    }
+    out[o] = 0;
+}
+
 static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
     if (!in || !out || !cap) return 0;
     size_t L = strlen(in);
@@ -2032,10 +2057,13 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
         }
     }
     /* §6.367 "图里没记过"这条**陈述**要站在我这一侧（问的是我能不能）；
-     * 后面那句"你想教我"是**用户对我说的话**，保留「你 会 …」不动。*/
+     * 后面那句"你想教我"是**用户对我说的话**，保留「你 会 …」不动。
+     * §6.391 但宾语也要换：`你 会 想 我 吗` ⇒ 「我 会 想 **你**」（以前写成「我 会 想 我」）。*/
+    char obj_me[64];
+    aip_pov_flip_obj(obj, obj_me, sizeof obj_me);
     snprintf(out, cap,
              "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「我 会 %.40s」。"
-             "你 想 教 我 就 说「你 会 %.40s」，我 就 记 下（存盘 之后 还 在）。", obj, obj);
+             "你 想 教 我 就 说「你 会 %.40s」，我 就 记 下（存盘 之后 还 在）。", obj_me, obj);
     return 1;
 }
 
