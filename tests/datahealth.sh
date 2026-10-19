@@ -3,7 +3,8 @@
 #
 #   ① 桶计数（patcount）：文件行数 vs 加载数，防"桶满静默丢弃"；
 #   ② 行使用率（patuse）：哪些 `[reply]` 在任何测例上都没命中（冗余/覆盖缺口线索）；
-#   ③ 误伤/学不到（datacheck）：普通说法在"有数据"时反而不学/不答的（`，对吗`、`教我` 那类）。
+#   ③ 误伤/学不到（datacheck）：普通说法在"有数据"时反而不学/不答的（`，对吗`、`教我` 那类）；
+#   ④ 复读率（replayrate，§6.364）：答复是语料原文的比例 —— "不是兜底"不等于"答得好"。
 # 出的是**清单**，不是判分。不是回归套件（不进 suites.txt）。
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,3 +30,10 @@ for c in tests/datacorpus.txt tests/datacorpus2.txt; do
     line=$(sh tests/datacheck.sh "$MODEL" "$c" 2>&1 | tail -1) || true
     echo "${line:-（没有输出）}"
 done
+
+echo "④ 复读率（样本 D；逐题起进程，约 1 分钟）"
+if [ -f tests/corpus_q100d.txt ]; then
+    sh tests/replayrate.sh "$MODEL" tests/corpus_q100d.txt 2>&1 | head -3 || true
+else
+    echo "   （缺 tests/corpus_q100d.txt，跳过）"
+fi
