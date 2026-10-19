@@ -32,6 +32,11 @@ def run(cmd, timeout=400):
     except subprocess.TimeoutExpired:
         return ""
 
+# §6.421 **先重建 patuse**：否则它会用旧二进制统计（踩过：加了标签，表里却没变，
+# 因为 build_patuse 是上一版编译的）。放在任何测量之前。
+subprocess.run(["gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                "-o", "build_patuse", "tools/patuse.c", "-lm"], check=False)
+
 def pcts(line):
     m = re.search(r"问句 (\d+) 条：给事实 (\d+)（([\d.]+)%）／诚实未知 (\d+)（([\d.]+)%）／兜底 (\d+)（([\d.]+)%）", line)
     if not m:

@@ -4006,6 +4006,9 @@ int main(int argc, char **argv) {
 
         char out[4096];
         agent_step(a, input, out, sizeof out);
+        /* §6.421 `AIP_SRC_ECHO=1`：把这一轮答复的**来源标签**打到 stderr，
+         * 供 shell 断言检查（答案本身照常走 stdout）。*/
+        if (getenv("AIP_SRC_ECHO")) fprintf(stderr, "[src] %s\n", ai_src_name(g_last_src));
         stdout_act(out, NULL);
     }
 

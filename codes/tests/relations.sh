@@ -765,6 +765,21 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "只 能 在 文 字 里 帮" \
     && chk "「你帮得了吗」⇒ 只能说清做不到" 1 \
     || chk "帮得了" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.421 路径标签要能被外部看到：`AIP_SRC_ECHO=1` 把来源打到 stderr
+echo "㊳ §6.421 答复来源标签"
+srcs=$( { printf '::load %s\n::char off\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' "$MODEL"
+          printf '天气怎么样\n猫会飞吗\n量子力学是什么\n'
+          printf '::quit\n'; } | AIP_SRC_ECHO=1 "$BIN" 2>&1 | sed -n 's/.*\[src\] //p' )
+n1=$(printf '%s\n' "$srcs" | sed -n 1p)
+n2=$(printf '%s\n' "$srcs" | sed -n 2p)
+n3=$(printf '%s\n' "$srcs" | sed -n 3p)
+[ "$n1" = "reply" ] && chk "「天气怎么样」⇒ 来源标签 reply（数据行）" 1 \
+    || chk "src reply" 0 "实得 $n1"
+[ "$n2" = "relation" ] && chk "「猫会飞吗」⇒ 来源标签 relation（关系层）" 1 \
+    || chk "src relation" 0 "实得 $n2"
+[ "$n3" = "fallback" ] && chk "「量子力学是什么」⇒ 来源标签 fallback（兜底池）" 1 \
+    || chk "src fallback" 0 "实得 $n3"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

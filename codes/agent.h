@@ -1166,6 +1166,7 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         if (out_conf) *out_conf = 0.8f;
         char *r = (char *)malloc(strlen(buf) + 1);
         if (r) memcpy(r, buf, strlen(buf) + 1);
+        if (r) g_last_src = AI_SRC_RELATION;   /* §6.420 严格形状的关系答复 */
         return r;
     }
     /* §6.272 **多字主语**（生词被切成单字的安全网）：分词对没见过的词按单字切
