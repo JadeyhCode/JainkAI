@@ -467,6 +467,24 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
     && chk "关掉 shape 桶 ⇒「猫有多少条腿」退回兜底（数据承重）" 1 \
     || chk "shape 消融" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+# §6.384 「X 的 体重/年龄 是 多少」：的-字领属问法，别掉兜底
+echo "㉑ §6.384 「的」字领属问法：说清不会量/没记年龄"
+out=$(run "猫 的 体 重 是 多少" "猫 的 年 龄 是 多少" "猫 有 多 重")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+    && chk "「猫的体重是多少」⇒ 不会量具体数量（不是兜底）" 1 \
+    || chk "体重" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 年" \
+    && chk "「猫的年龄是多少」⇒ 没记过年龄" 1 \
+    || chk "年龄" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 会 量" \
+    && chk "「猫有多重」（老的量/尺度路径）仍然正常" 1 \
+    || chk "多X 路径" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+# 承重：这两条是 [reply] 行
+out=$(AIP_NODATA=reply run "猫 的 体 重 是 多少")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+    && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
+    || chk "关掉 reply 桶就退回（数据承重）" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
