@@ -253,32 +253,32 @@ printf '%s\n' "$out" | grep -aq '猫 会' && chk "换一条关系也走得通（
 # §6.369 两个已知实体 + 已知关系 + 图里没有这条边 ⇒ 说「不确定」，不是「不太懂」
 echo "⑩ §6.369 听懂了但图里没有：说「不确定」"
 out=$(run "狗 吃 猫 吗" "鸟 吃 猫 吗" "猫 吃 鱼 吗" "狗 吃 猫 吗" "狗 不 吃 猫 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定 狗 吃 不 吃 猫" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 不 确定 狗 吃 不 吃 猫" \
     && chk "「狗 吃 猫 吗」⇒ 我不确定（不是「不太懂」）" 1 \
     || chk "未知关系说「不确定」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 确定" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 确定" \
     && chk "换一对实体也一样（鸟 吃 猫 吗）" 1 \
     || chk "换实体" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "对" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "对" \
     && chk "已知事实不受影响（猫 吃 鱼 吗 ⇒ 对）" 1 \
     || chk "已知事实未受影响" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 5p | grep -q "是不是 不 吃 猫" \
+has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "是不是 不 吃 猫" \
     && chk "否定的未知关系也说得清楚（狗 不 吃 猫 吗）" 1 \
     || chk "否定式" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 
 # §6.370 数量 / 年龄 / 比较 / 时间词族
 echo "⑪ §6.370 数量·年龄·比较说清「没记数目/不会比较」；时间词族走「没有时钟」"
 out=$(run "猫 有 几 条 腿" "猫 几 岁 了" "猫 比 狗 大 吗" "后天 星期几")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "只 记 了 猫 有 腿" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "只 记 了 猫 有 腿" \
     && chk "「猫有几条腿」⇒ 不知道数目，但说得出图里有「猫有腿」" 1 \
     || chk "数量（继承）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 年龄" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 记 过 年龄" \
     && chk "「猫几岁了」⇒ 没记过年龄" 1 \
     || chk "年龄" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 会 比 较" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "不 会 比 较" \
     && chk "「猫比狗大吗」⇒ 不会比较（不是「不太懂」）" 1 \
     || chk "比较" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没有 时 钟" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "没有 时 钟" \
     && chk "「后天星期几」⇒ 没有时钟（时间词族都能命中）" 1 \
     || chk "时间词族" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
@@ -295,7 +295,7 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
     && chk "「猫不是会飞吗」⇒ 不对（不再答出「不是会 不会」那种乱句）" 1 \
     || chk "不是…吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 out=$(AIP_NODATA=shape run "猫 难 道 不是 动物 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 太 懂" \
     && chk "关掉 shape 桶 ⇒ 同一句退回兜底（证明是那几行数据在起作用）" 1 \
     || chk "shape 消融没退回" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
@@ -315,7 +315,7 @@ printf '%s\n' "$out" | reps | sed -n 5p | grep -q "对.*不 会" \
     && chk "「猫该不会飞吧」⇒ 对，猫不会飞" 1 \
     || chk "该不会" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 out=$(AIP_NODATA=lead run "难不成 猫 会 飞" "猫 会 飞 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 太 懂" \
     && chk "关掉 lead 桶 ⇒ 同一句掉兜底（说明 lead 行承重）" 1 \
     || chk "lead 消融没变化" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
@@ -338,7 +338,7 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "记下 了|改 过来 了" \
     && chk "裸陈述「猫会飞」仍当教学（这是正确行为，别一起挡掉）" 1 \
     || chk "裸陈述被误挡" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 out=$(AIP_NODATA=lead run "请问 猫 会 飞" "猫 会 飞 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 太 懂" \
     && chk "关掉 lead 桶 ⇒ 同一句掉兜底（不学进去）" 1 \
     || chk "lead 消融" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
@@ -357,7 +357,7 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
 printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
     && chk "「猫确实会飞吗」⇒ 不对（分词是 确/实 两个词，也认得）" 1 \
     || chk "确实" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "猫 属于 动物" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "猫 属于 动物" \
     && chk "「猫实际上属于什么」⇒ 猫属于动物（三个词组成一个填充，也认得）" 1 \
     || chk "实际上" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 printf '%s\n' "$out" | reps | sed -n 5p | grep -q "不 对.*不 会" \
@@ -367,7 +367,7 @@ printf '%s\n' "$out" | reps | sed -n 6p | grep -qE "记下 了|改 过来 了|�
     && chk "带填充的**陈述**仍当教学（猫真的会飞 ⇒ 学到）" 1 \
     || chk "陈述被误清" 0 "$(printf '%s\n' "$out" | reps | sed -n 6p)"
 out=$(AIP_NODATA=fill run "猫 真的 会 飞 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 对" \
     && chk "关掉 fill 桶 ⇒ 同一句不再正常作答（说明是那 6 行数据在起作用）" 0 \
     || chk "关掉 fill 桶就退回去（数据承重）" 1
 
@@ -393,26 +393,26 @@ printf '%s\n' "$out" | reps | sed -n 8p | grep -qE "记下 了|改 过来 了|�
     && chk "带填充的陈述仍当教学（猫根本会飞）" 1 \
     || chk "陈述被误清" 0 "$(printf '%s\n' "$out" | reps | sed -n 8p)"
 # §6.377 之后：模态词**不删**，而是如实说"不会算概率"（删了会把"可能"答成"一定"）
-printf '%s\n' "$out" | reps | sed -n 9p | grep -q "不 会 算" \
+has "$(printf '%s\n' "$out" | reps | sed -n 9p)" "不 会 算" \
     && chk "「猫可能会飞吗」⇒ 如实说不会算概率（不删词、也不当确定事实答）" 1 \
     || chk "模态答复" 0 "$(printf '%s\n' "$out" | reps | sed -n 9p)"
 
 # §6.377 模态词（可能/也许/大概）：不删、不学，如实说"不会算概率"
 echo "⑰ §6.377 模态词：不删词、不当事实学、如实说不会算概率"
 out=$(run "猫 可能 会 飞 吗" "猫 可能 会 飞" "猫 会 飞 吗" "明天 可能 下雨 吗" "猫 一定 会 飞 吗" "猫 应该 属于 动物 吧")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 算" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 算" \
     && chk "「猫可能会飞吗」⇒ 不会算概率（不是「不对」，也不是兜底）" 1 \
     || chk "模态问句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 对" \
     && chk "模态问句**不许**当成确定事实答「不对」" 0 \
     || chk "没把「可能」答成「一定」" 1
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "记 不 了" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "记 不 了" \
     && chk "「猫可能会飞」（陈述）⇒ 明说记不了（不再造「猫可能」这种词）" 1 \
     || chk "模态陈述" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
     && chk "紧接着问「猫会飞吗」仍不对 ⇒ 模态陈述没污染知识" 1 \
     || chk "知识被污染" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "天气" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "天气" \
     && chk "「明天可能下雨吗」仍走天气边界（模态行没抢走它）" 1 \
     || chk "天气被抢" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 printf '%s\n' "$out" | reps | sed -n 5p | grep -q "不 对.*不 会" \
@@ -423,20 +423,20 @@ printf '%s\n' "$out" | reps | sed -n 6p | grep -q "对.*属 于\|对.*属于" \
     || chk "应该" 0 "$(printf '%s\n' "$out" | reps | sed -n 6p)"
 # 数据承重：关掉 reply 桶，模态答复退回兜底（这两行是 [reply]，不是代码）
 out=$(AIP_NODATA=reply run "猫 可能 会 飞 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 算" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 算" \
     && chk "关掉 reply 桶 ⇒ 模态答复消失（说明是数据行在兜）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
 # §6.380 「你能,吗」太宽：把所有能力问题都接成通用清单，害得「你能背诗吗」拿不到准确的答复
 echo "⑱ §6.380 能力问句收窄：具体能力要答「不敢说会」，只有"请我做件事"才给通用清单"
 out=$(run "你 能 背 诗 吗" "你 能 说 英语 吗" "你 能 来 吗" "你 能 帮 我 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 敢 说 会" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 敢 说 会" \
     && chk "「你能背诗吗」⇒ 不敢说会（不再被通用能力清单接走）" 1 \
     || chk "背诗" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 敢 说 会" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 敢 说 会" \
     && chk "「你能说英语吗」⇒ 不敢说会" 1 \
     || chk "英语" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "看 是 什 么 事" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "看 是 什 么 事" \
     && chk "「你能来吗」⇒ 仍给通用清单（这行没被误删）" 1 \
     || chk "你能来吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
@@ -459,142 +459,142 @@ printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "我 知道|记下 了|改 �
 # §6.383 「多少」= 「几」：改写成已有数量路径，别掉兜底
 echo "⑳ §6.383 「多少」数量问句：改写成「几」再答"
 out=$(run "猫 有 多少 条 腿" "猫 有 多少 个 朋友" "一 周 有 多少 天" "猫 有 几 条 腿")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "只 记 了 猫 有 腿" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "只 记 了 猫 有 腿" \
     && chk "「猫有多少条腿」⇒ 不知道数目，但说得出「猫有腿」" 1 \
     || chk "多少+量词" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 数 目" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 记 过 数 目" \
     && chk "「猫有多少个朋友」⇒ 没记过数目（几个 那一路）" 1 \
     || chk "多少+个" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "一周 有 几 天" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "一周 有 几 天" \
     && chk "「一周有多少天」⇒ 两字主语也认（一/周 是被拆开的词）" 1 \
     || chk "两字主语" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "只 记 了 猫 有 腿" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "只 记 了 猫 有 腿" \
     && chk "「猫有几条腿」仍然正常（没被改写行弄坏）" 1 \
     || chk "几形式" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 # 承重：这几条是 shape 行，关掉 shape 桶就该退回兜底
 out=$(AIP_NODATA=shape run "猫 有 多少 条 腿")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 太 懂" \
     && chk "关掉 shape 桶 ⇒「猫有多少条腿」退回兜底（数据承重）" 1 \
     || chk "shape 消融" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
 # §6.384 「X 的 体重/年龄 是 多少」：的-字领属问法，别掉兜底
 echo "㉑ §6.384 「的」字领属问法：说清不会量/没记年龄"
 out=$(run "猫 的 体 重 是 多少" "猫 的 年 龄 是 多少" "猫 有 多 重")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 量" \
     && chk "「猫的体重是多少」⇒ 不会量具体数量（不是兜底）" 1 \
     || chk "体重" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 记 过 年" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 记 过 年" \
     && chk "「猫的年龄是多少」⇒ 没记过年龄" 1 \
     || chk "年龄" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 会 量" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "不 会 量" \
     && chk "「猫有多重」（老的量/尺度路径）仍然正常" 1 \
     || chk "多X 路径" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 # 承重：这两条是 [reply] 行
 out=$(AIP_NODATA=reply run "猫 的 体 重 是 多少")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 量" \
     && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
 # §6.385 其余 的-字领属属性：身高/寿命/价格/颜色
 echo "㉒ §6.385 其它领属属性：都说"不记"，不掉兜底"
 out=$(run "猫 的 身 高 是 多少" "猫 的 寿 命 是 多少" "猫 的 颜 色 是 什么" "猫 一 般 多 少 钱")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 量" \
     && chk "「猫的身高是多少」⇒ 不会量" 1 \
     || chk "身高" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 知 道 寿 命" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 知 道 寿 命" \
     && chk "「猫的寿命是多少」⇒ 不知道寿命" 1 \
     || chk "寿命" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "颜 色 我 不 知 道" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "颜 色 我 不 知 道" \
     && chk "「猫的颜色是什么」⇒ 不知道颜色" 1 \
     || chk "颜色" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "价 格 我 不 知 道" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "价 格 我 不 知 道" \
     && chk "「猫一般多少钱」⇒ 不知道价格" 1 \
     || chk "价格" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 out=$(AIP_NODATA=reply run "猫 的 身 高 是 多少")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 量" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会 量" \
     && chk "关掉 reply 桶 ⇒ 同一句不再有这条答复（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
 # §6.386 `X 是谁`（不空格时 是谁 一个词）：不学垃圾、不说词串，说清"没记名字"
 echo "㉓ §6.386 名字类问题：不学垃圾、不说词串"
 out=$(run "猫 是 谁" "猫是谁" "老鼠是谁" "天是谁" "小明是谁")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 记 过 名 字" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "没 记 过 名 字" \
     && chk "「猫 是 谁」⇒ 没记过名字（带上已知类别）" 1 \
     || chk "spaced 身份" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 printf '%s\n' "$out" | reps | sed -n 2p | grep -q "猫 属 于 动物\|猫 属于 动物" \
     && chk "「猫是谁」（不空格，是谁 并成一个词）⇒ 同样能答" 1 \
     || chk "unspaced 身份" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 5p | grep -q "记下 了" \
+has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "记下 了" \
     && chk "「小明是谁」**不许**被学成事实（以前答「记下 了 ： 小 明 是谁」）" 0 \
     || chk "不把名字问题学成事实" 1
 # 注册过名字之后，两种写法都要能反查
 out=$(run "我 的 名字 是 小明" "小明 是 谁" "小明是谁")
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "叫 小明 的 有" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "叫 小明 的 有" \
     && chk "注册名字后「小明 是 谁」⇒ 反查" 1 \
     || chk "spaced 反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "叫 小明 的 有" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "叫 小明 的 有" \
     && chk "注册名字后「小明是谁」（不空格）⇒ 也反查" 1 \
     || chk "unspaced 反查" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
 # §6.391 情感/意愿/信用类：宾语换人称 + "没有判据"的如实答复
 echo "㉔ §6.391 情感类问句：宾语人称要对，答复说清没有判据"
 out=$(run "你 会 想 我 吗" "你 会 在 意 我 吗" "你 信 任 我 吗" "你 讨 厌 我 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 会 想你" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 会 想你" \
     && chk "「你会想我吗」⇒ 图里没记过「我会想**你**」（不是「我想我」）" 1 \
     || chk "宾语人称" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 会 想我" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 会 想我" \
     && chk "不再出现「我 会 想我」这种自指" 0 \
     || chk "没有自指宾语" 1
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "没 有 判 据" \
     && chk "「你信任我吗」⇒ 说清没有判据（不是兜底）" 1 \
     || chk "信任" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "没 有 判 据" \
     && chk "「你讨厌我吗」⇒ 说清没有判据" 1 \
     || chk "讨厌" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 out=$(AIP_NODATA=reply run "你 信 任 我 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "没 有 判 据" \
     && chk "关掉 reply 桶 ⇒ 这条答复消失（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
 # §6.392 态度动词同义扩展；「你在,吗」收紧成整句精确（否则 `你在意我吗` 被接成"在——你说"）
 echo "㉕ §6.392 态度动词同义 + 在不在的精确匹配"
 out=$(run "你 嫌 我 吗" "你 信 我 吗" "你 在 意 我 吗" "你 在 吗" "你 在 么" "这 个 奇 怪 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "没 有 判 据" \
     && chk "「你嫌我吗」⇒ 没有判据（同义动词也收）" 1 \
     || chk "嫌" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 有 判 据" \
     && chk "「你信我吗」⇒ 没有判据" 1 \
     || chk "信" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "在 —— 你 说" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "在 —— 你 说" \
     && chk "「你在意我吗」**不许**被"在不在"那行接走" 0 \
     || chk "「你在意我吗」不被在不在行抢走" 1
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "在 —— 你 说" \
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "在 —— 你 说" \
     && chk "「你在吗」（整句精确）仍正常" 1 \
     || chk "你在吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
-printf '%s\n' "$out" | reps | sed -n 5p | grep -q "在 —— 你 说" \
+has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "在 —— 你 说" \
     && chk "「你在么」仍正常" 1 \
     || chk "你在么" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
-printf '%s\n' "$out" | reps | sed -n 6p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 6p)" "没 有 判 据" \
     && chk "「这个奇怪吗」**不许**被态度行误伤（`怪` 只收 `怪我`）" 0 \
     || chk "没有误伤「奇怪」" 1
 
 # §6.393 词类 `@attitude`：往类里加同义词，答复行不动也能命中
 echo "㉖ §6.393 词类引用：加词不加行"
 out=$(run "你 嫉 妒 我 吗" "你 记 恨 我 吗" "你 看 不 上 我 吗" "你 嫌 我 吗" "这 个 奇 怪 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "没 有 判 据" \
     && chk "「你嫉妒我吗」⇒ 命中（嫉妒 只在 [class] 里，答复行没改）" 1 \
     || chk "class 追加词" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
-printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "没 有 判 据" \
     && chk "「你记恨我吗」⇒ 命中" 1 \
     || chk "class 记恨" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
-printf '%s\n' "$out" | reps | sed -n 3p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "没 有 判 据" \
     && chk "「你看不上我吗」⇒ 命中（三字词也行）" 1 \
     || chk "class 看不上" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 5p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "没 有 判 据" \
     && chk "「这个奇怪吗」仍**不**被误伤" 0 \
     || chk "没有误伤奇怪" 1
 out=$(AIP_NODATA=class run "你 嫉 妒 我 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "没 有 判 据" \
     && chk "关掉 class 桶 ⇒ 这条答复消失（类表承重）" 0 \
     || chk "关掉 class 桶就退回（类表承重）" 1
 
@@ -633,6 +633,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "天气 我 不 知道" \
 has "天 气 我 不 知 道" "天气我 不知道" \
     && chk "has() 对空格不敏感（逐字空格也不假红）" 1 \
     || chk "has() 空格不敏感" 0
+# §6.398 has() 的**反向测试**：期望写错时必须返回"不匹配"（否则它就是恒真的摆设）
+if has "天气我不知道" "这个期望根本不在答复里"; then
+    chk "has() 对错误的期望返回了「匹配」⇒ 断言会永远绿" 0
+else
+    chk "has() 对错误期望会说「不匹配」（断言不会恒绿）" 1
+fi
+
+# §6.398 听懂类变体 + C 样本剩余兜底的边界
+echo "㉙ §6.398 「听得懂」变体并入能力答复"
+out=$(run "你 听 得 懂 吗" "你 听 懂 了 吗" "你 听 不 听 得 懂")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 能 答 图 里 记 着 的 关系" \
+    && chk "「你听得懂吗」⇒ 能力答复（不再兜底）" 1 \
+    || chk "听得懂" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "我 能 答 图 里 记 着 的 关系" \
+    && chk "「你听不听得懂」⇒ 同一答复" 1 \
+    || chk "听不听得懂" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
