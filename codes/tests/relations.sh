@@ -805,6 +805,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "不 太 懂" \
     && chk "「太阳是恒星吧」⇒ 恒星不在图里，诚实说不知道" 1 \
     || chk "是X吧" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.425 推理类新说法：复合句 / 比较 / "东西"不是类别
+echo "㊵ §6.425 推理类新说法"
+out=$(run "猫 属于 动物 那 它 会 动 吗" "猫 和 鸟 谁 更 会 飞" "哪 些 东 西 属于 动物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "属于·继承" \
+    && chk "「猫属于动物那它会动吗」⇒ 复合句接住（多跳继承）" 1 \
+    || chk "复合句" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "会 飞 的 有" \
+    && chk "「猫和鸟谁更会飞」⇒ 列出会飞的（不再兜底）" 1 \
+    || chk "谁更会飞" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "属于 动物 的 有" \
+    && chk "「哪些东西属于动物」⇒ 东西不是类别，退化成什么属于动物" 1 \
+    || chk "哪些东西" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
