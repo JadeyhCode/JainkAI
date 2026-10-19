@@ -69,9 +69,27 @@ for k in ["lead", "slot", "confuse", "reply", "shape", "syn", "affix", "tail", "
     rows = len(re.findall(r"^\[%s\]" % k, src, re.M))
     print("| `%s` | %d | %s |" % (k, rows, counts.get(k, "?")))
 
+print()
+print("## 3. 数据卫生（reply 行使用率）")
+print()
+try:
+    pu = subprocess.run(["sh", "tools/probeunhit.sh"], capture_output=True, text=True,
+                        errors="replace", timeout=900).stdout
+except subprocess.TimeoutExpired:
+    pu = ""
+m1 = re.search(r"未命中行 (\d+) 条；造出探针 (\d+) 条", pu)
+m2 = re.search(r"小结：(\d+) 条同答复.*?(\d+) 条被抢答.*?(\d+) 条仍兜底", pu)
+if m1:
+    print("| 未命中的 reply 行 | %s |" % m1.group(1))
+    print("| 能造探针的行 | %s |" % m1.group(2))
+if m2:
+    print("| 同答复 / 被抢答 / 兜底 | %s / %s / %s |" % (m2.group(1), m2.group(2), m2.group(3)))
+if not (m1 or m2):
+    print("| （probeunhit 没跑出结果） | ? |")
+
 if not FAST:
     print()
-    print("## 3. 留出集")
+    print("## 4. 留出集")
     print()
     tp = tt = 0
     for f in sorted(os.listdir("tests")):
@@ -85,7 +103,7 @@ if not FAST:
             tp += int(mm.group(1)); tt += int(mm.group(2))
     print("| 十七组留出集合计 | **%d / %d** |" % (tp, tt))
     print()
-    print("## 4. 复读率")
+    print("## 5. 复读率")
     print()
     for f in ["tests/corpus_q100c.txt", "tests/corpus_q100d.txt"]:
         out = run(["sh", "tests/replayrate.sh", MODEL, f]).splitlines()

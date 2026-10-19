@@ -50,15 +50,15 @@ while IFS="$(printf '\t')" read -r probe expect; do
     want=$(printf '%s' "$expect" | tr -d ' ')
     case "$out" in
     *不\ 太\ 懂*|*还没\ 学*|"")
-        printf '  [兜底] %-14s => %.36s\n' "$probe" "$out"
+        printf '  [兜底] %-14s => %s\n' "$probe" "$out"
         fb=$((fb + 1)) ;;
     *)
         case "$flat" in
         *"$want"*)
-            printf '  [同答复] %-12s => %.30s\n' "$probe" "$out"
+            printf '  [同答复] %-12s => %s\n' "$probe" "$out"
             same=$((same + 1)) ;;
         *)
-            printf '  [不同  ] %-12s => %.30s\n' "$probe" "$out"
+            printf '  [不同  ] %-12s => %s\n' "$probe" "$out"
             other=$((other + 1)) ;;
         esac ;;
     esac
