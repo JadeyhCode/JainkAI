@@ -335,6 +335,32 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
     && chk "关掉 lead 桶时「猫会飞吗」仍不对 ⇒ 安全网不依赖数据" 1 \
     || chk "安全网依赖数据" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.375 副词填充（真的/其实/确实/实际上/到底/究竟）：删掉再判，教学不受影响
+echo "⑮ §6.375 副词填充不算语义：问句照答、陈述照学"
+out=$(run "猫 真的 会 飞 吗" "猫 其实 会 飞 吗" "猫 确实 会 飞 吗" "猫 实际上 属于 什么" "猫 到底 会 飞 吗" "猫 真的 会 飞")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对.*不 会" \
+    && chk "「猫真的会飞吗」⇒ 不对（真的 被当填充删掉）" 1 \
+    || chk "真的" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "「猫其实会飞吗」⇒ 不对" 1 \
+    || chk "其实" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "「猫确实会飞吗」⇒ 不对（分词是 确/实 两个词，也认得）" 1 \
+    || chk "确实" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "猫 属于 动物" \
+    && chk "「猫实际上属于什么」⇒ 猫属于动物（三个词组成一个填充，也认得）" 1 \
+    || chk "实际上" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "不 对.*不 会" \
+    && chk "「猫到底会飞吗」⇒ 不对" 1 \
+    || chk "到底" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+printf '%s\n' "$out" | reps | sed -n 6p | grep -qE "记下 了|改 过来 了|我 知道" \
+    && chk "带填充的**陈述**仍当教学（猫真的会飞 ⇒ 学到）" 1 \
+    || chk "陈述被误清" 0 "$(printf '%s\n' "$out" | reps | sed -n 6p)"
+out=$(AIP_NODATA=fill run "猫 真的 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对" \
+    && chk "关掉 fill 桶 ⇒ 同一句不再正常作答（说明是那 6 行数据在起作用）" 0 \
+    || chk "关掉 fill 桶就退回去（数据承重）" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

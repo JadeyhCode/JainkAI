@@ -385,10 +385,15 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 口径：只比 1:1 的桶（lead/slot/confuse/reply/syn/affix/tail）。`shape` 会**自动生成变体**，
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
-       AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_N };
+       AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
-    "lead", "slot", "confuse", "reply", "syn", "affix", "tail"
+    "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill"
 };
+/* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
+ * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
+ * （`确 实` / `实 际 上`），所以按**词序列**匹配、整段删。*/
+static AipPat g_fill[AIP_PAT_MAX];
+static size_t g_fill_n;
 static inline int aip_bucket_idx(const char *kind) {
     for (int i = 0; i < AIP_BK_N; ++i)
         if (!strcmp(kind, g_bucket_names[i])) return i;
@@ -399,6 +404,7 @@ static inline AipPat *aip_pat_bucket(const char *kind, size_t *n) {
     if (!strcmp(kind, "lead"))    return g_lead;
     if (!strcmp(kind, "slot"))    return g_slot;
     if (!strcmp(kind, "confuse")) return g_confuse;
+    if (!strcmp(kind, "fill"))    return g_fill;
     (void)n;
     return NULL;
 }
@@ -406,6 +412,7 @@ static inline size_t *aip_pat_count(const char *kind) {
     if (!strcmp(kind, "lead"))    return &g_lead_n;
     if (!strcmp(kind, "slot"))    return &g_slot_n;
     if (!strcmp(kind, "confuse")) return &g_confuse_n;
+    if (!strcmp(kind, "fill"))    return &g_fill_n;
     return NULL;
 }
 static inline void aip_patterns_load(AI *ai) {
@@ -416,7 +423,7 @@ static inline void aip_patterns_load(AI *ai) {
      * 用来量"每个族各贡献多少"——不是运行开关。 */
     const char *nd = getenv("AIP_NODATA");
     if (nd && *nd && !strcmp(nd, "1")) return;
-    g_lead_n = g_slot_n = g_confuse_n = 0;
+    g_lead_n = g_slot_n = g_confuse_n = g_fill_n = 0;
     FILE *f = fopen("patterns.txt", "r");
     if (!f) return;
     char line[1024];                    /* §6.285 一行可能含关键词+整句答复，256 会截断 */
@@ -603,6 +610,11 @@ static inline void aip_patterns_load(AI *ai) {
                     kind, AIP_PAT_MAX, val);
             continue;
         }
+        if (!strcmp(kind, "fill")) {   /* §6.375 去掉词间空格：匹配时按**拼起来的词序列**比 */
+            char *w = val, *r = val;
+            while (*w) { if (*w != ' ' && *w != '\t') *r++ = *w; ++w; }
+            *r = 0;
+        }
         if (!strcmp(kind, "lead")) {   /* §6.374 尾部 `?` = 问句引导语 */
             size_t vl = strlen(val);
             if (vl >= 3 && !strcmp(val + vl - 3, "？")) { val[vl - 3] = 0; g_lead_q[*cnt] = 1; }
@@ -616,7 +628,7 @@ static inline void aip_patterns_load(AI *ai) {
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
-                                g_syn_n, g_aff_n, g_tail_n};
+                                g_syn_n, g_aff_n, g_tail_n, g_fill_n};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -626,8 +638,8 @@ static inline void aip_patterns_load(AI *ai) {
         }
     }
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu\n",
-                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n);
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu\n",
+                g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n, g_fill_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -660,6 +672,44 @@ static inline size_t aip_pat_prefix_ex(const AipPat *arr, size_t n, const char *
     }
     if (idx) *idx = bi;
     return best;
+}
+/* §6.375 从词序列里删掉副词填充（数据桶 `[fill]`，按词序列匹配、整段删）。
+ * 约束：删完至少剩 2 个词，别把整句删空（`真的` 单独一句不该变成空）。返回删掉的个数。*/
+static inline size_t aip_strip_fillers(char **words, size_t *pn) {
+    if (!words || !pn || g_fill_n == 0) return 0;
+    size_t n = *pn, removed = 0;
+    for (size_t i = 0; i < n; ) {
+        size_t best = 0;                       /* 命中要吃掉几个词 */
+        for (size_t k = 0; k < g_fill_n; ++k) {
+            const char *want = g_fill[k].w;
+            size_t wl = strlen(want);
+            if (!wl) continue;
+            size_t got = 0, j = i;
+            while (j < n && got < wl) { got += strlen(words[j]); ++j; }
+            if (got != wl) continue;
+            char joined[64];
+            size_t o = 0;
+            for (size_t q = i; q < j; ++q) {
+                size_t l = strlen(words[q]);
+                if (o + l + 1 >= sizeof joined) { o = 0; break; }
+                memcpy(joined + o, words[q], l);
+                o += l;
+            }
+            if (!o) continue;
+            joined[o] = 0;
+            if (!strcmp(joined, want) && j - i > best) best = j - i;
+        }
+        if (best && n - best >= 2) {
+            for (size_t q = i; q < i + best; ++q) free(words[q]);
+            for (size_t q = i + best; q < n; ++q) words[q - best] = words[q];
+            n -= best;
+            removed += best;
+        } else {
+            ++i;
+        }
+    }
+    *pn = n;
+    return removed;
 }
 static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
     if (!arr || !s) return 0;
@@ -5650,6 +5700,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     }
     char **words = ai->char_stream ? ai_char_tokenize(ai, input_eff, &n)
                                    : ai_tokenize(ai, input_eff, &n);
+    /* §6.375 副词填充（真的/其实/确实/实际上/到底/究竟）：删掉再走后面所有判据 */
+    if (words && n > 0) (void)aip_strip_fillers(words, &n);
     /* §6.268 记下"这是不是一个问句、问的是什么（关系/极性/宾语）"——「那狗呢」靠它补全。
      * 放在这里（分词后、所有路径之前）一处记录，比在各条答复路径里分别记可靠。 */
     if (words && n >= 3) {
