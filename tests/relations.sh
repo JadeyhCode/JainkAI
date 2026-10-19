@@ -312,6 +312,29 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
     && chk "关掉 lead 桶时「猫会飞吗」仍不对 ⇒ 不被学进去是代码守卫，不是数据" 1 \
     || chk "安全网依赖数据" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.374 提问式引导语：剥掉「请问/麻烦/帮我看看…」之后仍然是问句
+echo "⑭ §6.374 提问式引导语不许把问句当陈述学（最长匹配 + 数据标记）"
+out=$(run "请问 猫 会 飞" "猫 会 飞 吗" "请问一下 猫 会 飞" "猫 会 飞")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 对.*不 会" \
+    && chk "「请问猫会飞」⇒ 不对（以前答「改过来了：猫会飞」，把知识改反）" 1 \
+    || chk "请问" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "紧接着问「猫会飞吗」仍不对 ⇒ 知识没被改" 1 \
+    || chk "知识被改" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 对.*不 会" \
+    && chk "「请问一下猫会飞」⇒ 不对（最长匹配：请问一下 先于 请问）" 1 \
+    || chk "最长匹配" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "记下 了|改 过来 了" \
+    && chk "裸陈述「猫会飞」仍当教学（这是正确行为，别一起挡掉）" 1 \
+    || chk "裸陈述被误挡" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+out=$(AIP_NODATA=lead run "请问 猫 会 飞" "猫 会 飞 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 太 懂" \
+    && chk "关掉 lead 桶 ⇒ 同一句掉兜底（不学进去）" 1 \
+    || chk "lead 消融" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 对.*不 会" \
+    && chk "关掉 lead 桶时「猫会飞吗」仍不对 ⇒ 安全网不依赖数据" 1 \
+    || chk "安全网依赖数据" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

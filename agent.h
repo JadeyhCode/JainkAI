@@ -364,6 +364,10 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
 #define AIP_PAT_LEN 48
 typedef struct { char w[AIP_PAT_LEN]; } AipPat;
 static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
+/* §6.374 **引导语的类别由数据定**：`[lead] 请问?` 末尾那个 `?` 表示"这是个问句引导语"。
+ * 剥掉它之后如果余句没有 吗/呢/?!，要**补回问号**——否则「请问 猫 会 飞」会被当成陈述学进去
+ * （实测：触发改口，把「猫不会飞」写成「猫会飞」）。加新引导语时不用改 C。 */
+static unsigned char g_lead_q[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
 #define AIP_REPLY_MAX 128
@@ -599,6 +603,12 @@ static inline void aip_patterns_load(AI *ai) {
                     kind, AIP_PAT_MAX, val);
             continue;
         }
+        if (!strcmp(kind, "lead")) {   /* §6.374 尾部 `?` = 问句引导语 */
+            size_t vl = strlen(val);
+            if (vl >= 3 && !strcmp(val + vl - 3, "？")) { val[vl - 3] = 0; g_lead_q[*cnt] = 1; }
+            else if (vl >= 1 && val[vl - 1] == '?')     { val[vl - 1] = 0; g_lead_q[*cnt] = 1; }
+            if (!val[0]) continue;
+        }
         snprintf(arr[*cnt].w, AIP_PAT_LEN, "%s", val);
         (*cnt)++;
     }
@@ -627,13 +637,29 @@ static inline void aip_patterns_report(void) {
 }
 
 /* 前缀命中：返回匹配长度（0 = 没中）。 */
+/* §6.374 **最长匹配**：`请问一下` 必须先于 `请问` 命中。
+ * 第一版按数组顺序取第一个匹配 ⇒ `请问一下猫会飞` 被 `请问` 抢先剥成「一下猫会飞」，
+ * 结果造出新词「一下猫」再掉兜底（实测）。 */
 static inline size_t aip_pat_prefix(const AipPat *arr, size_t n, const char *s) {
     if (!arr || !s) return 0;
+    size_t best = 0;
     for (size_t i = 0; i < n; ++i) {
         size_t l = strlen(arr[i].w);
-        if (l && strncmp(s, arr[i].w, l) == 0) return l;
+        if (l > best && strncmp(s, arr[i].w, l) == 0) best = l;
     }
-    return 0;
+    return best;
+}
+/* §6.374 前缀命中并带回**命中下标**（引导语要读它的类别标记） */
+static inline size_t aip_pat_prefix_ex(const AipPat *arr, size_t n, const char *s, size_t *idx) {
+    if (idx) *idx = (size_t)-1;
+    if (!arr || !s) return 0;
+    size_t best = 0, bi = (size_t)-1;
+    for (size_t i = 0; i < n; ++i) {
+        size_t l = strlen(arr[i].w);
+        if (l > best && strncmp(s, arr[i].w, l) == 0) { best = l; bi = i; }
+    }
+    if (idx) *idx = bi;
+    return best;
 }
 static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
     if (!arr || !s) return 0;
@@ -5534,8 +5560,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         /* §6.373 **反问标记剥掉之后，句子仍然是问句**。
          * 实测 `难不成 猫 会 飞`（没有 吗）被剥成「猫 会 飞」，然后当成**陈述**学进去，
          * 还触发了改口 —— 把「猫 不会 飞」改写成「猫 会 飞」。这类标记不能"剥完当陈述"。*/
-        static const char *rhet[] = {"难道", "岂不是", "莫非", "难不成", "莫不是", "谁不知道", NULL};
-        int was_rhet = 0;
+        int was_rhet = 0;   /* §6.374 由数据里的 `?` 标记决定，不再写死标记表 */
 
         /* §6.339 引导语可能**连着两个**（`难道 请注意 …` / `请问 麻烦你 …`）：
          * 以前只剥一次，剩下的那个引导语会让整句掉兜底。最多剥三层。 */
@@ -5544,10 +5569,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             for (size_t i = 0; lead[i] && !ll; ++i)
                 if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
             /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
-            if (!ll) ll = aip_pat_prefix(g_lead, g_lead_n, q);
+            size_t lead_i = (size_t)-1;
+            if (!ll) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
             if (!ll) break;
-            for (size_t i = 0; rhet[i]; ++i)
-                if (strncmp(q, rhet[i], strlen(rhet[i])) == 0) { was_rhet = 1; break; }
+            if (lead_i != (size_t)-1 && g_lead_q[lead_i]) was_rhet = 1;
             const char *rest = q + ll;
             while (*rest == ' ' || *rest == '\t') rest++;
             if (!*rest) break;
