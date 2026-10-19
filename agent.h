@@ -4800,6 +4800,44 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
  * 让原来的求解器 / 验证器 / 链式渲染原样用上 —— 他的信念和归他的假设因此
  * 走**同一条**代码路径，不需要为它开特例。答完立刻原样撤回：
  * 恢复点用 depth 记，所以中间从哪儿 return 都不会漏（这就是要包一层的原因）。 */
+/* §6.369 **听懂了的"不知道"**：两个已知实体 + 已知关系 + 图里没有这条边。
+ * 实测 `狗 吃 猫 吗` 以前掉兜底（「这个我 不 太 懂」）——可这句话完全听懂了，
+ * 只是图里没记。掉兜底等于告诉用户"我没理解你"，那是**假**的。
+ * 只在所有其它答复路径都失败之后才调用（所以已知事实、类比、检索、帧都不受影响）。*/
+static inline int agent_unknown_relation_note(AI *ai, char *const *words, size_t n,
+                                              char *out, size_t cap) {
+    if (!ai || !words || n < 4 || n > 7 || !out || cap == 0) return 0;
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int is_q = 0, is_neg = 0;
+    char jb[64];
+    if (!rel_parse(ai, words, n, jb, sizeof jb, &aw, &rid, &is_neg, &bw, &is_q, &rw, 0))
+        return 0;
+    if (!is_q || rid == 0 || !aw || !bw || !rw) return 0;
+    /* 带**实疑问词**（什么/谁/为什么/几…）的是开放问句，另走别的路；
+     * 但句尾的 吗/呢/么/吧/? 不算 —— 那正是是非问的标志。 */
+    {
+        static const char *part[] = {"吗", "呢", "么", "吧", "?", "？", NULL};
+        for (size_t i = 0; i < n; ++i) {
+            int is_part = 0;
+            for (size_t k = 0; part[k]; ++k) if (!strcmp(words[i], part[k])) is_part = 1;
+            if (!is_part && ai_token_has_question_word(words[i])) return 0;
+        }
+    }
+    Token *A = pool_find(ai->pool, aw);
+    Token *B = pool_find(ai->pool, bw);
+    if (!A || !B) return 0;
+    if (rel_direct(A, rid, B) || rel_direct_neg(A, rid, B)) return 0;
+    int pov = aip_is_second(aw);
+    const char *as = pov ? aip_pov_subj(aw) : aw;
+    const char *bs = pov ? aip_pov_obj(bw) : bw;
+    if (is_neg)
+        snprintf(out, cap, "我 不 确定 %s 是不是 不 %s %s —— 图里 没 记 过（不 编）。", as, rw, bs);
+    else
+        snprintf(out, cap, "我 不 确定 %s %s 不 %s %s —— 图里 没 记 过（不 编）。", as, rw, rw, bs);
+    return 1;
+}
+
 static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
                                           float *out_conf) {
     if (!ai || ai->rel_off || !words) return NULL;
@@ -5949,6 +5987,18 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * （「太阳 离 我们 多 远」cov=43，其实只有「远」出现过一次）。 */
         if (is_question || ai->last_retrieval_cov < 25 || ai->last_token_ratio < 50) {
             /* 没匹配上又是问题（或相似度低到没有意义）→ 诚实拒答，别瞎编 */
+            char unknown[220];
+            if (agent_unknown_relation_note(ai, words, n, unknown, sizeof unknown)) {
+                /* §6.369 但**听懂了、只是图里没有**时，说"不确定"比说"我不太懂"准确 */
+                resp = (char *)malloc(strlen(unknown) + 1);
+                if (resp) memcpy(resp, unknown, strlen(unknown) + 1);
+                conf = 0.35f;
+                cot_push(ai, COT_ADMIT, 0, 30, "听懂了，但图里没有这条关系",
+                         "两个实体都认识、关系也认识，只是没有边");
+                ai->n_cot++;
+                if (!ai->last_der.has_claim)
+                    der_source(&ai->last_der, "不确定（关系已知但没有记录）");
+            } else {
             size_t nref = 0;
             while (AI_REFUSALS[nref]) nref++;
             const char *rf = AI_REFUSALS[ai->n_refusals++ % nref];
@@ -5963,6 +6013,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 ai->n_cot++;
                 if (!ai->last_der.has_claim)
                     der_source(&ai->last_der, "拒答（覆盖率与词命中比都不够）");
+            }
             }
         } else {
             /* 结构化帧优先：能匹配到「问法骨架 + 槽位」就渲染一句新的。

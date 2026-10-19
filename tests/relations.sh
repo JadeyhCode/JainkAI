@@ -240,6 +240,22 @@ printf '%s\n' "$out" | grep -aq '属于 动物 的 有 ： 猫' \
     || chk "反向（实得：$(printf '%s\n' "$out" | reps | sed -n 2p)）" 0
 printf '%s\n' "$out" | grep -aq '猫 会' && chk "换一条关系也走得通（「猫 会 什么」）" 1 || chk "换关系" 0
 
+# §6.369 两个已知实体 + 已知关系 + 图里没有这条边 ⇒ 说「不确定」，不是「不太懂」
+echo "⑩ §6.369 听懂了但图里没有：说「不确定」"
+out=$(run "狗 吃 猫 吗" "鸟 吃 猫 吗" "猫 吃 鱼 吗" "狗 吃 猫 吗" "狗 不 吃 猫 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 不 确定 狗 吃 不 吃 猫" \
+    && chk "「狗 吃 猫 吗」⇒ 我不确定（不是「不太懂」）" 1 \
+    || chk "未知关系说「不确定」" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 确定" \
+    && chk "换一对实体也一样（鸟 吃 猫 吗）" 1 \
+    || chk "换实体" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "对" \
+    && chk "已知事实不受影响（猫 吃 鱼 吗 ⇒ 对）" 1 \
+    || chk "已知事实未受影响" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "是不是 不 吃 猫" \
+    && chk "否定的未知关系也说得清楚（狗 不 吃 猫 吗）" 1 \
+    || chk "否定式" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

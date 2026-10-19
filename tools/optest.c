@@ -1950,7 +1950,10 @@ static void test_recursive_transfer(void) {
         agent_step(ag, "甲9 会 冬眠9 吗", q2, sizeof q2);   /* 要靠上面那条当输入 */
         if (rm == 0) {
             ok(ai->n_rel_guess_mem == 0, "显式关掉：不记（记住条数 0）");
-            ok(strstr(q2, "不 太 懂") && !strstr(q2, "猜"), "显式关掉：迁移不了（Q2 仍是「不太懂」）");
+            /* §6.369 之后，"听懂了但没有记录"也会说「我不确定…」（不是猜测）；
+             * 这条断言的本意是**没有迁移/没有猜**，所以两种说法都接受。 */
+            ok((strstr(q2, "不 太 懂") || strstr(q2, "不 确定")) && !strstr(q2, "猜"),
+               "显式关掉：迁移不了（Q2 仍是「不太懂」/「不确定」，且没有「猜」）");
         } else {
             char m[240];
             snprintf(m, sizeof m, "开着：Q1 的类比结论被记下（记住 %zu 条）", ai->n_rel_guess_mem);
