@@ -144,7 +144,7 @@ if not FAST:
     print()
     tp = tt = 0
     for f in sorted(os.listdir("tests")):
-        if not (f.startswith("holdout") and f.endswith(".txt")) and f != "blind5.txt":
+        if not (f.startswith("holdout") and f.endswith(".txt")):
             continue
         if "pert" in f:
             continue
@@ -152,7 +152,28 @@ if not FAST:
         mm = re.search(r"（(\d+)/(\d+)）", out)
         if mm:
             tp += int(mm.group(1)); tt += int(mm.group(2))
-    print("| 十七组留出集合计 | **%d / %d** |" % (tp, tt))
+    print("| 十七组留出集合计（不含 pert） | **%d / %d** |" % (tp, tt))
+    out = run(["sh", "tests/holdout.sh", MODEL, "tests/holdout_pert.txt"])
+    mm = re.search(r"（(\d+)/(\d+)）", out)
+    if mm:
+        print("| 扰动留出集 holdout_pert | **%s / %s** |" % (mm.group(1), mm.group(2)))
+    # §6.426 盲测集（blind*）单独一行：它们是"新说法"，不是原来那 17 组
+    bp = bt = 0
+    for f in sorted(os.listdir("tests")):
+        if not (f.startswith("blind") and f.endswith(".txt")):
+            continue
+        out = run(["sh", "tests/holdout.sh", MODEL, "tests/" + f])
+        mm = re.search(r"（(\d+)/(\d+)）", out)
+        if mm:
+            bp += int(mm.group(1)); bt += int(mm.group(2))
+    if bt:
+        # 历史口径：17 组 + blind5；其余盲测（blind2-4,6-9）单独一行
+        b5 = run(["sh", "tests/holdout.sh", MODEL, "tests/blind5.txt"])
+        m5 = re.search(r"（(\d+)/(\d+)）", b5)
+        p5, t5 = (int(m5.group(1)), int(m5.group(2))) if m5 else (0, 0)
+        print("| blind5（历史口径里的那个） | **%d / %d** |" % (p5, t5))
+        print("| **17 组 + blind5 合计（历史口径）** | **%d / %d** |" % (tp + p5, tt + t5))
+        print("| 其余盲测（blind2-4,6-9） | **%d / %d** |" % (bp - p5, bt - t5))
     print()
     print("## 5. 复读率")
     print()
