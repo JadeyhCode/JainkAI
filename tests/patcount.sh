@@ -52,5 +52,25 @@ for k in $buckets; do
 done
 
 nb=$(printf '%s\n' "$buckets" | grep -c . || true)
+# §6.388 [shape] 的 rhs 不许指向"只有早期判据才认"的形状
+# 背景：`[shape]` 改写发生在管线中后段，而量/尺度（`有多大/多重…`）、名字反查（`是谁`）、
+# 保证请求（`你确定/真的吗`）都看**改写前**的输入 ⇒ 改写成果它们永远看不到，句子会掉到生成层。
+# 实测踩过两次（§6.384 答出「重 要」、§6.386 改写无效），这条把"再写一次"挡住。
+echo "③ [shape] 的 rhs 不许指向早期判据才认的形状"
+n_bad=0
+while IFS= read -r line; do
+    case "$line" in \[shape\]*) ;; *) continue ;; esac
+    rhs=${line#*=}
+    rhs=$(printf '%s' "$rhs" | tr -d ' ')   # 数据里的改写是空格分隔的，比较前把空格去掉
+    for m in 多大 多高 多重 多长 多远 多久 多快 多贵 多深 是谁 是啥 你确定 真的吗; do
+        case "$rhs" in
+        *"$m"*)
+            echo "  FAIL rhs 里出现「$m」：那类判据看的是**改写前**的输入（§6.384/§6.388）→ $line"
+            fail=1; n_bad=$((n_bad + 1)) ;;
+        esac
+    done
+done < patterns.txt
+[ "$n_bad" -eq 0 ] && echo "  OK 没有指向早期判据的改写"
+
 [ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，且每个桶都有承重探针）"
 exit "$fail"
