@@ -30,6 +30,10 @@ int main(int argc, char **argv) {
         while (L && (line[L-1] == '\n' || line[L-1] == '\r')) line[--L] = 0;
         if (!L || line[0] == '#') continue;
         char out[400];
+        /* §6.406 **每句都当"没有挂着的追问"**：`[reply]` 桶只在 `!ask_pending` 时生效，
+         * 而上一句若留下追问，这一句就会被跳过 ⇒ 行被误报"从未命中"（实测 `^你在么` 被误报）。
+         * 探针只关心"这行能不能匹配"，所以每句前清掉挂起状态。*/
+        ai->ask_pending = 0;
         if (devnull >= 0) dup2(devnull, 1);
         (void)agent_step(ag, line, out, sizeof out);
         if (save1 >= 0) dup2(save1, 1);

@@ -698,6 +698,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "就 三 件 事" \
     && chk "「你还想知道什么」⇒ 能力菜单（不是兜底）" 1 \
     || chk "还想知道什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.406 patuse 扫出的"没被测例走过"的行：抽查 4 条，确认它们是"没测过"而不是"坏行"
+echo "㉞ §6.406 测例没走过的 reply 行（抽查）"
+out=$(run "你 笨 不 笨" "电脑 坏 了 怎么办" "我们 做 朋友 吧" "你 写 一 首 诗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 不 聪明 也 不 笨" \
+    && chk "「你笨不笨」⇒ 如实说（不是兜底）" 1 \
+    || chk "笨不笨" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 会 给 步 骤" \
+    && chk "「电脑坏了怎么办」⇒ 不会给步骤（明说边界）" 1 \
+    || chk "怎么办" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "文 字 里 陪 你" \
+    && chk "「我们做朋友吧」⇒ 只能在文字里陪（不越界）" 1 \
+    || chk "做朋友" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "真 不 会" \
+    && chk "「你写一首诗」⇒ 真不会（不编）" 1 \
+    || chk "写诗" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
