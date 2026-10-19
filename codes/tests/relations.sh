@@ -841,6 +841,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 属于 动物" \
     && chk "「猫算什么」⇒ 猫属于动物（问句形式也认）" 1 \
     || chk "猫算什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.429 反问标记当引导语剥掉（陈述句也适用）
+echo "㊸ §6.429 难道/岂不是/莫非 当引导语"
+out=$(run "难 道 猫 会 飞 吗" "难 道 猫 属 于 动 物 吗" "岂 不 是 猫 属 于 动 物 吗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会" \
+    && chk "「难道猫会飞吗」⇒ 剥掉标记后答「不会」" 1 \
+    || chk "难道 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 -[属于]-> 动物" \
+    && chk "「难道猫属于动物吗」⇒ 剥掉标记后答「对，猫属于动物」" 1 \
+    || chk "难道 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 -[属于]-> 动物" \
+    && chk "「岂不是猫属于动物吗」⇒ 同一处理" 1 \
+    || chk "岂不是" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
