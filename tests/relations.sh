@@ -417,6 +417,19 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 会 算" \
     && chk "关掉 reply 桶 ⇒ 模态答复消失（说明是数据行在兜）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
+# §6.380 「你能,吗」太宽：把所有能力问题都接成通用清单，害得「你能背诗吗」拿不到准确的答复
+echo "⑱ §6.380 能力问句收窄：具体能力要答「不敢说会」，只有"请我做件事"才给通用清单"
+out=$(run "你 能 背 诗 吗" "你 能 说 英语 吗" "你 能 来 吗" "你 能 帮 我 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "不 敢 说 会" \
+    && chk "「你能背诗吗」⇒ 不敢说会（不再被通用能力清单接走）" 1 \
+    || chk "背诗" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "不 敢 说 会" \
+    && chk "「你能说英语吗」⇒ 不敢说会" 1 \
+    || chk "英语" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "看 是 什 么 事" \
+    && chk "「你能来吗」⇒ 仍给通用清单（这行没被误删）" 1 \
+    || chk "你能来吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

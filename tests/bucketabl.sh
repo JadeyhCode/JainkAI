@@ -9,10 +9,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 BIN=${BIN:-./build_aip}
 MODEL=${1:-session.bin}
-SETS="tests/holdout.txt tests/holdout2.txt tests/holdout3.txt tests/holdout4.txt tests/holdout5.txt \
+# `SETS` 可用环境变量覆盖（快速自测用，比如只跑一组）：
+#     SETS=tests/holdout15.txt sh tests/bucketabl.sh
+SETS=${SETS:-"tests/holdout.txt tests/holdout2.txt tests/holdout3.txt tests/holdout4.txt tests/holdout5.txt \
 tests/holdout6.txt tests/holdout7.txt tests/holdout8.txt tests/holdout9.txt tests/holdout10.txt \
 tests/holdout11.txt tests/holdout12.txt tests/holdout13.txt tests/holdout14.txt tests/holdout15.txt tests/holdout16.txt \
-tests/conv.txt tests/conv2.txt tests/conv3.txt tests/conv4.txt"
+tests/conv.txt tests/conv2.txt tests/conv3.txt tests/conv4.txt"}
 tot() {   # $1=额外的环境变量赋值（可为空）
     p=0; t=0
     for f in $SETS; do
@@ -29,8 +31,9 @@ tot() {   # $1=额外的环境变量赋值（可为空）
 }
 base=$(tot ""); bp=${base% *}; bt=${base#* }
 printf '%-8s %10s %10s %6s %8s\n' "桶" "通过/总数" "本族贡献" "行数" "行/项"
-for k in lead slot confuse reply shape syn affix; do
-    r=$(AIP_NODATA=$k sh -c "$(echo)" >/dev/null 2>&1 || true)
+# §6.380 桶名**从数据里发现**（以前写死 7 个：漏了 tail 和 §6.375 新加的 fill）
+BUCKETS=${BUCKETS:-$(grep -oE '^\[[a-z]+\]' patterns.txt | tr -d '[]' | sort -u)}
+for k in $BUCKETS; do
     ab=$(tot "AIP_NODATA=$k"); ap=${ab% *}
     rows=$(grep -c "^\[$k\]" patterns.txt || true)
     gain=$((bp - ap))
