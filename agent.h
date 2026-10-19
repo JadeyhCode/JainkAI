@@ -213,6 +213,8 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
+/* §6.361 命中计数（探针用；正常路径一次自增） */
+static unsigned long g_shape_hit[AIP_SHAPE_MAX];
 /* §6.294 **上一轮学到的那条事实**（供数据行做"反过来呢"这类镜像改写）。 */
 static char g_lf_a[40], g_lf_r[40], g_lf_b[40];
 static inline void aip_note_fact(const char *a, const char *r, const char *b) {
@@ -323,7 +325,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         }
         if (getenv("AIP_SHAPEDBG"))
             fprintf(stderr, "[shape] 命中: %s => %s%s\n", g_shape_l[r], out, bad ? "（改写失败）" : "");
-        if (!bad && o) { ai_free_words(w, n); return 1; }
+        if (!bad && o) { g_shape_hit[r]++; ai_free_words(w, n); return 1; }
     }
     ai_free_words(w, n);
     return 0;

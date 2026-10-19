@@ -20,7 +20,7 @@ echo "② 行使用率（全部测例输入）"
 cat tests/holdout*.txt tests/blind*.txt tests/corpus_q100*.txt 2>/dev/null \
     | grep -v '^#' | cut -f1 | grep -v '^[[:space:]]*$' > /tmp/dh_inputs.txt
 ./build_patuse "$MODEL" < /tmp/dh_inputs.txt 2>/dev/null > /tmp/dh_pu.txt || true
-grep -E '^输入 |^  未见:' /tmp/dh_pu.txt | head -40 || true
+grep -E '^输入 |^  未见:|^形状行 |^  形状未见:' /tmp/dh_pu.txt | head -40 || true
 
 echo "③ 误伤 / 学不到"
 for c in tests/datacorpus.txt tests/datacorpus2.txt; do

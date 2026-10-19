@@ -37,6 +37,16 @@ int main(int argc, char **argv) {
     }
     if (devnull >= 0) close(devnull);
     if (save1 >= 0) close(save1);
+    /* §6.361 形状表**真实输入**的使用率（合成输入不可靠：分词/前态都会影响，
+     * 所以这里只统计 3265 句测例上的命中数；0 命中的行留给人工核实）。 */
+    {
+        size_t deadsh = 0;
+        for (size_t r = 0; r < g_shape_n; ++r) if (!g_shape_hit[r]) deadsh++;
+        printf("形状行 %zu 条，测例上从未命中 %zu 条\n", g_shape_n, deadsh);
+        size_t shown = 0;
+        for (size_t r = 0; r < g_shape_n && shown < 12; ++r)
+            if (!g_shape_hit[r]) { printf("  形状未见: %s\n", g_shape_l[r]); shown++; }
+    }
     size_t dead = 0;
     for (size_t i = 0; i < g_reply_n; ++i) if (!g_reply_hit[i]) dead++;
     printf("输入 %zu 句；reply 行 %zu 条，从未命中 %zu 条\n", n, g_reply_n, dead);
