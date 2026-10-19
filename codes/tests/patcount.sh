@@ -1,20 +1,59 @@
 #!/bin/sh
-# tests/patcount.sh — **数据桶计数看护**（§6.352；§6.379 起改成"从数据里发现桶"）
+# tests/patcount.sh — **数据桶计数看护**（§6.352；§6.379/§6.388 两次加固）
 #
 # 五次踩过"桶满了静默丢弃"（shape 8/32/64、reply 64…）。这条把"文件里有几行"
 # 和"加载后有几条"钉在一起：任何一个桶对不上就红。
 #
-# §6.379 两处修正：
-#   ① 桶名**不再写死在脚本里**（以前漏了 `fill`：数据里有这个桶、脚本不查它）；
-#      现在从 `patterns.txt` 里把出现的桶全捞出来，逐个比。
-#   ② 每个出现在数据里的桶，`tests/bucketload.sh` 里**必须有一条探针**（否则新桶没人看护）。
-# 注意：`[shape]` 会**自动生成分词变体**，所以它的加载数 ≥ 文件行数，只查"不小于"。
+# 检查项：
+#   ① 每个出现在数据里的桶：加载数 == 文件行数（shape 含自动变体，只查不小于）；
+#   ② 每个桶在 `tests/bucketload.sh` 里必须有一条"关掉就变"的探针；
+#   ③ `[shape]` 的 **rhs** 不许指向"只有改写之前才认"的形状（§6.388）：
+#      量/尺度（多大/多重…）、名字反查（是谁/是啥）、保证请求（你确定/真的吗）。
+#      —— 那些判据排在 `[shape]` 之前，把句子改写成它们是白改（§6.384/§6.386 踩过两次）。
+#
+# `--selftest`：**用一份故意写坏的数据验证 ③ 真的会红**（§6.389）。
+# 第一版 ③ 因为"数据里改写是空格分隔"而漏判，是手工加坏行才发现的；现在自动化了。
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 BIN=${BIN:-./build_aip}
 [ -x "$BIN" ] || { echo "FAIL: 缺 $BIN"; exit 1; }
 [ -f patterns.txt ] || { echo "FAIL: 缺 patterns.txt"; exit 1; }
+
+# ---- ③ 的扫描逻辑（抽成函数：主流程和自检共用一份）----
+scan_bad_rhs() {   # $1 = 数据文件；有违规行 → 打印并返回 1
+    _bad=0
+    while IFS= read -r line; do
+        case "$line" in \[shape\]*) ;; *) continue ;; esac
+        rhs=${line#*=}
+        rhs=$(printf '%s' "$rhs" | tr -d ' ')   # 数据里的改写是空格分隔的，比较前去掉
+        for m in 多大 多高 多重 多长 多远 多久 多快 多贵 多深 是谁 是啥 你确定 真的吗; do
+            case "$rhs" in
+            *"$m"*)
+                echo "  FAIL rhs 里出现「$m」：那类判据看的是**改写前**的输入（§6.384/§6.388）→ $line"
+                _bad=$((_bad + 1)) ;;
+            esac
+        done
+    done < "$1"
+    [ "$_bad" -eq 0 ] && return 0 || return 1
+}
+
+# ---- 自检：故意写坏一行，验证 ③ 会红 ----
+if [ "${1:-}" = "--selftest" ]; then
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT INT TERM
+    cp patterns.txt "$tmp/clean.txt"
+    cp patterns.txt "$tmp/bad.txt"
+    printf '[shape] $1@k 的 体 重 = $1 有 多 重\n' >> "$tmp/bad.txt"
+    if ! scan_bad_rhs "$tmp/clean.txt" >/dev/null; then
+        echo "FAIL selftest：干净数据也被判违规（误报）"; exit 1
+    fi
+    if scan_bad_rhs "$tmp/bad.txt" >/dev/null; then
+        echo "FAIL selftest：违规行**没被抓到**（这条检查是摆设）"; exit 1
+    fi
+    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到）"
+    exit 0
+fi
 
 got=$(AIP_PATDBG=1 timeout 30 "$BIN" --model model.bin </dev/null 2>&1 \
       | sed -n 's/.*\[patterns\] \(lead=.*\)/\1/p' | head -1)
@@ -51,26 +90,13 @@ for k in $buckets; do
     fi
 done
 
-nb=$(printf '%s\n' "$buckets" | grep -c . || true)
-# §6.388 [shape] 的 rhs 不许指向"只有早期判据才认"的形状
-# 背景：`[shape]` 改写发生在管线中后段，而量/尺度（`有多大/多重…`）、名字反查（`是谁`）、
-# 保证请求（`你确定/真的吗`）都看**改写前**的输入 ⇒ 改写成果它们永远看不到，句子会掉到生成层。
-# 实测踩过两次（§6.384 答出「重 要」、§6.386 改写无效），这条把"再写一次"挡住。
 echo "③ [shape] 的 rhs 不许指向早期判据才认的形状"
-n_bad=0
-while IFS= read -r line; do
-    case "$line" in \[shape\]*) ;; *) continue ;; esac
-    rhs=${line#*=}
-    rhs=$(printf '%s' "$rhs" | tr -d ' ')   # 数据里的改写是空格分隔的，比较前把空格去掉
-    for m in 多大 多高 多重 多长 多远 多久 多快 多贵 多深 是谁 是啥 你确定 真的吗; do
-        case "$rhs" in
-        *"$m"*)
-            echo "  FAIL rhs 里出现「$m」：那类判据看的是**改写前**的输入（§6.384/§6.388）→ $line"
-            fail=1; n_bad=$((n_bad + 1)) ;;
-        esac
-    done
-done < patterns.txt
-[ "$n_bad" -eq 0 ] && echo "  OK 没有指向早期判据的改写"
+if scan_bad_rhs patterns.txt; then
+    echo "  OK 没有指向早期判据的改写"
+else
+    fail=1
+fi
 
-[ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，且每个桶都有承重探针）"
+nb=$(printf '%s\n' "$buckets" | grep -c . || true)
+[ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，每个桶都有承重探针，且没有指向早期判据的改写）"
 exit "$fail"

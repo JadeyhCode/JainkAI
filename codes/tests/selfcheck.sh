@@ -197,6 +197,20 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑨ 数据检查脚本自己要能红（patcount --selftest，§6.389）=="
+# 为什么单列一步：§6.388 第一版 ③ 是"假绿"的（数据里改写是空格分隔，比不到），
+# 是手工加坏行才发现的。现在 patcount 自带 --selftest：故意写坏一行，验证 ③ 真的会红。
+if [ -x ./build_aip ] && [ -f patterns.txt ]; then
+    if pcs=$(sh tests/patcount.sh --selftest 2>&1); then
+        say OK "patcount --selftest 通过（坏行会被抓到）"
+    else
+        say FAIL "patcount --selftest 没过：$(printf '%s' "$pcs" | tail -1)"
+        bad=1
+    fi
+else
+    say NOTE "没有 build_aip/patterns.txt ⇒ 跳过"
+fi
+
 echo "== ⑧ 文档里写的 \「::命令\」必须在命令表里（改名/删命令时文档会指空）=="
 _tmp2=$(mktemp -d)
 # 前面**不能紧挨标识符**：`Interp::stmt_start` 这种 C++ 作用域不是命令（§6.197 踩过）
