@@ -2820,7 +2820,8 @@ static inline int think_take_output(AI *ai, char *out, size_t cap) {
             snprintf(out, cap, "我 更 信 可 信 度 高 的 那 一 边 （%d 对 %d）：%s",
                      t->trust_c1, t->trust_c2, t->concl_text);
         } else if (t->chain_text2[0])
-            snprintf(out, cap, "%s（另 一条 依据 ： %s）", t->concl_text, t->chain_text2);
+            /* §6.357 用精度限长：`cap` 小时编译器会报 -Wformat-truncation（探针单独编译时踩到） */
+            snprintf(out, cap, "%.150s（另 一条 依据 ： %.150s）", t->concl_text, t->chain_text2);
         else
             snprintf(out, cap, "%s", t->concl_text);
         t->took_output = 1;

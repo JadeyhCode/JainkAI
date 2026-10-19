@@ -579,6 +579,10 @@ static inline int aip_pat_is(const AipPat *arr, size_t n, const char *s) {
 }
 static inline int aip_kw_line_match(const char *line, const char *b);
 /* [reply] 桶：关键词行命中就回后面那句话（行语法见 aip_kw_line_match）。 */
+/* §6.357 **行使用计数**（只给探针工具用）：哪条 `[reply]` 真的命中过。
+ * 用途：找出"从没被任何测例命中"的行（冗余/过拟合嫌疑）。运行时零开销（一次自增）。 */
+static unsigned long g_reply_hit[AIP_REPLY_MAX];
+
 static inline const char *aip_reply_lookup(const char *input) {
     if (!input || !g_reply_n) return NULL;
     char b[200];
@@ -588,7 +592,7 @@ static inline const char *aip_reply_lookup(const char *input) {
     b[bl] = 0;
     if (!bl) return NULL;
     for (size_t i = 0; i < g_reply_n; ++i)
-        if (aip_kw_line_match(g_reply_kw[i], b)) return g_reply_txt[i];
+        if (aip_kw_line_match(g_reply_kw[i], b)) { g_reply_hit[i]++; return g_reply_txt[i]; }
     return NULL;
 }
 
