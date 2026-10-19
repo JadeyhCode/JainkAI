@@ -664,7 +664,9 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 没有 看法" \
 printf '%s\n' "$out" | reps | sed -n 3p | grep -q "不 记 得 你" \
     && chk "「你记得我吗」⇒ 明说不记人（不编）" 1 \
     || chk "你记得我吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
-printf '%s\n' "$out" | reps | sed -n 4p | grep -q "换 个 说 法" \
+# §6.401 之后：`[reply]` 路径也会记 last_reply ⇒ 「我不明白」可能答"没讲清吗？我再说一遍：…"，
+# 也可能答"那我换个说法"。两种都是"当没听懂处理"，断言只要求落在这两条之一（别绑死一种）。
+printf '%s\n' "$out" | reps | sed -n 4p | grep -qE "换 个 说 法|我 再 说 一 遍" \
     && chk "「我不明白」（无空格）⇒ 当没听懂处理" 1 \
     || chk "我不明白" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 out=$(run "记住猫喜欢吃鱼" "我们聊到哪了")

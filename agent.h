@@ -3378,6 +3378,8 @@ static inline int agent_repeat_request(const char *input) {
     j[jl] = 0;
     static const char *forms[] = {
         "再说一遍", "再说一次", "再说一下", "再讲一遍", "重复一遍", "重复一次",
+        /* §6.401 加"可以/能…吗"的礼貌壳：实测 `可以 再 说 一 遍 吗` 掉兜底（forms 里没有这几种）。*/
+        "可以再说一遍吗", "能再说一遍吗", "可以说一遍吗", "能再说一次吗",
         "你刚才说什么", "你说了什么", "你刚说啥", "刚才说什么",
         NULL
     };
@@ -5646,7 +5648,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
     if (!ai->ask_pending) {
         const char *dr = aip_reply_lookup(input);
-        if (dr) { snprintf(out, out_cap, "%s", dr); ai->turns++; return strlen(out); }
+        if (dr) {
+            snprintf(out, out_cap, "%s", dr);
+            /* §6.401 **早退也要记住说了什么**：这条路径在主循环末尾之前 return，
+             * 以前不写 `last_reply` ⇒ 紧接着说「再说一遍」会答「我还 没 说 过 什么」。*/
+            if (out[0] && strcmp(out, "……") != 0)
+                snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
+            ai->turns++;
+            return strlen(out);
+        }
     }
     /* §6.261 **"自我/能力"类问题统一路由**（以前是散在 agent_step 里的 6 个 if 块）。
      * 顺序就是优先级，**从具体到宽泛** —— 踩过的坑：`你 会 什么 语言` 被"你会什么"（能做什么）
@@ -5661,6 +5671,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (bk == 1) {
             const char *r = "嗯 ， 好";
             snprintf(out, out_cap, "%s", r);
+            snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);   /* §6.401 早退也记住 */
             ai->turns++;
             return strlen(out);
         } else if (bk == 2) {

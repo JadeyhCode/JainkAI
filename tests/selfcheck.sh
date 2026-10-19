@@ -197,6 +197,25 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑩ docs/trend.md 的数字是不是过期了（二进制指纹变了就提示，§6.401）=="
+# §6.400 的生成器在 trend.md 里写了一行 `<!-- trend-meta: binary=xxxxxxxx … -->`。
+# 二进制一旦重编，那张表就可能过期；这里比对指纹，不一致就**提示**（不是失败：
+# 快照过期不等于代码错，但它不该被当成现状引用）。
+if [ -f docs/trend.md ] && [ -x ./build_aip ]; then
+    meta=$(sed -n 's/.*trend-meta: \(.*\) -->.*/\1/p' docs/trend.md | head -1)
+    want=$(printf '%s' "$meta" | sed -n 's/.*binary=\([0-9a-f]*\).*/\1/p')
+    have=$(sha256sum ./build_aip 2>/dev/null | cut -c1-8)
+    if [ -z "$want" ]; then
+        say NOTE "trend.md 里没有 trend-meta 指纹（旧版生成器？）"
+    elif [ "$want" = "$have" ]; then
+        say OK "trend.md 的二进制指纹与当前 build_aip 一致（$have）"
+    else
+        say NOTE "trend.md 的数字可能过期：生成时 binary=$want，当前 build_aip=$have —— 重跑 sh tools/trend.sh"
+    fi
+else
+    say NOTE "没有 docs/trend.md 或 build_aip ⇒ 跳过"
+fi
+
 echo "== ⑨ 数据检查脚本自己要能红（patcount --selftest，§6.389）=="
 # 为什么单列一步：§6.388 第一版 ③ 是"假绿"的（数据里改写是空格分隔，比不到），
 # 是手工加坏行才发现的。现在 patcount 自带 --selftest：故意写坏一行，验证 ③ 真的会红。

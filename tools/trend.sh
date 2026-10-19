@@ -15,6 +15,14 @@ exec python3 - "$@" <<'PY'
 import os, re, subprocess, sys
 
 FAST = "--fast" in sys.argv
+import hashlib, datetime
+
+def sha8(path):
+    try:
+        return hashlib.sha256(open(path, "rb").read()).hexdigest()[:8]
+    except OSError:
+        return "?"
+
 BIN = os.environ.get("BIN", "./build_aip")
 MODEL = os.environ.get("MODEL", "session.bin")
 
@@ -30,6 +38,9 @@ def pcts(line):
         return None
     return m.group(1), m.group(3), m.group(5), m.group(7)
 
+print("<!-- trend-meta: binary=%s model=%s fast=%d generated=%s -->" % (
+    sha8(BIN), sha8(MODEL), 1 if FAST else 0,
+    datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本")
 print()
 print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 |")
