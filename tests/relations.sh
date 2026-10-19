@@ -650,6 +650,16 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "我 能 答 图 里 记 着 �
     && chk "「你听不听得懂」⇒ 同一答复" 1 \
     || chk "听不听得懂" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.399 可信度问句（真话/实话）走同一套可核查的保证
+echo "㉚ §6.399 「你说的是真话吗」"
+out=$(run "你 说 的 是 真话 吗" "你 跟 我 说 实话 吧")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "我 说 的 都 是 图 里 记 着 的" \
+    && chk "「你说的是真话吗」⇒ 可核查的保证（不是兜底）" 1 \
+    || chk "真话" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "我 说 的 都 是 图 里 记 着 的" \
+    && chk "「你跟我说实话吧」⇒ 同一答复" 1 \
+    || chk "实话" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
