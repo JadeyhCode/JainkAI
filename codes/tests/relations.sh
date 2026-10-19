@@ -749,6 +749,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "我 一 直 在" \
     && chk "「你永远在这里吗」⇒ 我一直在" 1 \
     || chk "永远在" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
 
+# §6.416 B 样本三族：自我意图 / 理解类 / "帮得了吗"
+echo "㊲ §6.416 自我意图/理解/帮得了吗"
+out=$(run "你 想 做 什么" "你 希 望 什么" "你 理 解 吗" "你 帮 得 了 吗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "只 想 把 图 里 的 事 记 准" \
+    && chk "「你想做什么」⇒ 只有一个目的（和需要什么同族）" 1 \
+    || chk "想做" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "只 想 把 图 里 的 事 记 准" \
+    && chk "「你希望什么」⇒ 同一答复" 1 \
+    || chk "希望" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "能 答 图 里 记 着 的 关 系" \
+    && chk "「你理解吗」⇒ 能力答复（和听懂了吗同族）" 1 \
+    || chk "理解" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "只 能 在 文 字 里 帮" \
+    && chk "「你帮得了吗」⇒ 只能说清做不到" 1 \
+    || chk "帮得了" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
