@@ -546,6 +546,28 @@ printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
     && chk "关掉 reply 桶 ⇒ 这条答复消失（数据承重）" 0 \
     || chk "关掉 reply 桶就退回（数据承重）" 1
 
+# §6.392 态度动词同义扩展；「你在,吗」收紧成整句精确（否则 `你在意我吗` 被接成"在——你说"）
+echo "㉕ §6.392 态度动词同义 + 在不在的精确匹配"
+out=$(run "你 嫌 我 吗" "你 信 我 吗" "你 在 意 我 吗" "你 在 吗" "你 在 么" "这 个 奇 怪 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "没 有 判 据" \
+    && chk "「你嫌我吗」⇒ 没有判据（同义动词也收）" 1 \
+    || chk "嫌" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "没 有 判 据" \
+    && chk "「你信我吗」⇒ 没有判据" 1 \
+    || chk "信" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "在 —— 你 说" \
+    && chk "「你在意我吗」**不许**被"在不在"那行接走" 0 \
+    || chk "「你在意我吗」不被在不在行抢走" 1
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "在 —— 你 说" \
+    && chk "「你在吗」（整句精确）仍正常" 1 \
+    || chk "你在吗" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "在 —— 你 说" \
+    && chk "「你在么」仍正常" 1 \
+    || chk "你在么" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+printf '%s\n' "$out" | reps | sed -n 6p | grep -q "没 有 判 据" \
+    && chk "「这个奇怪吗」**不许**被态度行误伤（`怪` 只收 `怪我`）" 0 \
+    || chk "没有误伤「奇怪」" 1
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
