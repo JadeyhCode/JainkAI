@@ -43,49 +43,32 @@ print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
     datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）")
 print()
-print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 真答复行 | 边界声明行 | 固定答复合计 | 其它路径 |")
+print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 数据行答复 | 关系层 | 兜底池 | 自我/裸/未标注 |")
 print("|---|---|---|---|---|---|---|---|---|")
 for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
           "tests/corpus_q100c.txt", "tests/corpus_q100d.txt"]:
     line = run(["sh", "tests/corpusprobe.sh", MODEL, "0", f]).splitlines()
     got = pcts(line[0]) if line else None
-    # §6.419 答复来源**五分类**：真答复 / 边界声明 / 关系层 / 兜底 / 其它
-    share = real_share = bound_share = rel_share = fb_share = other_share = "?"
+    # §6.420 答复来源：用**代码路径标签**（patuse 的 SRC 行），不再猜文本
+    real_share = bound_share = share = other_share = "?"
     try:
         qs = [l.split("\t")[0].strip() for l in open(f, encoding="utf-8")
               if l.strip() and not l.startswith("#")]
-        env2 = dict(os.environ); env2["AIP_PATUSE_LOG"] = "1"
+        env2 = dict(os.environ); env2["AIP_PATUSE_SRC"] = "1"
         pu = subprocess.run(["./build_patuse", MODEL], input="\n".join(qs) + "\n",
                             capture_output=True, text=True, errors="replace", env=env2).stdout
-        texts = [l.split("=", 1)[1].strip() for l in open("patterns.txt", encoding="utf-8")
-                 if l.startswith("[reply]") and "=" in l]
-        BOUND = re.compile(r"不 会|不 认 识|不 知 道|不 知道|没 有|不 记|不 联 网|不 能|做 不 到|"
-                           r"不 敢 说|不 编|不 太 懂|只 能|没 办 法|我 说 的 都 是|没 记 过")
-        REL = re.compile(r"我 记 的 是|我 觉 得 它|-\[|对 ，|不 对 ，|我 不 确 定|属 于 动 物|🅰")
-        FB = re.compile(r"不 太 懂")
-        n = real = bound = rel = fb = other = 0
+        cnt = {"reply": 0, "self": 0, "bare": 0, "relation": 0, "fallback": 0, "other": 0}
         for l in pu.splitlines():
-            if not l.startswith("LOG|"):
-                continue
-            n += 1
-            parts = l.split("|")
-            ans = parts[3] if len(parts) > 3 else ""
-            if "|row=-1|" in l:
-                # §6.419 **不再用答复文本给 row=-1 分类**：试过，不稳定（见审计）——
-                # 文本正则分不清"关系层查了但没记过"和"能力边界声明"。这里只记"其它路径"。
-                other += 1
-                continue
-            m = re.search(r"\|row=(\d+)\|", l)
-            idx = int(m.group(1)) if m else -1
-            txt = texts[idx] if 0 <= idx < len(texts) else ""
-            if BOUND.search(txt):
-                bound += 1
-            else:
-                real += 1
-        if n:
-            pct = lambda x: "%.0f%%" % (100.0 * x / n)
-            share, real_share, bound_share = pct(real + bound), pct(real), pct(bound)
-            other_share = pct(other)
+            if l.startswith("SRC|"):
+                _, src, _inp = l.split("|", 2)
+                cnt[src] = cnt.get(src, 0) + 1
+        tot = sum(cnt.values())
+        if tot:
+            pct = lambda x: "%.0f%%" % (100.0 * x / tot)
+            real_share = pct(cnt["reply"])          # 数据行答复（含边界声明，未再细分）
+            bound_share = pct(cnt["relation"])
+            share = pct(cnt["fallback"])
+            other_share = pct(cnt["other"] + cnt["self"] + cnt["bare"])
     except Exception:
         pass
     if got:

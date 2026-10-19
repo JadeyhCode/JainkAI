@@ -801,6 +801,16 @@ static inline int aip_kw_line_match(const char *line, const char *b);
  * 用途：找出"从没被任何测例命中"的行（冗余/过拟合嫌疑）。运行时零开销（一次自增）。 */
 static unsigned long g_reply_hit[AIP_REPLY_MAX];
 
+/* §6.420 **答复来源标签**：给每次 `agent_step` 的最终答复标一个**代码路径**。
+ * 为什么需要：§6.419 试过按答复文本猜来源，一条正则就让"边界声明"从 31% 跳到 58% —— 不可靠。
+ * 只有路径自己知道答案是从哪来的（reply 桶 / 自我路由 / 裸回话 / 关系层 / 生成兜底）。*/
+enum { AI_SRC_OTHER = 0, AI_SRC_REPLY, AI_SRC_SELF, AI_SRC_BARE, AI_SRC_RELATION, AI_SRC_FALLBACK };
+static int g_last_src = AI_SRC_OTHER;
+static const char *const g_src_names[] = { "other", "reply", "self", "bare", "relation", "fallback" };
+static inline const char *ai_src_name(int s) {
+    return (s >= 0 && s < (int)(sizeof g_src_names / sizeof g_src_names[0])) ? g_src_names[s] : "?";
+}
+
 static inline const char *aip_reply_lookup(const char *input) {
     if (!input || !g_reply_n) return NULL;
     char b[200];
@@ -1215,6 +1225,7 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
             if (out_conf) *out_conf = a2 ? 0.8f : 0.6f;
             char *r2 = (char *)malloc(strlen(buf) + 1);
             if (r2) memcpy(r2, buf, strlen(buf) + 1);
+            if (r2) g_last_src = AI_SRC_RELATION;   /* §6.420 反查/开场关系答复 */
             return r2;
         }
     }
@@ -5202,6 +5213,7 @@ static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
     }
     char *r = agent_answer_relation_inner(ai, words, n, out_conf,
                                           ai->view_who ? 1 : 0);
+    if (r) g_last_src = AI_SRC_RELATION;   /* §6.420 */
     while (ai->hypo.depth > save) hypo_pop(&ai->hypo);
 
     /* 再解析一次，用于两条**归属**特有的答复：
@@ -5657,6 +5669,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!ai->ask_pending) {
         const char *dr = aip_reply_lookup(input);
         if (dr) {
+            g_last_src = AI_SRC_REPLY;   /* §6.420 */
             snprintf(out, out_cap, "%s", dr);
             return agent_say(ai, out);
         }
@@ -5666,7 +5679,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 先抢走。现在顺序写在一处、带编号，加新判据时看这张表就知道该插在哪。 */
     {
         const char *sr = agent_self_route(input, out, out_cap);
-        if (sr) { return agent_say(ai, out); }
+        if (sr) { g_last_src = AI_SRC_SELF; return agent_say(ai, out); }
     }
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
@@ -6004,6 +6017,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
 
     float conf = 0.5f;
     char *resp = NULL;
+    g_last_src = AI_SRC_OTHER;   /* §6.420 每轮重置 */
 
     ai_seg_lap(ai, AI_SEG_GEN, &seg_t);
     /* ---- 思维链：这一轮从「读入」开始记 ---- */
@@ -6149,6 +6163,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_answer_relation(ai, words, n, &rc);
+        if (resp) g_last_src = AI_SRC_RELATION;   /* §6.420 */
         if (resp) {
             conf = rc;
             /* 在他人的立场上答出来的话，得写明“在 他 看来” */
@@ -6401,6 +6416,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             const char *rf = AI_REFUSALS[ai->n_refusals++ % nref];
             resp = (char *)malloc(strlen(rf) + 1);
             if (resp) memcpy(resp, rf, strlen(rf) + 1);
+            g_last_src = AI_SRC_FALLBACK;   /* §6.420 兜底说法池 */
             conf = 0.2f;
             {
                 char note[80];
@@ -6481,7 +6497,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         else
             snprintf(out, out_cap, "%s", resp ? resp : "");
         seed->recent_misses++;
-        if (mode == EXPR_LOST || mode == EXPR_CURIOUS) seed->misses++;
+        if (mode == EXPR_LOST || mode == EXPR_CURIOUS) { seed->misses++; g_last_src = AI_SRC_FALLBACK; }
         break;
     case EXPR_SILENT:
     default:
