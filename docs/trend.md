@@ -4,12 +4,12 @@
 > 二进制 / 数据 / 模型指纹，`tests/selfcheck.sh` 会比它们和当前的：不一致说明数字可能过期。
 > 手写段（口径变化、套件、已知边界）在文件后半。
 
-<!-- trend-meta: binary=91f4b769 data=60e4ea63 model=74a932ae fast=0 generated=2026-10-20 -->
+<!-- trend-meta: binary=91f4b769 data=53c4b0b6 model=74a932ae fast=0 generated=2026-10-20 -->
 ## 1. 语料问句四样本
 
 | 样本 | 条数 | 给事实 | 诚实未知 | 兜底 |
 |---|---|---|---|---|
-| `corpus_q100.txt` | 100 | 70.0% | 21.0% | 9.0% |
+| `corpus_q100.txt` | 100 | 76.0% | 21.0% | 3.0% |
 | `corpus_q100b.txt` | 100 | 43.0% | 22.0% | 35.0% |
 | `corpus_q100c.txt` | 100 | 38.0% | 56.0% | 6.0% |
 | `corpus_q100d.txt` | 69 | 84.1% | 13.0% | 2.9% |
@@ -21,7 +21,7 @@
 | `lead` | 34 | 34 |
 | `slot` | 1 | 1 |
 | `confuse` | 2 | 2 |
-| `reply` | 76 | 76 |
+| `reply` | 78 | 78 |
 | `shape` | 127 | 192 |
 | `syn` | 25 | 25 |
 | `affix` | 5 | 5 |

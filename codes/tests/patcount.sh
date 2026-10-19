@@ -87,6 +87,26 @@ check_class_refs() {   # $1=数据文件；有未定义 @类名 → 打印并返
     [ "$_bad" -eq 0 ] && return 0 || return 1
 }
 
+scan_space_kw() {   # $1=数据文件；有内部空格 → 打印并返回 1
+    _n=$(awk -F'=' '
+        /^\[reply\]/ {
+            lhs = $1
+            sub(/^\[reply\][ \t]*/, "", lhs)
+            n = split(lhs, groups, ",")
+            for (i = 1; i <= n; i++) {
+                m = split(groups[i], alts, "|")
+                for (j = 1; j <= m; j++) {
+                    t = alts[j]
+                    gsub(/^[ \t]+|[ \t]+$/, "", t)
+                    if (t ~ /[ \t]/) { print "  FAIL 关键词里有空格（永远不命中）：" $0 > "/dev/stderr"; bad++ }
+                }
+            }
+        }
+        END { print bad + 0 }
+    ' "$1")
+    [ "$_n" -eq 0 ] && return 0 || return 1
+}
+
 # ---- 自检：故意写坏一行，验证 ③ 会红 ----
 if [ "${1:-}" = "--selftest" ]; then
     tmp=$(mktemp -d)
@@ -117,7 +137,16 @@ if [ "${1:-}" = "--selftest" ]; then
     if ! check_class_refs patterns.txt >/dev/null; then
         echo "FAIL selftest：真实数据被误判引用了不存在的词类"; exit 1
     fi
-    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到 / 缺探针被抓到 / 坏词类引用被抓到）"
+    # ⑥ 也要能红：临时加一条"关键词带空格"的行
+    cp patterns.txt "$tmp/badspace.txt"
+    printf '[reply] 有 什么 , 吗 = 测试\n' >> "$tmp/badspace.txt"
+    if scan_space_kw "$tmp/badspace.txt" >/dev/null; then
+        echo "FAIL selftest：关键词带空格没被发现（检查是摆设）"; exit 1
+    fi
+    if ! scan_space_kw patterns.txt >/dev/null; then
+        echo "FAIL selftest：真实数据被判有关键词带空格（误报）"; exit 1
+    fi
+    echo "PASS patcount --selftest（干净数据通过 / 违规行被抓到 / 缺探针被抓到 / 坏词类引用被抓到 / 关键词空格被抓到）"
     exit 0
 fi
 
@@ -167,28 +196,14 @@ echo "⑤ 词类词覆盖（提示，不算失败）"
 class_word_coverage
 echo "  （上面有 [提示] 说明那些词还没被任何测例走过，不代表坏；要验就补探针）"
 
-# §6.414 [reply] 关键词里**不许有内部空格**：匹配时输入被去掉空格，关键词却按原文比 ⇒
-# `有 什么` 这种永远匹配不上（本轮踩了两次）。用 awk 按 , 和 | 切，**保留**组内空格再查。
+# §6.414 [reply] 关键词里**不许有内部空格**：输入被去掉空格再比，关键词却按原文比 ⇒
+# `有 什么` 这种永远匹配不上（踩过两次）。用 awk 按 , 和 | 切，**保留**组内空格再查。
 echo "⑥ [reply] 关键词没有内部空格"
-n_sp=$(awk -F'=' '
-    /^\[reply\]/ {
-        lhs = $1
-        sub(/^\[reply\][ \t]*/, "", lhs)
-        n = split(lhs, groups, ",")
-        for (i = 1; i <= n; i++) {
-            m = split(groups[i], alts, "|")
-            for (j = 1; j <= m; j++) {
-                t = alts[j]
-                gsub(/^[ \t]+|[ \t]+$/, "", t)
-                if (t ~ /[ \t]/) { print "  FAIL 关键词里有空格（永远不命中）：" $0; bad++ }
-            }
-        }
-    }
-    END { print bad + 0 > "/dev/stderr" }
-' patterns.txt 2>/tmp/pc_sp_count.txt)
-n_sp_n=$(cat /tmp/pc_sp_count.txt 2>/dev/null || echo 0)
-[ -n "$n_sp" ] && printf '%s\n' "$n_sp"
-[ "$n_sp_n" -eq 0 ] && echo "  OK 没有带内部空格的关键词"
+if scan_space_kw patterns.txt; then
+    echo "  OK 没有带内部空格的关键词"
+else
+    fail=1
+fi
 
 echo "④ [reply] 引用的词类都真实存在"
 if check_class_refs patterns.txt; then

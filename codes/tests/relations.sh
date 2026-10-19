@@ -730,6 +730,25 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "只 想 把 图 里 的 事 �
     && chk "「你怕什么」⇒ 同一答复（不编恐惧）" 1 \
     || chk "害怕" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.415 指代无上文（这个为什么/是谁）、读心类、永远在吗
+echo "㊱ §6.415 指代/读心/永远在"
+out=$(run "这 个 为 什么" "这 个 是 谁" "你 猜 我 想 什么" "我 知 道 你 想 什么" "你 永 远 在 这 里 吗")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "你 说 的 是 哪 个" \
+    && chk "「这个为什么」⇒ 反问是哪个（不猜指代）" 1 \
+    || chk "这个为什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "你 说 的 是 哪 个" \
+    && chk "「这个是谁」⇒ 同一答复" 1 \
+    || chk "这个是谁" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "不 会 读 心" \
+    && chk "「你猜我想什么」⇒ 不会读心" 1 \
+    || chk "猜我想什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "不 会 读 心" \
+    && chk "「我知道你想什么」（陈述）⇒ 也不会读心" 1 \
+    || chk "我知道你想什么" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 5p)" "我 一 直 在" \
+    && chk "「你永远在这里吗」⇒ 我一直在" 1 \
+    || chk "永远在" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
