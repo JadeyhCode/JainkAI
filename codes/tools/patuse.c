@@ -43,9 +43,13 @@ int main(int argc, char **argv) {
         size_t deadsh = 0;
         for (size_t r = 0; r < g_shape_n; ++r) if (!g_shape_hit[r]) deadsh++;
         printf("形状行 %zu 条，测例上从未命中 %zu 条\n", g_shape_n, deadsh);
-        size_t shown = 0;
-        for (size_t r = 0; r < g_shape_n && shown < 12; ++r)
-            if (!g_shape_hit[r]) { printf("  形状未见: %s\n", g_shape_l[r]); shown++; }
+        /* 打印所有未命中的**基础行**（跳过紧随其后、rhs 相同的自动变体） */
+        for (size_t r = 0; r < g_shape_n; ++r) {
+            if (g_shape_hit[r]) continue;
+            int is_variant = (r > 0 && strcmp(g_shape_r[r], g_shape_r[r - 1]) == 0);
+            if (is_variant) continue;
+            printf("  形状未见#%zu: %s => %s\n", r, g_shape_l[r], g_shape_r[r]);
+        }
     }
     size_t dead = 0;
     for (size_t i = 0; i < g_reply_n; ++i) if (!g_reply_hit[i]) dead++;
