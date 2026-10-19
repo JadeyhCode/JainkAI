@@ -8,13 +8,14 @@
 #             说明"答的是这个话题，但用的是原文"（自我描述类问题常见，属记忆不是错答）；
 #   跑题复读：输入的内容字一个都没出现在答复里 —— 这是真错答（`狗 是谁 => 我 觉得 它 们 比 人 单 纯`）。
 # 用法：sh tests/replayrate.sh [模型] [样本文件]
+#       LIST=1 …           每条复读都打出来（`问题<TAB>答复`），用来做逐条归因 / 造对照集。
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 MODEL=${1:-session.bin}
 SAMPLE=${2:-tests/corpus_q100d.txt}
 exec python3 - "$MODEL" "$SAMPLE" <<'PY'
-import subprocess, re, sys
+import subprocess, re, sys, os
 model, sample = sys.argv[1], sys.argv[2]
 qs=[l.strip() for l in open(sample, encoding="utf-8") if l.strip() and not l.startswith("#")]
 corpus=re.sub(r"\s+", "", open("_corpus.txt", encoding="utf-8", errors="ignore").read())
@@ -22,6 +23,7 @@ STOP=set("你我他她它们的地得了吗呢吧啊是不有和就都很也太�
 def content(s):
     return {c for c in re.sub(r"\s+","",s) if c not in STOP}
 total=replay=on_topic=off_topic=0
+all_replay=[]
 ex_on=[]; ex_off=[]
 for q in qs:
     p=subprocess.run(["./build_aip","--model",model], input=q+"\n::quit\n",
@@ -35,6 +37,7 @@ for q in qs:
     if len(ns)>=6 and ns in corpus:
         replay+=1
         # 对题判定：输入内容字里**至少一个**出现在答复里
+        all_replay.append((q, r))
         if content(q) & set(ns):
             on_topic+=1
             if len(ex_on)<4: ex_on.append((q, r[:30]))
@@ -44,6 +47,9 @@ for q in qs:
 tot=max(total,1)
 print(f"复读率：{total} 条答复里 {replay} 条是语料原文（{100*replay/tot:.0f}%）"
       f" —— 对题 {on_topic}（{100*on_topic/tot:.0f}%）、跑题 {off_topic}（{100*off_topic/tot:.0f}%）")
-for q,r in ex_on: print(f"  对题复读: {q} => {r}")
-for q,r in ex_off: print(f"  跑题复读: {q} => {r}")
+if os.environ.get("LIST"):
+    for q,r in all_replay: print(f"{q}\t{r}")
+else:
+    for q,r in ex_on: print(f"  对题复读: {q} => {r}")
+    for q,r in ex_off: print(f"  跑题复读: {q} => {r}")
 PY
