@@ -1029,6 +1029,24 @@ printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 记 的 是 ： 猫 怕" 
     && chk "第三人称「猫怕什么」仍答「我记的是：猫怕狗」" 1 \
     || chk "第三人称格式被误伤" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+echo "72 §6.367 第二人称问句换视角（你 爱我 吗 ⇒ 我 爱 不 爱 你；第三人称不动）"
+out=$(run "你 属于 动物 吗" "你 爱 我 吗" "你 需要 我 吗" "你 会 飞 吗" "猫 喜欢 你 吗")
+printf '%s\n' "$out" | reps | sed -n 1p | grep -q "我 属于 不 属于 动物" \
+    && chk "「你属于动物吗」⇒ 我 属 不 属 于（不是我 不 知道 你 属 不 属 于）" 1 \
+    || chk "你属于动物吗 视角" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+printf '%s\n' "$out" | reps | sed -n 2p | grep -q "我 爱 不 爱 你" \
+    && chk "「你爱我吗」⇒ 我 爱 不 爱 你" 1 \
+    || chk "你爱我吗 视角" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+printf '%s\n' "$out" | reps | sed -n 3p | grep -q "我 需要 不 需要 你" \
+    && chk "「你需要我吗」⇒ 我 需 要 不 需 要 你" 1 \
+    || chk "你需要我吗 视角" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+printf '%s\n' "$out" | reps | sed -n 4p | grep -q "我 会 飞" \
+    && chk "「你会飞吗」⇒ 图里没记过「我会飞」" 1 \
+    || chk "你会飞吗 视角" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+printf '%s\n' "$out" | reps | sed -n 5p | grep -q "猫 喜欢 不 喜欢 你" \
+    && chk "第三人称「猫喜欢 你 吗」保持原样（你=用户，不许翻）" 1 \
+    || chk "第三人称被误翻" 0 "$(printf '%s\n' "$out" | reps | sed -n 5p)"
+
 if [ "$fail" -ne 0 ]; then
     echo "FAIL interact（互动通道端到端）"
     exit 1

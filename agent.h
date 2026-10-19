@@ -184,6 +184,27 @@ static inline int aip_apply_syn(AI *ai, const char *in, char *out, size_t cap) {
 }
 
 /* §6.336 剥句尾语气词（只剥一个；剥完还要非空） */
+
+/* §6.367 **换视角**：问句主语是第二人称时，答复要站在"我"这一侧说。
+ * `你 爱 我 吗` 以前答「我 不 知道 你 爱 不 爱 我」——把"你"当成用户了；
+ * 正确的是「我 不 知道 我 爱 不 爱 你」。只在**主语是第二人称**时换：
+ * `猫 喜欢 你 吗` 里的"你"确实是用户，不能动（§6.298 的断言钉着它）。 */
+static inline int aip_is_second(const char *w) {
+    return w && (!strcmp(w, "你") || !strcmp(w, "您") || !strcmp(w, "你们"));
+}
+static inline const char *aip_pov_subj(const char *w) {
+    if (!w) return w;
+    if (!strcmp(w, "你") || !strcmp(w, "您")) return "我";
+    if (!strcmp(w, "你们")) return "我们";
+    return w;
+}
+static inline const char *aip_pov_obj(const char *w) {
+    if (!w) return w;
+    if (!strcmp(w, "我")) return "你";
+    if (!strcmp(w, "我们")) return "你们";
+    if (!strcmp(w, "你") || !strcmp(w, "您")) return "我";
+    return w;
+}
 static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
     if (!in || !out || !cap) return 0;
     size_t L = strlen(in);
@@ -1884,8 +1905,10 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
             return 1;
         }
     }
+    /* §6.367 "图里没记过"这条**陈述**要站在我这一侧（问的是我能不能）；
+     * 后面那句"你想教我"是**用户对我说的话**，保留「你 会 …」不动。*/
     snprintf(out, cap,
-             "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「你 会 %.40s」。"
+             "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「我 会 %.40s」。"
              "你 想 教 我 就 说「你 会 %.40s」，我 就 记 下（存盘 之后 还 在）。", obj, obj);
     return 1;
 }
@@ -3616,9 +3639,13 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
             if (A->assocs[i].rel & bit) has_edge = 1;
         if (!has_edge) {
             char rb[220];
+            /* §6.367 第二人称主语 ⇒ 换到我这一侧（`你 属于 动物 吗` 答"我不知道我属不属于动物"）*/
+            int pov = aip_is_second(aw);
+            const char *as = pov ? aip_pov_subj(aw) : aw;
+            const char *bs = pov ? aip_pov_obj(bw) : bw;
             snprintf(rb, sizeof rb,
                      "我 不 知道 %s %s 不 %s %s —— 图里 没 记 过 %s %s 什么（不 编）。",
-                     aw, rw, rw, bw, aw, rw);
+                     as, rw, rw, bs, as, rw);
             agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);
             if (out_conf) *out_conf = 0.35f;
             char *r = (char *)malloc(strlen(rb) + 1);
@@ -3670,8 +3697,11 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         for (size_t i = 0; pr[i]; ++i) if (!strcmp(bw, pr[i])) is_person = 1;
         if (is_person) {
             char rb[220];
+            int pov = aip_is_second(aw);            /* §6.367 同上 */
+            const char *as = pov ? aip_pov_subj(aw) : aw;
+            const char *bs = pov ? aip_pov_obj(bw) : bw;
             snprintf(rb, sizeof rb, "我 不 知道 %s %s 不 %s %s —— 图里 没 记 过（不 编）。",
-                     aw, rw, rw, bw);
+                     as, rw, rw, bs);
             agent_askback_arm(ai, A, rid, is_neg, B, as_other, 1, is_neg);
             if (out_conf) *out_conf = 0.35f;
             char *r = (char *)malloc(strlen(rb) + 1);
