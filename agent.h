@@ -263,6 +263,7 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
 static int g_pattern_overflow;   /* §6.447 有桶超限时为 1（selfcheck 据此报警）*/
+static char g_pre_rhet[288];     /* §6.448 剥掉反问标记、补 `吗` 之前的文本（复查答复行用）*/
 /* §6.361 命中计数（探针用；正常路径一次自增） */
 static unsigned long g_shape_hit[AIP_SHAPE_MAX];
 /* §6.294 **上一轮学到的那条事实**（供数据行做"反过来呢"这类镜像改写）。 */
@@ -5873,6 +5874,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
         /* §6.373 剥掉的是反问标记 ⇒ 把问句性质补回去（没有 吗/呢 就补一个）。
          * 这一条挡的是"反问句被当成陈述学进去/触发改口"，不是给某个说法加分支。 */
+        snprintf(g_pre_rhet, sizeof g_pre_rhet, "%s", input_eff);   /* §6.448 补 `吗` 之前的文本 */
         if (was_rhet && !strstr(input_eff, "吗") && !strstr(input_eff, "呢") &&
             !strstr(input_eff, "?")) {
             /* ⚠ 不能直接 snprintf(decl_in, "%s 吗", input_eff)：`input_eff` 可能**就是**
@@ -5881,6 +5883,22 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             snprintf(rhet_tmp, sizeof rhet_tmp, "%.250s 吗", input_eff);
             snprintf(decl_in, sizeof decl_in, "%s", rhet_tmp);
             input_eff = decl_in;
+        }
+    }
+    /* §6.448 **剥掉引导语后，再查一次数据答复行**。
+     * `[reply]` 桶原来只对**原文**匹配（它在剥引导语之前），于是
+     * `难道 我不明白你说什么` 剥成 `我不明白你说什么` 后**没有第二次机会**，
+     * 直接掉兜底；而同一条说法不带引导语时答得好好的。这里补上第二次查表。 */
+    if (!ai->ask_pending && input_eff != input) {
+        const char *dr2 = aip_reply_lookup(input_eff);
+        /* 反问标记会补一个 `吗`（§6.373）；补完之后答复行可能就匹配不上了，
+         * 所以"补之前"的那份也要试一次。 */
+        if (!dr2 && g_pre_rhet[0] && strcmp(g_pre_rhet, input_eff) != 0)
+            dr2 = aip_reply_lookup(g_pre_rhet);
+        if (dr2) {
+            g_last_src = AI_SRC_REPLY;
+            snprintf(out, out_cap, "%s", dr2);
+            return agent_say(ai, out);
         }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */

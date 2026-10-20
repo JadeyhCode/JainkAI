@@ -941,6 +941,16 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 -[属于]-> 动物" \
     && chk "「猫是否属于动物」⇒ 对，猫属于动物" 1 \
     || chk "是否属于" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.448 剥掉引导语后再查一次 [reply] 答复行
+echo "５２ §6.448 引导语+答复行"
+out=$(run "难道换个" "难道你是怎么知道的")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "你 想 换 什么" \
+    && chk "「难道换个」⇒ 剥掉引导语后命中答复行（不再兜底）" 1 \
+    || chk "引导语+答复行 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "图 里 的 关系" \
+    && chk "「难道你是怎么知道的」⇒ 同上" 1 \
+    || chk "引导语+答复行 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

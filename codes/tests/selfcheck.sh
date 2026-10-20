@@ -250,16 +250,17 @@ fi
 
 echo "== ⑪ agent_step 的早退都走 agent_say（§6.404）=="
 # §6.401-403 的教训：早退路径不写 last_reply，"再说一遍"就复述不出来。
-# 这里数一下：`agent_say(ai, out)` 的调用数必须 = 10，裸 `return strlen(out);` 必须 = 3
+# 这里数一下：`agent_say(ai, out)` 的调用数必须 = 11，裸 `return strlen(out);` 必须 = 3
+# （§6.448 新增第 11 处：剥掉引导语后复查 `[reply]` 答复行，也要记 last_reply）
 # （3 条已定性：空闲主动说话 / 空闲沉默 / 主出口 —— 见 agent.h 的注释）。
 # 数字变了就 FAIL：新增早退要么改走 agent_say，要么把理由写进注释并**同步改这里的期望**。
 if [ -f agent.h ]; then
     n_say=$(grep -c 'agent_say(ai, out)' agent.h || true)
     n_raw=$(grep -c 'return strlen(out);' agent.h || true)
-    if [ "$n_say" = "10" ] && [ "$n_raw" = "3" ]; then
-        say OK "早退出口核对：agent_say 10 处 / 裸 return 3 处（与注释一致）"
+    if [ "$n_say" = "11" ] && [ "$n_raw" = "3" ]; then
+        say OK "早退出口核对：agent_say 11 处 / 裸 return 3 处（与注释一致）"
     else
-        say FAIL "早退出口变了：agent_say=$n_say（期望 10）/ 裸 return=$n_raw（期望 3）—— 新早退请走 agent_say，或改注释并同步这里"
+        say FAIL "早退出口变了：agent_say=$n_say（期望 11）/ 裸 return=$n_raw（期望 3）—— 新早退请走 agent_say，或改注释并同步这里"
         bad=1
     fi
 else
