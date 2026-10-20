@@ -158,7 +158,7 @@ if not FAST:
         out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe4.txt"])
         mm = re.search(r"（(\d+)/(\d+)）", out)
         if mm:
-            print("| 泛化探针 genprobe4（第四批，改动前写、未污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
+            print("| 泛化探针 genprobe4（第四批，非盲测；§6.460 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
     if os.path.exists("tests/genprobe3.txt"):
         out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe3.txt"])
         mm = re.search(r"（(\d+)/(\d+)）", out)
