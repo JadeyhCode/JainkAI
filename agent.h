@@ -3556,6 +3556,7 @@ static inline int agent_bare_reply(const char *input) {
     return 0;
 }
 
+
 /* §6.188 **把 pending 落成一个标记节点**：`[追问:k|n|f|R|A|B]`（普通符号节点、随图存盘）。
  * pending 本身只在内存 ⇒ 存盘再开就没了；有了标记，`agent_ask_restore` 能把它接回来。
  * 注意：标记是**新增节点**（不删不挪）⇒ 存档 id 仍然连续（§6.186 的约束）。 */
@@ -5683,6 +5684,25 @@ static inline size_t agent_say(AI *ai, char *out) {
     return strlen(out ? out : "");
 }
 
+/* §6.450 把"裸答复"的三条回复收成一处：以前在调用点**照抄两遍**（原文一次、剥掉引导语后一次），
+ * 改一处忘另一处就会漂。`agent_bare_reply` 只判定，这里负责措辞与出口。 */
+static inline int agent_say_bare(AI *ai, int kind, char *out, size_t out_cap) {
+    if (kind == 1) {
+        snprintf(out, out_cap, "嗯 ， 好");
+    } else if (kind == 2) {
+        snprintf(out, out_cap, "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句");
+    } else if (kind == 3) {
+        if (ai->last_reply[0])
+            snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
+        else
+            snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
+    } else {
+        return 0;
+    }
+    agent_say(ai, out);
+    return 1;
+}
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -5763,22 +5783,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     /* §6.203 没有挂着的追问时，裸短回话给一句实话（别掉进流水线出词串） */
     if (!ai->ask_pending) {
         int bk = agent_bare_reply(input);
-        if (bk == 1) {
-            const char *r = "嗯 ， 好";
-            snprintf(out, out_cap, "%s", r);
-            return agent_say(ai, out);
-        } else if (bk == 2) {
-            const char *r = "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句";
-            snprintf(out, out_cap, "%s", r);
-            return agent_say(ai, out);
-        } else if (bk == 3) {
-            /* 「没听懂」：把上一句再说一遍（比答词串有用得多）*/
-            if (ai->last_reply[0])
-                snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
-            else
-                snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
-            return agent_say(ai, out);
-        }
+        if (agent_say_bare(ai, bk, out, out_cap)) return (int)strlen(out);
     }
     /* §6.135 分段计时的起点（关着时 `ai_seg_mark` 返回 0，`ai_seg_lap` 一次都不读表）。 */
     uint64_t seg_t = ai_seg_mark(ai);
@@ -5905,19 +5910,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 而不带引导语时答得好好的。*/
         {
             int bk2 = agent_bare_reply(input_eff);
-            if (bk2 == 1) {
-                snprintf(out, out_cap, "嗯 ， 好");
-                return agent_say(ai, out);
-            } else if (bk2 == 2) {
-                snprintf(out, out_cap, "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句");
-                return agent_say(ai, out);
-            } else if (bk2 == 3) {
-                if (ai->last_reply[0])
-                    snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
-                else
-                    snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
-                return agent_say(ai, out);
-            }
+            if (agent_say_bare(ai, bk2, out, out_cap)) return (int)strlen(out);
         }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */
