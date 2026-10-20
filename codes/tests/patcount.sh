@@ -223,5 +223,21 @@ else
     fail=1
 fi
 
+# §6.472 **容量余量提示**：`[syn]`(64→160) 与 `[shape]`(256→512→1024) 都被"上限太小"咬过。
+# 这里从 agent.h 读出常量，算"已用/上限"，超过 85% 就提示（不判失败：还有空间，只是快满了）。
+echo "⑧ 桶容量余量（超过 85% 提示，不判失败）"
+for pair in "syn:AIP_SYN_MAX" "shape:AIP_SHAPE_MAX" "reply:AIP_PAT_MAX" "lead:AIP_PAT_MAX"; do
+    b=${pair%%:*}; macro=${pair##*:}
+    cap=$(sed -n "s/^#define $macro \([0-9][0-9]*\).*/\1/p" agent.h | head -1)
+    n=$(printf '%s\n' "$got" | sed -n "s/.*\b$b=\([0-9]*\).*/\1/p" | head -1)
+    [ -n "$cap" ] && [ -n "$n" ] || continue
+    pct=$(( n * 100 / cap ))
+    if [ "$pct" -ge 85 ]; then
+        echo "  [提示] $b=$n / $cap（${pct}%）——快撞上限了，超限会静默丢规则"
+    else
+        echo "  OK   $b=$n / $cap（${pct}%）"
+    fi
+done
+
 [ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，每个桶都有承重探针，且没有指向早期判据的改写）"
 exit "$fail"

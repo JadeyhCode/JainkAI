@@ -427,7 +427,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
  * 文件不存在就**当空表**（套件沙箱里不一定有这份文件，不能因此报错）。
  * 判据仍然是"前缀/整词匹配"——这不是理解，**但加新说法不再需要改代码**，
  * 这正是当前目标要的最小一步。 */
-#define AIP_PAT_MAX 96
+#define AIP_PAT_MAX 192   /* §6.472 96 → 192：reply 已 83/96（86%），超限会静默丢规则 */
 #define AIP_PAT_LEN 48
 typedef struct { char w[AIP_PAT_LEN]; } AipPat;
 static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
