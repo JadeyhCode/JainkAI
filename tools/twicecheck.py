@@ -32,7 +32,7 @@ def main():
     def kind(a):
         f = a.replace(" ", "")
         if any(r in f for r in REFUSE_F): return "拒绝/兜底"
-        if "记下" in f: return "学习确认"
+        if "记下" in f or "改过来了" in f: return "学习确认"
         if "我知道" in f: return "已知"
         return "其它"
 

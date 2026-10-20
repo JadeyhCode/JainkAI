@@ -197,6 +197,24 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑬ 第一次/第二次答复一致（大样本抽样，§6.443）=="
+# 同一句在同进程问两遍，类型不该变（"拒绝措辞不同"/"学到后变已知"除外）。
+if [ -x ./build_aip ] && [ -f tools/twicecheck.py ] && [ -f tests/blind4.txt ]; then
+    if tc=$(timeout 300 python3 tools/twicecheck.py tests/blind4.txt model.bin 20 2>&1); then
+        if printf '%s' "$tc" | grep -q "^PASS twicecheck"; then
+            say OK "$(printf '%s' "$tc" | grep '^PASS' | head -1)"
+        else
+            say FAIL "twicecheck：$(printf '%s' "$tc" | grep '注意' | head -1)"
+            bad=1
+        fi
+    else
+        say FAIL "twicecheck 脚本失败"
+        bad=1
+    fi
+else
+    say NOTE "没有 build_aip/twicecheck.py/blind4.txt ⇒ 跳过"
+fi
+
 echo "== ⑫ 脏实体检查（传话/传闻没被当成实体，§6.436）=="
 # 7→11 种说法各教一句、再查可疑名字有没有进图。跑得很快（11 个短进程）。
 if [ -x ./build_aip ] && [ -f tools/dirtyentity.sh ]; then

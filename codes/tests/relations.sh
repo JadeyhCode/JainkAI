@@ -911,6 +911,16 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "属于" \
     && chk "「猫算不算动物」⇒ 属于（首次问也对得上）" 1 \
     || chk "拆词对齐 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.443 "说错了吧" 引导语 + "属不算" 口语写法
+echo "㊾ §6.443 说错了吧 / 属不算"
+out=$(run "猫 属 不 算 动 物" "猫 到 底 属 不 算 动 物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "属于" \
+    && chk "「猫属不算动物」⇒ 属于（口语写法）" 1 \
+    || chk "属不算 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "属于" \
+    && chk "「猫到底属不算动物」⇒ 属于" 1 \
+    || chk "属不算 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
