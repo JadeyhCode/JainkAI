@@ -259,7 +259,7 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
  * 形状已 254 条，再加两条就把排在前面的旧行挤掉（加载器会打警告，但数字上只看到"变差"）。
  * 形状是纯数据、内存很小，上限翻倍比"删旧行腾地方"安全。*/
 #define AIP_SHAPE_MAX 1024
-#define AIP_SHAPE_TOK 8
+#define AIP_SHAPE_TOK 16   /* §6.477 8 → 16：形状最多 8 个 token 是硬上限，超过就被截断（长施事永远匹配不上）*/
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
 static int g_pattern_overflow;   /* §6.447 有桶超限时为 1（selfcheck 据此报警）*/
@@ -318,7 +318,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
     if (!w) return 0;
     /* §6.288 分词会把句尾「会吗/能吗」并成一个词 —— 规则里写的是 `$2@r 吗`，
      * 这里把"以吗结尾的长词"拆成 词 + 吗（通用预处理，不属于任何一条规则）。 */
-    const char *ww[12];
+    const char *ww[AIP_SHAPE_TOK];
     size_t nn = n;
     /* §6.294 **会话变量**（数据行能用）：$S = 上一轮主语，$P = 上一轮问题的宾语，
      * $R = 上一轮问题的关系名。它们是**读**会话状态，不引入新的语义判断。 */
@@ -345,8 +345,8 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         fprintf(stderr, "\n");
     }
     for (size_t r = 0; r < g_shape_n; ++r) {
-        char lbuf[96];
-        snprintf(lbuf, sizeof lbuf, "%.95s", g_shape_l[r]);
+        char lbuf[176];
+        snprintf(lbuf, sizeof lbuf, "%.175s", g_shape_l[r]);
         char *lt[AIP_SHAPE_TOK]; size_t nl = 0;
         for (char *tok = strtok(lbuf, " "); tok && nl < AIP_SHAPE_TOK; tok = strtok(NULL, " "))
             lt[nl++] = tok;
