@@ -212,5 +212,16 @@ else
     fail=1
 fi
 
+# §6.471 **重复行会被静默丢弃**（同义词表 64 上限那次就是先出现重复，后来才发现）：
+# 同一行写两遍不会"更有效"，只会让"文件行数 vs 加载数"对不上。这里直接查重复。
+echo "⑦ 没有重复的数据行（重复会被静默丢掉一条）"
+dups=$(awk '!/^#/ && NF {gsub(/[ \t]+$/, ""); if (seen[$0]++) print $0}' patterns.txt)
+if [ -z "$dups" ]; then
+    echo "  OK 没有重复行"
+else
+    printf '%s\n' "$dups" | sed 's/^/  FAIL 重复行: /'
+    fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，每个桶都有承重探针，且没有指向早期判据的改写）"
 exit "$fail"
