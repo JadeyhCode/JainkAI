@@ -901,6 +901,16 @@ has "$a1" "鲸鱼" && has "$a1" "游泳" \
     && chk "「鲸鱼算哺乳动物它们会游泳吗」⇒ 只答后半句（答复里有鲸鱼+游泳）" 1 \
     || chk "双断言后半" 0 "$a1"
 
+# §6.441 可变长度对齐：一个字面 token 被分词拆开也要能匹配（首次问就生效）
+echo "㊽ §6.441 字面 token 被拆开也对得上"
+out=$(run "猫 算 动 物 它 会 不 会 飞" "猫 算 不 算 动 物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "不 会" \
+    && chk "「猫算动物它会不会飞」（首次问、会不会被拆成会/不会）⇒ 答不会" 1 \
+    || chk "拆词对齐 A" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "属于" \
+    && chk "「猫算不算动物」⇒ 属于（首次问也对得上）" 1 \
+    || chk "拆词对齐 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

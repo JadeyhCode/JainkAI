@@ -271,6 +271,33 @@ static inline void aip_note_fact(const char *a, const char *r, const char *b) {
 }
 
 /* 返回 1 = 命中并写出了新句子 */
+/* §6.441 **可变长度对齐**：形状里的一个字面 token 可能被分词拆成多个
+ * （`会不会` → `会`+`不会`）。这里把输入 token 按"拼起来等于字面"的方式贪婪合并，
+ * 产出与形状**等长**的虚拟 token 数组；失败返回 0。只处理字面 token，槽位仍一对一。*/
+static inline int aip_shape_align(char *const *lt, size_t nl, const char *const *ww, size_t nn,
+                                  const char **out) {
+    size_t pi = 0, wi = 0;
+    while (pi < nl && wi < nn) {
+        const char *pat = lt[pi];
+        if (pat[0] == '$') { out[pi] = ww[wi]; ++pi; ++wi; continue; }
+        size_t take = 0;
+        char acc[64]; size_t al = 0;
+        int matched = 0;
+        while (wi + take < nn && take < 4) {
+            size_t l = strlen(ww[wi + take]);
+            if (al + l + 1 >= sizeof acc) break;
+            memcpy(acc + al, ww[wi + take], l); al += l; acc[al] = 0;
+            ++take;
+            if (al == strlen(pat) && strcmp(acc, pat) == 0) { matched = 1; break; }
+        }
+        if (!matched) return 0;
+        out[pi] = pat;
+        ++pi;
+        wi += take;
+    }
+    return (pi == nl && wi == nn) ? 1 : 0;
+}
+
 static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t cap) {
     if (!ai || !input || !out || cap < 32 || !g_shape_n) return 0;
     char c[192];
@@ -318,11 +345,16 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         char *lt[AIP_SHAPE_TOK]; size_t nl = 0;
         for (char *tok = strtok(lbuf, " "); tok && nl < AIP_SHAPE_TOK; tok = strtok(NULL, " "))
             lt[nl++] = tok;
+        const char *wwx[12];
+        const char **wwu = ww;
         if (nl != nn) {
-            /* §6.440 跳过的行也要能看见：以前长度不符直接 continue、什么都不打印，
-             * 于是"形状没命中"看起来像"形状没加载"。 */
-            if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 长度不符(%zu≠%zu): %s\n", nl, nn, g_shape_l[r]);
-            continue;
+            /* §6.441 先试"字面 token 被分词拆开"的对齐；不成功才算长度不符。 */
+            if (nl <= 12 && aip_shape_align(lt, nl, ww, nn, wwx)) { wwu = wwx; }
+            else {
+                if (getenv("AIP_SHAPEDBG"))
+                    fprintf(stderr, "[shape] 长度不符(%zu≠%zu): %s\n", nl, nn, g_shape_l[r]);
+                continue;
+            }
         }
         const char *bind[AIP_SHAPE_TOK] = {0};
         int ok = 1;
@@ -333,7 +365,7 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
                 const char *v = sess[pat[1] == 'S' ? 0 : (pat[1] == 'P' ? 1 :
                                     (pat[1] == 'R' ? 2 : (pat[1] == 'A' ? 3 :
                                     (pat[1] == 'W' ? 4 : 5))))];
-                if (!v || strcmp(v, ww[i]) != 0) ok = 0;
+                if (!v || strcmp(v, wwu[i]) != 0) ok = 0;
                 continue;
             }
             if (pat[0] == '$' && pat[1] >= '1' && pat[1] <= '9') {
@@ -341,17 +373,17 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
                 const char *con = pat + 2;           /* @k / @r / 空 */
                 /* §6.323 `@k` 也认 lexicon.txt 里的词：新词第一次出现时还没进池（形状比
                  * 分词早），否则「鲸鱼 是否 属于 鱼」这类会因为 @k 不成立而永远匹配不上。 */
-                if (strchr(con, 'k') && !pool_find(ai->pool, ww[i]) && !ai_lex_extra_has(ai, ww[i])) ok = 0;
-                if (strchr(con, 'r') && rel_id_of(ai, ww[i], 0) == 0) ok = 0;
+                if (strchr(con, 'k') && !pool_find(ai->pool, wwu[i]) && !ai_lex_extra_has(ai, wwu[i])) ok = 0;
+                if (strchr(con, 'r') && rel_id_of(ai, wwu[i], 0) == 0) ok = 0;
                 /* §6.341 `$3@s2`：这个位置必须与**第 2 个占位符**取到同一个词。
                  * 用途：A-不-A 句式（`吃 不 吃`）一条规则覆盖所有谓语，不用每个动词写一行。
                  * ⚠ 不能写成 `@=2`：加载器按**第一个 `=`** 切 lhs/rhs，会把规则切坏（踩过）。 */
                 if (con[0] == 's' && con[1] >= '1' && con[1] <= '9') {
                     size_t ref = (size_t)(con[1] - '1');
-                    if (bind[ref] && strcmp(bind[ref], ww[i]) != 0) ok = 0;
+                    if (bind[ref] && strcmp(bind[ref], wwu[i]) != 0) ok = 0;
                 }
-                bind[k] = ww[i];
-            } else if (strcmp(pat, ww[i]) != 0) ok = 0;
+                bind[k] = wwu[i];
+            } else if (strcmp(pat, wwu[i]) != 0) ok = 0;
         }
         if (!ok) { if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 近失: %s\n", g_shape_l[r]); continue; }
         char rbuf[96];
