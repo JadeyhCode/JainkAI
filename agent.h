@@ -318,7 +318,12 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         char *lt[AIP_SHAPE_TOK]; size_t nl = 0;
         for (char *tok = strtok(lbuf, " "); tok && nl < AIP_SHAPE_TOK; tok = strtok(NULL, " "))
             lt[nl++] = tok;
-        if (nl != nn) continue;
+        if (nl != nn) {
+            /* §6.440 跳过的行也要能看见：以前长度不符直接 continue、什么都不打印，
+             * 于是"形状没命中"看起来像"形状没加载"。 */
+            if (getenv("AIP_SHAPEDBG")) fprintf(stderr, "[shape] 长度不符(%zu≠%zu): %s\n", nl, nn, g_shape_l[r]);
+            continue;
+        }
         const char *bind[AIP_SHAPE_TOK] = {0};
         int ok = 1;
         for (size_t i = 0; i < nl && ok; ++i) {
