@@ -201,7 +201,7 @@ echo "== ⑫ 脏实体检查（传话/传闻没被当成实体，§6.436）=="
 # 7→11 种说法各教一句、再查可疑名字有没有进图。跑得很快（11 个短进程）。
 if [ -x ./build_aip ] && [ -f tools/dirtyentity.sh ]; then
     if de=$(MODEL=${MODEL:-session.bin} sh tools/dirtyentity.sh 2>&1); then
-        if printf '%s' "$de" | grep -q "脏实体：0 /"; then
+        if printf '%s' "$de" | grep -q "脏实体：0 /" && printf '%s' "$de" | grep -q "内层事实没学到：0 /"; then
             say OK "dirtyentity：$(printf '%s' "$de" | grep '脏实体：' | tail -1)"
         else
             say FAIL "dirtyentity 查出脏实体：$(printf '%s' "$de" | grep '脏实体：' | tail -1)"
