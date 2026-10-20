@@ -197,6 +197,24 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑫ 脏实体检查（传话/传闻没被当成实体，§6.436）=="
+# 7→11 种说法各教一句、再查可疑名字有没有进图。跑得很快（11 个短进程）。
+if [ -x ./build_aip ] && [ -f tools/dirtyentity.sh ]; then
+    if de=$(MODEL=${MODEL:-session.bin} sh tools/dirtyentity.sh 2>&1); then
+        if printf '%s' "$de" | grep -q "脏实体：0 /"; then
+            say OK "dirtyentity：$(printf '%s' "$de" | grep '脏实体：' | tail -1)"
+        else
+            say FAIL "dirtyentity 查出脏实体：$(printf '%s' "$de" | grep '脏实体：' | tail -1)"
+            bad=1
+        fi
+    else
+        say FAIL "dirtyentity 脚本本身失败"
+        bad=1
+    fi
+else
+    say NOTE "没有 build_aip 或 tools/dirtyentity.sh ⇒ 跳过"
+fi
+
 echo "== ⑪ agent_step 的早退都走 agent_say（§6.404）=="
 # §6.401-403 的教训：早退路径不写 last_reply，"再说一遍"就复述不出来。
 # 这里数一下：`agent_say(ai, out)` 的调用数必须 = 10，裸 `return strlen(out);` 必须 = 3
