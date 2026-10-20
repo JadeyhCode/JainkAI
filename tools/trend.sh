@@ -154,11 +154,16 @@ if not FAST:
             tp += int(mm.group(1)); tt += int(mm.group(2))
     print("| 十七组留出集合计（不含 pert） | **%d / %d** |" % (tp, tt))
     # §6.452 泛化探针：已收形状的**换词变体**（非盲测，作者知道实现）
+    if os.path.exists("tests/genprobe6.txt"):
+        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe6.txt"])
+        mm = re.search(r"（(\d+)/(\d+)）", out)
+        if mm:
+            print("| 泛化探针 genprobe6（第六批，非盲测；§6.462 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
     if os.path.exists("tests/genprobe5.txt"):
         out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe5.txt"])
         mm = re.search(r"（(\d+)/(\d+)）", out)
         if mm:
-            print("| 泛化探针 genprobe5（第五批，改动前写、未污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
+            print("| 泛化探针 genprobe5（第五批，非盲测；改动前基线 9/16，§6.462 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
     if os.path.exists("tests/genprobe4.txt"):
         out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe4.txt"])
         mm = re.search(r"（(\d+)/(\d+)）", out)
