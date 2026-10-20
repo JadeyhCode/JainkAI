@@ -197,6 +197,21 @@ else
 fi
 rm -rf "$_tmp"
 
+echo "== ⑭ 数据加载不能有 ⚠/✗（超上限/超长/坏引用，§6.447）=="
+# 以前超上限只是打 ⚠ 然后丢行，看起来像"新加的规则有害"（§6.445 就是这么误判的）。
+# 现在任何加载告警都算失败：宁可看得见地少一条规则，也不要静默丢。
+if [ -x ./build_aip ] && [ -f patterns.txt ]; then
+    pw=$(printf '::quit\n' | AIP_PATDBG=1 ./build_aip --model model.bin 2>&1 | grep -E "⚠|✗" || true)
+    if [ -z "$pw" ]; then
+        say OK "数据加载无告警"
+    else
+        say FAIL "数据加载有告警：$(printf '%s' "$pw" | head -1)"
+        bad=1
+    fi
+else
+    say NOTE "没有 build_aip/patterns.txt ⇒ 跳过"
+fi
+
 echo "== ⑬ 第一次/第二次答复一致（大样本抽样，§6.443）=="
 # 同一句在同进程问两遍，类型不该变（"拒绝措辞不同"/"学到后变已知"除外）。
 if [ -x ./build_aip ] && [ -f tools/twicecheck.py ] && [ -f tests/blind4.txt ]; then

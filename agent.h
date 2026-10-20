@@ -258,10 +258,11 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
 /* §6.446 256 → 512：§6.445 的"组合加行反而变差"其实是**撞了上限**——
  * 形状已 254 条，再加两条就把排在前面的旧行挤掉（加载器会打警告，但数字上只看到"变差"）。
  * 形状是纯数据、内存很小，上限翻倍比"删旧行腾地方"安全。*/
-#define AIP_SHAPE_MAX 512
+#define AIP_SHAPE_MAX 1024
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
+static int g_pattern_overflow;   /* §6.447 有桶超限时为 1（selfcheck 据此报警）*/
 /* §6.361 命中计数（探针用；正常路径一次自增） */
 static unsigned long g_shape_hit[AIP_SHAPE_MAX];
 /* §6.294 **上一轮学到的那条事实**（供数据行做"反过来呢"这类镜像改写）。 */
@@ -558,8 +559,11 @@ static inline void aip_patterns_load(AI *ai) {
             char *eq = strchr(val, '=');
             if (!eq) continue;
             if (g_shape_n >= AIP_SHAPE_MAX) {
-                fprintf(stderr, "[patterns] ⚠ [shape] 超过上限 %d，这一行被丢弃：%.60s\n",
+                /* §6.447 **不再"悄悄挤掉"**：以前超限只是打 ⚠ 然后丢新行，看起来像"新规则有害"。
+                 * 现在用 ✗ 标出来（selfcheck 会把 ✗ 当失败），并且丢的是**新行**不是旧行。*/
+                fprintf(stderr, "[patterns] ✗ [shape] 超过上限 %d，这一行被丢弃：%.60s\n",
                         AIP_SHAPE_MAX, val);
+                g_pattern_overflow = 1;
                 continue;
             }
             *eq = 0;
