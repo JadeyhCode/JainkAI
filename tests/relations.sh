@@ -974,6 +974,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "猫 属于 动物" \
     && chk "「一只猫算什么」⇒ 猫属于动物" 1 \
     || chk "一只-量词" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
 
+# §6.456 genprobe2 的共性说法：到底算不算 / 难道不算 / 说…对不对 / 谁算
+echo "５５ §6.456 到底/难道不算/说…对不对"
+out=$(run "猫 到 底 算 不 算 动 物" "猫 难 道 不 算 动 物 吗" "猫 和 狗 谁 算 动 物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "猫 -[属于]-> 动物" \
+    && chk "「猫到底算不算动物」⇒ 对，猫属于动物" 1 \
+    || chk "到底算不算" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 -[属于]-> 动物" \
+    && chk "「猫难道不算动物吗」⇒ 对（反问+否定）" 1 \
+    || chk "难道不算" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 -[属于]-> 动物" \
+    && chk "「猫和狗谁算动物」⇒ 先答猫属于动物" 1 \
+    || chk "谁算" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
