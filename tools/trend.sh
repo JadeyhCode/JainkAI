@@ -170,6 +170,7 @@ if not FAST:
         ("genprobe13", 11, 16),
         ("genprobe14", 6, 16),
         ("genprobe15", 0, 16),
+        ("genprobe16", 8, 16),
     ]
     rows = []
     for name, base, tot in probes:
