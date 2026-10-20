@@ -330,8 +330,10 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
     sess[4] = g_lf_r[0] ? g_lf_r : NULL;      /* $W = 上一轮学到的关系 */
     sess[5] = g_lf_b[0] ? g_lf_b : NULL;      /* $O = 上一轮学到的宾语 */
     char lastbuf[32];
-    for (size_t i = 0; i < n && i < 12; ++i) ww[i] = w[i];
-    if (nn && nn < 12 && strlen(ww[nn - 1]) > strlen("吗") &&
+    /* §6.478 这里的 12 是**写死的**：`ww[]` 已经放到 AIP_SHAPE_TOK(16)，但只填前 12 个，
+     * 14 token 的句子会让 ww[12..13] 保持 NULL ⇒ 后面 strlen(NULL) 段错误。改成跟着宏走。*/
+    for (size_t i = 0; i < n && i < AIP_SHAPE_TOK; ++i) ww[i] = w[i];
+    if (nn && nn < AIP_SHAPE_TOK && strlen(ww[nn - 1]) > strlen("吗") &&
         strcmp(ww[nn - 1] + strlen(ww[nn - 1]) - strlen("吗"), "吗") == 0) {
         size_t l = strlen(ww[nn - 1]) - strlen("吗");
         snprintf(lastbuf, sizeof lastbuf, "%.*s", (int)l, ww[nn - 1]);
@@ -5853,7 +5855,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
         const char *q = input_eff;
         while (*q == ' ' || *q == '\t') q++;
-        static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches"};
+        static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches", NULL};   /* §6.478 补 NULL 结尾：以前漏了，靠相邻内存恰好为 0 才没崩（长句 14 token 一换布局就段错误）*/
         /* §6.373 **反问标记剥掉之后，句子仍然是问句**。
          * 实测 `难不成 猫 会 飞`（没有 吗）被剥成「猫 会 飞」，然后当成**陈述**学进去，
          * 还触发了改口 —— 把「猫 不会 飞」改写成「猫 会 飞」。这类标记不能"剥完当陈述"。*/

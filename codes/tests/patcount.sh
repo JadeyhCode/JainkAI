@@ -226,6 +226,20 @@ fi
 # §6.472 **容量余量提示**：`[syn]`(64→160) 与 `[shape]`(256→512→1024) 都被"上限太小"咬过。
 # 这里从 agent.h 读出常量，算"已用/上限"，超过 85% 就提示（不判失败：还有空间，只是快满了）。
 echo "⑧ 桶容量余量（超过 85% 提示，不判失败）"
+# §6.478 形状 token 上限也列进来：它不是"桶行数"，而是"一行最多几个 token"，
+# 超了会被**截断**（不是丢行），所以单独打印它 + 当前最长 lhs 的 token 数。
+if [ -f agent.h ]; then
+    stok=$(sed -n 's/^#define AIP_SHAPE_TOK \([0-9][0-9]*\).*/\1/p' agent.h | head -1)
+    maxl=$(awk '/^\[shape\]/{line=$0; sub(/#.*/,"",line); sub(/=.*/,"",line); gsub(/[ \t]+/," ",line);
+                              n=split(line,a," "); if(n>m){m=n}} END{print m+0}' patterns.txt)
+    if [ -n "$stok" ]; then
+        if [ "$maxl" -ge "$stok" ]; then
+            echo "  [提示] shape 最长一行 $maxl token / 上限 $stok——超出的会被截断"
+        else
+            echo "  OK   shape 最长一行 $maxl token / 上限 $stok"
+        fi
+    fi
+fi
 for pair in "syn:AIP_SYN_MAX" "shape:AIP_SHAPE_MAX" "reply:AIP_PAT_MAX" "lead:AIP_PAT_MAX"; do
     b=${pair%%:*}; macro=${pair##*:}
     cap=$(sed -n "s/^#define $macro \([0-9][0-9]*\).*/\1/p" agent.h | head -1)
