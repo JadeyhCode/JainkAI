@@ -153,83 +153,37 @@ if not FAST:
         if mm:
             tp += int(mm.group(1)); tt += int(mm.group(2))
     print("| 十七组留出集合计（不含 pert） | **%d / %d** |" % (tp, tt))
-    # §6.452 泛化探针：已收形状的**换词变体**（非盲测，作者知道实现）
-    if os.path.exists("tests/genprobe11.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe11.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe11（第十一批，非盲测；基线 5/16，§6.468 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe10.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe10.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe10（第十批，非盲测；基线 4/16，§6.467 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe9.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe9.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe9（第九批，非盲测；基线 2/16，§6.467 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe8.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe8.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe8（第八批，非盲测；基线 5/16，§6.465 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe7.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe7.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe7（第七批，非盲测；基线 2/16，§6.464 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe6.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe6.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe6（第六批，非盲测；§6.462 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe5.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe5.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe5（第五批，非盲测；改动前基线 9/16，§6.462 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe4.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe4.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe4（第四批，非盲测；§6.460 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe3.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe3.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe3（第三批，非盲测；§6.458 起已受污染） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe2.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe2.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe2（第二批，非盲测） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    if os.path.exists("tests/genprobe.txt"):
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/genprobe.txt"])
-        mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            print("| 泛化探针 genprobe（换词变体，非盲测） | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    out = run(["sh", "tests/holdout.sh", MODEL, "tests/holdout_pert.txt"])
-    mm = re.search(r"（(\d+)/(\d+)）", out)
-    if mm:
-        print("| 扰动留出集 holdout_pert | **%s / %s** |" % (mm.group(1), mm.group(2)))
-    # §6.426 盲测集（blind*）单独一行：它们是"新说法"，不是原来那 17 组
-    bp = bt = 0
-    for f in sorted(os.listdir("tests")):
-        if not (f.startswith("blind") and f.endswith(".txt")):
+    # §6.469 泛化探针折成一张小表（11 批太占版面）：基线 = 那一批"改动前写"时的通过数。
+    probes = [
+        ("genprobe",   None, None),   # 换词变体（§6.452）
+        ("genprobe2",  5, 14),
+        ("genprobe3",  8, 16),
+        ("genprobe4",  3, 16),
+        ("genprobe5",  9, 16),
+        ("genprobe6",  2, 16),
+        ("genprobe7",  2, 16),
+        ("genprobe8",  5, 16),
+        ("genprobe9",  2, 16),
+        ("genprobe10", 4, 16),
+        ("genprobe11", 5, 16),
+    ]
+    rows = []
+    for name, base, tot in probes:
+        fn = "tests/%s.txt" % name
+        if not os.path.exists(fn):
             continue
-        out = run(["sh", "tests/holdout.sh", MODEL, "tests/" + f])
+        out = run(["sh", "tests/holdout.sh", MODEL, fn])
         mm = re.search(r"（(\d+)/(\d+)）", out)
-        if mm:
-            bp += int(mm.group(1)); bt += int(mm.group(2))
-    if bt:
-        # 历史口径：17 组 + blind5；其余盲测（blind2-4,6-9）单独一行
-        b5 = run(["sh", "tests/holdout.sh", MODEL, "tests/blind5.txt"])
-        m5 = re.search(r"（(\d+)/(\d+)）", b5)
-        p5, t5 = (int(m5.group(1)), int(m5.group(2))) if m5 else (0, 0)
-        print("| blind5（历史口径里的那个） | **%d / %d** |" % (p5, t5))
-        print("| **17 组 + blind5 合计（历史口径）** | **%d / %d** |" % (tp + p5, tt + t5))
-        print("| 其余盲测（blind2-4,6-9） | **%d / %d** |" % (bp - p5, bt - t5))
+        if not mm:
+            continue
+        cur, total = mm.group(1), mm.group(2)
+        b = "%s/%s" % (base, tot) if base is not None else "—"
+        rows.append((name, b, "%s/%s" % (cur, total)))
+    if rows:
+        print("| 探针 | 改动前基线 | 现在 |")
+        print("|---|---|---|")
+        for name, b, cur in rows:
+            print("| %s | %s | **%s** |" % (name, b, cur))
     print()
     print("## 5. 复读率")
     print()
