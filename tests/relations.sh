@@ -951,6 +951,13 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "图 里 的 关系" \
     && chk "「难道你是怎么知道的」⇒ 同上" 1 \
     || chk "引导语+答复行 B" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.449 剥掉引导语后再判"裸答复"（没听懂/不对）
+echo "５３ §6.449 引导语+裸答复"
+out=$(run "难道我不明白你说什么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "换 个 说 法" \
+    && chk "「难道我不明白你说什么」⇒ 剥掉引导语后判成'没听懂'（不再兜底）" 1 \
+    || chk "引导语+裸答复" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }

@@ -5900,6 +5900,25 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             snprintf(out, out_cap, "%s", dr2);
             return agent_say(ai, out);
         }
+        /* §6.449 「没听懂/不对」这类**裸答复**也只认原文（`agent_bare_reply(input)`）；
+         * 剥掉引导语后要再判一次，否则 `难道我不明白你说什么` 掉兜底、
+         * 而不带引导语时答得好好的。*/
+        {
+            int bk2 = agent_bare_reply(input_eff);
+            if (bk2 == 1) {
+                snprintf(out, out_cap, "嗯 ， 好");
+                return agent_say(ai, out);
+            } else if (bk2 == 2) {
+                snprintf(out, out_cap, "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句");
+                return agent_say(ai, out);
+            } else if (bk2 == 3) {
+                if (ai->last_reply[0])
+                    snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
+                else
+                    snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
+                return agent_say(ai, out);
+            }
+        }
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */
     if (agent_rule_teach(input_eff) && input_eff != input) {
@@ -5911,10 +5930,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {   /* §6.288 形状表（`patterns.txt` 的 `[shape]` 桶）：整句等长的语序改写。
          * 以前这里是写死的 `agent_rewrite_topic`；现在规则在数据里（加一种语序 = 加一行）。 */
         char tp[192];
+        int shaped = 0;
         if (aip_shape_rewrite(ai, input_eff, tp, sizeof tp)) {
             snprintf(decl_in, sizeof decl_in, "%s", tp);
             input_eff = decl_in;
+            shaped = 1;
         }
+        (void)shaped;   /* §6.449 试过"形状改写后再查一次答复行"：blind4/pert 均无变化 ⇒ 没留在树上 */
     }
     /* §6.216/§6.292 「再说一遍」：**用改写后的句子**判 —— 以前它在改写之前跑，
      * 所以 `能再说一次吗`（被形状行改写成 `再 说 一 遍`）永远接不住。 */
