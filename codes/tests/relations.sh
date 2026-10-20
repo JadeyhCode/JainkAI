@@ -931,6 +931,16 @@ has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 属于 动物" \
     && chk "「在杭州的猫算什么」⇒ 猫属于动物（地点短语取中心词）" 1 \
     || chk "在杭州的猫" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
 
+# §6.445 「是否」写法（鲸鱼是否算哺乳动物 / 猫是否属于动物）
+echo "５１ §6.445 是否"
+out=$(run "鲸 鱼 是 否 算 哺 乳 动 物" "猫 是 否 属 于 动 物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "属于" \
+    && chk "「鲸鱼是否算哺乳动物」⇒ 属于（是否写法）" 1 \
+    || chk "是否算" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 -[属于]-> 动物" \
+    && chk "「猫是否属于动物」⇒ 对，猫属于动物" 1 \
+    || chk "是否属于" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
