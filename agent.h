@@ -80,7 +80,7 @@ static inline int agent_open_slot_word(const char *w) {
 #define AIP_TAIL_MAX 12
 static char g_tail[AIP_TAIL_MAX][12];
 static size_t g_tail_n;
-#define AIP_SYN_MAX 64
+#define AIP_SYN_MAX 160   /* §6.470 64 → 160：同义词表已到 66 条，超限会静默丢规则（加载器会打 ⚠） */
 static char g_syn_from[AIP_SYN_MAX][48], g_syn_to[AIP_SYN_MAX][48];
 static size_t g_syn_n;
 /* §6.307 **[affix] 词缀变体**：`[affix] 小=pre` / `[affix] 儿=post`。
