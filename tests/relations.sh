@@ -893,6 +893,14 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 属于 动物" \
     && chk "「你以为猫属于什么」⇒ 猫属于动物（'你以为'当引导语）" 1 \
     || chk "你以为" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.438 双断言后半句：只答同一主语的那个问句
+echo "㊼ §6.438 双断言后半句"
+out=$(run "鲸 鱼 算 哺 乳 动 物 它 们 会 游 泳 吗")
+a1=$(printf '%s\n' "$out" | reps | sed -n 1p)
+has "$a1" "鲸鱼" && has "$a1" "游泳" \
+    && chk "「鲸鱼算哺乳动物它们会游泳吗」⇒ 只答后半句（答复里有鲸鱼+游泳）" 1 \
+    || chk "双断言后半" 0 "$a1"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
