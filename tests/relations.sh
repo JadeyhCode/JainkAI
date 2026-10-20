@@ -987,6 +987,19 @@ has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 -[属于]-> 动物" \
     && chk "「猫和狗谁算动物」⇒ 先答猫属于动物" 1 \
     || chk "谁算" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
 
+# §6.458 呢 结尾 / 逗号+对吧 / 逗号-但 再问 / 哪一类 / 是…对吗
+echo "５６ §6.458 呢、逗号对吧、哪一类"
+out=$(run "猫 算 不 算 动 物 呢" "猫 算 动 物 ， 对 吧" "猫 算 哪 一 类 动 物")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "猫 -[属于]-> 动物" \
+    && chk "「猫算不算动物呢」⇒ 对（呢 结尾）" 1 \
+    || chk "呢 结尾" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "猫 -[属于]-> 动物" \
+    && chk "「猫算动物，对吧」⇒ 对（逗号+确认）" 1 \
+    || chk "逗号对吧" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "猫 -[属于]-> 动物" \
+    && chk "「猫算哪一类动物」⇒ 对（哪一类）" 1 \
+    || chk "哪一类" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
