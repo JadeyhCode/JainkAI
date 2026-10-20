@@ -255,7 +255,10 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
  * 左边是**词序列**：字面词必须相等，`$n` 捕获一个词；`@k` = 必须在词池里，`@r` = 必须是已知关系词。
  * 右边用捕获重排。这是"新句法不改代码"的第一步：加一种语序 = 加一行。
  * 只做**整句等长**的替换（不做插入/删除），够用且不会误伤。 */
-#define AIP_SHAPE_MAX 256   /* §6.304 这是第四次被"上限太小"咬：超限时现在会打警告（不再静默）*/
+/* §6.446 256 → 512：§6.445 的"组合加行反而变差"其实是**撞了上限**——
+ * 形状已 254 条，再加两条就把排在前面的旧行挤掉（加载器会打警告，但数字上只看到"变差"）。
+ * 形状是纯数据、内存很小，上限翻倍比"删旧行腾地方"安全。*/
+#define AIP_SHAPE_MAX 512
 #define AIP_SHAPE_TOK 8
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
