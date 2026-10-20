@@ -958,6 +958,22 @@ has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "换 个 说 法" \
     && chk "「难道我不明白你说什么」⇒ 剥掉引导语后判成'没听懂'（不再兜底）" 1 \
     || chk "引导语+裸答复" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
 
+# §6.451 把陈述当对象问 / 但-转折 / 都-并列 / 一只-量词 / 呢
+echo "５４ §6.451 这件事对不对、但、都、一只"
+out=$(run "猫 算 动 物 这 件 事 对 不 对" "猫 算 动 物 但 它 会 飞 吗" "狗 和 猫 都 算 动 物 吗" "一 只 猫 算 什 么")
+has "$(printf '%s\n' "$out" | reps | sed -n 1p)" "猫 -[属于]-> 动物" \
+    && chk "「猫算动物这件事对不对」⇒ 对，猫属于动物" 1 \
+    || chk "这件事对不对" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 2p)" "不 会" \
+    && chk "「猫算动物但它会飞吗」⇒ 只答后半句（不会）" 1 \
+    || chk "但-转折" 0 "$(printf '%s\n' "$out" | reps | sed -n 2p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 3p)" "狗 -[属于]-> 动物" \
+    && chk "「狗和猫都算动物吗」⇒ 对，狗属于动物" 1 \
+    || chk "都-并列" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+has "$(printf '%s\n' "$out" | reps | sed -n 4p)" "猫 属于 动物" \
+    && chk "「一只猫算什么」⇒ 猫属于动物" 1 \
+    || chk "一只-量词" 0 "$(printf '%s\n' "$out" | reps | sed -n 4p)"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "PASS relations（L2：静态知识/传递推理/对话中现学/持久化/不误学/合写否定/情态说法/动态否定/触发接求解）" \
                   || { echo "FAIL relations"; exit 1; }
