@@ -155,30 +155,30 @@ if not FAST:
     print("| 十七组留出集合计（不含 pert） | **%d / %d** |" % (tp, tt))
     # §6.469 泛化探针折成一张小表（11 批太占版面）：基线 = 那一批"改动前写"时的通过数。
     probes = [
-        ("genprobe",   None, None),   # 换词变体（§6.452）
-        ("genprobe2",  5, 14),
-        ("genprobe3",  8, 16),
-        ("genprobe4",  3, 16),
-        ("genprobe5",  9, 16),
-        ("genprobe6",  2, 16),
-        ("genprobe7",  2, 16),
-        ("genprobe8",  5, 16),
-        ("genprobe9",  2, 16),
-        ("genprobe10", 4, 16),
-        ("genprobe11", 5, 16),
-        ("genprobe12", 3, 16),
-        ("genprobe13", 11, 16),
-        ("genprobe14", 6, 16),
-        ("genprobe15", 0, 16),
-        ("genprobe16", 8, 16),
-        ("genprobe17", 7, 16),
-        ("genprobe18", 11, 16),
-        ("genprobe19", 15, 16),
-        ("genprobe20", 2, 16),
-        ("genprobe21", 6, 16),
+        ("genprobe",   None, None, "换词变体（谓词同义）"),
+        ("genprobe2",  5, 14, "谓词变体 + 外壳混"),
+        ("genprobe3",  8, 16, "结构行（到底/算不算）"),
+        ("genprobe4",  3, 16, "结构行"),
+        ("genprobe5",  9, 16, "谓词同义（算作/该算…）"),
+        ("genprobe6",  2, 16, "归入类谓词 + 外壳"),
+        ("genprobe7",  2, 16, "外壳剥离（被/把/行吗）"),
+        ("genprobe8",  5, 16, "谓词变体（称得上/归于）"),
+        ("genprobe9",  2, 16, "外壳（被看作/就算…）"),
+        ("genprobe10", 4, 16, "谓词位（归类为/划归）"),
+        ("genprobe11", 5, 16, "被/把 + 动词槽"),
+        ("genprobe12", 3, 16, "把/被 + 动词槽（更多）"),
+        ("genprobe13", 11, 16, "被 + 施事 + 谓词"),
+        ("genprobe14", 6, 16, "被 + 双字施事"),
+        ("genprobe15", 0, 16, "被 + 双字施事（更长）"),
+        ("genprobe16", 8, 16, "施事三 token"),
+        ("genprobe17", 7, 16, "长施事 1~6"),
+        ("genprobe18", 11, 16, "长施事 7~9"),
+        ("genprobe19", 15, 16, "长施事 + 谓词变体"),
+        ("genprobe20", 2, 16, "**换族**：的-从句/名词化/依据/倒装"),
+        ("genprobe21", 6, 16, "**换族**：反问求证/双否定/选择问"),
     ]
     rows = []
-    for name, base, tot in probes:
+    for name, base, tot, fam in probes:
         fn = "tests/%s.txt" % name
         if not os.path.exists(fn):
             continue
@@ -188,12 +188,12 @@ if not FAST:
             continue
         cur, total = mm.group(1), mm.group(2)
         b = "%s/%s" % (base, tot) if base is not None else "—"
-        rows.append((name, b, "%s/%s" % (cur, total)))
+        rows.append((name, fam, b, "%s/%s" % (cur, total)))
     if rows:
-        print("| 探针 | 改动前基线 | 现在 |")
-        print("|---|---|---|")
-        for name, b, cur in rows:
-            print("| %s | %s | **%s** |" % (name, b, cur))
+        print("| 探针 | 族 | 改动前基线 | 现在 |")
+        print("|---|---|---|---|")
+        for name, fam, b, cur in rows:
+            print("| %s | %s | %s | **%s** |" % (name, fam, b, cur))
     print()
     print("## 5. 复读率")
     print()
