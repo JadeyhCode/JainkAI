@@ -36,6 +36,7 @@
 | `sh tools/dirtyentity.sh` | 传话/传闻有没有被当成实体、内层事实有没有学到 |
 | `sh tools/asan_check.sh` | ASan/UBSan/LSan（生命周期/随机句/病态/变异/命令面） |
 | `sh tools/trend.sh` | 生成 `docs/trend.md` 的 1~5 节（含 22 批探针表、族列、锚点） |
+| `sh tools/probematrix.sh` | 一次跑完 22 批探针 + 全部留出集，打一张回归表（§6.499） |
 | `sh tests/patcount.sh` | 桶计数/探针/改写安全/词类/关键词空格/重复行/容量余量/写死实体 |
 
 ## 4. 已知边界（照实说）
