@@ -48,6 +48,10 @@ print("<!-- trend-meta: binary=%s data=%s model=%s fast=%d generated=%s -->" % (
     datetime.date.today().isoformat()))
 print("## 1. 语料问句四样本（含**答复来源**：固定答复行 vs 其它路径）")
 print()
+print("> ⚠ **「给事实」里含固定答复行**（§6.501）：关掉 `[reply]` 桶后 A 76→43%、B 50→25%，C/D 只掉 5~6pp。")
+print("> 读这张表时看「数据行」那一列：那才是固定答复行的占比。")
+print()
+print()
 print("| 样本 | 条数 | 给事实 | 诚实未知 | 兜底 | 数据行 | 关系层 | 兜底池 | 框架 | 检索/说明 | 自我/裸 | 未标注 |")
 print("|---|---|---|---|---|---|---|---|---|---|---|---|")
 for f in ["tests/corpus_q100.txt", "tests/corpus_q100b.txt",
