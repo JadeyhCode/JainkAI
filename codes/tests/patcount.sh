@@ -87,6 +87,14 @@ check_class_refs() {   # $1=数据文件；有未定义 @类名 → 打印并返
     [ "$_bad" -eq 0 ] && return 0 || return 1
 }
 
+scan_hard_entity() {   # $1=数据文件；lhs 里写死实体 → 打印并返回 1（§6.490）
+    _hard=$(awk '/^\[shape\]/{line=$0; sub(/#.*/,"",line); sub(/=.*/,"",line);
+                          if (line ~ /猫|狗|鲸鱼|鸟|鱼|猪/) print line}' "$1")
+    if [ -z "$_hard" ]; then return 0; fi
+    printf '%s\n' "$_hard" | sed 's/^/  FAIL 写死实体: /'
+    return 1
+}
+
 scan_space_kw() {   # $1=数据文件；有内部空格 → 打印并返回 1
     _n=$(awk -F'=' '
         /^\[reply\]/ {
@@ -127,6 +135,15 @@ if [ "${1:-}" = "--selftest" ]; then
     fi
     if ! check_probes patterns.txt tests/bucketload.sh >/dev/null; then
         echo "FAIL selftest：真实探针表被判缺探针（误报）"; exit 1
+    fi
+    # ⑨ 也要能红：临时加一条写死实体的 [shape]
+    cp patterns.txt "$tmp/badent.txt"
+    printf '[shape] 猫 算 动物 吗 = 猫 属于 动物 吗\n' >> "$tmp/badent.txt"
+    if scan_hard_entity "$tmp/badent.txt" >/dev/null; then
+        echo "FAIL selftest：写死实体的形状行没被抓到（⑨ 是摆设）"; exit 1
+    fi
+    if ! scan_hard_entity "$tmp/clean.txt" >/dev/null; then
+        echo "FAIL selftest：干净数据被判写死实体（误报）"; exit 1
     fi
     # ④ 也要能红：临时加一条引用不存在词类的 [reply]
     cp patterns.txt "$tmp/badclass.txt"
@@ -257,12 +274,9 @@ done
 # 只查 lhs（`=` 之前）里的实体字面；类别词（动物/哺乳动物）允许，但要人工确认不是写死。
 echo "⑨ [shape] lhs 没有写死实体"
 if [ -f patterns.txt ]; then
-    hard=$(awk '/^\[shape\]/{line=$0; sub(/#.*/,"",line); sub(/=.*/,"",line);
-                          if (line ~ /猫|狗|鲸鱼|鸟|鱼|猪/) print line}' patterns.txt)
-    if [ -z "$hard" ]; then
+    if scan_hard_entity patterns.txt; then
         echo "  OK 没有写死实体的形状行"
     else
-        printf '%s\n' "$hard" | sed 's/^/  FAIL 写死实体: /'
         fail=1
     fi
     # 类别词（动物/哺乳动物）不判失败，只报数：要人工看是"习语"还是"写死"
