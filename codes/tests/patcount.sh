@@ -253,5 +253,25 @@ for pair in "syn:AIP_SYN_MAX" "shape:AIP_SHAPE_MAX" "reply:AIP_PAT_MAX" "lead:AI
     fi
 done
 
+# §6.490 **形状里不许写死实体**：写了"猫/狗/鲸鱼…"就等于把测试集当训练集（§6.488 犯过一次）。
+# 只查 lhs（`=` 之前）里的实体字面；类别词（动物/哺乳动物）允许，但要人工确认不是写死。
+echo "⑨ [shape] lhs 没有写死实体"
+if [ -f patterns.txt ]; then
+    hard=$(awk '/^\[shape\]/{line=$0; sub(/#.*/,"",line); sub(/=.*/,"",line);
+                          if (line ~ /猫|狗|鲸鱼|鸟|鱼|猪/) print line}' patterns.txt)
+    if [ -z "$hard" ]; then
+        echo "  OK 没有写死实体的形状行"
+    else
+        printf '%s\n' "$hard" | sed 's/^/  FAIL 写死实体: /'
+        fail=1
+    fi
+    # 类别词（动物/哺乳动物）不判失败，只报数：要人工看是"习语"还是"写死"
+    cat_n=$(awk '/^\[shape\]/{line=$0; sub(/#.*/,"",line); sub(/=.*/,"",line);
+                          if (line ~ /动物|哺乳/) c++} END{print c+0}' patterns.txt)
+    [ "$cat_n" -gt 0 ] && echo "  [提示] 含类别词（动物/哺乳）的形状 $cat_n 条——确认是习语不是写死"
+else
+    echo "  NOTE 没有 patterns.txt"
+fi
+
 [ "$fail" -eq 0 ] && echo "PASS patcount（$nb 个桶全部对上，每个桶都有承重探针，且没有指向早期判据的改写）"
 exit "$fail"
