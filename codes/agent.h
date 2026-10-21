@@ -592,7 +592,33 @@ static inline void aip_patterns_load(AI *ai) {
                     g_shape_r[g_shape_n][--L] = 0;
             }
             g_shape_n++;
-            if (!ai) continue;              /* dump 工具传 NULL：不生成变体（要查词池） */
+                        /* §6.495 **@x 展开必须在"变体生成"之前**：变体生成会把 `g_shape_l[g_shape_n-1]` 换成
+             * 拆开写法的副本（`属 于`），于是原始行（`属于`）永远不会被展开 —— 这是 §6.491/§6.494
+             * 两次"查不到那条 8-filler 行"的真正原因。 */
+            if (strstr(g_shape_l[g_shape_n - 1], "@x") && !strstr(g_shape_l[g_shape_n - 1], "$5")) {
+                char srcx[sizeof g_shape_l[0]]; snprintf(srcx, sizeof srcx, "%s", g_shape_l[g_shape_n - 1]);
+                char rhsx[sizeof g_shape_r[0]]; snprintf(rhsx, sizeof rhsx, "%s", g_shape_r[g_shape_n - 1]);
+                for (size_t take = 1; take <= 10 && g_shape_n < AIP_SHAPE_MAX; ++take) {
+                    char outx[sizeof g_shape_l[0]]; size_t o = 0; outx[0] = 0;
+                    for (const char *q = srcx; *q; ) {
+                        if (!strncmp(q, "@x", 2)) {
+                            for (size_t k = 0; k < take && o + 4 < sizeof outx; ++k)
+                                o += (size_t)snprintf(outx + o, sizeof outx - o, "%s$5", o ? " " : "");
+                            q += 2; continue;
+                        }
+                        size_t l = aip_u8len(q);
+                        if (o + l + 2 >= sizeof outx) break;
+                        memcpy(outx + o, q, l); o += l; outx[o] = 0; q += l;
+                    }
+                    { char fold[sizeof outx]; size_t fi = 0;
+                      for (size_t k = 0; outx[k]; ++k) { if (outx[k] == ' ' && fi && fold[fi-1] == ' ') continue; fold[fi++] = outx[k]; }
+                      fold[fi] = 0; snprintf(outx, sizeof outx, "%s", fold); }
+                    snprintf(g_shape_l[g_shape_n], sizeof g_shape_l[0], "%s", outx);
+                    snprintf(g_shape_r[g_shape_n], sizeof g_shape_r[0], "%s", rhsx);
+                    g_shape_n++;
+                }
+            }
+if (!ai) continue;              /* dump 工具传 NULL：不生成变体（要查词池） */
             /* §6.322 **自动生成"分词变体"**（没有 ai 时跳过：dump 工具会传 NULL）：
              * 规则里的多字实词（如 `属于`）在词池里
              * 有时是一个 token、有时被切成 `属`+`于`。与其让写规则的人两种都写一遍
