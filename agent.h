@@ -4354,6 +4354,7 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
 #define PROC_RUN_DEPTH_MAX 3
 #define PROC_RUN_LOOP_MAX  2
 #define PROC_RUN_STEP_MAX  64
+#define PROC_CLAIM_MAX     64   /* §6.508 断言结果表：按步号存（步号 > 64 的记不下，按"判不了"） */
 
 typedef struct {
     size_t n_step;      /* 记了几步（含调用展开） */
@@ -4372,6 +4373,9 @@ typedef struct {
     size_t n_verify_fail; /* ① 复核不过（缺口/推不出来）的次数 */
     size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
     size_t hypo_peak;     /* 跑的时候到过的最大深度 */
+    int8_t claim[PROC_CLAIM_MAX];  /* §6.508 B2：按**步号**记「加断言」那一步的复核结论
+                                    * 1=过、0=不过、-1=没跑过/不是断言步。
+                                    * 条件里用 `#N` 引用（`#1` = 第 1 步的断言结果）。 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
 } ProcRun;
 
@@ -4541,6 +4545,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                            label, act->name ? act->name : "?", cs, cr, cb2);
                     der_gap(&pr->trace, "复核目标认不全");
                     pr->n_gap++; pr->n_verify_fail++;
+                    if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 0;   /* §6.508 B2 */
                     proc_step_rollback(ai, act, added, n_added, pr);
                     return 0;
                 }
@@ -4559,6 +4564,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                            label, act->name ? act->name : "?", cneg ? "不 " : "", cs, cr, cb2,
                            d.n > 0 ? d.n - 1 : 0);
                     pr->n_ok++; pr->n_verified++;
+                    if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 1;   /* §6.508 B2 */
                     return 1;
                 }
                 printf("    %s %-12s ✗ 断点：**复核不过**（要核「%s%s %s %s」：%s，缺口 %d）\n",
@@ -4566,6 +4572,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                        st == 0 ? "推不出来" : "验证器不认", vg);
                 der_gap(&pr->trace, "独立复核不过");
                 pr->n_gap++; pr->n_verify_fail++;
+                if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 0;   /* §6.508 B2 */
                 proc_step_rollback(ai, act, added, n_added, pr);
                 return 0;
             }
@@ -4600,9 +4607,23 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
 /* §6.507 **条件组合**（逻辑落在图上，而不是再加一套判据）：
  * `A&B` = 与、`A|B` = 或、`!A` = 非（`!` 可连写）；原子判据**仍是前提三档** + 可选求值层。
  * 返回 1=成立、0=不成立、-1=判不了（有原子图里没有、求值层也不算）——**判不了不静默当成立**。 */
-static inline int proc_cond_atom_eval(AI *ai, const char *atom, int *by_eval) {
+static inline int proc_cond_atom_eval(AI *ai, const ProcRun *pr, const char *atom, int *by_eval) {
     if (by_eval) *by_eval = 0;
     if (!ai || !atom || !*atom) return -1;
+    /* §6.508 B2：`#N` = 本过程第 N 步「加断言」的**复核结论**（1 过 / 0 不过 / 没跑过=判不了）。
+     * 这样条件能引用前面核过的事实，而不是只能问"这个词提没提过"。 */
+    if (atom[0] == '#') {
+        long idx = 0; const char *q = atom + 1;
+        if (!*q) return -1;
+        for (; *q; ++q) {
+            if (*q < '0' || *q > '9') return -1;
+            idx = idx * 10 + (*q - '0');
+            if (idx >= PROC_CLAIM_MAX) return -1;
+        }
+        if (!pr || idx <= 0) return -1;
+        int8_t c = pr->claim[idx];
+        return c > 0 ? 1 : (c == 0 ? 0 : -1);
+    }
     int ev = 0;
     if (ai->eval_num && ai_eval_cmp(atom, &ev)) { if (by_eval) *by_eval = 1; return ev ? 1 : 0; }
     Token *x = pool_find(ai->pool, atom);
@@ -4610,7 +4631,8 @@ static inline int proc_cond_atom_eval(AI *ai, const char *atom, int *by_eval) {
     return ai_premise_holds(ai, x) ? 1 : 0;
 }
 
-static inline int proc_cond_eval(AI *ai, const char *spec, size_t *n_atoms, int *n_unknown) {
+static inline int proc_cond_eval(AI *ai, const ProcRun *pr, const char *spec,
+                                 size_t *n_atoms, int *n_unknown) {
     size_t atoms = 0; int unknown = 0;
     int any_true = 0, any_group_unknown = 0;
     const char *p = (spec && *spec) ? spec : "";
@@ -4631,7 +4653,7 @@ static inline int proc_cond_eval(AI *ai, const char *spec, size_t *n_atoms, int 
             while (*a2 == '!') { neg = !neg; ++a2; }
             if (*a2) {
                 ++atoms; ++g_any;
-                int r = proc_cond_atom_eval(ai, a2, NULL);
+                int r = proc_cond_atom_eval(ai, pr, a2, NULL);
                 if (r < 0) { ++unknown; g_unknown = 1; }
                 else if (neg ? r : !r) g_false = 1;
             }
@@ -4706,7 +4728,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
          * 所以要**排在图内判据前面**（第一版放在后面 ⇒ 永远走到"图里没有这个词"那条路）。
          * §6.507 条件可以是**复合式**：`A&B`（与）/`A|B`（或）/`!A`（非），原子判据不变。 */
         size_t n_atoms = 0; int n_unknown = 0;
-        int cres = proc_cond_eval(ai, cb, &n_atoms, &n_unknown);
+        int cres = proc_cond_eval(ai, pr, cb, &n_atoms, &n_unknown);
         int single = (n_atoms <= 1);
         if (cres < 0) {
             /* 原子**图里根本没有**（且求值层也不算）⇒ 不是"没提到"，是"判不了"。照实说，并按不成立走
@@ -4879,6 +4901,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
 static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
     ProcRun pr;
     memset(&pr, 0, sizeof pr);
+    for (size_t ci = 0; ci < PROC_CLAIM_MAX; ++ci) pr.claim[ci] = -1;   /* §6.508：没跑过的断言步 = 判不了 */
     der_reset(&pr.trace);
     /* **开关在引擎自己的入口上**（不只在外面的命令里）：关着一律不发车 ——
      * 免得换个调用方（C 层/别的命令）就绕过了"默认关"。 */
