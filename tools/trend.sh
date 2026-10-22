@@ -181,6 +181,7 @@ if not FAST:
         ("genprobe20", 2, 16, "**换族**：的-从句/名词化/依据/倒装"),
         ("genprobe21", 6, 16, "**换族**：反问求证/双否定/选择问"),
         ("genprobe22", 4, 16, "长施事 + 不同外壳（验收 @x 修复）"),
+        ("genprobe23", 9, 16, "外壳剥离族（B5 下沉对象）"),
     ]
     rows = []
     for name, base, tot, fam in probes:
