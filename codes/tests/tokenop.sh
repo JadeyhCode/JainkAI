@@ -594,6 +594,15 @@ run '::proc on\n::proc dry off\n::op 建过程 查\n::op 加断言 查 猫 属�
 grep -q '条件「#1:过」\*\*成立\*\*' o53 \
     && ok "**过** ⇒ `#1:过` 成立（与 `#1` 同真值，但写出来更清楚）" \
     || bad "缺口类型-过" "$(grep -m3 '条件' o53)"
+# §6.524 P1-3：过程**说过话**就把那句话当答复（`加说` 接进对话流水线）
+run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 报\n::op 加说 报 猫 属于 动物\n跑 报\n' o54
+grep -q 'AI > 猫 属于 动物' o54 \
+    && ok "**说过的过程**：`跑 报` 直接答「猫 属于 动物」（不是状态串）" \
+    || bad "过程答复" "$(grep -m2 'AI >' o54)"
+run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 报\n::op 加步骤 报 烧水\n跑 报\n' o55
+grep -q '跑 完 了' o55 \
+    && ok "**没说过话的过程**：仍回状态串（不被空模板顶掉）" \
+    || bad "过程无话" "$(grep -m2 'AI >' o55)"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \

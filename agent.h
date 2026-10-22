@@ -5327,7 +5327,14 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
             snprintf(out, out_cap, "过程 「 %s 」 在 ， 可 执行 引擎 关着 （ ::proc on 打开 ）", bare);
             return 1;
         }
-        size_t gaps = proc_run(ai, bare, NULL);
+        /* §6.524 P1-3：过程里**说过话**就把那句话当答复（`加说` 的模板），
+         * 否则才退回"跑完了…每一步都过得去"的状态串。 */
+        ProcRun pr;
+        size_t gaps = proc_run(ai, bare, &pr);
+        if (pr.say[0]) {
+            snprintf(out, out_cap, "%s", pr.say);
+            return 1;
+        }
         snprintf(out, out_cap, "跑 完 了 「 %s 」 ： %s", bare,
                  gaps ? "有 断点 —— 停 在 断点 上" : "每 一步 都 过 得 去");
         return 1;
