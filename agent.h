@@ -542,7 +542,7 @@ static inline size_t *aip_pat_count(const char *kind) {
  * 不许悄悄改图（§6.514 的教训：少了"问句框架"这条信息，blind4 掉 81 条）。 */
 static inline void aip_shell_mirror_lead(AI *ai) {
     const char *on = getenv("AIP_SHELLMIRROR");
-    if (!on || !*on || !strcmp(on, "0")) return;    /* §6.518 仍默认关：默认化会让 relations 套件 2 项红（见审计） */
+    if (on && *on && !strcmp(on, "0")) return;      /* §6.520 默认**开**：`::load` 也会重新镜像，套件不再受累积状态影响 */
     if (!ai || !ai->pool || g_lead_n == 0) return;
     Token *mark = pool_token_intern(ai->pool, "外壳标记");
     Token *markq = pool_token_intern(ai->pool, "[外壳:问]");
@@ -6167,9 +6167,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 }
             }
             if (!ll) {
-                /* §6.518 默认仍走桶；`AIP_SHELLONLY=1` 才"只用图"（A/B 用）。 */
+                /* §6.520 默认**只用图**（桶退役出剥离路径，仍作镜像来源）；`AIP_SHELLONLY=0` 回到旧行为。 */
                 const char *so2 = getenv("AIP_SHELLONLY");
-                int only = (so2 && *so2 && strcmp(so2, "0") != 0);
+                int only = !(so2 && *so2 && strcmp(so2, "0") == 0);
                 if (!only) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
             }
             /* §6.516 **A/B 开关**：`AIP_SHELLONLY=1` 时**完全不看 `[lead]` 桶**，只用图。

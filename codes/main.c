@@ -2199,6 +2199,9 @@ int main(int argc, char **argv) {
                     ai_free(a->brain);
                     a->brain = m;
                     m->rel_verify_hook = aip_rel_verify;   /* §6.248 */
+                    /* §6.520 `::load` 也会换脑子 ⇒ 外壳镜像要**重新做一次**
+                     * （§6.518 只在启动加载时做过；套件里大量用 `::load`，于是镜像全丢了） */
+                    aip_shell_mirror_lead(a->brain);
                     printf("[已加载模型 %s]\n", path);
                     ai_stats(a->brain);
                 } else {

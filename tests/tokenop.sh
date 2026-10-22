@@ -557,6 +557,16 @@ grep -q 'AI > 对' "$WORK/o45" \
 grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q '→ 图上 45 条边' "$WORK/o46" \
     && ok "镜像日志：`[lead]` 45 条 → 图上 45 条边（机制真的跑了）" \
     || bad "镜像日志" "$(grep -m2 '外壳\|lead=' "$WORK/o46")"
+# §6.520 `::load` 之后**要重新镜像**（否则换脑子就把外壳全丢了 —— 套件里大量用 `::load`）
+# ⚠ 在仓库根跑：WORK 目录没有 patterns.txt（没有 `[lead]` 就没东西可镜像）
+( cd "$ROOT" && cp model.bin mx.bin && { printf '::load mx.bin\n'; printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '请问猫属于动物吗\n'; } | \
+    AIP_PATDBG=1 "$WORK/aip" --model mx.bin > "$WORK/o47" 2>&1 ) || true
+[ "$(grep -c '外壳镜像' "$WORK/o47")" -ge 2 ] \
+    && ok "`::load` 之后**又镜像了一次**（启动 1 次 + 换脑子 1 次）" \
+    || bad "load 后镜像" "$(grep -m3 '外壳镜像\|加载' "$WORK/o47")"
+grep -q 'AI > 对' "$WORK/o47" \
+    && ok "换脑子之后引导语照样剥（默认走图）" \
+    || bad "load 后剥离" "$(grep -m2 'AI >' "$WORK/o47")"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \
