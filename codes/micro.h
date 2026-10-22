@@ -2405,8 +2405,13 @@ static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQue
     /* 关系**只记名字、到跑的时候再解析**：micro.h 在 rel.h 之前（这一层看不见 rel_id_of）。
      * 关系词表启动时都会进池子，所以这里先按"词在不在"做个粗检查。 */
     Token *relw = pool_find(ai->pool, args[2]);
-    if (!sub || !obj || !relw) {
-        snprintf(note, cap, "主语/关系/宾语认不全（关系词得是表里的）");
+    /* §6.509 B3：`$1`..`$4` 是**跑的时候才绑**的实参占位，建的时候当然不在池子里 ——
+     * 占位符跳过"认得全"检查（真给不出实参时，跑那一步会因认不全断点，照实说）。 */
+    int sub_ph = (args[1] && args[1][0] == '$' && args[1][1] >= '1' && args[1][1] <= '9' && !args[1][2]);
+    int obj_ph = (args[3] && args[3][0] == '$' && args[3][1] >= '1' && args[3][1] <= '9' && !args[3][2]);
+    int rel_ph = (args[2] && args[2][0] == '$' && args[2][1] >= '1' && args[2][1] <= '9' && !args[2][2]);
+    if ((!sub && !sub_ph) || (!obj && !obj_ph) || (!relw && !rel_ph)) {
+        snprintf(note, cap, "主语/关系/宾语认不全（关系词得是表里的；占位写 `$1`..`$4`）");
         return -1;
     }
     int neg = 0, idx = 0;

@@ -4354,7 +4354,8 @@ static inline OtherBeliefVerdict other_belief_view_print(AI *ai, const Token *a,
 #define PROC_RUN_DEPTH_MAX 3
 #define PROC_RUN_LOOP_MAX  2
 #define PROC_RUN_STEP_MAX  64
-#define PROC_CLAIM_MAX     64   /* §6.508 断言结果表：按步号存（步号 > 64 的记不下，按"判不了"） */
+#define PROC_CLAIM_MAX     64
+#define PROC_ARG_MAX        4   /* §6.509 B3：一次跑最多带 4 个实参（`$1`..`$4`） */   /* §6.508 断言结果表：按步号存（步号 > 64 的记不下，按"判不了"） */
 
 typedef struct {
     size_t n_step;      /* 记了几步（含调用展开） */
@@ -4373,11 +4374,36 @@ typedef struct {
     size_t n_verify_fail; /* ① 复核不过（缺口/推不出来）的次数 */
     size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
     size_t hypo_peak;     /* 跑的时候到过的最大深度 */
+    char arg[PROC_ARG_MAX][48];    /* §6.509 B3：这次跑的实参（`::proc run 查 猫 动物` → arg[0]=猫 arg[1]=动物） */
+    size_t n_arg;
     int8_t claim[PROC_CLAIM_MAX];  /* §6.508 B2：按**步号**记「加断言」那一步的复核结论
                                     * 1=过、0=不过、-1=没跑过/不是断言步。
                                     * 条件里用 `#N` 引用（`#1` = 第 1 步的断言结果）。 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
 } ProcRun;
+
+/* §6.509 B3：把 `$1`..`$9` 换成这次跑的实参。没给的实参**原样保留** ⇒ 后面"认不全"会断点
+ * （不静默替换成空串 —— 那会让断言变成"空 属于 空"这种假通过）。 */
+static inline void proc_subst_args(const ProcRun *pr, char *buf, size_t cap) {
+    if (!pr || !buf || !cap || pr->n_arg == 0) return;
+    char out[256]; size_t o = 0;
+    for (size_t i = 0; buf[i] && o + 1 < sizeof out; ) {
+        if (buf[i] == '$' && buf[i + 1] >= '1' && buf[i + 1] <= '9') {
+            size_t k = (size_t)(buf[i + 1] - '1');
+            if (k < pr->n_arg) {
+                const char *v = pr->arg[k];
+                while (*v && o + 1 < sizeof out) out[o++] = *v++;
+                i += 2;
+                continue;
+            }
+        }
+        out[o++] = buf[i++];
+    }
+    out[o] = 0;
+    memcpy(buf, out, o + 1 < cap ? o + 1 : cap - 1);
+    buf[cap - 1] = 0;
+}
+
 
 static inline Token *proc_root_of(AI *ai, const char *bare) {
     if (!ai || !bare || !bare[0]) return NULL;
@@ -4537,6 +4563,10 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             int cidx = 0, cneg = 0;
             char cs[64], cr[64], cb2[64];
             if (proc_step_claim(se, &cidx, cs, sizeof cs, cr, sizeof cr, cb2, sizeof cb2, &cneg)) {
+                /* §6.509 B3：断言里的 `$1`/`$2` 换成这次跑的实参（没给原样留着 ⇒ 认不全就断点） */
+                proc_subst_args(pr, cs, sizeof cs);
+                proc_subst_args(pr, cr, sizeof cr);
+                proc_subst_args(pr, cb2, sizeof cb2);
                 Token *csb = pool_find(ai->pool, cs);
                 Token *cob = pool_find(ai->pool, cb2);
                 uint8_t crid = rel_id_of(ai, cr, 0);
@@ -4610,6 +4640,13 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
 static inline int proc_cond_atom_eval(AI *ai, const ProcRun *pr, const char *atom, int *by_eval) {
     if (by_eval) *by_eval = 0;
     if (!ai || !atom || !*atom) return -1;
+    /* §6.509 B3：原子里的 `$1` 先换成实参（没给就原样留着 ⇒ 判不了） */
+    {
+        char ab[96];
+        snprintf(ab, sizeof ab, "%s", atom);
+        proc_subst_args(pr, ab, sizeof ab);
+        if (strcmp(ab, atom) != 0) atom = ab;
+    }
     /* §6.508 B2：`#N` = 本过程第 N 步「加断言」的**复核结论**（1 过 / 0 不过 / 没跑过=判不了）。
      * 这样条件能引用前面核过的事实，而不是只能问"这个词提没提过"。 */
     if (atom[0] == '#') {
@@ -4898,10 +4935,15 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
 }
 
 /* 跑一条过程并打总结 + 轨迹（`::proc run <名字>` 用；返回断点数）。 */
-static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
+static inline size_t proc_run_args(AI *ai, const char *bare, ProcRun *out,
+                                   char *const *args, size_t nargs) {
     ProcRun pr;
     memset(&pr, 0, sizeof pr);
     for (size_t ci = 0; ci < PROC_CLAIM_MAX; ++ci) pr.claim[ci] = -1;   /* §6.508：没跑过的断言步 = 判不了 */
+    /* §6.509 B3：把实参带进这一轮（打印出来，谁都能看见用的是哪几个） */
+    for (size_t ai2 = 0; ai2 < nargs && ai2 < PROC_ARG_MAX; ++ai2)
+        snprintf(pr.arg[ai2], sizeof pr.arg[ai2], "%s", args[ai2] ? args[ai2] : "");
+    pr.n_arg = nargs < PROC_ARG_MAX ? nargs : PROC_ARG_MAX;
     der_reset(&pr.trace);
     /* **开关在引擎自己的入口上**（不只在外面的命令里）：关着一律不发车 ——
      * 免得换个调用方（C 层/别的命令）就绕过了"默认关"。 */
@@ -4963,6 +5005,11 @@ static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
  * 然后在**痕**里写一句"这件事我记过过程 X（N 步）"；引擎开着时顺手**干跑一遍**（`proc_run` 的
  * 干跑是只读的：不执行行为、假定前提也只在假设层里），把"几步过/几个断点"并进痕。
  * **关着时一个字都不加**（默认关）。不动图：这一条只往痕和思考对象上写，没有任何写入。 */
+/* 旧签名（无实参）保留：所有老调用点一个字都不用改。 */
+static inline size_t proc_run(AI *ai, const char *bare, ProcRun *out) {
+    return proc_run_args(ai, bare, out, NULL, 0);
+}
+
 static inline void think_note_process(AI *ai, char *const *words, size_t n) {
     if (!ai || !ai->proc_think || !words || !n) return;
     Think *t = (Think *)ai->think;

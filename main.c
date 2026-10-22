@@ -1202,7 +1202,20 @@ static void cmd_proc(AI *ai, const char *cmd) {
         /* 开关判在引擎入口里（一处），这里只管转过去 */
         char nm[64] = {0};
         if (sscanf(w, "%63s", nm) != 1) return;
-        (void)proc_run(ai, nm, NULL);
+        /* §6.509 B3：`::proc run <名字> [实参…]` —— 实参供步骤/断言/条件里的 `$1`..`$4` 用 */
+        char abuf[PROC_ARG_MAX][48];
+        char *av[PROC_ARG_MAX];
+        size_t an = 0;
+        const char *q2 = w + strlen(nm);
+        while (an < PROC_ARG_MAX) {
+            while (*q2 == ' ') ++q2;
+            if (!*q2) break;
+            if (sscanf(q2, "%47s", abuf[an]) != 1) break;
+            av[an] = abuf[an];
+            ++an;
+            q2 += strlen(abuf[an - 1]);
+        }
+        (void)proc_run_args(ai, nm, NULL, av, an);
         return;
     }
     if (arg && *arg) {
