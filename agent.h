@@ -441,6 +441,7 @@ static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.513 B5 **外壳的真相在图上**：`词 —[外壳]→ [外壳:标记]` 这样的边。
  * 这里只做一张**缓存**（词名表），池子词数一变就重建 —— 加新外壳 = 建一条边（受审通道），不改代码。 */
 static AipPat g_shell[AIP_PAT_MAX];
+static unsigned char g_shell_q[AIP_PAT_MAX];   /* §6.515：这条外壳是不是**问句框架**（剥完补问号） */
 static size_t g_shell_n;
 static size_t g_shell_poolcnt = (size_t)-1;
 static inline void aip_shell_refresh(const AI *ai) {
@@ -455,6 +456,8 @@ static inline void aip_shell_refresh(const AI *ai) {
             const Token *tg = t->assocs[k].main;
             if (tg && tg->name && strcmp(tg->name, "外壳标记") == 0) {
                 snprintf(g_shell[g_shell_n].w, sizeof g_shell[0].w, "%s", t->name);
+                const Token *act = t->assocs[k].action;
+                g_shell_q[g_shell_n] = (act && act->name && !strcmp(act->name, "[外壳:问]")) ? 1 : 0;
                 ++g_shell_n;
                 break;
             }
@@ -517,6 +520,38 @@ static inline size_t *aip_pat_count(const char *kind) {
     if (!strcmp(kind, "fill"))    return &g_fill_n;
     return NULL;
 }
+/* §6.515 **桶 → 图的镜像（默认关）**：`AIP_SHELLMIRROR=1` 时把 `[lead]` 各条在图上留一条外壳边。
+ * `?` 后缀 ⇒ 动作槽挂 `[外壳:问]`（问句框架）。**默认不建边**：图化 A/B 还没证明等价之前，
+ * 不许悄悄改图（§6.514 的教训：少了"问句框架"这条信息，blind4 掉 81 条）。 */
+static inline void aip_shell_mirror_lead(AI *ai) {
+    const char *on = getenv("AIP_SHELLMIRROR");
+    if (!on || !*on || !strcmp(on, "0")) return;
+    if (!ai || !ai->pool || g_lead_n == 0) return;
+    Token *mark = pool_token_intern(ai->pool, "外壳标记");
+    Token *markq = pool_token_intern(ai->pool, "[外壳:问]");
+    if (!mark) return;
+    size_t made = 0;
+    for (size_t i = 0; i < g_lead_n; ++i) {
+        char w[64];
+        snprintf(w, sizeof w, "%.63s", g_lead[i].w);
+        size_t l = strlen(w);
+        int is_q = (l && w[l - 1] == '?');
+        if (is_q) w[--l] = 0;
+        if (!w[0]) continue;
+        Token *t = pool_token_intern(ai->pool, w);
+        if (!t || t == mark) continue;
+        AssocEntry *e = token_add_assoc_action_unique(t, mark, is_q ? markq : NULL);
+        if (!e) continue;
+        if (e->hits == 0) e->hits = 1;   /* §6.514 踩过：载入后的空边清理会把 hits=0 的边抹掉 */
+        ++made;
+    }
+    g_shell_poolcnt = (size_t)-1;
+    (void)markq;
+    if (getenv("AIP_PATDBG"))
+        fprintf(stderr, "[patterns] 外壳镜像（AIP_SHELLMIRROR）：[lead] %zu 条 → 图上 %zu 条边\n",
+                g_lead_n, made);
+}
+
 static inline void aip_patterns_load(AI *ai) {
     if (g_pat_loaded) return;
     g_pat_loaded = 1;
@@ -837,6 +872,7 @@ continue;
             }
         }
     }
+    aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
         fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n);
@@ -6103,8 +6139,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
              * 顺序先桶后图：桶是既有行为（blind4 靠它），图是新的下沉通道。 */
             if (!ll) {
                 aip_shell_refresh(ai);
-                size_t sl = aip_pat_prefix_ex(g_shell, g_shell_n, q, NULL);
-                if (sl) { ll = sl; was_rhet = 1; }   /* 外壳 = 问句框架 ⇒ 剥完要补回问号 */
+                size_t si = (size_t)-1;
+                size_t sl = aip_pat_prefix_ex(g_shell, g_shell_n, q, &si);
+                if (sl) {
+                    ll = sl;
+                    /* §6.515 只有**问句框架**的外壳才补问号（以前一律补 ⇒ 陈述被当成问句，blind4 −81） */
+                    if (si != (size_t)-1 && g_shell_q[si]) was_rhet = 1;
+                }
             }
             if (!ll) break;
             if (lead_i != (size_t)-1 && g_lead_q[lead_i]) was_rhet = 1;

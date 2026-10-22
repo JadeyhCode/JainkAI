@@ -544,6 +544,19 @@ run '帮我看下鲸鱼属于鱼吗\n::op 标外壳 鲸鱼属于\n鲸鱼属于�
 grep -q '行为 标外壳' o44 \
     && ok "同一会话里**现场标**新外壳（不用改代码/不用重启）" \
     || bad "现场标" "$(grep -m2 '标外壳' o44)"
+# §6.515 B5 **图化等价**：`[lead]` 桶关掉（SHELLONLY）、只用**镜像到图上**的外壳边，问句照样答得出来
+# ⚠ 必须在**仓库根**跑：这套的 WORK 目录里没有 patterns.txt（没有 `[lead]` 就没东西可镜像）——
+#   而且 `cp` 要在管道外（放管道里会和二进制启动竞争，读到半个模型文件 —— 踩过）。
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '请问猫属于动物吗\n'; } | \
+    AIP_SHELLMIRROR=1 AIP_SHELLONLY=1 "$WORK/aip" --model model.bin > "$WORK/o45" 2>&1 ) || true
+grep -q 'AI > 对' "$WORK/o45" \
+    && ok "**桶关掉、只用图** ⇒ 引导语照样剥、照样答（图化等价的第一步）" \
+    || bad "图化等价" "$(grep -m3 'AI >\|外壳\|加载失败' "$WORK/o45")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '::quit\n'; } | \
+    AIP_SHELLMIRROR=1 AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o46" 2>&1 ) || true
+grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q '→ 图上 45 条边' "$WORK/o46" \
+    && ok "镜像日志：`[lead]` 45 条 → 图上 45 条边（机制真的跑了）" \
+    || bad "镜像日志" "$(grep -m2 '外壳\|lead=' "$WORK/o46")"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \

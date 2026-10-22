@@ -1522,6 +1522,8 @@ int main(int argc, char **argv) {
             ai_free(a->brain);
             a->brain = m;
             a->brain->rel_verify_hook = aip_rel_verify;    /* §6.248 */
+            /* §6.515 换了新池子之后要重新镜像（外壳边建在旧池子上；默认关时这里是空操作） */
+            aip_shell_mirror_lead(a->brain);
             loaded = 1;
             printf("[已加载模型 %s]\n", model_path);
         } else {

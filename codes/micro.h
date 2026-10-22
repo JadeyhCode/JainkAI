@@ -2458,16 +2458,20 @@ static inline int token_op_mark_shell(AI *ai, char *const *args, size_t n, ModQu
     if (!w) { snprintf(note, cap, "这个词建不出来"); return -1; }
     Token *mark = pool_token_intern(ai->pool, "外壳标记");
     if (!mark) { snprintf(note, cap, "标记节点建不出来"); return -1; }
+    int is_q = (n >= 2 && args[1] && !strcmp(args[1], "问"));
+    Token *act = is_q ? pool_token_intern(ai->pool, "[外壳:问]") : NULL;
     ModIntent m;
     memset(&m, 0, sizeof m);
     m.type = MOD_ADD_ASSOC;
     m.target = w;
     m.main = mark;
+    m.action = act;                                 /* NULL = 普通外壳；`[外壳:问]` = 问句框架 */
     snprintf(m.name, sizeof m.name, "%s", "外壳标记");
     snprintf(m.source, sizeof m.source, "行为:标外壳");
     m.bump = 1;
     int ok = mod_propose(q, &m);
-    snprintf(note, cap, "%s —[外壳]→ 外壳标记（%s）", args[0], ok ? "已提出" : "与队列重复");
+    snprintf(note, cap, "%s —[外壳]→ 外壳标记%s（%s）", args[0], is_q ? "（问句框架）" : "",
+             ok ? "已提出" : "与队列重复");
     return ok ? 1 : 0;
 }
 
@@ -2753,10 +2757,12 @@ static const TokenOp TOKEN_OPS[] = {
       4, 6, token_op_add_claim },
     { "加异常",     "<过程> <类型> <动作>", "⑤ 给过程加**出错时跳的处理步**（`[异常:类型]`）："
       "哪一步失败就跑它（类型只作标签，v1 不按类型分派）", 3, 3, token_op_add_exc },
-    /* §6.513 B5 **外壳也是图里的记号**：把某个词标成"引导语"，剥离环节会从**图**里读它 */
-    { "标外壳",     "<词>", "§6.513 把 <词> 标成**引导语外壳**（`词 —[外壳]→ 外壳标记`）；"
-      "以后剥离环节先读图里的标记，再看 `[lead]` 桶（桶是兼容层）",
-      1, 1, token_op_mark_shell },
+    /* §6.513 B5 **外壳也是图里的记号**：把某个词标成"引导语"，剥离环节会从**图**里读它。
+     * §6.515 加一个可选参数 `问`：表示这是**问句框架**的引导语（剥完要补回问号）。
+     * 这个信息以前只存在 `[lead]` 桶的 `?` 后缀里 —— 图化 A/B 掉 81 条就是因为丢了它。 */
+    { "标外壳",     "<词> [问]", "§6.513/§6.515 把 <词> 标成**引导语外壳**（`词 —[外壳]→ 外壳标记`）；"
+      "带 `问` 时再挂 `[外壳:问]` 动作（= 问句框架，剥完补回问号）",
+      1, 2, token_op_mark_shell },
     /* §6.511 B4 **答复模板也是行为**：给过程加一个"说出来"的步骤（模板=后面所有参数用空格连起来） */
     { "加说",       "<过程> <模板…>", "§6.511 给过程加一步**答复模板**（`[步骤:N@说:模板]`）；"
       "模板里可用 `$1`..`$4`（`::proc run <名> <实参…>` 绑）；跑完把说过的话打在「答复：」上",
