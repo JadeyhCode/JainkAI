@@ -438,6 +438,29 @@ static AipPat g_lead[AIP_PAT_MAX], g_slot[AIP_PAT_MAX], g_confuse[AIP_PAT_MAX];
  * （实测：触发改口，把「猫不会飞」写成「猫会飞」）。加新引导语时不用改 C。 */
 static unsigned char g_lead_q[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
+/* §6.513 B5 **外壳的真相在图上**：`词 —[外壳]→ [外壳:标记]` 这样的边。
+ * 这里只做一张**缓存**（词名表），池子词数一变就重建 —— 加新外壳 = 建一条边（受审通道），不改代码。 */
+static AipPat g_shell[AIP_PAT_MAX];
+static size_t g_shell_n;
+static size_t g_shell_poolcnt = (size_t)-1;
+static inline void aip_shell_refresh(const AI *ai) {
+    if (!ai || !ai->pool) return;
+    if (ai->pool->count == g_shell_poolcnt) return;
+    g_shell_poolcnt = ai->pool->count;
+    g_shell_n = 0;
+    for (size_t i = 0; i < ai->pool->count && g_shell_n < AIP_PAT_MAX; ++i) {
+        const Token *t = ai->pool->tokens[i];
+        if (!t || !t->name) continue;
+        for (size_t k = 0; k < t->count; ++k) {
+            const Token *tg = t->assocs[k].main;
+            if (tg && tg->name && strcmp(tg->name, "外壳标记") == 0) {
+                snprintf(g_shell[g_shell_n].w, sizeof g_shell[0].w, "%s", t->name);
+                ++g_shell_n;
+                break;
+            }
+        }
+    }
+}
 /* §6.284 **[reply] 桶**：`关键词1,关键词2=回复`。关键词**全部**出现才命中（AND）。 */
 #define AIP_REPLY_MAX 128
 /* §6.370 关键词串**按行存整串**（`组,组|组`），不是单个词 —— 128 字节装不下
@@ -6076,6 +6099,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
             size_t lead_i = (size_t)-1;
             if (!ll) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
+            /* §6.513 B5：`[lead]` 桶没命中时，再看**图里的外壳标记**（`标外壳` 建的那些）。
+             * 顺序先桶后图：桶是既有行为（blind4 靠它），图是新的下沉通道。 */
+            if (!ll) {
+                aip_shell_refresh(ai);
+                size_t sl = aip_pat_prefix_ex(g_shell, g_shell_n, q, NULL);
+                if (sl) { ll = sl; was_rhet = 1; }   /* 外壳 = 问句框架 ⇒ 剥完要补回问号 */
+            }
             if (!ll) break;
             if (lead_i != (size_t)-1 && g_lead_q[lead_i]) was_rhet = 1;
             const char *rest = q + ll;

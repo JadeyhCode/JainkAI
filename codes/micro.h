@@ -2450,6 +2450,27 @@ static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQue
     return ok ? 1 : 0;
 }
 
+/* §6.513 B5：把一个词标成引导语外壳（图里留一条 `词 —[外壳]→ [外壳:标记]` 的边）。 */
+static inline int token_op_mark_shell(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                      char *note, size_t cap) {
+    if (n < 1) { snprintf(note, cap, "要 <词>"); return -1; }
+    Token *w = pool_token_intern(ai->pool, args[0]);
+    if (!w) { snprintf(note, cap, "这个词建不出来"); return -1; }
+    Token *mark = pool_token_intern(ai->pool, "外壳标记");
+    if (!mark) { snprintf(note, cap, "标记节点建不出来"); return -1; }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = w;
+    m.main = mark;
+    snprintf(m.name, sizeof m.name, "%s", "外壳标记");
+    snprintf(m.source, sizeof m.source, "行为:标外壳");
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s —[外壳]→ 外壳标记（%s）", args[0], ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+
 /* §6.511 B4：加一个"说"的步骤。模板 = args[1..] 用空格连起来（`::op 加说 查 猫 属于 $1`）。 */
 static inline int token_op_add_say(AI *ai, char *const *args, size_t n, ModQueue *q,
                                    char *note, size_t cap) {
@@ -2732,6 +2753,10 @@ static const TokenOp TOKEN_OPS[] = {
       4, 6, token_op_add_claim },
     { "加异常",     "<过程> <类型> <动作>", "⑤ 给过程加**出错时跳的处理步**（`[异常:类型]`）："
       "哪一步失败就跑它（类型只作标签，v1 不按类型分派）", 3, 3, token_op_add_exc },
+    /* §6.513 B5 **外壳也是图里的记号**：把某个词标成"引导语"，剥离环节会从**图**里读它 */
+    { "标外壳",     "<词>", "§6.513 把 <词> 标成**引导语外壳**（`词 —[外壳]→ 外壳标记`）；"
+      "以后剥离环节先读图里的标记，再看 `[lead]` 桶（桶是兼容层）",
+      1, 1, token_op_mark_shell },
     /* §6.511 B4 **答复模板也是行为**：给过程加一个"说出来"的步骤（模板=后面所有参数用空格连起来） */
     { "加说",       "<过程> <模板…>", "§6.511 给过程加一步**答复模板**（`[步骤:N@说:模板]`）；"
       "模板里可用 `$1`..`$4`（`::proc run <名> <实参…>` 绑）；跑完把说过的话打在「答复：」上",
