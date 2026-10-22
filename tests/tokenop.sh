@@ -612,6 +612,11 @@ run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 泡茶\n::op 加�
 grep -q 'AI > 泡 好 了' o57 \
     && ok "**多字过程名不被实参拆坏**（`跑 泡茶` 仍认成过程 泡茶）" \
     || bad "多字过程名" "$(grep -m2 'AI >' o57)"
+# §6.526 对话入口的实参超限也要**明说**（CLI 有，对话以前没有）
+run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 报\n::op 加说 报 $1\n跑 报 甲 乙 丙 丁 戊\n' o58
+grep -q '实参最多 4 个' o58 \
+    && ok "对话里给 5 个实参 ⇒ 答复里**明说**「后面 1 个没带进去」" \
+    || bad "对话实参超限" "$(grep -m2 'AI >' o58)"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \

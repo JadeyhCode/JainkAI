@@ -5345,9 +5345,14 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
         char *av[PROC_ARG_MAX];
         size_t an = 0;
         for (size_t k = arg_from; k < n && an < PROC_ARG_MAX; ++k) av[an++] = words[k];
+        size_t n_extra = (n > arg_from + an) ? (n - arg_from - an) : 0;   /* §6.526 超限要说出来 */
         size_t gaps = proc_run_args(ai, bare, &pr, av, an);
         if (pr.say[0]) {
-            snprintf(out, out_cap, "%s", pr.say);
+            if (n_extra)
+                snprintf(out, out_cap, "%.180s（实参最多 %d 个：后面 %zu 个**没带进去**）",
+                         pr.say, PROC_ARG_MAX, n_extra);
+            else
+                snprintf(out, out_cap, "%.200s", pr.say);
             return 1;
         }
         snprintf(out, out_cap, "跑 完 了 「 %s 」 ： %s", bare,
