@@ -603,6 +603,15 @@ run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 报\n::op 加步�
 grep -q '跑 完 了' o55 \
     && ok "**没说过话的过程**：仍回状态串（不被空模板顶掉）" \
     || bad "过程无话" "$(grep -m2 'AI >' o55)"
+# §6.525 P1-3 续：对话里也能**带实参**（`跑 <过程> <实参…>`，过程名取最长匹配）
+run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 报\n::op 加说 报 $1 属于 $2\n跑 报 猫 动物\n' o56
+grep -q 'AI > 猫 属于 动物' o56 \
+    && ok "**对话里带实参**：`跑 报 猫 动物` ⇒ 过程名=报、实参=猫/动物" \
+    || bad "对话实参" "$(grep -m2 'AI >' o56)"
+run '::proc on\n::proc dry off\n::proc talk on\n::op 建过程 泡茶\n::op 加说 泡茶 泡 好 了\n::op 加步骤 泡茶 烧水\n跑 泡茶\n' o57
+grep -q 'AI > 泡 好 了' o57 \
+    && ok "**多字过程名不被实参拆坏**（`跑 泡茶` 仍认成过程 泡茶）" \
+    || bad "多字过程名" "$(grep -m2 'AI >' o57)"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \

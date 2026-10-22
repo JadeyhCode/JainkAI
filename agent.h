@@ -5318,8 +5318,20 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
         char nm[64];
         size_t from = (n >= 2 && strcmp(words[1], "过程") == 0) ? 2 : 1;
         if (dialog_join_words(words, n, from, nm, sizeof nm) == 0) return 0;
+        /* §6.525 P1-3 续：**过程名取最长匹配**，剩下的词当实参
+         * （`跑 报 猫 动物` ⇒ 过程 报 + 实参 猫/动物；以前整串当名字 ⇒ 找不到）。 */
+        size_t arg_from = n;
+        for (size_t j = n; j > from; --j) {
+            char cand[64];
+            if (dialog_join_words(words, j, from, cand, sizeof cand) == 0) continue;
+            if (proc_root_of(ai, cand)) {
+                snprintf(nm, sizeof nm, "%s", cand);
+                arg_from = j;
+                break;
+            }
+        }
         const char *bare = nm;
-        if (!proc_root_of(ai, bare)) {
+        if (arg_from == n && !proc_root_of(ai, bare)) {   /* 整串也找不到 ⇒ 报"没有这个" */
             snprintf(out, out_cap, "没有 「 %s 」 这个 过程", bare);
             return 1;
         }
@@ -5330,7 +5342,10 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
         /* §6.524 P1-3：过程里**说过话**就把那句话当答复（`加说` 的模板），
          * 否则才退回"跑完了…每一步都过得去"的状态串。 */
         ProcRun pr;
-        size_t gaps = proc_run(ai, bare, &pr);
+        char *av[PROC_ARG_MAX];
+        size_t an = 0;
+        for (size_t k = arg_from; k < n && an < PROC_ARG_MAX; ++k) av[an++] = words[k];
+        size_t gaps = proc_run_args(ai, bare, &pr, av, an);
         if (pr.say[0]) {
             snprintf(out, out_cap, "%s", pr.say);
             return 1;
