@@ -4456,9 +4456,10 @@ typedef struct {
     char say[256];                 /* §6.511 B4：这一轮"说出来"的答复模板（跑完打在「答复：」上） */
     char arg[PROC_ARG_MAX][48];    /* §6.509 B3：这次跑的实参（`::proc run 查 猫 动物` → arg[0]=猫 arg[1]=动物） */
     size_t n_arg;
-    int8_t claim[PROC_CLAIM_MAX];  /* §6.508 B2：按**步号**记「加断言」那一步的复核结论
-                                    * 1=过、0=不过、-1=没跑过/不是断言步。
-                                    * 条件里用 `#N` 引用（`#1` = 第 1 步的断言结果）。 */
+    int8_t claim[PROC_CLAIM_MAX];  /* §6.508 B2 / §6.523：按**步号**记「加断言」那一步的结论类型
+                                    * -1=没跑过/不是断言步；1=过；2=**认不全**（主语/关系/宾语缺失）；
+                                    * 3=**复核不过**（推不出来/验证器不认）。
+                                    * 条件里 `#N` 看"过不过"，`#N:认不全` / `#N:复核不过` / `#N:过` 看类型。 */
     Derivation trace;   /* 执行轨迹（复用 Derivation：goal + 每步 fact/gap + conclude） */
 } ProcRun;
 
@@ -4674,7 +4675,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                            label, act->name ? act->name : "?", cs, cr, cb2);
                     der_gap(&pr->trace, "复核目标认不全");
                     pr->n_gap++; pr->n_verify_fail++;
-                    if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 0;   /* §6.508 B2 */
+                    if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 2;   /* §6.523 认不全 */
                     proc_step_rollback(ai, act, added, n_added, pr);
                     return 0;
                 }
@@ -4701,7 +4702,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
                        st == 0 ? "推不出来" : "验证器不认", vg);
                 der_gap(&pr->trace, "独立复核不过");
                 pr->n_gap++; pr->n_verify_fail++;
-                if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 0;   /* §6.508 B2 */
+                if (cidx > 0 && cidx < PROC_CLAIM_MAX) pr->claim[cidx] = 3;   /* §6.523 复核不过 */
                 proc_step_rollback(ai, act, added, n_added, pr);
                 return 0;
             }
@@ -4749,16 +4750,23 @@ static inline int proc_cond_atom_eval(AI *ai, const ProcRun *pr, const char *ato
     /* §6.508 B2：`#N` = 本过程第 N 步「加断言」的**复核结论**（1 过 / 0 不过 / 没跑过=判不了）。
      * 这样条件能引用前面核过的事实，而不是只能问"这个词提没提过"。 */
     if (atom[0] == '#') {
+        /* §6.523：`#N` 看"过不过"；`#N:过` / `#N:认不全` / `#N:复核不过` 看**缺口类型**。 */
         long idx = 0; const char *q = atom + 1;
         if (!*q) return -1;
-        for (; *q; ++q) {
-            if (*q < '0' || *q > '9') return -1;
-            idx = idx * 10 + (*q - '0');
-            if (idx >= PROC_CLAIM_MAX) return -1;
-        }
+        while (*q >= '0' && *q <= '9') { idx = idx * 10 + (*q - '0'); ++q; if (idx >= PROC_CLAIM_MAX) return -1; }
         if (!pr || idx <= 0) return -1;
         int8_t c = pr->claim[idx];
-        return c > 0 ? 1 : (c == 0 ? 0 : -1);
+        if (c < 0) return -1;
+        if (*q == ':') {
+            const char *kind = q + 1;
+            int want = (!strcmp(kind, "过") || !strcmp(kind, "通过")) ? 1
+                     : (!strcmp(kind, "认不全")) ? 2
+                     : (!strcmp(kind, "复核不过") || !strcmp(kind, "不过")) ? 3
+                     : 0;
+            if (!want) return -1;                 /* 认不出的类型：判不了，不猜 */
+            return c == want ? 1 : 0;
+        }
+        return c == 1 ? 1 : 0;
     }
     int ev = 0;
     if (ai->eval_num && ai_eval_cmp(atom, &ev)) { if (by_eval) *by_eval = 1; return ev ? 1 : 0; }
