@@ -4597,6 +4597,60 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
 }
 
 /* 跑一条过程（递归跑子过程）。返回"断点数"（0 = 每一步都过）。 */
+/* §6.507 **条件组合**（逻辑落在图上，而不是再加一套判据）：
+ * `A&B` = 与、`A|B` = 或、`!A` = 非（`!` 可连写）；原子判据**仍是前提三档** + 可选求值层。
+ * 返回 1=成立、0=不成立、-1=判不了（有原子图里没有、求值层也不算）——**判不了不静默当成立**。 */
+static inline int proc_cond_atom_eval(AI *ai, const char *atom, int *by_eval) {
+    if (by_eval) *by_eval = 0;
+    if (!ai || !atom || !*atom) return -1;
+    int ev = 0;
+    if (ai->eval_num && ai_eval_cmp(atom, &ev)) { if (by_eval) *by_eval = 1; return ev ? 1 : 0; }
+    Token *x = pool_find(ai->pool, atom);
+    if (!x) return -1;
+    return ai_premise_holds(ai, x) ? 1 : 0;
+}
+
+static inline int proc_cond_eval(AI *ai, const char *spec, size_t *n_atoms, int *n_unknown) {
+    size_t atoms = 0; int unknown = 0;
+    int any_true = 0, any_group_unknown = 0;
+    const char *p = (spec && *spec) ? spec : "";
+    while (1) {
+        const char *bar = strchr(p, '|');
+        size_t glen = bar ? (size_t)(bar - p) : strlen(p);
+        int g_false = 0, g_unknown = 0, g_any = 0;
+        const char *q = p, *gend = p + glen;
+        while (q < gend) {
+            const char *amp = q;
+            while (amp < gend && *amp != '&') ++amp;
+            size_t alen = (size_t)(amp - q);
+            char atom[96];
+            if (alen >= sizeof atom) alen = sizeof atom - 1;
+            memcpy(atom, q, alen); atom[alen] = 0;
+            int neg = 0;
+            char *a2 = atom;
+            while (*a2 == '!') { neg = !neg; ++a2; }
+            if (*a2) {
+                ++atoms; ++g_any;
+                int r = proc_cond_atom_eval(ai, a2, NULL);
+                if (r < 0) { ++unknown; g_unknown = 1; }
+                else if (neg ? r : !r) g_false = 1;
+            }
+            q = (amp < gend) ? amp + 1 : gend;
+        }
+        if (g_any) {
+            if (!g_false && !g_unknown) any_true = 1;
+            else if (g_unknown && !g_false) any_group_unknown = 1;
+        }
+        if (!bar) break;
+        p = bar + 1;
+    }
+    if (n_atoms) *n_atoms = atoms;
+    if (n_unknown) *n_unknown = unknown;
+    if (any_true) return 1;
+    if (any_group_unknown || unknown) return -1;
+    return 0;
+}
+
 static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr, int dry) {
     if (!ai || !pr) return 0;
     if (depth > PROC_RUN_DEPTH_MAX) {
@@ -4649,14 +4703,19 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
         (void)proc_mark_bare(conds[i]->action ? conds[i]->action->name : NULL,
                              PROC_COND_PREFIX, cb, sizeof cb);
         /* ② **求值层样板先试**（默认关）：条件写成可计算的形式（`3<5`）时，词当然不在图里 ——
-         * 所以要**排在图内判据前面**（第一版放在后面 ⇒ 永远走到"图里没有这个词"那条路）。 */
-        int evaluated = 0, ev = 0;
-        if (ai->eval_num && ai_eval_cmp(cb, &ev)) evaluated = 1;
-        Token *x = evaluated ? NULL : (cb[0] ? pool_find(ai->pool, cb) : NULL);
-        if (!evaluated && !x) {
-            /* 条件词**图里根本没这个词** ⇒ 不是"没提到"，是"判不了"。照实说，并按不成立走
+         * 所以要**排在图内判据前面**（第一版放在后面 ⇒ 永远走到"图里没有这个词"那条路）。
+         * §6.507 条件可以是**复合式**：`A&B`（与）/`A|B`（或）/`!A`（非），原子判据不变。 */
+        size_t n_atoms = 0; int n_unknown = 0;
+        int cres = proc_cond_eval(ai, cb, &n_atoms, &n_unknown);
+        int single = (n_atoms <= 1);
+        if (cres < 0) {
+            /* 原子**图里根本没有**（且求值层也不算）⇒ 不是"没提到"，是"判不了"。照实说，并按不成立走
              * （不然一个拼错的条件会静默变成"成立"，那是最坏的一种骗人）。 */
-            printf("    条件「%s」：图里没有这个词 ⇒ **判不了**（按不成立处理）\n", cb);
+            if (single)
+                printf("    条件「%s」：图里没有这个词 ⇒ **判不了**（按不成立处理）\n", cb);
+            else
+                printf("    条件「%s」：有 %d 个原子判不了 ⇒ **判不了**（按不成立处理）\n",
+                       cb, n_unknown);
             if (nel > 0) {
                 printf("      → 走 「[否则]」 那一支 %s\n",
                        elses[0]->main && elses[0]->main->name ? elses[0]->main->name : "?");
@@ -4669,10 +4728,17 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
             continue;
         }
         /* 求值层算出来了就用它的真值；否则走图内判据（提到过/够得着/有据） */
-        if (evaluated)
-            printf("    条件「%s」：**求值层算了一遍**（数值比较）⇒ %s\n", cb,
-                   ev ? "成立" : "不成立");
-        int holds = evaluated ? ev : ai_premise_holds(ai, x);
+        if (single) {
+            int by_eval = 0, ev1 = 0;
+            if (ai->eval_num && ai_eval_cmp(cb, &ev1)) by_eval = 1;
+            if (by_eval)
+                printf("    条件「%s」：**求值层算了一遍**（数值比较）⇒ %s\n", cb,
+                       ev1 ? "成立" : "不成立");
+        } else {
+            printf("    条件「%s」：**复合式**（%zu 个原子，与/或/非）⇒ %s\n", cb, n_atoms,
+                   cres ? "成立" : "不成立");
+        }
+        int holds = cres;
         if (holds) {
             printf("    条件「%s」**成立** → 走它那一支 %s\n", cb,
                    conds[i]->main && conds[i]->main->name ? conds[i]->main->name : "?");
