@@ -452,6 +452,23 @@ static inline void aip_shell_refresh(const AI *ai) {
     for (size_t i = 0; i < ai->pool->count && g_shell_n < AIP_PAT_MAX; ++i) {
         const Token *t = ai->pool->tokens[i];
         if (!t || !t->name) continue;
+        /* §6.518 来源一：**保留命名空间**里的记号（`[外壳:词]` / `[外壳问:词]`）——
+         * 它不 intern 原词 ⇒ **不会改分词**（§6.517 的根因）。 */
+        if (!strncmp(t->name, "[外壳问:", strlen("[外壳问:"))) {
+            snprintf(g_shell[g_shell_n].w, sizeof g_shell[0].w, "%s",
+                     t->name + strlen("[外壳问:"));
+            char *rb2 = strrchr(g_shell[g_shell_n].w, ']');
+            if (rb2) *rb2 = 0;
+            if (g_shell[g_shell_n].w[0]) { g_shell_q[g_shell_n] = 1; ++g_shell_n; }
+            continue;
+        }
+        if (!strncmp(t->name, "[外壳:", strlen("[外壳:"))) {
+            snprintf(g_shell[g_shell_n].w, sizeof g_shell[0].w, "%s", t->name + strlen("[外壳:"));
+            char *rb2 = strrchr(g_shell[g_shell_n].w, ']');
+            if (rb2) *rb2 = 0;
+            if (g_shell[g_shell_n].w[0]) { g_shell_q[g_shell_n] = 0; ++g_shell_n; }
+            continue;
+        }
         for (size_t k = 0; k < t->count; ++k) {
             const Token *tg = t->assocs[k].main;
             if (tg && tg->name && strcmp(tg->name, "外壳标记") == 0) {
@@ -525,7 +542,7 @@ static inline size_t *aip_pat_count(const char *kind) {
  * 不许悄悄改图（§6.514 的教训：少了"问句框架"这条信息，blind4 掉 81 条）。 */
 static inline void aip_shell_mirror_lead(AI *ai) {
     const char *on = getenv("AIP_SHELLMIRROR");
-    if (!on || !*on || !strcmp(on, "0")) return;
+    if (!on || !*on || !strcmp(on, "0")) return;    /* §6.518 仍默认关：默认化会让 relations 套件 2 项红（见审计） */
     if (!ai || !ai->pool || g_lead_n == 0) return;
     Token *mark = pool_token_intern(ai->pool, "外壳标记");
     Token *markq = pool_token_intern(ai->pool, "[外壳:问]");
@@ -538,11 +555,11 @@ static inline void aip_shell_mirror_lead(AI *ai) {
          * 所以这里必须读 g_lead_q，不能再去 w 里找 `?`（§6.516 就是这里错：全被判成非问句 ⇒ blind4 −2）。 */
         int is_q = (i < AIP_PAT_MAX && g_lead_q[i]) ? 1 : 0;
         if (!w[0]) continue;
-        Token *t = pool_token_intern(ai->pool, w);
-        if (!t || t == mark) continue;
-        AssocEntry *e = token_add_assoc_action_unique(t, mark, is_q ? markq : NULL);
-        if (!e) continue;
-        if (e->hits == 0) e->hits = 1;   /* §6.514 踩过：载入后的空边清理会把 hits=0 的边抹掉 */
+        /* §6.518 **不 intern 原词**：只建一个保留命名空间里的记号 `[外壳:词]` / `[外壳问:词]`。
+         * §6.517 的教训：intern 原词会改分词（`难道` 从 难/道 变成整词），连累 g2/g21 掉分。 */
+        char mk[128];
+        snprintf(mk, sizeof mk, "[外壳%s:%s]", is_q ? "问" : "", w);
+        if (!pool_token_intern(ai->pool, mk)) continue;
         ++made;
     }
     g_shell_poolcnt = (size_t)-1;
@@ -6150,6 +6167,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 }
             }
             if (!ll) {
+                /* §6.518 默认仍走桶；`AIP_SHELLONLY=1` 才"只用图"（A/B 用）。 */
                 const char *so2 = getenv("AIP_SHELLONLY");
                 int only = (so2 && *so2 && strcmp(so2, "0") != 0);
                 if (!only) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
