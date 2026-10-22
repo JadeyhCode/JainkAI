@@ -534,9 +534,9 @@ static inline void aip_shell_mirror_lead(AI *ai) {
     for (size_t i = 0; i < g_lead_n; ++i) {
         char w[64];
         snprintf(w, sizeof w, "%.63s", g_lead[i].w);
-        size_t l = strlen(w);
-        int is_q = (l && w[l - 1] == '?');
-        if (is_q) w[--l] = 0;
+        /* ⚠ 加载器**已经把尾部 `?` 摘掉**、把"问句框架"记在 `g_lead_q[]` 里（§6.374）。
+         * 所以这里必须读 g_lead_q，不能再去 w 里找 `?`（§6.516 就是这里错：全被判成非问句 ⇒ blind4 −2）。 */
+        int is_q = (i < AIP_PAT_MAX && g_lead_q[i]) ? 1 : 0;
         if (!w[0]) continue;
         Token *t = pool_token_intern(ai->pool, w);
         if (!t || t == mark) continue;
@@ -6134,7 +6134,33 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
             /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
             size_t lead_i = (size_t)-1;
-            if (!ll) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
+            /* §6.517 顺序开关：`AIP_SHELLFIRST=1` 时**先图后桶**（默认仍是先桶后图）。
+             * 为什么要试：真 A/B 下"只用图"pert 215→248（+33），但 blind4 −2 —— 先图后桶可能两头都要。 */
+            {
+                const char *sf = getenv("AIP_SHELLFIRST");
+                int gfirst = (sf && *sf && strcmp(sf, "0") != 0);
+                if (gfirst) {
+                    aip_shell_refresh(ai);
+                    size_t gi = (size_t)-1;
+                    size_t gl = aip_pat_prefix_ex(g_shell, g_shell_n, q, &gi);
+                    if (gl) {
+                        ll = gl;
+                        if (gi != (size_t)-1 && g_shell_q[gi]) was_rhet = 1;
+                    }
+                }
+            }
+            if (!ll) {
+                const char *so2 = getenv("AIP_SHELLONLY");
+                int only = (so2 && *so2 && strcmp(so2, "0") != 0);
+                if (!only) ll = aip_pat_prefix_ex(g_lead, g_lead_n, q, &lead_i);
+            }
+            /* §6.516 **A/B 开关**：`AIP_SHELLONLY=1` 时**完全不看 `[lead]` 桶**，只用图。
+             * 这是"图能不能等价顶住"的唯一判据 —— 没有它，所谓的 A/B 其实两边都走了桶（§6.515 就吃过这个亏）。 */
+            {
+                const char *so = getenv("AIP_SHELLONLY");
+                int shell_only = (so && *so && strcmp(so, "0") != 0);
+                if (shell_only) { ll = 0; lead_i = (size_t)-1; }
+            }
             /* §6.513 B5：`[lead]` 桶没命中时，再看**图里的外壳标记**（`标外壳` 建的那些）。
              * 顺序先桶后图：桶是既有行为（blind4 靠它），图是新的下沉通道。 */
             if (!ll) {
