@@ -4374,6 +4374,7 @@ typedef struct {
     size_t n_verify_fail; /* ① 复核不过（缺口/推不出来）的次数 */
     size_t hypo_base;     /* 跑之前的假设层深度（跑完必须回到它） */
     size_t hypo_peak;     /* 跑的时候到过的最大深度 */
+    char say[256];                 /* §6.511 B4：这一轮"说出来"的答复模板（跑完打在「答复：」上） */
     char arg[PROC_ARG_MAX][48];    /* §6.509 B3：这次跑的实参（`::proc run 查 猫 动物` → arg[0]=猫 arg[1]=动物） */
     size_t n_arg;
     int8_t claim[PROC_CLAIM_MAX];  /* §6.508 B2：按**步号**记「加断言」那一步的复核结论
@@ -4555,6 +4556,19 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             der_gap(&pr->trace, "动作执行失败");
             pr->n_gap++;
             return 0;
+        }
+        /* ①.5 **答复模板步骤**（§6.511 B4）：记号 `[步骤:N@说:模板]` ⇒ 把模板（替换实参后）记进本轮 */
+        {
+            char tpl[160];
+            if (proc_step_say(se, tpl, sizeof tpl)) {
+                proc_subst_args(pr, tpl, sizeof tpl);
+                size_t have = strlen(pr->say);
+                if (have + strlen(tpl) + 2 < sizeof pr->say)
+                    snprintf(pr->say + have, sizeof pr->say - have, "%s%s", have ? " " : "", tpl);
+                printf("    %s %-12s 说：%s\n", label, act->name ? act->name : "?", tpl);
+                pr->n_ok++;
+                return 1;
+            }
         }
         /* ① **步骤带对象**：记号里有"要核的事"（`[步骤:N@要:S/R/B]`）⇒ 走
          * `rel_solve` 推一遍 + `der_verify` **独立复核**（不信任构造时写下的东西）。
@@ -4968,6 +4982,7 @@ static inline size_t proc_run_args(AI *ai, const char *bare, ProcRun *out,
      * 的活儿；这里把数补上，免得读轨迹的人以为"gaps=0 就是全过"） */
     pr.trace.gaps = pr.n_gap;
     der_conclude(&pr.trace, pr.n_gap ? 0 : +1, pr.n_gap ? 20 : 70);
+    if (pr.say[0]) printf("  **答复**：%s\n", pr.say);
     printf("  汇总：%zu 步（含调用展开）—— %zu 步过 / **%zu 个断点** / 真执行 %zu 个行为 / 进 %zu 次子过程\n",
            pr.n_step, pr.n_ok, pr.n_gap, pr.n_ran, pr.n_call);
     if (pr.n_verified || pr.n_verify_fail)

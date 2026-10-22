@@ -2450,6 +2450,47 @@ static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQue
     return ok ? 1 : 0;
 }
 
+/* §6.511 B4：加一个"说"的步骤。模板 = args[1..] 用空格连起来（`::op 加说 查 猫 属于 $1`）。 */
+static inline int token_op_add_say(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                   char *note, size_t cap) {
+    if (n < 2) { snprintf(note, cap, "要 <过程> <模板…>"); return -1; }
+    Token *root = proc_find(ai, args[0]);
+    if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
+    int idx = 0;
+    for (size_t i = 0; i < root->count; ++i) {
+        int sN = edge_step_index(&root->assocs[i]);
+        if (sN > idx) idx = sN;
+    }
+    idx++;
+    if (idx > 255) { snprintf(note, cap, "步号太大"); return -1; }
+    char tpl[128] = {0};
+    size_t use = 0;
+    for (size_t i = 1; i < n && i < 6; ++i) {
+        if (!args[i] || !args[i][0]) continue;
+        use += (size_t)snprintf(tpl + use, sizeof tpl - use, "%s%s", use ? " " : "", args[i]);
+        if (use + 8 >= sizeof tpl) break;
+    }
+    if (!tpl[0]) { snprintf(note, cap, "模板是空的"); return -1; }
+    char mk[192];
+    snprintf(mk, sizeof mk, "%s%d%s%s]", PROC_STEP_PREFIX, idx, PROC_STEP_SAY, tpl);
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_ADD_ASSOC;
+    m.target = root;
+    m.main = pool_find(ai->pool, args[1]);           /* 端点：模板第一个词（可能没有 ⇒ 走名字端点） */
+    snprintf(m.name, sizeof m.name, "%s", args[1]);
+    snprintf(m.source, sizeof m.source, "行为:加说");
+    m.flags = MOD_FLAG_PROCESS;
+    m.rel_id = (uint8_t)idx;
+    m.action = pool_token_intern(ai->pool, mk);
+    if (!m.action) { snprintf(note, cap, "说记号建不出来"); return -1; }
+    m.bump = 1;
+    int ok = mod_propose(q, &m);
+    snprintf(note, cap, "%s%s —%s→ %s（%s）", PROC_TOKEN_PREFIX, args[0], mk, tpl,
+             ok ? "已提出" : "与队列重复");
+    return ok ? 1 : 0;
+}
+
 static inline int token_op_add_cond(AI *ai, char *const *args, size_t n, ModQueue *q,
                                     char *note, size_t cap) {
     if (n < 3) { snprintf(note, cap, "要 <过程> <条件词> <动作>"); return -1; }
@@ -2691,6 +2732,10 @@ static const TokenOp TOKEN_OPS[] = {
       4, 6, token_op_add_claim },
     { "加异常",     "<过程> <类型> <动作>", "⑤ 给过程加**出错时跳的处理步**（`[异常:类型]`）："
       "哪一步失败就跑它（类型只作标签，v1 不按类型分派）", 3, 3, token_op_add_exc },
+    /* §6.511 B4 **答复模板也是行为**：给过程加一个"说出来"的步骤（模板=后面所有参数用空格连起来） */
+    { "加说",       "<过程> <模板…>", "§6.511 给过程加一步**答复模板**（`[步骤:N@说:模板]`）；"
+      "模板里可用 `$1`..`$4`（`::proc run <名> <实参…>` 绑）；跑完把说过的话打在「答复：」上",
+      2, 6, token_op_add_say },
     { NULL, NULL, NULL, 0, 0, NULL }
 };
 

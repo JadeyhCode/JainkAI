@@ -32,9 +32,9 @@ run() { cp model.bin m.bin; { printf '::notepad off\n::char off\n::hypo cache of
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
-grep -q '符号节点行为（图操作）：15 条' o1 && ok "::op 列出 15 条行为（表生成；过程记号+执行槽那九条在**表尾**）" \
+grep -q '符号节点行为（图操作）：16 条' o1 && ok "::op 列出 16 条行为（表生成；过程记号+执行槽在**表尾**）" \
     || bad "行为表" "$(grep -A3 'Token 行为' o1 | head -4)"
-for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行; do
+for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行 加说; do
     grep -q "::op $op" o1 || bad "表里少了行为 $op" "$(grep '::op' o1 | head -5)"
 done
 grep -q '当前未回收的临时符号节点：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
@@ -522,6 +522,19 @@ run '::proc on\n::proc dry off\n::op 建过程 查\n::op 加断言 查 $1 属于
 grep -q '认不全' o39 && grep -q '\$2' o39 \
     && ok "**没给实参** ⇒ 明说认不全（占位符 `$2` 原样留着，不静默变空串）" \
     || bad "参数缺" "$(grep -m3 '认不全\|条件' o39)"
+# §6.511 B4 **答复模板也是行为**：`加说` 给过程加一步"说出来"，走的是同一条受审通道
+run '::proc on\n::proc dry off\n::op 建过程 答\n::op 加说 答 猫 属于 动物\n::proc run 答\n' o40
+grep -q '答复\*\*：猫 属于 动物' o40 \
+    && ok "**模板原样说出来**（过程跑完打「答复：」）" \
+    || bad "加说" "$(grep -m3 '说：\|答复' o40)"
+run '::proc on\n::proc dry off\n::op 建过程 答\n::op 加说 答 猫 属于 $1\n::proc run 答 动物\n' o41
+grep -q '答复\*\*：猫 属于 动物' o41 \
+    && ok "**模板里能带实参**（`$1` ⇒ 动物）" \
+    || bad "加说参数" "$(grep -m3 '说：\|答复' o41)"
+run '::proc on\n::proc dry off\n::op 建过程 答\n::op 加说 答 猫 属于 $2\n::proc run 答 动物\n' o42
+grep -q '答复\*\*：猫 属于 \$2' o42 \
+    && ok "**没给的实参原样留着**（`$2` 不静默变空串）" \
+    || bad "加说缺参" "$(grep -m3 '说：\|答复' o42)"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \

@@ -138,6 +138,7 @@ static inline const char *assoc_role_name(uint8_t role) {
 #define PROC_STEP_CLAIM    "@要:"      /* 步骤记号里带"要核的那件事"：`[步骤:N@要:主语/关系/宾语[/不]]`
                                           * —— 一条边一个记号，所以"顺序 + 要核什么"写在同一个记号里（不撞车）。
                                           * 带它的步骤跑的时候走 `rel_solve` + `der_verify` **独立复核**。 */
+#define PROC_STEP_SAY      "@说:"      /* §6.511 步骤记号里带**答复模板**：`[步骤:N@说:猫 属于 $1]` */
 #define PROC_COND_PREFIX   "[条件:"
 #define PROC_ELSE_MARK     "[否则]"
 #define PROC_EXC_PREFIX    "[异常:"
@@ -613,6 +614,21 @@ static inline int proc_step_claim(const AssocEntry *e, int *out_idx,
         if (seg < 3 && dst[seg] && k + 1 < cap[seg]) dst[seg][k++] = *q;
     }
     return (seg >= 3 && sb && sb[0] && rb && rb[0] && bb && bb[0]);
+}
+
+/* §6.511 步骤记号里有没有**答复模板**：`[步骤:N@说:模板]`。有就取出模板（到 `]` 为止）。 */
+static inline int proc_step_say(const AssocEntry *e, char *out, size_t cap) {
+    if (out && cap) out[0] = 0;
+    if (!e || !e->action || !e->action->name) return 0;
+    const char *nm = e->action->name;
+    if (strncmp(nm, PROC_STEP_PREFIX, strlen(PROC_STEP_PREFIX)) != 0) return 0;
+    const char *at = strstr(nm, PROC_STEP_SAY);
+    if (!at) return 0;
+    at += strlen(PROC_STEP_SAY);
+    size_t k = 0;
+    while (*at && *at != ']' && k + 1 < cap) out[k++] = *at++;
+    if (out && cap) out[k] = 0;
+    return out && out[0];
 }
 
 /* `[条件:X]` → X（名字里的那一段；不是条件边就返回 NULL）。 */
