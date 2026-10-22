@@ -446,8 +446,11 @@ static size_t g_shell_n;
 static size_t g_shell_poolcnt = (size_t)-1;
 static inline void aip_shell_refresh(const AI *ai) {
     if (!ai || !ai->pool) return;
-    if (ai->pool->count == g_shell_poolcnt) return;
+    /* §6.521 两个判据：池子词数变了 **或** `标外壳` 动过（版本号）。后者管"标记已有词"的情况。 */
+    static size_t epoch_seen = (size_t)-1;
+    if (ai->pool->count == g_shell_poolcnt && g_shell_epoch == epoch_seen) return;
     g_shell_poolcnt = ai->pool->count;
+    epoch_seen = g_shell_epoch;
     g_shell_n = 0;
     for (size_t i = 0; i < ai->pool->count && g_shell_n < AIP_PAT_MAX; ++i) {
         const Token *t = ai->pool->tokens[i];

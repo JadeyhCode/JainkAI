@@ -139,6 +139,12 @@ static inline const char *assoc_role_name(uint8_t role) {
                                           * —— 一条边一个记号，所以"顺序 + 要核什么"写在同一个记号里（不撞车）。
                                           * 带它的步骤跑的时候走 `rel_solve` + `der_verify` **独立复核**。 */
 #define PROC_STEP_SAY      "@说:"      /* §6.511 步骤记号里带**答复模板**：`[步骤:N@说:猫 属于 $1]` */
+
+/* §6.521 外壳缓存的**版本号**：`标外壳` 每跑一次就 +1，剥离那边的缓存看到变了就重建。
+ * 为什么不用"池子词数变了"当判据：标记一个**已经在池子里**的词时词数不变 ⇒ 缓存永远不更新
+ * （§6.521 实测：先标 请 再标 问，第二条不生效）。放 token.h 是因为 micro.h（标外壳）与
+ * agent.h（剥离）都看得见它，而 micro.h 看不见 agent.h 的全局。 */
+static size_t g_shell_epoch;
 #define PROC_COND_PREFIX   "[条件:"
 #define PROC_ELSE_MARK     "[否则]"
 #define PROC_EXC_PREFIX    "[异常:"

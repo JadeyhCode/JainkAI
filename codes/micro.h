@@ -2470,6 +2470,7 @@ static inline int token_op_mark_shell(AI *ai, char *const *args, size_t n, ModQu
     snprintf(m.source, sizeof m.source, "行为:标外壳");
     m.bump = 1;
     int ok = mod_propose(q, &m);
+    ++g_shell_epoch;                      /* §6.521 通知剥离侧：外壳集合变了，缓存该重建 */
     snprintf(note, cap, "%s —[外壳]→ 外壳标记%s（%s）", args[0], is_q ? "（问句框架）" : "",
              ok ? "已提出" : "与队列重复");
     return ok ? 1 : 0;
