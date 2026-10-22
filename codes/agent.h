@@ -4608,6 +4608,8 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             for (const char *q2 = cmdline; *q2 && *q2 != ']' && ck + 1 < sizeof cmd; ++q2)
                 cmd[ck++] = *q2;
             cmd[ck] = 0;
+            /* §6.522 B3 续：命令里的 `$1`..`$4` 也换成实参（以前只有断言/条件会换） */
+            proc_subst_args(pr, cmd, sizeof cmd);
             if (dry) {
                 printf("    %s %-12s ✓ 干跑：动作**不执行**（要真做得跑非干跑）｜命令「%s」\n",
                        label, act->name, cmd);

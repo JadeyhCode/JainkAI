@@ -572,6 +572,15 @@ run '::op 标外壳 请\n请猫属于动物吗\n::op 标外壳 问\n问猫属于
 [ "$(grep -c 'AI > 对' o48)" -ge 2 ] \
     && ok "**连标两个已有词**（请、问）⇒ 两条都立刻生效（缓存按版本号重建，不是按词数）" \
     || bad "外壳缓存版本号" "$(grep -m4 'AI >\|标外壳' o48)"
+# §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
+run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
+grep -q '真执行了.*echo 猫' o49 \
+    && ok "**实参进动作命令**：`echo $1` + run 带 `猫` ⇒ 真执行 `echo 猫`" \
+    || bad "动作实参" "$(grep -m3 '执行\|echo' o49)"
+run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $2\n::proc run 说 猫\n' o50
+grep -q 'echo \$2' o50 \
+    && ok "**没给的实参原样留着**（`$2` 不变空串 —— 和断言/条件同一套规矩）" \
+    || bad "动作缺参" "$(grep -m3 '执行\|echo' o50)"
 # 循环：回边 + 上限（③）；带条件的回边 = while（每轮先看条件）
 run '::proc on\n::proc dry off\n::op 建过程 泡茶\n::op 加步骤 泡茶 烧水\n::op 加回边 泡茶 1 猫\n猫 有 毛 吗\n::proc run 泡茶\n' o27
 grep -q '循环条件「猫」成立 ⇒ 按上限 2 次重跑，每轮再看一次' o27 \
