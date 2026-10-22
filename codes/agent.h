@@ -6156,11 +6156,6 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
             /* §6.516 **A/B 开关**：`AIP_SHELLONLY=1` 时**完全不看 `[lead]` 桶**，只用图。
              * 这是"图能不能等价顶住"的唯一判据 —— 没有它，所谓的 A/B 其实两边都走了桶（§6.515 就吃过这个亏）。 */
-            {
-                const char *so = getenv("AIP_SHELLONLY");
-                int shell_only = (so && *so && strcmp(so, "0") != 0);
-                if (shell_only) { ll = 0; lead_i = (size_t)-1; }
-            }
             /* §6.513 B5：`[lead]` 桶没命中时，再看**图里的外壳标记**（`标外壳` 建的那些）。
              * 顺序先桶后图：桶是既有行为（blind4 靠它），图是新的下沉通道。 */
             if (!ll) {
@@ -6174,6 +6169,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 }
             }
             if (!ll) break;
+            if (getenv("AIP_PATDBG")) fprintf(stderr, "[strip] layer=%d ll=%zu q=%.40s\n", layer, ll, q);
             if (lead_i != (size_t)-1 && g_lead_q[lead_i]) was_rhet = 1;
             const char *rest = q + ll;
             while (*rest == ' ' || *rest == '\t') rest++;
