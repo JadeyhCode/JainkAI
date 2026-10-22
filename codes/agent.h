@@ -4563,6 +4563,10 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
             int cidx = 0, cneg = 0;
             char cs[64], cr[64], cb2[64];
             if (proc_step_claim(se, &cidx, cs, sizeof cs, cr, sizeof cr, cb2, sizeof cb2, &cneg)) {
+                /* §6.510 记不下就**明说**（以前静默丢：条件里 `#N` 永远判不了，却看不出为什么） */
+                if (cidx >= PROC_CLAIM_MAX)
+                    printf("    （步号 %d 超过断言表上限 %d：这条断言结论**记不下**，条件里的 `#%d` 会判不了）\n",
+                           cidx, PROC_CLAIM_MAX, cidx);
                 /* §6.509 B3：断言里的 `$1`/`$2` 换成这次跑的实参（没给原样留着 ⇒ 认不全就断点） */
                 proc_subst_args(pr, cs, sizeof cs);
                 proc_subst_args(pr, cr, sizeof cr);

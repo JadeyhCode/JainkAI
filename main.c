@@ -1207,14 +1207,29 @@ static void cmd_proc(AI *ai, const char *cmd) {
         char *av[PROC_ARG_MAX];
         size_t an = 0;
         const char *q2 = w + strlen(nm);
-        while (an < PROC_ARG_MAX) {
+        size_t skipped = 0;
+        while (1) {
             while (*q2 == ' ') ++q2;
             if (!*q2) break;
-            if (sscanf(q2, "%47s", abuf[an]) != 1) break;
-            av[an] = abuf[an];
-            ++an;
-            q2 += strlen(abuf[an - 1]);
+            char tmp[128] = {0};
+            if (sscanf(q2, "%127s", tmp) != 1) break;
+            if (an < PROC_ARG_MAX) {
+                /* §6.510 超长实参**明说被截断**（以前静默截，跑起来"认不全"却不知道是截断） */
+                if (strlen(tmp) >= sizeof abuf[an]) {
+                    printf("（实参「%.8s…」超过 %zu 字节，**截断**成 %zu 字节）\n",
+                           tmp, strlen(tmp), sizeof abuf[an] - 1);
+                    tmp[sizeof abuf[an] - 1] = 0;
+                }
+                snprintf(abuf[an], sizeof abuf[an], "%s", tmp);
+                av[an] = abuf[an];
+                ++an;
+            } else {
+                ++skipped;
+            }
+            q2 += strlen(tmp);
         }
+        if (skipped)
+            printf("（实参最多 %d 个：后面 %zu 个**没带进去**）\n", PROC_ARG_MAX, skipped);
         (void)proc_run_args(ai, nm, NULL, av, an);
         return;
     }
