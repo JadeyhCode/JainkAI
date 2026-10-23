@@ -257,7 +257,7 @@ if [ -f agent.h ]; then
         fi
     fi
 fi
-for pair in "syn:AIP_SYN_MAX" "shape:AIP_SHAPE_MAX" "reply:AIP_PAT_MAX" "lead:AIP_PAT_MAX"; do
+for pair in "syn:AIP_SYN_MAX" "shape:AIP_SHAPE_MAX" "reply:AIP_PAT_MAX" "lead:AIP_PAT_MAX" "tail:AIP_TAIL_MAX"; do
     b=${pair%%:*}; macro=${pair##*:}
     cap=$(sed -n "s/^#define $macro \([0-9][0-9]*\).*/\1/p" agent.h | head -1)
     n=$(printf '%s\n' "$got" | sed -n "s/.*\b$b=\([0-9]*\).*/\1/p" | head -1)

@@ -76,9 +76,11 @@ static inline int agent_open_slot_word(const char *w) {
  * 在**分词之前**做字符串替换（长的先替），于是"猫咪""猫儿"这些变体走的是同一条知识，
  * 不用为每个变体加一条行、更不用改代码。替换是**逐位置最长匹配**，不会误替别的词里面。 */
 /* §6.336 **[tail] 句尾语气词**：`呢/吧/啊/呀` 这类只影响语气、不影响语义的尾巴。
- * 先说清楚为什么不做成 `[lead]`：lead 只剥**句首**；尾巴得单独一个桶。 */
-#define AIP_TAIL_MAX 12
-static char g_tail[AIP_TAIL_MAX][12];
+ * 先说清楚为什么不做成 `[lead]`：lead 只剥**句首**；尾巴得单独一个桶。
+ * §6.529 槽位 12 → 32 字节、条数 12 → 24：句尾外壳（`…这件事对吗` / `…这一点没错吧`）是**多字**的，
+ * 12 字节只装得下 3 个汉字，长一点的会被加载器**静默跳过**（同 §6.446 形状上限那个坑）。 */
+#define AIP_TAIL_MAX 24
+static char g_tail[AIP_TAIL_MAX][32];
 static size_t g_tail_n;
 #define AIP_SYN_MAX 160   /* §6.470 64 → 160：同义词表已到 66 条，超限会静默丢规则（加载器会打 ⚠） */
 static char g_syn_from[AIP_SYN_MAX][48], g_syn_to[AIP_SYN_MAX][48];
