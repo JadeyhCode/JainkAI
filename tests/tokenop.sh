@@ -32,9 +32,9 @@ run() { cp model.bin m.bin; { printf '::notepad off\n::char off\n::hypo cache of
 
 echo "== ① 行为表：列得出来，跑得动 =="
 run '::op\n' o1
-grep -q '符号节点行为（图操作）：17 条' o1 && ok "::op 列出 17 条行为（表生成；过程记号+执行槽在**表尾**）" \
+grep -q '符号节点行为（图操作）：18 条' o1 && ok "::op 列出 18 条行为（表生成；过程记号+执行槽+撤外壳在**表尾**）" \
     || bad "行为表" "$(grep -A3 'Token 行为' o1 | head -4)"
-for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行 加说 标外壳; do
+for op in 加前提 加反前提 前提接线 中间插词 回收临时 调用补丁 建过程 加步骤 加调用 加回边 加条件 加否则 加异常 加断言 加执行 加说 标外壳 撤外壳; do
     grep -q "::op $op" o1 || bad "表里少了行为 $op" "$(grep '::op' o1 | head -5)"
 done
 grep -q '当前未回收的临时符号节点：0 个' o1 && ok "开局没有临时 Token（草稿是干净的）" \
@@ -554,8 +554,8 @@ grep -q 'AI > 对' "$WORK/o45" \
     || bad "图化等价" "$(grep -m3 'AI >\|外壳\|加载失败' "$WORK/o45")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '::quit\n'; } | \
     AIP_SHELLMIRROR=1 AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o46" 2>&1 ) || true
-grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q '→ 图上 45 条边' "$WORK/o46" \
-    && ok "镜像日志：`[lead]` 45 条 → 图上 45 条边（机制真的跑了）" \
+grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q '→ 图上 55 条边' "$WORK/o46" \
+    && ok "镜像日志：[lead] 55 条 → 图上 55 条边（机制真的跑了；§6.530 代码表搬进来 +10）" \
     || bad "镜像日志" "$(grep -m2 '外壳\|lead=' "$WORK/o46")"
 # §6.520 `::load` 之后**要重新镜像**（否则换脑子就把外壳全丢了 —— 套件里大量用 `::load`）
 # ⚠ 在仓库根跑：WORK 目录没有 patterns.txt（没有 `[lead]` 就没东西可镜像）
@@ -572,6 +572,41 @@ run '::op 标外壳 请\n请猫属于动物吗\n::op 标外壳 问\n问猫属于
 [ "$(grep -c 'AI > 对' o48)" -ge 2 ] \
     && ok "**连标两个已有词**（请、问）⇒ 两条都立刻生效（缓存按版本号重建，不是按词数）" \
     || bad "外壳缓存版本号" "$(grep -m4 'AI >\|标外壳' o48)"
+# §6.530 目标② **外壳的唯一写法在图上**：建边 = 标，删边 = 撤（不再有"只活在代码里"的引导语表）
+run '::op 标外壳 咳\n咳猫属于动物吗\n::op 撤外壳 咳\n::edges 咳\n咳猫属于动物吗\n' o55
+grep -q '行为 撤外壳' o55 && grep -q '\[咳\] 有 0 条边' o55 \
+    && [ "$(grep -c 'AI > 对' o55)" = 1 ] \
+    && ok "**撤外壳**：删掉标记边 + 缓存立刻失效（标记时答「对」，撤了以后不再答）" \
+    || bad "撤外壳" "$(grep -m6 'AI >\|撤外壳\|条边' o55)"
+run '::op 撤外壳 从没标过\n' o56
+grep -q '不是.*外壳\|没有.*外壳' o56 \
+    && ok "撤一个**不是外壳**的词 ⇒ 明说（不静默成功）" \
+    || bad "撤外壳-空撤" "$(grep -m3 '撤外壳' o56)"
+# ⚠ 同样要在仓库根跑：镜像记号 `[外壳:请问]` 只有在 patterns.txt 存在时才建
+( cd "$ROOT" && { printf '::op 撤外壳 请问\n'; } | "$WORK/aip" --model model.bin > "$WORK/o57" 2>&1 ) || true
+grep -q '\[lead\]\|镜像' "$WORK/o57" \
+    && ok "**镜像来的外壳**（「[lead]」→ 图）撤不掉 ⇒ 明说要改数据行（不假装撤了）" \
+    || bad "撤外壳-镜像" "$(grep -m3 '撤外壳' "$WORK/o57")"
+# 存盘：图里标的外壳必须**活得比进程长**（否则"唯一写法"只是内存里的假象）
+run '::op 标外壳 咳\n::save sb.bin\n' o58
+{ printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '咳猫属于动物吗\n'; } \
+    | ./aip --model sb.bin > o59 2>&1 || true
+grep -q 'AI > 对' o59 \
+    && ok "**存读之后还在**：「标外壳」建的边进了存档 ⇒ 新进程照样剥（不是只活在内存）" \
+    || bad "标外壳-存读" "$(grep -m3 'AI >\|加载' o59)"
+# 数据驱动：[lead] 桶关掉且不镜像 ⇒ 连「教你」都不剥（证明它已经没有代码兜底表了）
+# ⚠ 必须在仓库根跑（WORK 里没有 patterns.txt —— 没有数据行就没有可镜像的东西）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '教你 猫 属于 动物吗\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o60" 2>&1 ) || true
+grep -q 'AI > 对' "$WORK/o60" && ok "「教你…」默认剥得掉（数据行 + 镜像）" \
+    || bad "教你-默认" "$(grep -m2 'AI >' "$WORK/o60")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '教你 猫 属于 动物吗\n'; } | \
+    AIP_NODATA=lead AIP_SHELLMIRROR=0 "$WORK/aip" --model model.bin > "$WORK/o61" 2>&1 ) || true
+if grep -q 'AI > 对' "$WORK/o61"; then
+    bad "教你-数据关掉还答对" "说明还有代码兜底表在剥（agent_step 里那张 lead[]）"
+else
+    ok "**数据一关就剥不动**（「教你」没有代码兜底表 —— 外壳的唯一写法确实在数据/图上）"
+fi
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

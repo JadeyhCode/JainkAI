@@ -36,8 +36,8 @@ static Token *T(AI *ai, const char *name) { return pool_token_intern(ai->pool, n
 static void test_table(void) {
     printf("== ① 符号节点行为表：名字不重复、每条都有展开函数 ==\n");
     size_t n = token_op_count();
-    ok(n == 17, "表里 17 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
-                "后 11 条 = 过程记号/执行槽/加说/标外壳，**必须在表尾** —— 原语层按下标引用这张表）");
+    ok(n == 18, "表里 18 条行为（前 6 条 = 加前提/加反前提/前提接线/中间插词/回收临时/调用补丁；"
+                "后 12 条 = 过程记号/执行槽/加说/标外壳/撤外壳，**必须在表尾** —— 原语层按下标引用这张表）");
     int dup = 0, nofn = 0, noshape = 0;
     for (size_t i = 0; TOKEN_OPS[i].name; ++i) {
         if (!TOKEN_OPS[i].expand) nofn++;

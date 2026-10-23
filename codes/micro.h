@@ -2476,6 +2476,46 @@ static inline int token_op_mark_shell(AI *ai, char *const *args, size_t n, ModQu
     return ok ? 1 : 0;
 }
 
+/* §6.530 目标②：**撤外壳** —— 把 `词 —[外壳]→ 外壳标记` 这条边撤掉（受审通道，和标走同一条路）。
+ * 这是"外壳的唯一写法在图上"的另一半：能建就能撤，否则图只是单向的配置。
+ * 三种"撤不掉"都要**明说**，不许假装成功：
+ *   ① 词不在池子里；② 没有外壳标记边；③ 这个词是从数据 `[lead]` 镜像来的（`[外壳:词]` 记号还在）——
+ *     那种要改数据行，不是撤销能解决的。 */
+static inline int token_op_unmark_shell(AI *ai, char *const *args, size_t n, ModQueue *q,
+                                        char *note, size_t cap) {
+    if (n < 1) { snprintf(note, cap, "要 <词>"); return -1; }
+    /* ⚠ 先查镜像记号：镜像**故意不 intern 原词**（§6.518：intern 原词会改分词），
+     * 所以 `请问` 这种词在池子里根本不存在 —— 若先查"词在不在池里"，
+     * 镜像来的外壳会被误报成"不是外壳"（§6.530 实测踩到）。 */
+    char mk[72];
+    snprintf(mk, sizeof mk, "[外壳:%s]", args[0]);
+    Token *mir = pool_find(ai->pool, mk);
+    if (!mir) {
+        snprintf(mk, sizeof mk, "[外壳问:%s]", args[0]);
+        mir = pool_find(ai->pool, mk);
+    }
+    if (mir) {
+        snprintf(note, cap, "「%s」是数据 [lead] 镜像来的外壳（%s 还在）—— 要改 patterns.txt 的那行，撤不了",
+                 args[0], mir->name);
+        return 0;
+    }
+    Token *w = pool_find(ai->pool, args[0]);
+    if (!w) { snprintf(note, cap, "「%s」不在词池里 —— 不是外壳", args[0]); return 0; }
+    Token *mark = pool_find(ai->pool, "外壳标记");
+    if (!mark) { snprintf(note, cap, "图里还没有任何外壳标记 —— 「%s」不是外壳", args[0]); return 0; }
+    ModIntent m;
+    memset(&m, 0, sizeof m);
+    m.type = MOD_REMOVE_ASSOC;
+    m.target = w;
+    m.main = mark;
+    snprintf(m.name, sizeof m.name, "%s", "外壳标记");
+    snprintf(m.source, sizeof m.source, "行为:撤外壳");
+    int ok = mod_propose(q, &m);
+    ++g_shell_epoch;                      /* §6.521 同理：外壳集合变了，剥离缓存要重建 */
+    snprintf(note, cap, "%s —[外壳]→ 外壳标记 已撤（%s）", args[0], ok ? "已提出" : "没这条边");
+    return ok ? 1 : 0;
+}
+
 /* §6.511 B4：加一个"说"的步骤。模板 = args[1..] 用空格连起来（`::op 加说 查 猫 属于 $1`）。 */
 static inline int token_op_add_say(AI *ai, char *const *args, size_t n, ModQueue *q,
                                    char *note, size_t cap) {
@@ -2768,6 +2808,10 @@ static const TokenOp TOKEN_OPS[] = {
     { "加说",       "<过程> <模板…>", "§6.511 给过程加一步**答复模板**（`[步骤:N@说:模板]`）；"
       "模板里可用 `$1`..`$4`（`::proc run <名> <实参…>` 绑）；跑完把说过的话打在「答复：」上",
       2, 6, token_op_add_say },
+    /* §6.530 目标② **撤销外壳**：外壳的唯一写法在图上 —— 能建边就能删边（同一条受审通道） */
+    { "撤外壳",     "<词>", "§6.530 把 <词> 的**引导语外壳**标记撤掉（删 `词 —[外壳]→ 外壳标记`）；"
+      "数据 `[lead]` 镜像来的外壳撤不了（要改数据行，会明说）",
+      1, 1, token_op_unmark_shell },
     { NULL, NULL, NULL, 0, 0, NULL }
 };
 

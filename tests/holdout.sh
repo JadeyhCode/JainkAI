@@ -21,7 +21,14 @@ OTHER=model.bin
 [ "$MODEL" = "model.bin" ] && OTHER=session.bin
 
 pass=0; fail=0; bad=""; div=0
-rm -f /tmp/holdout_dual.tsv
+# §6.530 **临时文件名必须带本进程号**：这两个文件原来写死 `/tmp/holdout_one.log`，
+# 两个量尺（比如 A/B 新旧二进制）**同时**跑就会互相覆盖 —— 实测两边都得出假数字
+# （blind4 447/446、pert 208/209，而真值是 448/215）。这是"量尺不可信"级别的坑。
+TMP1=/tmp/holdout_one.$$.log
+TMP2=/tmp/holdout_two.$$.log
+DUAL=/tmp/holdout_dual.$$.tsv
+rm -f "$DUAL"
+trap 'rm -f "$TMP1" "$TMP2" "$DUAL"' EXIT
 while IFS='	' read -r q want setup; do
     case "$q" in '#'*|'') continue ;; esac
     [ -n "$want" ] || continue
@@ -30,14 +37,14 @@ while IFS='	' read -r q want setup; do
             printf '%s\n' "$setup" | tr ';' '\n'
         fi
         printf '%s\n::quit\n' "$q"
-    } | timeout 30 "$BIN" --model "$MODEL" > /tmp/holdout_one.log 2>&1
-    out=$(sed -n 's/.*AI > //p' /tmp/holdout_one.log | tail -1)
+    } | timeout 30 "$BIN" --model "$MODEL" > "$TMP1" 2>&1
+    out=$(sed -n 's/.*AI > //p' "$TMP1" | tail -1)
     if [ -n "${AIP_DUAL:-}" ] && [ -f "$OTHER" ]; then
         {   if [ -n "$setup" ]; then printf '%s\n' "$setup" | tr ';' '\n'; fi
             printf '%s\n::quit\n' "$q"
-        } | timeout 30 "$BIN" --model "$OTHER" > /tmp/holdout_two.log 2>&1
-        out2=$(sed -n 's/.*AI > //p' /tmp/holdout_two.log | tail -1)
-        printf '%s\t%s\t%s\n' "$q" "$out" "$out2" >> /tmp/holdout_dual.tsv
+        } | timeout 30 "$BIN" --model "$OTHER" > "$TMP2" 2>&1
+        out2=$(sed -n 's/.*AI > //p' "$TMP2" | tail -1)
+        printf '%s\t%s\t%s\n' "$q" "$out" "$out2" >> "$DUAL"
         [ "$out" = "$out2" ] || div=$((div+1))
     fi
     case "$want" in
@@ -57,9 +64,9 @@ done < "$SET"
 echo "留出集：$pass 通过 / $((pass+fail)) 条"
 [ -n "$bad" ] && printf '%s\n' "$bad"
 echo "PASS holdout（$pass/$((pass+fail))）"
-if [ -n "${AIP_DUAL:-}" ] && [ -f /tmp/holdout_dual.tsv ]; then
+if [ -n "${AIP_DUAL:-}" ] && [ -f "$DUAL" ]; then
     echo "双模型对照（$MODEL vs $OTHER）：$div 行答复不同"
     awk -F'\t' -v m="$MODEL" -v o="$OTHER" \
         '$2 != $3 { printf "  ≠ %s\n      %s: %s\n      %s: %s\n", $1, m, $2, o, $3 }' \
-        /tmp/holdout_dual.tsv | head -20
+        "$DUAL" | head -20
 fi

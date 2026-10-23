@@ -6179,7 +6179,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
         const char *q = input_eff;
         while (*q == ' ' || *q == '\t') q++;
-        static const char *lead[] = {"告诉你", "教你", "教我", "帮我记住", "请记住", "记住", "告诉 你", "教 你", "教 我", " teaches", NULL};   /* §6.478 补 NULL 结尾：以前漏了，靠相邻内存恰好为 0 才没崩（长句 14 token 一换布局就段错误）*/
+        /* §6.530 **目标②：外壳的唯一写法在数据/图上** —— 这张写死的引导语表（`教你/告诉我/记住/teaches…`）
+         * 搬进 `patterns.txt` 的 `[lead]` 行（`教` 那行早就在），由镜像变成图记号。
+         * 为什么必须搬：它和"数据里的引导语"是**同一件事的两套实现**，行为差异（先命中 vs 最长命中）
+         * 会在长引导语上体现成两个答案；而且加一个新引导语要改代码，违背"不改代码能听懂新说法"。
+         * 判据（tests/tokenop.sh §6.530）：`AIP_NODATA=lead AIP_SHELLMIRROR=0` 时「教你…」不再被剥。 */
         /* §6.373 **反问标记剥掉之后，句子仍然是问句**。
          * 实测 `难不成 猫 会 飞`（没有 吗）被剥成「猫 会 飞」，然后当成**陈述**学进去，
          * 还触发了改口 —— 把「猫 不会 飞」改写成「猫 会 飞」。这类标记不能"剥完当陈述"。*/
@@ -6188,9 +6192,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         /* §6.339 引导语可能**连着两个**（`难道 请注意 …` / `请问 麻烦你 …`）：
          * 以前只剥一次，剩下的那个引导语会让整句掉兜底。最多剥三层。 */
         for (int layer = 0; layer < 3; ++layer) {
-            size_t ll = 0;
-            for (size_t i = 0; lead[i] && !ll; ++i)
-                if (strncmp(q, lead[i], strlen(lead[i])) == 0) ll = strlen(lead[i]);
+            size_t ll = 0;   /* §6.530 代码表已退役：引导语只从数据桶/图里来 */
             /* §6.283 数据表里的引导语（`请注意` / `记一下` 这类） */
             size_t lead_i = (size_t)-1;
             /* §6.517 顺序开关：`AIP_SHELLFIRST=1` 时**先图后桶**（默认仍是先桶后图）。
