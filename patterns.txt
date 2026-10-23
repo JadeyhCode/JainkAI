@@ -800,3 +800,66 @@
 [reply] 写诗|写首诗|写首歌|作诗|画画|画张|画个=这 个 我 真 不 会 —— 我 只 能 回 答 图 里 记 着 的 关 系、记 你 教 我 的 东 西，不 会 写 诗/画 画 这 类 生 成。
 # §6.362 恢复：分词里「是不是」是一个词（3 词规则），删了 holdout13 会红
 [shape] $1@k 是不是 $2@k = $1 属于 $2 吗
+
+# ---- §6.531 疑问词表（原来写死在 ai.h，现在这里是**唯一来源**；没有本文件时才退回内置种子）----
+# `[qword]` = 整词匹配（一个 token 就是它）；`[qpart]` = 子串匹配（词里含它就当问句，
+# 只对 2 个汉字以上的词生效：`多少钱` 被分词并成一个词时，整词表看不出它是问句）。
+# 加一个新疑问词只要加一行 —— 不用改代码、不用重编译。
+[qword] 吗
+[qword] 呢
+[qword] 么
+[qword] 吧
+[qword] ?
+[qword] ？
+[qword] 谁
+[qword] 什么
+[qword] 什么时候
+[qword] 怎么
+[qword] 怎么样
+[qword] 哪
+[qword] 哪里
+[qword] 哪儿
+[qword] 哪个
+[qword] 为什么
+[qword] 几
+[qword] 多少
+[qword] 如何
+[qword] 干什么
+[qword] 是不是
+[qword] 有没有
+[qword] 对不对
+[qword] 好不好
+[qpart] 什么
+[qpart] 怎么
+[qpart] 为什么
+[qpart] 多少
+[qpart] 如何
+[qpart] 干什么
+[qpart] 是不是
+[qpart] 有没有
+[qpart] 对不对
+[qpart] 好不好
+[qpart] 多大
+[qpart] 多久
+[qpart] 多远
+[qpart] 多高
+[qpart] 多长
+[qpart] 多快
+[qpart] 多贵
+[qpart] 多重
+[qpart] 多深
+[qpart] 是谁
+[qpart] 是啥
+[qpart] 难不成
+[qpart] 莫不是
+[qpart] 谁不知道
+[qpart] 该不会
+[qpart] 岂
+[qpart] 难道说
+[qpart] 请问
+[qpart] 我想问
+[qpart] 想问
+[qpart] 帮我看看
+[qpart] 帮我看一下
+[qpart] 能不能告诉我
+[qpart] 能告诉我

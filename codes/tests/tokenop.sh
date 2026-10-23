@@ -607,6 +607,22 @@ if grep -q 'AI > 对' "$WORK/o61"; then
 else
     ok "**数据一关就剥不动**（「教你」没有代码兜底表 —— 外壳的唯一写法确实在数据/图上）"
 fi
+# §6.531 目标③：**疑问词表下沉成数据**（`[qword]` 整词 / `[qpart]` 子串）
+# 为什么这条算"下沉"：表原来写死在 ai.h，加一个疑问词要重编译；现在 patterns.txt 是唯一来源，
+# 没有文件时才退回内置种子表（保证"没有数据也不会把问句当陈述学进去"）。
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o62" 2>&1 ) || true
+grep -q 'qword=24 qpart=34' "$WORK/o62" \
+    && ok "疑问词表**从数据读**：qword=24 / qpart=34（patterns.txt 各一行，代码里那份只当种子）" \
+    || bad "疑问词桶" "$(grep -o 'qword=[0-9]* qpart=[0-9]*' "$WORK/o62")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 哪儿 在\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o63" 2>&1 ) || true
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 哪儿 在\n'; } | \
+    AIP_NODATA=qword "$WORK/aip" --model model.bin > "$WORK/o64" 2>&1 ) || true
+q_on=$(sed -n 's/.*AI > //p' "$WORK/o63" | tail -1)
+q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
+[ -n "$q_on" ] && [ "$q_on" != "$q_off" ] \
+    && ok "关掉 qword 桶 ⇒ 答复就变（**桶在承重**；反证：改前这个开关对写死的表毫无作用）" \
+    || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

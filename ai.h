@@ -45,6 +45,20 @@ static int g_walk_trace = 0;
  * 三份还各不完全一样 —— 那种重复是 bug 的温床：改一处、忘一处，
  * 表现就是「同一句话在一条路径上算问句、在另一条上不算」。
  * 现在只有这一张表 + 两个查询函数。 */
+/* §6.531 **目标③：疑问词表下沉成数据**（`[qword]` 整词 / `[qpart]` 子串）。
+ *
+ * 为什么：这张表原来写死在 ai.h，加一个新疑问词（`咋`/`啥时候`/`多久`）要重新编译 ——
+ * 而"新说法靠数据、不靠改代码"是本项目的核心约束。现在**数据的桶占位**：
+ *   · `patterns.txt` 里有 `[qword]`/`[qpart]` 行 ⇒ 用数据（写死的表只当 `AIP_QBUILTIN` 对照）；
+ *   · 没有 patterns.txt（比如某些套件在自己的临时目录里跑）⇒ 退回下面这两张**种子表**，
+ *     保证"没有数据也不会把问句当陈述学进去"。
+ * 数据桶的实现在 agent.h（`aip_pat_bucket`），这里只留读取端 —— 语言层的判据还是在这一处。 */
+#define AI_QWORD_MAX  48
+#define AI_QPART_MAX  64
+static char g_qword[AI_QWORD_MAX][24];
+static char g_qpart[AI_QPART_MAX][24];
+static size_t g_qword_n, g_qpart_n;
+static int g_qword_data, g_qpart_data;   /* 1 = 数据接管（patterns.txt 读到了，桶可能有 0 行） */
 static const char *const AI_QUESTION_WORDS[] = {
     "吗", "呢", "么", "吧", "?", "？",
     "谁", "什么", "什么时候", "怎么", "怎么样", "哪", "哪里", "哪儿", "哪个",
@@ -53,6 +67,11 @@ static const char *const AI_QUESTION_WORDS[] = {
 };
 static inline int ai_is_question_word(const char *w) {
     if (!w || !w[0]) return 0;
+    if (g_qword_data) {                      /* §6.531 数据接管：桶里没有就不是 */
+        for (size_t i = 0; i < g_qword_n; ++i)
+            if (strcmp(w, g_qword[i]) == 0) return 1;
+        return 0;
+    }
     for (size_t i = 0; AI_QUESTION_WORDS[i]; ++i)
         if (strcmp(w, AI_QUESTION_WORDS[i]) == 0) return 1;
     return 0;
@@ -86,8 +105,13 @@ static inline int ai_token_has_question_word(const char *w) {
     if (!w || !w[0]) return 0;
     if (ai_is_question_word(w)) return 1;
     /* 最短的实疑问词是 2 个汉字（6 字节）—— 单字词在上面整词那一关就已经排除了，
-     * 这里直接返回，省掉每个词 10 次 strstr（这条函数在热路径上，量得到开销）。 */
+     * 这里直接返回，省掉每个词一串 strstr（这条函数在热路径上，量得到开销）。 */
     if (strlen(w) < 6) return 0;
+    if (g_qpart_data) {                      /* §6.531 数据接管（同整词那张表） */
+        for (size_t i = 0; i < g_qpart_n; ++i)
+            if (strstr(w, g_qpart[i])) return 1;
+        return 0;
+    }
     for (size_t i = 0; AI_QUESTION_SUBSTR[i]; ++i)
         if (strstr(w, AI_QUESTION_SUBSTR[i])) return 1;
     return 0;
