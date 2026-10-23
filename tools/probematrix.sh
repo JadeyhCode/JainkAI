@@ -1,5 +1,5 @@
 #!/bin/sh
-# tools/probematrix.sh — 一次跑完「22 批探针 + 全部留出集」并打一张表（§6.499）
+# tools/probematrix.sh — 一次跑完「全部 genprobe 探针 + 全部留出集」并打一张表（§6.499；§6.528 起自动收全）
 #
 # 用途：回归轮专用。改完引擎/数据后跑一次，看有没有哪一批掉了。
 # 用法：sh tools/probematrix.sh [模型]     默认 session.bin
@@ -19,9 +19,12 @@ row() {   # $1=标签 $2=文件
 echo "| 集合 | 通过/总数 |"
 echo "|---|---|"
 row "genprobe" tests/genprobe.txt
-for i in 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22; do
-    f="tests/genprobe${i}.txt"
-    [ -f "$f" ] && row "genprobe${i}" "$f"
+# §6.528：这里原来是写死的 `2 3 … 22` —— genprobe23 加了却没进表（不进表＝回归看不见）。
+# 改成「有就跑到没有」：以后新增探针只要文件在，自动进表。
+i=2
+while [ -f "tests/genprobe${i}.txt" ]; do
+    row "genprobe${i}" "tests/genprobe${i}.txt"
+    i=$((i + 1))
 done
 for f in tests/blind4.txt tests/blind5.txt tests/blind9.txt tests/holdout.txt tests/holdout_pert.txt; do
     [ -f "$f" ] && row "$(basename "$f" .txt)" "$f"

@@ -35,8 +35,8 @@
 | `python3 tools/twicecheck.py` | 同一句问两遍是否一致（第一次 vs 第二次） |
 | `sh tools/dirtyentity.sh` | 传话/传闻有没有被当成实体、内层事实有没有学到 |
 | `sh tools/asan_check.sh` | ASan/UBSan/LSan（生命周期/随机句/病态/变异/命令面） |
-| `sh tools/trend.sh` | 生成 `docs/trend.md` 的 1~5 节（含 22 批探针表、族列、锚点） |
-| `sh tools/probematrix.sh` | 一次跑完 22 批探针 + 全部留出集，打一张回归表（§6.499） |
+| `sh tools/trend.sh` | 生成 `docs/trend.md` 的 1~5 节（含全部 genprobe 探针表、族列、锚点） |
+| `sh tools/probematrix.sh` | 一次跑完**全部** `tests/genprobe*.txt` + 全部留出集，打一张回归表（§6.499；§6.528 起自动收全，不再写死 22 批） |
 | `sh tests/patcount.sh` | 桶计数/探针/改写安全/词类/关键词空格/重复行/容量余量/写死实体 |
 
 ## 3.5 「给事实」这个指标要小心读（§6.501）
@@ -79,7 +79,7 @@ A 里 21 条"诚实未知"，换成 3 种问法再问：13 条能答，但来源
 
 ```
 sh tests/tokenop.sh        # 179 项
-sh tools/probematrix.sh    # 22 批探针 + 5 留出集
+sh tools/probematrix.sh    # 全部 genprobe 探针 + 5 留出集（§6.528 起自动收全）
 ```
 
 ## 4.1 三个结构性缺口（**没解决**，2026 用户提问后登记，详见 `docs/局限总表.md` 〇之二十四）
