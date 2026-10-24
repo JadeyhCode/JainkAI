@@ -1308,6 +1308,21 @@ grep -q '#1 存到 saved.bin' "$BS/out.txt" \
 grep -q '对 ， 小明同学 -\[属于\]-> 人类' "$BS/out2.txt" \
     && ok "**读回来还是它自己的知识**（不是 base 的）" \
     || bad "brain-save-回读" "$(grep 'AI >' "$BS/out2.txt" | tail -1)"
+# §6.578 `::brain drop N`：关掉一个脑（内存还回去）、当前那个不许关、槽位能复用
+DP="$WORK/dp"; rm -rf "$DP"; mkdir -p "$DP"
+cp "$ROOT/session.bin" "$DP/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$DP/" 2>/dev/null || true
+( cd "$DP" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new\n::brain new\n::brain drop 1\n::brain list\n::brain drop 2\n::brain new\n::brain list\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+grep -q '关掉 #1' "$DP/out.txt" \
+    && ok "**能关掉一个脑**（#1 释放）" \
+    || bad "brain-drop" "$(grep '多脑' "$DP/out.txt" | head -3 | tr '\n' ' ')"
+grep -q '#[12] 是当前那个，先用 ::brain use 切走' "$DP/out.txt" \
+    && ok "**当前那个不许关**（明确拒绝，不静默）" \
+    || bad "brain-drop当前" "$(grep '是当前' "$DP/out.txt" | head -1)"
+n_list=$(grep -c '#0  1469 词' "$DP/out.txt" || true)
+[ "${n_list:-0}" -ge 1 ] && grep -q '\* #1  32 词' "$DP/out.txt" \
+    && ok "**关掉后列表少了一个、且槽位被新脑复用**（* #1 32 词）" \
+    || bad "brain-drop-复用" "$(grep -E '^\s+[* ]#|\* #' "$DP/out.txt" | tail -3 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true

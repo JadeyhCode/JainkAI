@@ -1797,7 +1797,9 @@ int main(int argc, char **argv) {
                 const char *arg = NULL;
                 if (sp2) { *sp2 = 0; arg = sp2 + 1; while (*arg == ' ') arg++; }
                 if (!strncmp(sb, "new", 3) && sb[3] == 0) {
-                    if (g_nbrains >= AI_MAX_BRAINS) {
+                    size_t slot = (size_t)-1;
+                    for (size_t i = 0; i < g_nbrains; ++i) if (!g_brains[i]) { slot = i; break; }
+                    if (slot == (size_t)-1 && g_nbrains >= AI_MAX_BRAINS) {
                         printf("[多脑] 最多同时 %d 个（现在 %zu 个）\n", AI_MAX_BRAINS, g_nbrains);
                     } else {
                         Agent *nb = agent_new(stdin_perceive, stdout_act, NULL);
@@ -1817,10 +1819,10 @@ int main(int argc, char **argv) {
                                     printf("[多脑] 从 %s 读了一份\n", arg);
                                 }
                             }
-                            g_brains[g_nbrains] = nb;
+                            if (slot == (size_t)-1) slot = g_nbrains++;   /* 没洞就往后排 */
+                            g_brains[slot] = nb;
                             a = nb;
-                            g_curbrain = g_nbrains;
-                            g_nbrains++;
+                            g_curbrain = slot;
                             printf("[多脑] 开了第 %zu 个（当前就是它）：%zu 个词 / %zu 条改动\n",
                                    g_nbrains, nb->brain->pool->count, ai_modlog_count(nb->brain));
                         }
@@ -1828,6 +1830,7 @@ int main(int argc, char **argv) {
                 } else if (!strncmp(sb, "list", 4) && sb[4] == 0) {
                     printf("[多脑] %zu 个：\n", g_nbrains);
                     for (size_t i = 0; i < g_nbrains; ++i) {
+                        if (!g_brains[i]) continue;
                         AI *b = g_brains[i] ? g_brains[i]->brain : NULL;
                         printf("  %c #%zu  %zu 词 / %zu 条改动%s\n", i == g_curbrain ? '*' : ' ', i,
                                b ? b->pool->count : 0, ai_modlog_count(b),
@@ -1835,7 +1838,7 @@ int main(int argc, char **argv) {
                     }
                 } else if (!strncmp(sb, "use", 3) && sb[3] == 0) {
                     size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : (size_t)-1;
-                    if (k >= g_nbrains) printf("[多脑] 说「::brain use N」，N 在 0..%zu 之间\n",
+                    if (k >= g_nbrains || !g_brains[k]) printf("[多脑] 说「::brain use N」，N 在 0..%zu 之间\n",
                                                g_nbrains ? g_nbrains - 1 : 0);
                     else { a = g_brains[k]; g_curbrain = k; printf("[多脑] 切到 #%zu\n", k); }
                 } else if (!strncmp(sb, "diff", 4) && sb[4] == 0) {
@@ -1901,6 +1904,18 @@ int main(int argc, char **argv) {
                             }
                         }
                         printf("  只在 #%zu 的：%zu 条；只在 #%zu 的：%zu 条\n", ia, only_a, ib, only_b);
+                    }
+                } else if (!strncmp(sb, "drop", 4) && sb[4] == 0) {
+                    /* §6.578 关掉一个脑（把它占的内存还回去）；当前那个不能关 */
+                    size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : (size_t)-1;
+                    if (k >= g_nbrains || !g_brains[k]) printf("[多脑] 没有 #%zu\n", k);
+                    else if (k == g_curbrain) printf("[多脑] #%zu 是当前那个，先用 ::brain use 切走\n", k);
+                    else {
+                        agent_free(g_brains[k]);
+                        g_brains[k] = NULL;
+                        printf("[多脑] 关掉 #%zu（内存还回去了）\n", k);
+                        /* 末尾的空槽收掉，免得 `list` 里留一堆洞 */
+                        while (g_nbrains > 1 && !g_brains[g_nbrains - 1]) g_nbrains--;
                     }
                 } else if (!strncmp(sb, "save", 4) && sb[4] == 0) {
                     /* §6.577 把**指定的那个脑**存盘（多脑时 `::save` 只存当前那个） */
