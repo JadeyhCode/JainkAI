@@ -131,8 +131,8 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
  *
  * 键名是**语义位**，不是句子：`判词.对` / `判词.不对` / `判词.不定` / `组织.定` / `组织.符号` /
  * `组织.猜一` / `组织.猜多` / `组织.假设` / `组织.缺` / `组织.空`。 */
-#define AI_SAY_MAX 24
-#define AI_SAY_KEY_LEN 24
+#define AI_SAY_MAX 40   /* §6.540 24 → 40：模板已到 26 条，24 会**静默丢**后加的两行（撞过） */
+#define AI_SAY_KEY_LEN 40   /* §6.540 24 → 40：`不知道.没听他说过` 是 25 字节，24 会静默丢行 */
 #define AI_SAY_TXT_LEN 220
 static char g_say_key[AI_SAY_MAX][AI_SAY_KEY_LEN];
 static char g_say_txt[AI_SAY_MAX][AI_SAY_TXT_LEN];

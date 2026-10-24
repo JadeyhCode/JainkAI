@@ -4481,7 +4481,9 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         char resp0[200];
         /* 站在别人的立场上时，「在假设下」这个说法会让人以为是**我**的假设 ——
          * 那其实是他名下的信念，所以说清「我没听他说过这个」。 */
-        if (as_other) snprintf(resp0, sizeof resp0, "我 没 听 他 说 过 这 个 ， 推 不 出 来");
+        if (as_other) snprintf(resp0, sizeof resp0, "%s",
+                               ai_say_tpl("不知道.没听他说过") ? ai_say_tpl("不知道.没听他说过")
+                                                              : "我 没 听 他 说 过 这 个 ， 推 不 出 来");
         else          snprintf(resp0, sizeof resp0, "在 假设 下 我 推不出来");
         if (out_conf) *out_conf = 0.25f;
         char *r = (char *)malloc(strlen(resp0) + 1);
@@ -7086,9 +7088,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             conf = rc;
             /* 在他人的立场上答出来的话，得写明“在 他 看来” */
             if (ai->view_who) {
-                char pre[256];
-                snprintf(pre, sizeof pre, "在 %s 看来 ： %s",
-                         ai->view_who->name ? ai->view_who->name : "他", resp);
+                char pre[320];
+                {
+                    /* §6.540 视角前缀也进数据（`$1` 谁、`$2` 那句话） */
+                    const char *t = ai_say_tpl("视角.在");
+                    der_fill3(pre, sizeof pre,
+                              t ? t : "在 $1 看来 ： $2",
+                              ai->view_who->name ? ai->view_who->name : "他", resp, NULL);
+                }
                 free(resp);
                 resp = (char *)malloc(strlen(pre) + 1);
                 if (resp) memcpy(resp, pre, strlen(pre) + 1);
