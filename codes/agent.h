@@ -2948,13 +2948,19 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
         if (!C) return NULL;
         int na = A ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
         int nb = B ? (rel_direct(B, rid, C) ? 1 : (rel_direct_neg(B, rid, C) ? -1 : 0)) : 0;
-        if (na == 1 && nb == 1)
-            snprintf(buf, sizeof buf, "对 ， %s 和 %s 都 %s %s", aw, bw, rw, cw);
-        else if (na == -1 || nb == -1)
-            snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", (na == -1) ? aw : bw, rw, cw);
-        else
-            snprintf(buf, sizeof buf, "我 不 确定 ： %s 和 %s 里 我 只 知道 一边（%s %s）",
-                     aw, bw, rw, cw);
+        if (na == 1 && nb == 1) {   /* §6.555 并列答复进数据 */
+            const char *t = ai_say_tpl("并列.都对");
+            const char *const a[4] = { aw, bw, rw, cw };
+            der_filln(buf, sizeof buf, t ? t : "对 ， $1 和 $2 都 $3 $4", a, 4);
+        } else if (na == -1 || nb == -1) {
+            const char *t = ai_say_tpl("并列.不对");
+            const char *const a[3] = { (na == -1) ? aw : bw, rw, cw };
+            der_filln(buf, sizeof buf, t ? t : "不 对 ： $1 不 $2 $3", a, 3);
+        } else {
+            const char *t = ai_say_tpl("并列.一边");
+            const char *const a[4] = { aw, bw, rw, cw };
+            der_filln(buf, sizeof buf, t ? t : "我 不 确定 ： $1 和 $2 里 我 只 知道 一边（$3 $4）", a, 4);
+        }
         if (out_conf) *out_conf = (na == 1 && nb == 1) ? 0.85f : 0.5f;
     }
     if (out_is_q) *out_is_q = is_q;
@@ -3135,14 +3141,23 @@ static inline char *agent_or_ask(AI *ai, char *const *words, size_t n, int *out_
     int vb = B ? (rel_direct(A, rid, B) ? 1 : (rel_direct_neg(A, rid, B) ? -1 : 0)) : 0;
     int vc = C ? (rel_direct(A, rid, C) ? 1 : (rel_direct_neg(A, rid, C) ? -1 : 0)) : 0;
     char buf[200];
-    if (vb == 1)
-        snprintf(buf, sizeof buf, "对 ： %s %s %s（不 是 %s）", aw, words[1], bw, cw);
-    else if (vc == 1)
-        snprintf(buf, sizeof buf, "对 ： %s %s %s（不 是 %s）", aw, words[1], cw, bw);
-    else if (vb == -1 && vc == -1)
-        snprintf(buf, sizeof buf, "都 不 对 ： %s 既 不 %s %s 也 不 %s %s", aw, words[1], bw, words[1], cw);
-    else
-        snprintf(buf, sizeof buf, "我 不 确定 你 指 哪 个 ： %s %s %s / %s", aw, words[1], bw, cw);
+    if (vb == 1) {
+        const char *t = ai_say_tpl("三选.对");
+        const char *const a[4] = { aw, words[1], bw, cw };
+        der_filln(buf, sizeof buf, t ? t : "对 ： $1 $2 $3（不 是 $4）", a, 4);
+    } else if (vc == 1) {
+        const char *t = ai_say_tpl("三选.对");
+        const char *const a[4] = { aw, words[1], cw, bw };
+        der_filln(buf, sizeof buf, t ? t : "对 ： $1 $2 $3（不 是 $4）", a, 4);
+    } else if (vb == -1 && vc == -1) {
+        const char *t = ai_say_tpl("三选.都不对");
+        const char *const a[4] = { aw, words[1], bw, cw };
+        der_filln(buf, sizeof buf, t ? t : "都 不 对 ： $1 既 不 $2 $3 也 不 $2 $4", a, 4);
+    } else {
+        const char *t = ai_say_tpl("三选.不确定");
+        const char *const a[4] = { aw, words[1], bw, cw };
+        der_filln(buf, sizeof buf, t ? t : "我 不 确定 你 指 哪 个 ： $1 $2 $3 / $4", a, 4);
+    }
     if (out_conf) *out_conf = (vb == 1 || vc == 1) ? 0.8f : 0.45f;
     if (out_is_q) *out_is_q = 1;
     char *r = (char *)malloc(strlen(buf) + 1);

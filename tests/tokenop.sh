@@ -1116,6 +1116,26 @@ sed -i 's/^\[say\] 信念\.大家都说=.*/[say] 信念.大家都说=（数据�
 grep -q '（数据）猫 会 飞（1 人；（数据）我 不 认）' "$C9X/out.txt" \
     && ok "**改两行数据** ⇒ 投一票句与我的立场都换掉（槽位都对）" \
     || bad "C9-改模板" "$(sed -n 's/.*AI > //p' "$C9X/out.txt" | tail -1)"
+# §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true
+grep -q '对 ， 猫 和 狗 都 属于 动物' "$WORK/o123" \
+    && ok "并列「都对」**照旧**" \
+    || bad "C7-并列" "$(sed -n 's/.*AI > //p' "$WORK/o123" | head -1)"
+grep -q '对 ： 猫 属于 动物（不 是 植物）' "$WORK/o123" \
+    && ok "三选一「对」**照旧**" \
+    || bad "C7-三选" "$(sed -n 's/.*AI > //p' "$WORK/o123" | sed -n 2p)"
+grep -q '我 不 确定 你 指 哪 个 ： 猫 属于 鱼 / 植物' "$WORK/o123" \
+    && ok "三选一「不确定」**照旧**" \
+    || bad "C7-三选不确定" "$(sed -n 's/.*AI > //p' "$WORK/o123" | sed -n 3p)"
+C7X="$WORK/c7x"; rm -rf "$C7X"; mkdir -p "$C7X"
+cp "$ROOT/session.bin" "$C7X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$C7X/" 2>/dev/null || true
+sed -i 's/^\[say\] 并列\.都对=.*/[say] 并列.都对=（数据）$1 和 $2 都 $3 $4 对/; s/^\[say\] 三选\.对=.*/[say] 三选.对=（数据）$1 $2 $3 对（不 是 $4）/' "$C7X/patterns.txt"
+( cd "$C7X" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫 和 狗 都 属于 动物 对' "$C7X/out.txt" && grep -q '（数据）猫 属于 动物 对（不 是 植物）' "$C7X/out.txt" \
+    && ok "**改两行数据** ⇒ 并列与三选都换掉（槽位都对）" \
+    || bad "C7-改模板" "$(sed -n 's/.*AI > //p' "$C7X/out.txt" | tail -2 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
