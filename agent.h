@@ -3923,21 +3923,19 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
              who && who->name ? "（这层算在「他」头上）" : "");
     cot_push(ai, COT_HYP, 1, 80, "进入假设世界（不写进知识库）", note);
     ai->n_cot++;
-    if (hypo_conflict)
-        snprintf(resp0, sizeof resp0,
-                 "好 ， 就 当 %s %s%s %s —— 注意 这 和 你 刚才 说 的 相反 ，"
-                 "我 按 最新 这条 算", aw, is_neg ? "不 " : "", rw, bw);
-    else if (conflict)
-        snprintf(resp0, sizeof resp0,
-                 "好 ， 就 当 %s %s%s %s —— 不过 我 知道 实际 上 不是 这样 ，"
-                 "下面 说 的 都 是 假设 下 的",
-                 aw, is_neg ? "不 " : "", rw, bw);
-    else if (who && who->name)
-        snprintf(resp0, sizeof resp0, "好 ， 就 当 %s 以为 %s %s%s %s",
-                 who->name, aw, is_neg ? "不 " : "", rw, bw);
-    else
-        snprintf(resp0, sizeof resp0, "好 ， 就 当 %s %s%s %s",
-                 aw, is_neg ? "不 " : "", rw, bw);
+    /* §6.561 F2：反事实的四条说法都进数据（$1 主语 / $2 否定词 / $3 关系 / $4 宾语） */
+    {
+        const char *key = hypo_conflict ? "就当.冲突"
+                        : (conflict ? "就当.与实际冲突"
+                                    : ((who && who->name) ? "就当.他以为" : "就当.平"));
+        const char *t = ai_say_tpl(key);
+        const char *dflt = hypo_conflict ? "好 ， 就 当 $1 $2$3 $4 —— 注意 这 和 你 刚才 说 的 相反 ，我 按 最新 这条 算"
+                         : (conflict ? "好 ， 就 当 $1 $2$3 $4 —— 不过 我 知道 实际 上 不是 这样 ，下面 说 的 都 是 假设 下 的"
+                                     : ((who && who->name) ? "好 ， 就 当 $5 以为 $1 $2$3 $4"
+                                                           : "好 ， 就 当 $1 $2$3 $4"));
+        const char *const a5[5] = { aw, is_neg ? "不 " : "", rw, bw, (who && who->name) ? who->name : "他" };
+        der_filln(resp0, sizeof resp0, t ? t : dflt, a5, 5);
+    }
     if (out_conf) *out_conf = 0.7f;
     char *r = (char *)malloc(strlen(resp0) + 1);
     if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -6281,8 +6279,11 @@ static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
             OtherModel *om = other_find(ai, ai->view_who);
             if (!om || !other_has_subject(om, A)) {
                 char resp0[160];
-                snprintf(resp0, sizeof resp0, "我 不 知道 %s 怎么 想",
-                         ai->view_who->name ? ai->view_who->name : "他");
+                {
+                    const char *t = ai_say_tpl("视角.不知道他想");
+                    const char *const a[1] = { ai->view_who->name ? ai->view_who->name : "他" };
+                    der_filln(resp0, sizeof resp0, t ? t : "我 不 知道 $1 怎么 想", a, 1);
+                }
                 if (out_conf) *out_conf = 0.30f;
                 char *q = (char *)malloc(strlen(resp0) + 1);
                 if (q) memcpy(q, resp0, strlen(resp0) + 1);
@@ -6315,7 +6316,11 @@ static inline char *agent_answer_relation(AI *ai, char *const *words, size_t n,
                 size_t need = strlen(r) + 160;   /* 中文一个字 3 字节，别抠 */
                 char *q = (char *)malloc(need);
                 if (q) {
-                    snprintf(q, need, "%s （这 是 他 的 看法 ； 我 知道 实际 不 是 这样）", r);
+                    {
+                        const char *t = ai_say_tpl("视角.他的看法");
+                        const char *const a2[1] = { r };
+                        der_filln(q, need, t ? t : "$1 （这 是 他 的 看法 ； 我 知道 实际 不 是 这样）", a2, 1);
+                    }
                     free(r);
                     r = q;
                 }

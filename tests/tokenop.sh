@@ -1176,6 +1176,20 @@ sed -i 's|^\[say\] 列表\.表头=.*|[say] 列表.表头=$1$2 $3 都 有 谁 ：
 grep -q '属于 动物 都 有 谁 ：' "$F4X/out.txt" \
     && ok "**改一行数据** ⇒ 列表表头换掉（槽位都对）" \
     || bad "F4-改模板" "$(sed -n 's/.*AI > //p' "$F4X/out.txt" | head -1)"
+# §6.561 F2/F3：反事实四句 + 他者视角两句
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '如果 猫 会 飞\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o130" 2>&1 ) || true
+grep -q '好 ， 就 当 猫 会 飞 —— 不过 我 知道 实际 上 不是 这样' "$WORK/o130" \
+    && ok "「就当…（与实际冲突）」**照旧**" \
+    || bad "F2-冲突" "$(sed -n 's/.*AI > //p' "$WORK/o130" | tail -1)"
+F2X="$WORK/f2x"; rm -rf "$F2X"; mkdir -p "$F2X"
+cp "$ROOT/session.bin" "$F2X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$F2X/" 2>/dev/null || true
+sed -i 's|^\[say\] 就当\.与实际冲突=.*|[say] 就当.与实际冲突=（数据）先 当 $1 $2$3 $4 成 立|' "$F2X/patterns.txt"
+( cd "$F2X" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '如果 猫 会 飞\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）先 当 猫 会 飞 成 立' "$F2X/out.txt" \
+    && ok "**改一行数据** ⇒ 反事实说法换掉（四槽都对）" \
+    || bad "F2-改模板" "$(sed -n 's/.*AI > //p' "$F2X/out.txt" | tail -1)"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true
