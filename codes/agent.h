@@ -3341,7 +3341,12 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
          * 第一版连 `aw` 一起查，把 `我 叫 小明`（名字介绍）也挡了，套件当场红。 */
         if (fr_is_func(rw) || fr_is_func(bw)) return NULL;
         if (ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION) != 0) return NULL;
-        snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s", aw, is_neg ? "不 " : "", rw, bw);
+        {
+            /* §6.545 学习确认也进数据（四槽位：主语/否定词/关系/宾语） */
+            const char *t = ai_say_tpl("学习.事实");
+            der_fill5(resp0, sizeof resp0, t ? t : "记下 了 ： $1 $2$3 $4",
+                      aw, is_neg ? "不 " : "", rw, bw, NULL);
+        }
         ai->n_rel_learned++;
         cot_push(ai, COT_LEARN, 1, 90, "现场学一条关系事实（新谓语）", resp0);
         ai->n_cot++;
@@ -3394,8 +3399,12 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                 (void)mod_propose(&micro_of(ai)->queue, &in);
             }
         } else {
-            snprintf(resp0, sizeof resp0, "记下 了 ： %s %s %s", aw,
-                     is_neg ? rshow : rw, bw);
+            {
+                /* §6.545 这一处否定词已经并进 rshow（`不 喜欢` 是一个词），所以槽位不同 */
+                const char *t = ai_say_tpl("学习.事实分隔");
+                der_fill5(resp0, sizeof resp0, t ? t : "记下 了 ： $1 $2 $3",
+                          aw, is_neg ? rshow : rw, bw, NULL, NULL);
+            }
             ai->n_rel_learned++;
             ai->n_learned++;
             cot_push(ai, COT_LEARN, 1, 90, "现场学一条关系事实", resp0);
@@ -3597,8 +3606,11 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     ai->n_learned++;
     aip_note_fact(ta->name, words[ri], tb->name);
     char resp0[192];
-    snprintf(resp0, sizeof resp0, "记下 了 ： %s %s%s %s（新词当场造）",
-             ta->name, neg_sep ? "不 " : "", words[ri], tb->name);
+    {
+        const char *t = ai_say_tpl("学习.新词");
+        der_fill5(resp0, sizeof resp0, t ? t : "记下 了 ： $1 $2$3 $4（新词当场造）",
+                  ta->name, neg_sep ? "不 " : "", words[ri], tb->name, NULL);
+    }
     cot_push(ai, COT_LEARN, 1, 80, "自然说法里含新词：当场造词 + 学一条核心关系", resp0);
     ai->n_cot++;
     if (out_conf) *out_conf = 0.7f;

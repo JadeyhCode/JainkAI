@@ -622,8 +622,9 @@ static inline void der_symbol_text(const AI *ai, const Derivation *d,
 /* §6.532 模板槽位：只认 `$1`/`$2`（`$2` 给 NULL 时按空串），别的字符原样抄 —— 够用且好查。
  * 不做转义：模板是数据，写 `$` 就当槽位（这条写进 `docs/data-layer.md`）。*/
 /* §6.538 三个槽位的版本（列表答复的头部要用 `$1` 主语 / `$2` 否定词 / `$3` 关系）。 */
-static inline void der_fill3(char *out, size_t cap, const char *tpl,
-                             const char *a, const char *b, const char *c) {
+static inline void der_fill5(char *out, size_t cap, const char *tpl,
+                             const char *a, const char *b, const char *c,
+                             const char *d, const char *e) {
     if (!out || !cap) return;
     size_t o = 0;
     for (const char *p = tpl; *p && o + 8 < cap; ) {
@@ -645,14 +646,30 @@ static inline void der_fill3(char *out, size_t cap, const char *tpl,
             if (o + l + 1 >= cap) break;
             memcpy(out + o, v, l); o += l; p += 2; continue;
         }
+        if (p[0] == '$' && p[1] == '4') {
+            const char *v = d ? d : "";
+            size_t l = strlen(v);
+            if (o + l + 1 >= cap) break;
+            memcpy(out + o, v, l); o += l; p += 2; continue;
+        }
+        if (p[0] == '$' && p[1] == '5') {
+            const char *v = e ? e : "";
+            size_t l = strlen(v);
+            if (o + l + 1 >= cap) break;
+            memcpy(out + o, v, l); o += l; p += 2; continue;
+        }
         out[o++] = *p++;
     }
     out[o] = 0;
 }
-/* 两个槽位的旧签名（调用点多，保留成薄包装；$3 传 NULL） */
+/* 旧签名保留成薄包装（调用点多）：der_fill3 三槽、der_fill 两槽 */
+static inline void der_fill3(char *out, size_t cap, const char *tpl,
+                             const char *a, const char *b, const char *c) {
+    der_fill5(out, cap, tpl, a, b, c, NULL, NULL);
+}
 static inline void der_fill(char *out, size_t cap, const char *tpl,
                             const char *a, const char *b) {
-    der_fill3(out, cap, tpl, a, b, NULL);
+    der_fill5(out, cap, tpl, a, b, NULL, NULL, NULL);
 }
 
 static inline void der_say(const AI *ai, Derivation *d, int style,
