@@ -71,8 +71,16 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z170. 数据键撞名改成"加载期报错"（§6.563）
+## 4z171. 多智能体第一刀：共存 + 各记各的修改账 + 指针标签地基（§6.564）
 
+- **A**：一个进程两个 `ai_new()`，各教各的关系；双向查不到对方的（`tools/multiagent.c` 钉住）。
+- **B**：`AIModLog` 放进 `AI`（有界环形 256，记 Token.id/rid/neg/来源/序号），`ai_write_rel` 成功即记账。
+- **C 地基**：`ptrtag.h`（8 字节对齐 ⇒ 低 3 位：0 内存 / 1 磁盘 / 2 别处），tag=0 与"没打标签"逐字节等价。
+- 证据：新套件 `multiagent` **32 项全过**、整包 **46/46**、`probematrix` **28 行 diff 为空**、selfcheck/asan/patcount/bucketload 全 PASS。
+- 路线写进 `docs/multi-agent-plan.md`：C 腿先收 ~170 处 `->assocs` 直接访问成访问器，再打标签、再分段按需加载。
+- 坑：① `aip_ptr_tag` 不能先查对齐（打过标签就不对齐了）；② Token.id 跨池不唯一，"两本账比较"要 id→名字。
+
+## 4z170. 数据键撞名改成"加载期报错"（§6.563）
 - `[say]` 加载时查重：`say_dup` 计数、PATDBG 点名、后一行丢弃（先出现赢）；`patcount ⑩` 要求 `say_dup=0`。
 - 判据：先写用例（红 3 项）→ 全绿；出厂 `say=106 say_dup=0`；人为撞名 `say_dup=1` 且报出键名；
   45/45、selfcheck、asan、bucketload 全 PASS；tokenop **285 项**；`probematrix` **28 行 diff 为空**。

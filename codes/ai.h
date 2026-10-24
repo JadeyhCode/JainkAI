@@ -463,6 +463,36 @@ static inline const char *ai_write_src_name(AiWriteSrc s) {
     default:               return "?";
     }
 }
+/* ============================ §6.564 每个智能体自己的修改账 ============================
+ *
+ * 目标（用户 2026-10-24）：**打开多个智能体，每个智能体只维护自己的修改**。
+ * 第一刀不是"隔离进程"，而是把"我改过什么"变成**每个 AI 自己的一本账**：
+ *   · 账在 `AI` 里（堆上），**不是全局的** ⇒ 两个 AI 天然各记各的；
+ *   · 只记"落地的写"（`ai_write_rel` 成功、`ai_write_assoc` 新加边），不记意图；
+ *   · 有界环形缓冲（`AI_MODLOG_MAX` 条），溢出只丢最旧的 —— 账不能把内存吃干；
+ *   · 存的是 **Token id 与关系 id**（不是指针）：跨池/跨 agent 也认得，且不进存档。
+ * 这层是后面三件事的地基：`::mods`（看自己的账）、局部加载（谁改了哪块图要能追）、
+ * 合并/回放（两本账能不能并成一本）。
+ */
+#define AI_MODLOG_MAX 256u
+
+typedef struct {
+    uint32_t a_id, b_id;    /* Token.id（稳定、跨池可比） */
+    uint32_t seq;           /* 本 agent 的写入序号（从 1 开始，单调） */
+    uint8_t  rid;           /* 关系 id（0 = 无/不适用，如纯共现边） */
+    uint8_t  neg;           /* 1 = 写的否定边 */
+    uint8_t  src;           /* AiWriteSrc */
+    uint8_t  kind;          /* AIMOD_REL / AIMOD_ASSOC */
+} AIModEntry;
+
+typedef enum { AIMOD_REL = 1, AIMOD_ASSOC = 2 } AIModKind;
+
+typedef struct {
+    AIModEntry ent[AI_MODLOG_MAX];
+    size_t     n;           /* 累计条数（含被覆盖的）*/
+    size_t     head;        /* 下一个要写的槽位 */
+} AIModLog;
+
 typedef struct {
     Token  *a;
     Token  *b;
@@ -1141,6 +1171,10 @@ typedef struct {
 
     OtherModel others[AI_MAX_OTHERS];
     size_t     others_n;
+
+    /* §6.564 **本智能体的修改账**（只进内存、不进存档）：谁改了哪条边、什么时候、什么来源。
+     * 它是"每个智能体只维护自己的修改"的第一刀 —— 两个 AI 各有各的账。 */
+    AIModLog   modlog;
 
     float  imagine_rate;
     size_t n_imaginations, n_imagine_useful;
@@ -5368,6 +5402,32 @@ static inline void ai_stats(const AI *ai) {
  *      直写本来就是它的正常路径。这条区别写在 `::safe` 里，不藏着。
  *
  * 两个口子都必须**在 micro.h 之后**（要用 micro_of / micro_try）。 */
+/* §6.564 记一笔"我改了什么"。有界环形：满了覆盖最旧的一条（`n` 继续涨，能看出溢出）。 */
+static inline void ai_modlog_note(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
+                                  AiWriteSrc s, AIModKind kind) {
+    if (!ai || !a || !b) return;
+    AIModLog *L = &ai->modlog;
+    AIModEntry *e = &L->ent[L->head];
+    L->head = (L->head + 1u) % AI_MODLOG_MAX;
+    L->n++;
+    e->a_id = a->id;
+    e->b_id = b->id;
+    e->seq  = (uint32_t)L->n;
+    e->rid  = rid;
+    e->neg  = (uint8_t)(neg ? 1 : 0);
+    e->src  = (uint8_t)((unsigned)s < AI_WSRC_N ? (unsigned)s : 0u);
+    e->kind = (uint8_t)kind;
+}
+static inline size_t ai_modlog_count(const AI *ai) { return ai ? ai->modlog.n : 0; }
+/* 第 i 条（0 = 最新）。越界返回 NULL。 */
+static inline const AIModEntry *ai_modlog_at(const AI *ai, size_t i) {
+    if (!ai || i >= ai->modlog.n) return NULL;
+    size_t n = ai->modlog.n < AI_MODLOG_MAX ? ai->modlog.n : AI_MODLOG_MAX;
+    if (i >= n) return NULL;                     /* 更老的已经被覆盖 */
+    size_t slot = (ai->modlog.head + AI_MODLOG_MAX - 1u - i) % AI_MODLOG_MAX;
+    return &ai->modlog.ent[slot];
+}
+
 static inline void ai_write_count(AI *ai, AiWriteSrc s) {
     if (ai && (unsigned)s < AI_WSRC_N) ai->writes[s]++;
 }
@@ -5431,6 +5491,7 @@ static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
     /* §6.248 **写后读回校验**（可选，`::verifywrites on` / `AIP_VERIFYWRITES=1`，默认关）：
      * 声称写成功就立刻用读路径查一遍。这是"报了没学进去"那类错的**机制**兜底
      * （人工清单只能保证这一版）。默认关的理由：每次学习多一次查图，且生产路径不需要。 */
+    if (rc == 0) ai_modlog_note(ai, a, b, rid, neg, s, AIMOD_REL);   /* §6.564 */
     if (rc == 0 && ai->verify_writes && ai->rel_verify_hook) {
         /* 读路径在 rel.h（ai.h 之后才 include）⇒ 走**函数指针**，由 main.c 装上 */
         if (!ai->rel_verify_hook(a, b, rid, neg)) ai->n_verify_miss++;
