@@ -503,16 +503,33 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
-       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_N };
+       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say"
+    "qword", "qpart", "say", "bare"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
  * （`确 实` / `实 际 上`），所以按**词序列**匹配、整段删。*/
 static AipPat g_fill[AIP_PAT_MAX];
 static size_t g_fill_n;
+
+/* §6.533 **裸短回话的词表**（`[bare] 肯定=对,是,嗯` / `否定=不是,不对` / `不懂=不明白`）：
+ * 这三组原来是 `agent_bare_reply` 里的三张 `static const char *[]`。词表是**语言件**（认哪些说法算"嗯"），
+ * 不是引擎 —— 所以下沉成数据；回话的**措辞**在 `[say] 回话.*` 里（同一套模板机制，§6.532）。
+ * 数据接管判据与 qword/say 一致：patterns.txt 读到了就只认数据（桶被 `AIP_NODATA` 关掉时 0 条 ⇒ 消融量得出来）。 */
+#define AIP_BARE_MAX 48
+#define AIP_BARE_LEN 24
+static char g_bare[3][AIP_BARE_MAX][AIP_BARE_LEN];
+static size_t g_bare_n[3];
+static size_t g_bare_lines;   /* 文件里 `[bare]` 的**行数**（patcount ① 按行对账；组内条数看 g_bare_n[]） */
+static int g_bare_data;
+static inline int aip_bare_gi(const char *k) {
+    if (!strcmp(k, "肯定") || !strcmp(k, "yes"))     return 0;
+    if (!strcmp(k, "否定") || !strcmp(k, "no"))      return 1;
+    if (!strcmp(k, "不懂") || !strcmp(k, "confuse")) return 2;
+    return -1;
+}
 
 /* §6.393 **词类**（`[class] 名=词,词,…`）：答复行的关键词可以用 `@名` 引用一整类词，
  * 这样"往类里加一个同义词"不用改答复行 —— 这是"加新说法只改数据"的下一步。
@@ -833,6 +850,43 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.533 裸回话词表：`[bare] 肯定=对,是,嗯`（三组：肯定/否定/不懂，词用逗号分隔） */
+        if (!strcmp(kind, "bare")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char *ke = val + strlen(val);
+            while (ke > val && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
+            int gi = aip_bare_gi(val);
+            g_bare_lines++;
+            if (gi < 0) {
+                fprintf(stderr, "[patterns] ⚠ [bare] 认不出这一组（只认 肯定/否定/不懂）：%.40s\n", val);
+                continue;
+            }
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                if (*ws) {
+                    if (g_bare_n[gi] >= AIP_BARE_MAX) {
+                        fprintf(stderr, "[patterns] ⚠ [bare] 第 %d 组超过上限 %d，这一条被丢弃：%.40s\n",
+                                gi, AIP_BARE_MAX, ws);
+                    } else if (strlen(ws) >= AIP_BARE_LEN) {
+                        fprintf(stderr, "[patterns] ⚠ [bare] 词太长（%zu ≥ %d），被丢弃：%.40s\n",
+                                strlen(ws), AIP_BARE_LEN, ws);
+                    } else {
+                        snprintf(g_bare[gi][g_bare_n[gi]], sizeof g_bare[0][0], "%s", ws);
+                        g_bare_n[gi]++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
         /* §6.532 答复组织下沉：`[say] 键=模板`（模板里 `$1`/`$2` 是槽位；存储端与种子在 ai.h） */
         if (!strcmp(kind, "say")) {
             char *eq = strchr(val, '=');
@@ -909,11 +963,12 @@ continue;
     g_qword_data = 1;
     g_qpart_data = 1;
     g_say_data = 1;      /* §6.532 答复模板同上：文件读到了就由数据接管 */
+    g_bare_data = 1;     /* §6.533 裸回话词表同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
-                                g_qword_n, g_qpart_n, g_say_n};
+                                g_qword_n, g_qpart_n, g_say_n, g_bare_lines};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -951,9 +1006,10 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
-                g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n);
+                g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
+                g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2]);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -3724,6 +3780,7 @@ static inline int agent_bare_reply(const char *input) {
     }
     char *e = b + strlen(b); while (e > b && (e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
     if (!*b) return 0;
+    /* §6.533 词表来自数据（`[bare]`）；没有 patterns.txt 时用下面这三张**种子表**（与旧代码逐字节相同）。 */
     static const char *yes[] = {"对", "是", "嗯", "好", "行", "好的", "是啊", "是的", "没错",
                                 "对 的", "可以", "嗯 嗯", "懂了", "明白", "明白了", "知道了",
                                 "能", "会", "行 的", NULL};   /* §6.234：单字肯定也别掉流水线 */
@@ -3735,10 +3792,18 @@ static inline int agent_bare_reply(const char *input) {
     static const char *confuse[] = {"不懂", "不 懂", "不明白", "不 明白", "没懂", "没 懂",
                                     "没听懂", "没 听 懂", "听不懂", "听 不 懂",
                                     "不清楚", "不 清楚", NULL};
-    for (size_t i = 0; yes[i]; ++i) if (strcmp(b, yes[i]) == 0) return 1;
-    for (size_t i = 0; no[i]; ++i)  if (strcmp(b, no[i]) == 0)  return 2;
-    for (size_t i = 0; confuse[i]; ++i)
-        if (strcmp(b, confuse[i]) == 0 || strcmp(bp, confuse[i]) == 0) return 3;
+    if (g_bare_data) {
+        /* §6.533 数据接管：只认数据里的词（桶被关掉 ⇒ 一条都认不出 ⇒ 消融可见） */
+        for (size_t i = 0; i < g_bare_n[0]; ++i) if (strcmp(b, g_bare[0][i]) == 0) return 1;
+        for (size_t i = 0; i < g_bare_n[1]; ++i) if (strcmp(b, g_bare[1][i]) == 0) return 2;
+        for (size_t i = 0; i < g_bare_n[2]; ++i)
+            if (strcmp(b, g_bare[2][i]) == 0 || strcmp(bp, g_bare[2][i]) == 0) return 3;
+    } else {
+        for (size_t i = 0; yes[i]; ++i) if (strcmp(b, yes[i]) == 0) return 1;
+        for (size_t i = 0; no[i]; ++i)  if (strcmp(b, no[i]) == 0)  return 2;
+        for (size_t i = 0; confuse[i]; ++i)
+            if (strcmp(b, confuse[i]) == 0 || strcmp(bp, confuse[i]) == 0) return 3;
+    }
     /* §6.283 数据表里的「没听懂」说法（前缀匹配：`我不明白你说什么` 也算）。
      * ⚠ 两个形态都要查：`b` 是原句、`bp` 是剥掉句首代词后的。 */
     if (aip_pat_prefix(g_confuse, g_confuse_n, b) ||
@@ -6069,15 +6134,22 @@ static inline size_t agent_say(AI *ai, char *out) {
 /* §6.450 把"裸答复"的三条回复收成一处：以前在调用点**照抄两遍**（原文一次、剥掉引导语后一次），
  * 改一处忘另一处就会漂。`agent_bare_reply` 只判定，这里负责措辞与出口。 */
 static inline int agent_say_bare(AI *ai, int kind, char *out, size_t out_cap) {
+    /* §6.533 措辞来自数据（`[say] 回话.*`）；数据没给就用下面这几句种子（与旧代码逐字节相同）。 */
     if (kind == 1) {
-        snprintf(out, out_cap, "嗯 ， 好");
+        const char *t = ai_say_tpl("回话.肯定");
+        snprintf(out, out_cap, "%s", t ? t : "嗯 ， 好");
     } else if (kind == 2) {
-        snprintf(out, out_cap, "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句");
+        const char *t = ai_say_tpl("回话.不对");
+        snprintf(out, out_cap, "%s", t ? t : "哦 ？ 哪儿 不 对 ？ 我 刚才 说 的 是 哪 一 句");
     } else if (kind == 3) {
-        if (ai->last_reply[0])
-            snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
-        else
-            snprintf(out, out_cap, "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
+        if (ai->last_reply[0]) {
+            const char *t = ai_say_tpl("回话.不懂");
+            if (t) der_fill(out, out_cap, t, ai->last_reply, NULL);
+            else snprintf(out, out_cap, "没 讲 清 吗 ？ 我 再 说 一 遍 ： %s", ai->last_reply);
+        } else {
+            const char *t = ai_say_tpl("回话.不懂空");
+            snprintf(out, out_cap, "%s", t ? t : "那 我 换 个 说 法 —— 你 想 问 哪 方 面 ？");
+        }
     } else {
         return 0;
     }

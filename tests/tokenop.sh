@@ -625,8 +625,8 @@ q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
     || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
 # §6.532 目标③续：**答复组织下沉**（`[say] 语义位=模板`；`$1`/`$2` 是槽位）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o65" 2>&1 ) || true
-grep -q 'say=10' "$WORK/o65" \
-    && ok "答复模板**从数据读**：say=10（判词 3 + 组织 7，patterns.txt 一行一个语义位）" \
+grep -q 'say=14' "$WORK/o65" \
+    && ok "答复模板**从数据读**：say=14（判词 3 + 组织 7 + 回话 4，一行一个语义位）" \
     || bad "say 桶" "$(grep -o 'say=[0-9]*' "$WORK/o65")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
     "$WORK/aip" --model model.bin > "$WORK/o66" 2>&1 ) || true
@@ -647,6 +647,34 @@ sed -i 's/^\[say\] 组织\.定=.*/[say] 组织.定=（数据改的）$1 ⇒ $2/'
 grep -q '（数据改的）' "$SX/out.txt" \
     && ok "**改一行 [say] 组织.定** ⇒ 答复措辞跟着变（答复组织真的是数据）" \
     || bad "say 改模板" "$(sed -n 's/.*AI > //p' "$SX/out.txt" | tail -1)"
+# §6.533 裸短回话：**输入词表 + 回话语措**两边都下沉（`[bare]` 组=词,词 + `[say] 回话.*`）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o68" 2>&1 ) || true
+grep -q 'bare_yes=19 bare_no=14 bare_cf=12' "$WORK/o68" \
+    && ok "裸回话词表**从数据读**：肯定 19 / 否定 14 / 不懂 12（三组，逗号分隔）" \
+    || bad "bare 桶" "$(grep -o 'bare_yes=[0-9]* bare_no=[0-9]* bare_cf=[0-9]*' "$WORK/o68")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '好的\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o69" 2>&1 ) || true
+grep -q 'AI > 嗯 ， 好' "$WORK/o69" \
+    && ok "裸回话**照旧**（「好的」⇒「嗯 ， 好」，措辞来自 [say] 回话.肯定）" \
+    || bad "裸回话-肯定" "$(sed -n 's/.*AI > //p' "$WORK/o69" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '好的\n'; } | \
+    AIP_NODATA=bare "$WORK/aip" --model model.bin > "$WORK/o70" 2>&1 ) || true
+b_on=$(sed -n 's/.*AI > //p' "$WORK/o69" | tail -1)
+b_off=$(sed -n 's/.*AI > //p' "$WORK/o70" | tail -1)
+[ -n "$b_on" ] && [ "$b_on" != "$b_off" ] \
+    && ok "关掉 bare 桶 ⇒ 「好的」不再算裸回话（桶在承重）" \
+    || bad "bare 消融" "on=「$b_on」 off=「$b_off」"
+# 加一个**数据里的新回话词**：`好哒`（代码里没有）—— 不用改代码就该被认出来
+BX="$WORK/bx"; rm -rf "$BX"; mkdir -p "$BX"
+cp "$ROOT/model.bin" "$BX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$BX/" 2>/dev/null || true
+( cd "$BX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '好哒\n'; } | \
+    "$WORK/aip" --model m.bin > before.txt 2>&1 ) || true
+sed -i 's/^\[bare\] 肯定=\(.*\)/[bare] 肯定=\1,好哒/' "$BX/patterns.txt"
+( cd "$BX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '好哒\n'; } | \
+    "$WORK/aip" --model m.bin > after.txt 2>&1 ) || true
+grep -q 'AI > 嗯 ， 好' "$BX/after.txt" && ! grep -q 'AI > 嗯 ， 好' "$BX/before.txt" \
+    && ok "**加一行数据（好哒）** ⇒ 新的裸回话就这样被认出来（代码没动）" \
+    || bad "bare 加词" "before=$(sed -n 's/.*AI > //p' "$BX/before.txt" | tail -1) after=$(sed -n 's/.*AI > //p' "$BX/after.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
