@@ -485,7 +485,7 @@ typedef struct {
     uint8_t  kind;          /* AIMOD_REL / AIMOD_ASSOC */
 } AIModEntry;
 
-typedef enum { AIMOD_REL = 1, AIMOD_ASSOC = 2 } AIModKind;
+typedef enum { AIMOD_REL = 1, AIMOD_ASSOC = 2, AIMOD_REL_DEL = 3, AIMOD_ASSOC_DEL = 4 } AIModKind;
 
 typedef struct {
     AIModEntry ent[AI_MODLOG_MAX];
@@ -5386,22 +5386,6 @@ static inline void ai_stats(const AI *ai) {
 /* 微内核（安全内核 + 自修改意图队列 + 补丁注册表 + 元认知）。
  * 放在最后包含：它要用完整的 AI 结构，也要用上面这些函数
  * （ai_tokenize / ai_focus_push / ai_free_words）。 */
-#include "micro.h"
-
-/* ============================ 统一写入通道 ============================
- *
- * `microkernel.md` 一直记着一条局限：**老写入者绕过安全内核**
- * （感知学习、内部对话、想象、关系层现场学都直接改图）。这一轮把它变成
- * "**有账 + 可路由**"：
- *
- *   ① **有账**：谁写的都从这两个口子过，`ai->writes[来源]++`；
- *   ② **可路由**：`ai->route_writes` 打开时，**知识类**写入（关系事实）
- *      改成提意图 → 同一条「审查 → 预算 → 应用 → 审计」的路；
- *   ③ **刻意不路由的**：感知共现（`ai_learn_pair`）。它带 hits/pattern/topic
- *      这些观测细节，转成意图会**丢信息**；而且观测是知识的来源，
- *      直写本来就是它的正常路径。这条区别写在 `::safe` 里，不藏着。
- *
- * 两个口子都必须**在 micro.h 之后**（要用 micro_of / micro_try）。 */
 /* §6.564 记一笔"我改了什么"。有界环形：满了覆盖最旧的一条（`n` 继续涨，能看出溢出）。 */
 static inline void ai_modlog_note(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
                                   AiWriteSrc s, AIModKind kind) {
@@ -5428,6 +5412,28 @@ static inline const AIModEntry *ai_modlog_at(const AI *ai, size_t i) {
     return &ai->modlog.ent[slot];
 }
 
+/* §6.568 记"删掉了一条边"（B 腿：账里不能只有"加"，没有"删/改"） */
+static inline void ai_modlog_note_del(AI *ai, Token *a, Token *b, AiWriteSrc s, AIModKind kind) {
+    ai_modlog_note(ai, a, b, 0, 0, s, kind);
+}
+
+
+#include "micro.h"
+
+/* ============================ 统一写入通道 ============================
+ *
+ * `microkernel.md` 一直记着一条局限：**老写入者绕过安全内核**
+ * （感知学习、内部对话、想象、关系层现场学都直接改图）。这一轮把它变成
+ * "**有账 + 可路由**"：
+ *
+ *   ① **有账**：谁写的都从这两个口子过，`ai->writes[来源]++`；
+ *   ② **可路由**：`ai->route_writes` 打开时，**知识类**写入（关系事实）
+ *      改成提意图 → 同一条「审查 → 预算 → 应用 → 审计」的路；
+ *   ③ **刻意不路由的**：感知共现（`ai_learn_pair`）。它带 hits/pattern/topic
+ *      这些观测细节，转成意图会**丢信息**；而且观测是知识的来源，
+ *      直写本来就是它的正常路径。这条区别写在 `::safe` 里，不藏着。
+ *
+ * 两个口子都必须**在 micro.h 之后**（要用 micro_of / micro_try）。 */
 static inline void ai_write_count(AI *ai, AiWriteSrc s) {
     if (ai && (unsigned)s < AI_WSRC_N) ai->writes[s]++;
 }

@@ -1938,6 +1938,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         return 1;
     case MOD_REMOVE_ASSOC: {
         if (token_remove_assoc(m->target, m->main) != 0) return -1;
+        ai_modlog_note_del(ai, m->target, m->main, AI_WSRC_MICRO, AIMOD_ASSOC_DEL);
         if (note) snprintf(note, note_cap, "删 %s→%s",
                            m->target->name ? m->target->name : "?",
                            m->main->name ? m->main->name : "?");
@@ -1974,7 +1975,10 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             long i = micro_edge_index(A, B);
             if (i >= 0) {
                 if (micro_edge_removable(&token_assocs(A)[i])) {
-                    if (token_remove_assoc(A, B) == 0) cut = 1;
+                    if (token_remove_assoc(A, B) == 0) {
+                        cut = 1;
+                        ai_modlog_note_del(ai, A, B, AI_WSRC_MICRO, AIMOD_ASSOC_DEL);
+                    }
                 } else {
                     kept = 1;      /* 直连是**知识**（观测关系边）→ 铁律 2：不许拆 */
                 }

@@ -1190,6 +1190,18 @@ sed -i 's|^\[say\] 就当\.与实际冲突=.*|[say] 就当.与实际冲突=（�
 grep -q '（数据）先 当 猫 会 飞 成 立' "$F2X/out.txt" \
     && ok "**改一行数据** ⇒ 反事实说法换掉（四槽都对）" \
     || bad "F2-改模板" "$(sed -n 's/.*AI > //p' "$F2X/out.txt" | tail -1)"
+# §6.568 B 腿：`mods` 看自己的账（多智能体时各看各的）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '窗户 属于 家具\n猫 会 打呼噜\n::mods\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o133" 2>&1 ) || true
+grep -q '本脑的改动 2 条' "$WORK/o133" \
+    && ok "**mods 看自己的账**：学两条之后是 2 条" \
+    || bad "mods-计数" "$(grep -o '本脑的改动 [0-9]* 条' "$WORK/o133" | tail -1)"
+grep -q '加关系  猫 会 打呼噜' "$WORK/o133" && grep -q '加关系  窗户 属于 家具' "$WORK/o133" \
+    && ok "账里能读回**谁 关系 谁**（id→名字解得回来）" \
+    || bad "mods-内容" "$(grep '加关系' "$WORK/o133" | head -2 | tr '\n' ' ')"
+grep -q '#2 加关系' "$WORK/o133" \
+    && ok "**最新在前**（序号 2 排在 1 前面）" \
+    || bad "mods-顺序" "$(grep -o '#[0-9]* 加关系' "$WORK/o133" | head -2 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true

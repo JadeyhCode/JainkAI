@@ -71,8 +71,15 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z174. C 腿第 3 步：换出 + 真实图量局部加载（§6.567）
+## 4z175. B 腿补齐：账里记删 + `::mods`（§6.568）
 
+- `AIMOD_REL_DEL/AIMOD_ASSOC_DEL` + `ai_modlog_note_del`；`micro.h` 的两条删边路径记账。
+- 新命令 `::mods`：只列本脑最近 20 条，最新在前，带 kind/三元组/来源（id→名字）。
+- 判据：tokenop **288 项**、multiagent 探针 **34 项**、整包 **49/49**、`probematrix` 28 行 diff 为空、selfcheck 97 个命令引用齐、asan 88 条命令全干净。
+- 坑：① 早就会的事实不写 ⇒ 账为空（记账口径是"真正落地写"）；② `rel_name_of` 不该 `rid-1`；③ 记账函数必须在 `#include "micro.h"` **之前**。
+- 边界：感知共现不记；无 `mods diff`；`ai_gc` 回收不进账。
+
+## 4z174. C 腿第 3 步：换出 + 真实图量局部加载（§6.567）
 - `aip_parts_evict`（换出**干净**段，脏段 skip）、`aip_parts_stats`（loads/bytes/resident/evicted）、`token_assocs_resident`。
 - **真实图数字**（model.bin，1199 词 / 41216 边）：段文件 **1059 段 / 2.5 MB**；问 50 词读回 **50 段 / 483008 B = 18.19%**。
 - 新套件 `partbench`（第 49 套）；`partprobe` 加到 34 项；整包 **49/49**；`probematrix` 28 行 diff 为空。

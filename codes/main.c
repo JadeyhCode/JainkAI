@@ -601,6 +601,7 @@ typedef enum {
     CMD_DERIVEDUMP,
     CMD_REVCHECK,
     CMD_WTRACE,
+    CMD_MODS,               /* §6.568 本智能体自己的修改账（B 腿） */
     CMD_NONE
 } CmdId;
 
@@ -620,6 +621,8 @@ static const CmdDef CMDS[] = {
       "这份帮助", CMD_HELP },
     { "stats", NULL, 0, "基本",
       "统计（符号节点/边/状态/计数器）", CMD_STATS },
+    { "mods", NULL, 1, "基本",
+      "这个脑自己的改动记账（只记本脑，不串别的脑）", CMD_MODS },
     { "save", NULL, 1, "基本",
       "保存完整模型快照（默认 %M）", CMD_SAVE },
     { "load", NULL, 1, "基本",
@@ -1594,6 +1597,34 @@ int main(int argc, char **argv) {
                 ai_stats(a->brain);
                 (void)micro_of(a->brain); micro_stats(a->brain);
                 (void)think_of(a->brain); think_stats(a->brain);
+                continue;
+            }
+            /* §6.568 B 腿：**本机这具脑子**的改动账（多智能体时各看各的） */
+            case CMD_MODS: {
+                size_t n = ai_modlog_count(a->brain);
+                size_t shown = n < 20 ? n : 20;
+                printf("[本脑的改动 %zu 条%s]\n", n,
+                       n > shown ? "（只列最近 20 条）" : "");
+                for (size_t i = 0; i < shown; ++i) {
+                    const AIModEntry *e = ai_modlog_at(a->brain, i);
+                    if (!e) continue;
+                    Token *ta = pool_token_by_id(a->brain->pool, e->a_id);
+                    Token *tb = pool_token_by_id(a->brain->pool, e->b_id);
+                    const char *kind = e->kind == AIMOD_REL ? "加关系"
+                                     : (e->kind == AIMOD_ASSOC ? "加共现"
+                                     : (e->kind == AIMOD_REL_DEL ? "删关系" : "删共现"));
+                    const char *anam = ta && ta->name ? ta->name : "?";
+                    const char *bnam = tb && tb->name ? tb->name : "?";
+                    if (e->kind == AIMOD_REL || e->kind == AIMOD_REL_DEL) {
+                        const char *rn = e->rid ? rel_name_of(a->brain, e->rid) : NULL;
+                        printf("  #%u %s  %s %s%s %s  [%s]\n", e->seq, kind, anam,
+                               e->neg ? "不 " : "", rn ? rn : "?", bnam,
+                               ai_write_src_name((AiWriteSrc)e->src));
+                    } else {
+                        printf("  #%u %s  %s → %s  [%s]\n", e->seq, kind, anam, bnam,
+                               ai_write_src_name((AiWriteSrc)e->src));
+                    }
+                }
                 continue;
             }
             /* ---- 思维循环 ---- */

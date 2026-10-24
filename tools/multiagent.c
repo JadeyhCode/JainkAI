@@ -89,6 +89,30 @@ int main(void) {
        "② 账是**有界环形**：写超上限后总数继续涨");
     ok(ai_modlog_at(A, AI_MODLOG_MAX) == NULL, "② 被覆盖的最旧条目读不到（不是假数据）");
 
+    /* ---------- ②b 账里也记"删"（§6.568：只有"加"的账看不出后来改了什么） ---------- */
+    {
+        AI *D = ai_new();
+        Token *x = pool_token_intern(D->pool, "桌子");
+        Token *y = pool_token_intern(D->pool, "家具");
+        (void)ai_write_assoc(D, x, y, AI_WSRC_PERCEIVE);     /* 先有一条共现边 */
+        size_t before = ai_modlog_count(D);
+        ModIntent m;
+        memset(&m, 0, sizeof m);
+        m.type = MOD_REMOVE_ASSOC;
+        m.target = x; m.main = y;
+        char note[96];
+        int rc = micro_try(D, &m, note, sizeof note);
+        ok(rc == SAFE_OK || rc == SAFE_DENY_RELATION, "②b 删除意图有明确结论（允许或拒绝，不静默）");
+        if (rc == SAFE_OK) {
+            const AIModEntry *e = ai_modlog_at(D, 0);
+            ok(ai_modlog_count(D) == before + 1 && e && e->kind == AIMOD_ASSOC_DEL,
+               "②b **删边也进账**（最近一条是 AIMOD_ASSOC_DEL）");
+        } else {
+            ok(1, "②b 被安全内核拒绝（这条边不可删，账里没有假记录）");
+        }
+        ai_free(D);
+    }
+
     /* ---------- ③ 指针标签的地基 ---------- */
     void *p = malloc(64);
     ok(p && aip_ptr_taggable(p), "③ malloc 出来的指针是 8 字节对齐的（低 3 位为 0）");

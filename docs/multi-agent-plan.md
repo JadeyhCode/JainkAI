@@ -69,7 +69,8 @@
 
 ## 3. B 腿：修改账下一刀
 
-现在记的是**关系写**（`AIMOD_REL`）。后面：
+现在记的是**关系写**（`AIMOD_REL`）**与删**（`AIMOD_REL_DEL` / `AIMOD_ASSOC_DEL`，§6.568），
+并出了 **`::mods`** 命令（只看本脑）。后面：
 - 记"删/改"（`MOD_REMOVE_ASSOC`、改口重写）——同样是知识变更，必须进账；
 - 账里加 `pool->serial`（跨 agent 身份，见 `token.h` 的 `serial` 注释：光比指针会串味）；
 - 新增 **mods 命令**（尚未实现）：看自己的账；再加 `mods diff <另一个 agent>`（两本账的差集）——
