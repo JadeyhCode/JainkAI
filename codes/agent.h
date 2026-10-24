@@ -2826,15 +2826,19 @@ static inline char *agent_forget_request(AI *ai, char *const *words, size_t n, f
     if (q || !aw || !bw || !rid) return NULL;
     Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw);
     int have = A && B && (neg ? rel_direct_neg(A, rid, B) : rel_direct(A, rid, B));
-    char buf[320];
-    if (have)
-        snprintf(buf, sizeof buf,
-                 "这 条 我 删 不 了 —— 观测 到 的 知识 不 许 剪（硬 底线）。"
-                 "如果 你 的 意思 是「%s 不 %s %s」，就 这么 说，我 会 当「改口」记 下；"
-                 "想 看 我 到底 记 了 什么 可以 查 一下。",
-                 aw, rw, bw);
-    else
-        snprintf(buf, sizeof buf, "我 图 里 没 有「%s %s %s」，不 用 删。", aw, rw, bw);
+    char buf[400];
+    /* §6.542 删除请求的答复也进数据（`删除.不行` 三槽位：主语/关系/宾语） */
+    if (have) {
+        const char *t = ai_say_tpl("删除.不行");
+        der_fill3(buf, sizeof buf,
+                  t ? t : "这 条 我 删 不 了 —— 观测 到 的 知识 不 许 剪（硬 底线）。"
+                          "如果 你 的 意思 是「$1 不 $2 $3」，就 这么 说，我 会 当「改口」记 下；"
+                          "想 看 我 到底 记 了 什么 可以 查 一下。",
+                  aw, rw, bw);
+    } else {
+        const char *t = ai_say_tpl("删除.没有");
+        der_fill3(buf, sizeof buf, t ? t : "我 图 里 没 有「$1 $2 $3」，不 用 删。", aw, rw, bw);
+    }
     if (out_conf) *out_conf = 0.6f;
     char *r = (char *)malloc(strlen(buf) + 1);
     if (r) memcpy(r, buf, strlen(buf) + 1);
