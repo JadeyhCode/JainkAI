@@ -17,6 +17,15 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
+/* §6.571 **多智能体在同一个进程里**：一张小表 + 当前是哪一个。
+ * 每个脑是独立的 `Agent`（自己的池、自己的修改账、自己的 parts 上下文）；
+ * 命令面里 `::brain new/list/use/mods` 就是这张表的操作。
+ * 上限 4 个：这是"能同时开几个"，不是"能存几个模型"（存几个看磁盘）。 */
+#define AI_MAX_BRAINS 4
+static Agent *g_brains[AI_MAX_BRAINS];
+static size_t g_nbrains;
+static size_t g_curbrain;
+
 #define DEFAULT_MODEL "model.bin"
 
 /* 内存态指纹：把整张图滚成一个 FNV 哈希，用来验证 model.bin 存取是否无损。
@@ -604,6 +613,7 @@ typedef enum {
     CMD_WTRACE,
     CMD_MODS,               /* §6.568 本智能体自己的修改账（B 腿） */
     CMD_PARTS,              /* §6.569 局部加载：save/attach/detach/stats/evict */
+    CMD_BRAIN,              /* §6.571 多智能体：new/list/use/mods */
     CMD_NONE
 } CmdId;
 
@@ -627,6 +637,8 @@ static const CmdDef CMDS[] = {
       "这个脑自己的改动记账（只记本脑，不串别的脑）", CMD_MODS },
     { "parts", NULL, 1, "基本",
       "局部加载：save/attach/detach/stats/evict（边可以暂放磁盘，按需读回）", CMD_PARTS },
+    { "brain", NULL, 1, "基本",
+      "多智能体：new/list/use N/mods N（每个脑各记各的改，互不串台）", CMD_BRAIN },
     { "save", NULL, 1, "基本",
       "保存完整模型快照（默认 %M）", CMD_SAVE },
     { "load", NULL, 1, "基本",
@@ -1513,6 +1525,8 @@ int main(int argc, char **argv) {
 
     Agent *a = agent_new(stdin_perceive, stdout_act, NULL);
     if (!a) { fprintf(stderr, "agent_new 失败\n"); return 1; }
+    /* §6.571 初始脑就是 #0（`::brain new` 之后可以并存多个） */
+    g_brains[0] = a; g_nbrains = 1; g_curbrain = 0;
 
     /* 1) 给了语料 → 先训练 */
     size_t trained = 0;
@@ -1658,6 +1672,75 @@ int main(int argc, char **argv) {
                     printf("  detach          把边交还给磁盘（内存里不再留）\n");
                     printf("  stats           读回段数/字节、内存驻留段数、换出次数\n");
                     printf("  evict N         换出到只剩 N 段（只换干净的）\n");
+                }
+                continue;
+            }
+            /* §6.571 多智能体：开/列/切/看账（每个脑的池、账、parts 都是自己的） */
+            case CMD_BRAIN: {
+                const char *sp = strchr(cmd, ' ');
+                const char *sub = sp ? sp + 1 : "";
+                while (*sub == ' ') sub++;
+                char sb[32] = {0};
+                snprintf(sb, sizeof sb, "%s", sub);
+                char *sp2 = strchr(sb, ' ');
+                const char *arg = NULL;
+                if (sp2) { *sp2 = 0; arg = sp2 + 1; while (*arg == ' ') arg++; }
+                if (!strncmp(sb, "new", 3) && sb[3] == 0) {
+                    if (g_nbrains >= AI_MAX_BRAINS) {
+                        printf("[多脑] 最多同时 %d 个（现在 %zu 个）\n", AI_MAX_BRAINS, g_nbrains);
+                    } else {
+                        Agent *nb = agent_new(stdin_perceive, stdout_act, NULL);
+                        if (!nb) printf("[多脑] 建不出来（内存不够？）\n");
+                        else {
+                            nb->brain->rel_verify_hook = aip_rel_verify;
+                            g_brains[g_nbrains] = nb;
+                            a = nb;
+                            g_curbrain = g_nbrains;
+                            g_nbrains++;
+                            printf("[多脑] 开了第 %zu 个（当前就是它）：%zu 个词 / %zu 条改动\n",
+                                   g_nbrains, nb->brain->pool->count, ai_modlog_count(nb->brain));
+                        }
+                    }
+                } else if (!strncmp(sb, "list", 4) && sb[4] == 0) {
+                    printf("[多脑] %zu 个：\n", g_nbrains);
+                    for (size_t i = 0; i < g_nbrains; ++i) {
+                        AI *b = g_brains[i] ? g_brains[i]->brain : NULL;
+                        printf("  %c #%zu  %zu 词 / %zu 条改动%s\n", i == g_curbrain ? '*' : ' ', i,
+                               b ? b->pool->count : 0, ai_modlog_count(b),
+                               (b && b->pool && b->pool->part_load) ? " / 局部加载已挂" : "");
+                    }
+                } else if (!strncmp(sb, "use", 3) && sb[3] == 0) {
+                    size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : (size_t)-1;
+                    if (k >= g_nbrains) printf("[多脑] 说「::brain use N」，N 在 0..%zu 之间\n",
+                                               g_nbrains ? g_nbrains - 1 : 0);
+                    else { a = g_brains[k]; g_curbrain = k; printf("[多脑] 切到 #%zu\n", k); }
+                } else if (!strncmp(sb, "mods", 4) && sb[4] == 0) {
+                    size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : g_curbrain;
+                    if (k >= g_nbrains) printf("[多脑] 没有 #%zu\n", k);
+                    else {
+                        AI *b = g_brains[k]->brain;
+                        size_t n = ai_modlog_count(b), shown = n < 10 ? n : 10;
+                        printf("[#%zu 的改动 %zu 条]\n", k, n);
+                        for (size_t i = 0; i < shown; ++i) {
+                            const AIModEntry *e = ai_modlog_at(b, i);
+                            if (!e) continue;
+                            Token *ta = pool_token_by_id(b->pool, e->a_id);
+                            Token *tb = pool_token_by_id(b->pool, e->b_id);
+                            printf("  #%u %s  %s %s%s %s\n", e->seq,
+                                   e->kind == AIMOD_REL ? "加关系" :
+                                   (e->kind == AIMOD_ASSOC ? "加共现" :
+                                   (e->kind == AIMOD_REL_DEL ? "删关系" : "删共现")),
+                                   ta && ta->name ? ta->name : "?", e->neg ? "不 " : "",
+                                   e->rid ? (rel_name_of(b, e->rid) ? rel_name_of(b, e->rid) : "?") : "",
+                                   tb && tb->name ? tb->name : "?");
+                        }
+                    }
+                } else {
+                    printf("[用法] ::brain new|list|use N|mods N\n");
+                    printf("  new      再开一个脑（当前切到它；各脑的图/账/parts 各自独立）\n");
+                    printf("  list     列出现在有几个、各多少词/多少条改动\n");
+                    printf("  use N    切到第 N 个\n");
+                    printf("  mods N   看第 N 个脑自己的改动账\n");
                 }
                 continue;
             }
@@ -4140,6 +4223,11 @@ int main(int argc, char **argv) {
 
     printf("\n");
     ai_stats(a->brain);
-    agent_free(a);
+    /* §6.571 退出时把**所有**脑都放掉（`::brain new` 开的不算"漏" —— 那是真占着内存的）。
+     * 注意 `a` 可能只是其中一个（当前那个），别重复 free。 */
+    for (size_t i = 0; i < g_nbrains; ++i) {
+        if (g_brains[i]) { agent_free(g_brains[i]); g_brains[i] = NULL; }
+    }
+    if (!g_nbrains) agent_free(a);
     return 0;
 }

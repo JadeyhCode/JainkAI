@@ -1221,6 +1221,22 @@ l=$(grep -o '读回 [0-9]* 段' "$PW/out.txt" | tail -1 | grep -o '[0-9]*' || tr
 grep -q '对 ， 窗户 -\[属于\]-> 家具' "$PW/out.txt" \
     && ok "**卸下状态下问句仍然答得对**" \
     || bad "parts-答对" "$(grep -E '对 ，|不 对' "$PW/out.txt" | head -1)"
+# §6.571 多智能体（命令面）：::brain new/list/use/mods —— 两个脑**互不串台、各记各的账**
+BW="$WORK/bw"; rm -rf "$BW"; mkdir -p "$BW"
+cp "$ROOT/session.bin" "$BW/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$BW/" 2>/dev/null || true
+( cd "$BW" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new\n窗户 属于 家具\n::brain list\n::brain use 0\n窗户 属于 家具 吗\n';     printf '::brain use 1\n窗户 属于 家具 吗\n::brain mods 0\n::brain mods 1\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '开了第 2 个' "$BW/out.txt" && grep -q '\[多脑\] 2 个' "$BW/out.txt" \
+    && ok "**能开第二个脑**，列表里是 2 个" \
+    || bad "多脑-开" "$(grep '多脑' "$BW/out.txt" | head -3 | tr '\n' ' ')"
+grep -q '#0 的改动 0 条' "$BW/out.txt" && grep -q '#1 的改动 1 条' "$BW/out.txt" \
+    && ok "**各记各的账**：#0 是 0 条、#1 是 1 条" \
+    || bad "多脑-账" "$(grep '的改动' "$BW/out.txt" | tr '\n' ' ')"
+n_unknown=$(grep -c '图里 没 记 过 窗户 属于 什么' "$BW/out.txt" || true)
+n_known=$(grep -c '对 ， 窗户 -\[属于\]-> 家具' "$BW/out.txt" || true)
+[ "${n_unknown:-0}" -ge 1 ] && [ "${n_known:-0}" -ge 1 ] \
+    && ok "**互不串台**：#0 不知道（说没记过）、#1 知道（对）" \
+    || bad "多脑-隔离" "unknown=${n_unknown:-0} known=${n_known:-0}"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true
