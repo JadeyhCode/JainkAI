@@ -23,9 +23,10 @@ rm -rf "$TMP"; mkdir -p "$TMP"
 fail=0
 chk() { if [ "$2" -eq 1 ]; then echo "  OK   $1"; else echo "  FAIL $1${3:+（$3）}"; fail=1; fi }
 
-ask() {   # ask <桶名或空> <输入> → 第一句答复
-    printf '%s\n::quit\n' "$2" | env AIP_NODATA="$1" timeout 30 "$BIN" --model "$MODEL" 2>/dev/null \
-        | sed -n 's/.*AI > //p' | head -1
+ask() {   # ask <桶名或空> <输入> → 第一句答复；输入里的 `;` 当换行（多轮探针用，§6.534）
+    printf '%s\n::quit\n' "$(printf '%s' "$2" | tr ';' '\n')" \
+        | env AIP_NODATA="$1" timeout 30 "$BIN" --model "$MODEL" 2>/dev/null \
+        | sed -n 's/.*AI > //p' | tail -1
 }
 
 echo "① 每个桶：关掉它，至少一条探针的答复必须变"
@@ -55,6 +56,7 @@ qword|猫 哪儿 在
 qpart|请问猫是什么
 say|猫 属于 动物 吗
 bare|好的
+verdict|猫 属于 动物 吗;不对
 TABLE
 
 echo "② 全部关掉（AIP_NODATA=1）时，每条探针都必须变（证明它们都真的依赖数据）"
@@ -84,5 +86,5 @@ TABLE
 echo "  （②没有逐条 OK，只在失败时报；全过就是数据都承重）"
 
 rm -rf "$TMP"
-[ "$fail" -eq 0 ] && echo "PASS bucketload（14 个桶都有'关掉就变'的探针）" \
+[ "$fail" -eq 0 ] && echo "PASS bucketload（15 个桶都有'关掉就变'的探针）" \
                   || { echo "FAIL bucketload"; exit 1; }

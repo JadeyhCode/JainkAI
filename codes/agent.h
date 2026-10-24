@@ -503,10 +503,10 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
-       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_N };
+       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say", "bare"
+    "qword", "qpart", "say", "bare", "verdict"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -529,6 +529,34 @@ static inline int aip_bare_gi(const char *k) {
     if (!strcmp(k, "否定") || !strcmp(k, "no"))      return 1;
     if (!strcmp(k, "不懂") || !strcmp(k, "confuse")) return 2;
     return -1;
+}
+
+/* §6.534 **判词/答词/改口词的六组表**（`[verdict] 回答肯定=对,是,嗯…`）：
+ * 这六组**不是一张表**，是三件事的两个极性：
+ *   回答肯定/回答否认 = 回答"会不会/是不是"（会/不会）；
+ *   判词肯定/判词否认 = 评价我上一句（对/不对）；
+ *   改口触发/改口确认 = 上一轮我给过确定答案后，用户有没有推翻（错了/没错）。
+ * 原来它们是 `agent_askback_reply` 与 `agent_correct_reply` 里四张写死的 `static const char *[]`；
+ * 下沉时**保留分组**（不硬合并 —— 合并会改行为，且语义本来不同）。 */
+#define AIP_VERD_GROUPS 6
+#define AIP_VERD_MAX 32
+#define AIP_VERD_LEN 24
+static char g_verd[AIP_VERD_GROUPS][AIP_VERD_MAX][AIP_VERD_LEN];
+static size_t g_verd_n[AIP_VERD_GROUPS];
+static size_t g_verd_lines;
+static int g_verd_data;
+static inline int aip_verd_gi(const char *k) {
+    static const char *names[AIP_VERD_GROUPS] = {
+        "回答肯定", "回答否认", "判词肯定", "判词否认", "改口触发", "改口确认"
+    };
+    for (int i = 0; i < AIP_VERD_GROUPS; ++i) if (!strcmp(k, names[i])) return i;
+    return -1;
+}
+static inline int aip_verd_hit(int gi, const char *s) {
+    if (gi < 0 || gi >= AIP_VERD_GROUPS || !s) return 0;
+    for (size_t i = 0; i < g_verd_n[gi]; ++i)
+        if (!strcmp(s, g_verd[gi][i])) return 1;
+    return 0;
 }
 
 /* §6.393 **词类**（`[class] 名=词,词,…`）：答复行的关键词可以用 `@名` 引用一整类词，
@@ -850,7 +878,43 @@ continue;
             g_class_n++;
             continue;
         }
-        /* §6.533 裸回话词表：`[bare] 肯定=对,是,嗯`（三组：肯定/否定/不懂，词用逗号分隔） */
+        /* §6.534 判词/答词/改口：`[verdict] 回答肯定=会,能`（六组，词用逗号分隔） */
+        if (!strcmp(kind, "verdict")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char *ke = val + strlen(val);
+            while (ke > val && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
+            int gi = aip_verd_gi(val);
+            g_verd_lines++;
+            if (gi < 0) {
+                fprintf(stderr, "[patterns] ⚠ [verdict] 认不出这一组：%.40s\n", val);
+                continue;
+            }
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                if (*ws) {
+                    if (g_verd_n[gi] >= AIP_VERD_MAX)
+                        fprintf(stderr, "[patterns] ⚠ [verdict] 第 %d 组超过上限 %d，丢弃：%.40s\n",
+                                gi, AIP_VERD_MAX, ws);
+                    else if (strlen(ws) >= AIP_VERD_LEN)
+                        fprintf(stderr, "[patterns] ⚠ [verdict] 词太长，丢弃：%.40s\n", ws);
+                    else {
+                        snprintf(g_verd[gi][g_verd_n[gi]], sizeof g_verd[0][0], "%s", ws);
+                        g_verd_n[gi]++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
+        /* §6.533 裸回话词表：`[bare] 肯定=对,是,嗯`（三组：否定/不懂，词用逗号分隔） */
         if (!strcmp(kind, "bare")) {
             char *eq = strchr(val, '=');
             if (!eq) continue;
@@ -964,11 +1028,12 @@ continue;
     g_qpart_data = 1;
     g_say_data = 1;      /* §6.532 答复模板同上：文件读到了就由数据接管 */
     g_bare_data = 1;     /* §6.533 裸回话词表同理 */
+    g_verd_data = 1;     /* §6.534 判词/答词/改口词同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
-                                g_qword_n, g_qpart_n, g_say_n, g_bare_lines};
+                                g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -1006,10 +1071,12 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
                 g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
-                g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2]);
+                g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
+                g_verd_lines, g_verd_n[0], g_verd_n[1], g_verd_n[2], g_verd_n[3],
+                g_verd_n[4], g_verd_n[5]);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -5899,10 +5966,18 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
                                    "嗯 嗯", "嗯嗯", NULL};
         static const char *jn[] = {"不 对", "不对", "不 是", "不是", "不", "没",
                                    "没 有", "没有", "错", NULL};
-        for (size_t i = 0; ay[i]; ++i) if (!strcmp(j, ay[i])) { yes = 1; saw_answer = 1; }
-        for (size_t i = 0; an[i]; ++i) if (!strcmp(j, an[i])) { no = 1; saw_answer = 1; }
-        for (size_t i = 0; jy[i]; ++i) if (!strcmp(j, jy[i])) { yes = 1; saw_judge = 1; }
-        for (size_t i = 0; jn[i]; ++i) if (!strcmp(j, jn[i])) { no = 1; saw_judge = 1; }
+        if (g_verd_data) {
+            /* §6.534 数据接管：六组里挑对应的四组（答词 2 组 + 判词 2 组） */
+            if (aip_verd_hit(0, j)) { yes = 1; saw_answer = 1; }
+            if (aip_verd_hit(1, j)) { no = 1;  saw_answer = 1; }
+            if (aip_verd_hit(2, j)) { yes = 1; saw_judge = 1; }
+            if (aip_verd_hit(3, j)) { no = 1;  saw_judge = 1; }
+        } else {
+            for (size_t i = 0; ay[i]; ++i) if (!strcmp(j, ay[i])) { yes = 1; saw_answer = 1; }
+            for (size_t i = 0; an[i]; ++i) if (!strcmp(j, an[i])) { no = 1; saw_answer = 1; }
+            for (size_t i = 0; jy[i]; ++i) if (!strcmp(j, jy[i])) { yes = 1; saw_judge = 1; }
+            for (size_t i = 0; jn[i]; ++i) if (!strcmp(j, jn[i])) { no = 1; saw_judge = 1; }
+        }
         if (!yes && !no) junk = 1;
     }
     ai_free_words(w, n);
@@ -5968,9 +6043,14 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
     static const char *corr[] = {"不 对", "不 是", "错", "说 错", "不 正 确", NULL};
     static const char *conf[] = {"对", "是", "嗯", "没 错", "好", "行", NULL};
     int is_corr = 0, is_conf = 0;
-    for (size_t i = 0; corr[i]; ++i) if (strcmp(j, corr[i]) == 0) { is_corr = 1; break; }
-    if (!is_corr)
-        for (size_t i = 0; conf[i]; ++i) if (strcmp(j, conf[i]) == 0) { is_conf = 1; break; }
+    if (g_verd_data) {
+        is_corr = aip_verd_hit(4, j);           /* 改口触发 */
+        if (!is_corr) is_conf = aip_verd_hit(5, j);   /* 改口确认 */
+    } else {
+        for (size_t i = 0; corr[i]; ++i) if (strcmp(j, corr[i]) == 0) { is_corr = 1; break; }
+        if (!is_corr)
+            for (size_t i = 0; conf[i]; ++i) if (strcmp(j, conf[i]) == 0) { is_conf = 1; break; }
+    }
     /* §6.172c **整句说法**也认：`你 说 的 不 对` / `你 说 错 了`（语气词已剔掉）。
      * 只认"你/您/这/那 + 纠正词"这个形状 —— `我 说 的 不 对`（用户说自己说错了）
      * 不该拿来改**我的**知识，落空更安全。 */
@@ -5980,6 +6060,19 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
         for (size_t i = 0; !is_corr && lead[i]; ++i) {
             size_t ll = strlen(lead[i]);
             if (strncmp(j, lead[i], ll) != 0 || jl <= ll) continue;
+            if (g_verd_data) {   /* §6.534 数据接管：**后缀**匹配（`你 说 不 对` 也要认，不只是「你 不 对」） */
+                const char *rest = j + ll + 1;
+                if (j[ll] != ' ') continue;
+                for (size_t k = 0; k < g_verd_n[4]; ++k) {
+                    size_t cl = strlen(g_verd[4][k]);
+                    size_t rl = strlen(rest);
+                    if (rl < cl) continue;
+                    if (rl == cl && strcmp(rest, g_verd[4][k]) == 0) { is_corr = 1; break; }
+                    if (rl > cl && rest[rl - cl - 1] == ' ' &&
+                        strcmp(rest + rl - cl, g_verd[4][k]) == 0) { is_corr = 1; break; }
+                }
+                continue;
+            }
             for (size_t k = 0; !is_corr && corr[k]; ++k) {
                 size_t cl = strlen(corr[k]);
                 if (jl > cl && j[jl - cl - 1] == ' ' && strcmp(j + jl - cl, corr[k]) == 0)

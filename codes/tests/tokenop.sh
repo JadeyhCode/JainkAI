@@ -675,6 +675,33 @@ sed -i 's/^\[bare\] 肯定=\(.*\)/[bare] 肯定=\1,好哒/' "$BX/patterns.txt"
 grep -q 'AI > 嗯 ， 好' "$BX/after.txt" && ! grep -q 'AI > 嗯 ， 好' "$BX/before.txt" \
     && ok "**加一行数据（好哒）** ⇒ 新的裸回话就这样被认出来（代码没动）" \
     || bad "bare 加词" "before=$(sed -n 's/.*AI > //p' "$BX/before.txt" | tail -1) after=$(sed -n 's/.*AI > //p' "$BX/after.txt" | tail -1)"
+# §6.534 L1 判词识别下沉：`[verdict]` 六个**语义组**（答案词 / 判词 / 改口，不是一张表）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o71" 2>&1 ) || true
+grep -q 'verdict=6' "$WORK/o71" \
+    && ok "判词表**从数据读**：verdict=6（答词 2 + 判词 2 + 改口 2，分组保留、不合并）" \
+    || bad "verdict 桶" "$(grep -o 'verdict=[0-9]*' "$WORK/o71")"
+run '猫 属于 动物 吗\n不对\n' o72
+grep -q '改 过来 了' o72 \
+    && ok "改口**照旧**（问 → 答 → 「不对」⇒ 改过来了）" \
+    || bad "改口-默认" "$(sed -n 's/.*AI > //p' o72 | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n不对\n'; } | \
+    AIP_NODATA=verdict "$WORK/aip" --model model.bin > "$WORK/o73" 2>&1 ) || true
+v_on=$(sed -n 's/.*AI > //p' o72 | tail -1)
+v_off=$(sed -n 's/.*AI > //p' "$WORK/o73" | tail -1)
+[ -n "$v_off" ] && [ "$v_off" != "$v_on" ] \
+    && ok "关掉 verdict 桶 ⇒ 「不对」不再触发改口（桶在承重）" \
+    || bad "verdict 消融" "on=「$v_on」 off=「$v_off」"
+# 加一个**数据里的新改口词**：`瞎`（代码里没有；单 token —— 多字新词先要进词表，否则被分词拆开）
+VX="$WORK/vx"; rm -rf "$VX"; mkdir -p "$VX"
+cp "$ROOT/model.bin" "$VX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$VX/" 2>/dev/null || true
+( cd "$VX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n瞎\n'; } | \
+    "$WORK/aip" --model m.bin > before.txt 2>&1 ) || true
+sed -i 's/^\[verdict\] 改口触发=\(.*\)/[verdict] 改口触发=\1,瞎/' "$VX/patterns.txt"
+( cd "$VX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n瞎\n'; } | \
+    "$WORK/aip" --model m.bin > after.txt 2>&1 ) || true
+grep -q '改 过来 了' "$VX/after.txt" && ! grep -q '改 过来 了' "$VX/before.txt" \
+    && ok "**加一行数据（瞎）** ⇒ 新的改口说法就认出来了（代码没动）" \
+    || bad "verdict 加词" "before=$(sed -n 's/.*AI > //p' "$VX/before.txt" | tail -1) after=$(sed -n 's/.*AI > //p' "$VX/after.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
