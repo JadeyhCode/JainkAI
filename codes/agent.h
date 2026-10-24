@@ -6554,15 +6554,24 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         int hk = agent_history_kind(input);
         if (hk) {
             if (hk == 2) {
-                if (ai->hist_n == 0) snprintf(out, out_cap, "你 还 没 说 过 什么");
-                else {
+                /* §6.543 历史回顾的措辞也进数据（`历史.*`） */
+                if (ai->hist_n == 0) {
+                    const char *t = ai_say_tpl("历史.还没说");
+                    snprintf(out, out_cap, "%s", t ? t : "你 还 没 说 过 什么");
+                } else {
                     size_t slot = (ai->hist_head + 6 - 1) % 6;
-                    snprintf(out, out_cap, "你 刚才 说 的 是 ： %s", ai->hist[slot]);
+                    const char *t = ai_say_tpl("历史.你说");
+                    der_fill3(out, out_cap, t ? t : "你 刚才 说 的 是 ： $1", ai->hist[slot], NULL, NULL);
                 }
             } else {
-                if (ai->hist_n == 0) snprintf(out, out_cap, "我们 还 没 聊 过 什么");
-                else {
-                    size_t off = (size_t)snprintf(out, out_cap, "刚才 我们 聊 了 ： ");
+                if (ai->hist_n == 0) {
+                    const char *t = ai_say_tpl("历史.还没聊");
+                    snprintf(out, out_cap, "%s", t ? t : "我们 还 没 聊 过 什么");
+                } else {
+                    /* ⚠ 数据行**行尾空格会被加载器修掉**，所以"头 + 列表"之间那个空格由代码补（§6.543） */
+                    const char *t = ai_say_tpl("历史.我们");
+                    size_t off = (size_t)snprintf(out, out_cap, "%s ",
+                                                  t ? t : "刚才 我们 聊 了 ：");
                     size_t n_list = ai->hist_n < 3 ? ai->hist_n : 3;
                     for (size_t k = 0; k < n_list && off + 1 < out_cap; ++k) {
                         size_t idx = (ai->hist_head + 6 - n_list + k) % 6;
