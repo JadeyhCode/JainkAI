@@ -2777,12 +2777,16 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
     if (b0 && rid) {
         Token *me = pool_find(ai->pool, "你");
         /* 图里有这条事实就直接答（A-不-A 形状关系层解析不出来，别指望流水线）。 */
-        if (me && rel_direct(me, rid, b0)) {
-            snprintf(out, cap, "对 ， 你 -[会]-> %.40s", obj);
+        if (me && rel_direct(me, rid, b0)) {   /* §6.552 能力答复也进数据 */
+            const char *t = ai_say_tpl("能力.会");
+            const char *const a[1] = { obj };
+            der_filln(out, cap, t ? t : "对 ， 你 -[会]-> $1", a, 1);
             return 1;
         }
         if (me && rel_direct_neg(me, rid, b0)) {
-            snprintf(out, cap, "不 对 ， 你 -[不 会]-> %.40s", obj);
+            const char *t = ai_say_tpl("能力.不会");
+            const char *const a[1] = { obj };
+            der_filln(out, cap, t ? t : "不 对 ， 你 -[不 会]-> $1", a, 1);
             return 1;
         }
     }
@@ -3389,8 +3393,11 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     int known = is_neg ? rel_direct_neg(A, rid, B) : rel_direct(A, rid, B);
     if (known) {
         /* 已经知道的：回一句「我知道」，别装没听见。不算新学，不涨计数。 */
-        snprintf(resp0, sizeof resp0, "我 知道 ： %s %s %s", aw,
-                 is_neg ? rshow : rw, bw);
+        {
+            const char *t = ai_say_tpl("关系.我知道");
+            const char *const a[3] = { aw, is_neg ? rshow : rw, bw };
+            der_filln(resp0, sizeof resp0, t ? t : "我 知道 ： $1 $2 $3", a, 3);
+        }
         cot_push(ai, COT_LEARN, 1, 70, "这条关系我本来就知道", resp0);
         ai->n_cot++;
     } else {

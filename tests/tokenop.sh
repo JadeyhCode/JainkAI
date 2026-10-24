@@ -1059,6 +1059,25 @@ sed -i 's/^\[say\] 假设\.撤一层=.*/[say] 假设.撤一层=（数据）撤 �
 grep -q '（数据）撤 一 层（还 有 1 层）' "$HXX/out.txt" \
     && ok "**改两行数据** ⇒ 撤一层的答复换掉（槽位填对）" \
     || bad "假设-改模板" "$(sed -n 's/.*AI > //p' "$HXX/out.txt" | tail -2 | tr '\n' ' ')"
+# §6.552 C7 第一刀：**能力答复 + "我 知道"**（关系答复族的两句）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '你 会 游泳\n你 会 游泳 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o117" 2>&1 ) || true
+grep -q '对 ， 你 -\[会\]-> 游泳' "$WORK/o117" \
+    && ok "能力答复**照旧**（教过之后问 ⇒「对 ， 你 -[会]-> 游泳」）" \
+    || bad "能力-会" "$(sed -n 's/.*AI > //p' "$WORK/o117" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o118" 2>&1 ) || true
+grep -q '我 知道 ： 猫 属于 动物' "$WORK/o118" \
+    && ok "「我 知道」**照旧**（教一条已知事实时不装没听见）" \
+    || bad "我知道-默认" "$(sed -n 's/.*AI > //p' "$WORK/o118" | tail -1)"
+CXX="$WORK/cxx"; rm -rf "$CXX"; mkdir -p "$CXX"
+cp "$ROOT/session.bin" "$CXX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$CXX/" 2>/dev/null || true
+sed -i 's/^\[say\] 能力\.会=.*/[say] 能力.会=（数据）你 会 $1/; s/^\[say\] 关系\.我知道=.*/[say] 关系.我知道=（数据）早 就 记 着：$1 $2 $3/' "$CXX/patterns.txt"
+( cd "$CXX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '你 会 游泳\n你 会 游泳 吗\n猫 属于 动物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）你 会 游泳' "$CXX/out.txt" && grep -q '（数据）早 就 记 着：猫 属于 动物' "$CXX/out.txt" \
+    && ok "**改两行数据** ⇒ 两句都换掉（槽位都对）" \
+    || bad "能力-改模板" "$(sed -n 's/.*AI > //p' "$CXX/out.txt" | tail -3 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
