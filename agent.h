@@ -504,10 +504,10 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
        AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_PRON,
-       AIP_BK_MEASURE, AIP_BK_N };
+       AIP_BK_MEASURE, AIP_BK_REFUSE, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say", "bare", "verdict", "pron", "measure"
+    "qword", "qpart", "say", "bare", "verdict", "pron", "measure", "refuse"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -949,6 +949,34 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.537 兜底说法池：`[refuse] 说法=这个我 不 太 懂,…`（一组，逗号分隔） */
+        if (!strcmp(kind, "refuse")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                if (*ws) {
+                    if (g_refuse_n >= AI_REFUSE_MAX)
+                        fprintf(stderr, "[patterns] ⚠ [refuse] 超过上限 %d，丢弃：%.40s\n",
+                                AI_REFUSE_MAX, ws);
+                    else if (strlen(ws) >= AI_REFUSE_LEN)
+                        fprintf(stderr, "[patterns] ⚠ [refuse] 说法太长，丢弃：%.40s\n", ws);
+                    else {
+                        snprintf(g_refuse[g_refuse_n], sizeof g_refuse[0], "%s", ws);
+                        g_refuse_n++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
         /* §6.536 量词：`[measure] 词=有多大,多高,…`（一组，逗号分隔；strstr 匹配） */
         if (!strcmp(kind, "measure")) {
             char *eq = strchr(val, '=');
@@ -1167,12 +1195,14 @@ continue;
     g_verd_data = 1;     /* §6.534 判词/答词/改口词同理 */
     g_pron_data = 1;     /* §6.535 代词表同理 */
     g_measure_data = 1;  /* §6.536 量词表同理 */
+    g_refuse_data = 1;   /* §6.537 兜底说法池同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
                                 g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines,
-                                g_pron_lines, g_measure_lines};
+                                g_pron_lines, g_measure_lines,
+                                g_refuse_n ? 1 : 0};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -1210,14 +1240,15 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu refuse=%zu refuse_n=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
                 g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
                 g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
                 g_verd_lines, g_verd_n[0], g_verd_n[1], g_verd_n[2], g_verd_n[3],
                 g_verd_n[4], g_verd_n[5],
                 g_pron_lines, g_pron_n[0], g_pron_n[1], g_pron_n[2], g_pron_n[3],
-                g_measure_lines, g_measure_n);
+                g_measure_lines, g_measure_n,
+                (size_t)(g_refuse_n ? 1 : 0), g_refuse_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -7251,9 +7282,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                 if (!ai->last_der.has_claim)
                     der_source(&ai->last_der, "不确定（关系已知但没有记录）");
             } else {
-            size_t nref = 0;
-            while (AI_REFUSALS[nref]) nref++;
-            const char *rf = AI_REFUSALS[ai->n_refusals++ % nref];
+            /* §6.537 说法池来自数据（`[refuse]`）；池空（消融）时退一句最小的诚实说法 */
+            size_t nref = ai_refuse_count();
+            const char *rf = nref ? ai_refuse_at(ai->n_refusals++) : "我 不 知道";
+            if (!rf) rf = "我 不 知道";
             resp = (char *)malloc(strlen(rf) + 1);
             if (resp) memcpy(resp, rf, strlen(rf) + 1);
             g_last_src = AI_SRC_FALLBACK;   /* §6.420 兜底说法池 */

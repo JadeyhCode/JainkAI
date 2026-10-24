@@ -289,6 +289,14 @@ static const char *const AI_SEG_NAMES[AI_SEG_N] = {
  * 关键设计：检索**必须能拒答**。之前不管输入是什么都硬塞一个最像的句子，
  * 于是「1加1等于几」会得到「先喝口水我在这里」—— 这比答不上来糟糕得多。
  * 匹配不到就诚实说不知道，这才是正常交流。 */
+/* §6.537 **说法池下沉**：这 6 句原来写死在这里；现在 `patterns.txt` 的 `[refuse] 说法=…` 是唯一来源，
+ * 代码里这份只当**没有数据时**的种子。选哪一句仍是代码（按 `n_refusals` 轮换，§6.420）——
+ * "说什么" 是语言，"怎么轮换" 是算法。 */
+#define AI_REFUSE_MAX 12
+#define AI_REFUSE_LEN 64
+static char g_refuse[AI_REFUSE_MAX][AI_REFUSE_LEN];
+static size_t g_refuse_n;
+static int g_refuse_data;
 static const char *const AI_REFUSALS[] = {
     "这个我 不 太 懂",
     "我 不 知道 你 能 告诉 我 吗",
@@ -298,6 +306,18 @@ static const char *const AI_REFUSALS[] = {
     "我 不 太 确定 你 说 给 我 听",
     NULL
 };
+static inline size_t ai_refuse_count(void) {
+    if (g_refuse_data) return g_refuse_n;
+    size_t n = 0;
+    while (AI_REFUSALS[n]) n++;
+    return n;
+}
+static inline const char *ai_refuse_at(size_t i) {
+    if (g_refuse_data) return (g_refuse_n && i < g_refuse_n) ? g_refuse[i % g_refuse_n] : NULL;
+    size_t n = 0;
+    while (AI_REFUSALS[n]) n++;
+    return n ? AI_REFUSALS[i % n] : NULL;
+}
 
 /* 整句检索：语料里「输入句 → 回复句」的成对记忆。
  *

@@ -756,6 +756,31 @@ m_off=$(sed -n 's/.*AI > //p' "$WORK/o79" | tail -1)
 grep -q '具 体 数 量' "$WORK/o80" \
     && ok "数据补上的量词（多沉）⇒ 拒答（以前是「记下 了」，把问句学成事实）" \
     || bad "measure 补洞" "$(sed -n 's/.*AI > //p' "$WORK/o80" | tail -1)"
+# §6.537 L4 "不知道"的说法池下沉：`[refuse] 说法=…`（原来是 ai.h 里写死的 6 句）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o81" 2>&1 ) || true
+grep -q 'refuse=1' "$WORK/o81" \
+    && ok "兜底说法池**从数据读**：refuse=1 行（6 句，逗号分隔）" \
+    || bad "refuse 桶" "$(grep -o 'refuse=[0-9]*' "$WORK/o81")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 的 妈妈 是 谁\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o82" 2>&1 ) || true
+grep -q '这个我 不 太 懂' "$WORK/o82" \
+    && ok "兜底措辞**照旧**（「猫 的 妈妈 是 谁」⇒「这个我 不 太 懂」）" \
+    || bad "refuse-默认" "$(sed -n 's/.*AI > //p' "$WORK/o82" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 的 妈妈 是 谁\n'; } | \
+    AIP_NODATA=refuse "$WORK/aip" --model model.bin > "$WORK/o83" 2>&1 ) || true
+r_on=$(sed -n 's/.*AI > //p' "$WORK/o82" | tail -1)
+r_off=$(sed -n 's/.*AI > //p' "$WORK/o83" | tail -1)
+[ -n "$r_off" ] && [ "$r_on" != "$r_off" ] \
+    && ok "关掉 refuse 桶 ⇒ 兜底措辞就变（桶在承重）" \
+    || bad "refuse 消融" "on=「$r_on」 off=「$r_off」"
+RX="$WORK/rx"; rm -rf "$RX"; mkdir -p "$RX"
+cp "$ROOT/model.bin" "$RX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RX/" 2>/dev/null || true
+sed -i 's/^\[refuse\] 说法=.*/[refuse] 说法=（数据）我 想 想 再 说/' "$RX/patterns.txt"
+( cd "$RX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 的 妈妈 是 谁\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）我 想 想 再 说' "$RX/out.txt" \
+    && ok "**改一行数据** ⇒ 兜底的说法就换掉（说话方式真的是数据）" \
+    || bad "refuse 改池" "$(sed -n 's/.*AI > //p' "$RX/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
