@@ -4822,13 +4822,14 @@ static inline char *agent_learn_belief(AI *ai, char *const *words, size_t n,
     /* 他的看法和我的知识相反时如实说出来 —— 这正是「归属」的意义所在 */
     int mine_pos = rel_direct(A, rid, B), mine_neg = rel_direct_neg(A, rid, B);
     const char *wv = (vp == 1 && !strcmp(words[1], "说")) ? "说" : "以为";   /* 他说的是「说」，就别说成「以为」 */
-    if (is_neg ? mine_pos : mine_neg)
-        snprintf(resp0, sizeof resp0,
-                 "记下 了 ： %s %s %s %s%s %s —— 可 我 知道 实际 上 不 是 这样",
-                 who->name ? who->name : "他", wv, aw, is_neg ? "不 " : "", rw, bw);
-    else
-        snprintf(resp0, sizeof resp0, "记下 了 ： %s %s %s %s%s %s",
-                 who->name ? who->name : "他", wv, aw, is_neg ? "不 " : "", rw, bw);
+    {   /* §6.562 他者学习确认也进数据（$1 谁 $2 以为 $3 主语 $4 否定 $5 关系 $6 宾语）*/
+        int confl = is_neg ? mine_pos : mine_neg;
+        const char *t = ai_say_tpl(confl ? "学习.他以为反" : "学习.他以为");
+        const char *const a[6] = { who->name ? who->name : "他", wv, aw, is_neg ? "不 " : "", rw, bw };
+        der_filln(resp0, sizeof resp0,
+                  t ? t : (confl ? "记下 了 ： $1 $2 $3 $4$5 $6 —— 可 我 知道 实际 上 不 是 这样"
+                                 : "记下 了 ： $1 $2 $3 $4$5 $6"), a, 6);
+    }
     if (out_conf) *out_conf = 0.75f;
     char *r = (char *)malloc(strlen(resp0) + 1);
     if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -5947,8 +5948,14 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
         size_t gaps = proc_run_args(ai, bare, &pr, av, an);
         if (pr.say[0]) {
             if (n_extra)
-                snprintf(out, out_cap, "%.180s（实参最多 %d 个：后面 %zu 个**没带进去**）",
-                         pr.say, PROC_ARG_MAX, n_extra);
+            {   /* §6.562 实参超限的提示也进数据（$1 已说的答复 $2 上限 $3 多出的个数）*/
+                const char *t = ai_say_tpl("过程.实参超限");
+                char cap3[32], ex3[32];
+                snprintf(cap3, sizeof cap3, "%d", (int)PROC_ARG_MAX);
+                snprintf(ex3, sizeof ex3, "%zu", n_extra);
+                const char *const a3[3] = { pr.say, cap3, ex3 };
+                der_filln(out, out_cap, t ? t : "$1（实参最多 $2 个：后面 $3 个**没带进去**）", a3, 3);
+            }
             else
                 snprintf(out, out_cap, "%.200s", pr.say);
             return 1;

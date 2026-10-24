@@ -1190,6 +1190,20 @@ sed -i 's|^\[say\] 就当\.与实际冲突=.*|[say] 就当.与实际冲突=（�
 grep -q '（数据）先 当 猫 会 飞 成 立' "$F2X/out.txt" \
     && ok "**改一行数据** ⇒ 反事实说法换掉（四槽都对）" \
     || bad "F2-改模板" "$(sed -n 's/.*AI > //p' "$F2X/out.txt" | tail -1)"
+# §6.562 他者学习确认 + 过程实参超限
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true
+grep -q '记下 了 ： 他 以为 猫 会 飞 —— 可 我 知道 实际 上 不 是 这样' "$WORK/o131" \
+    && ok "他者学习确认**照旧**（和我的知识冲突时也照实说）" \
+    || bad "他者-确认" "$(sed -n 's/.*AI > //p' "$WORK/o131" | tail -1)"
+L5="$WORK/l5"; rm -rf "$L5"; mkdir -p "$L5"
+cp "$ROOT/session.bin" "$L5/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$L5/" 2>/dev/null || true
+sed -i 's|^\[say\] 学习\.他以为反=.*|[say] 学习.他以为反=（数据）$1 说 $3 $4$5 $6，我 不 认|' "$L5/patterns.txt"
+( cd "$L5" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）他 说 猫 会 飞，我 不 认' "$L5/out.txt" \
+    && ok "**改一行数据** ⇒ 他者确认换掉（六槽都对）" \
+    || bad "他者-改模板" "$(sed -n 's/.*AI > //p' "$L5/out.txt" | tail -1)"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true
