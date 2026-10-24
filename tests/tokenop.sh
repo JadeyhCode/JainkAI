@@ -1157,6 +1157,25 @@ sed -i 's|^\[say\] 改口\.确认=.*|[say] 改口.确认=（数据）好 的 记
 grep -q '（数据）好 的 记 下：猫 属于 动物' "$F1X/out.txt" \
     && ok "**改两行数据** ⇒ 确认语与汇总语都换掉" \
     || bad "F1-改模板" "$(sed -n 's/.*AI > //p' "$F1X/out.txt" | tr '\n' ' ' | cut -c1-120)"
+# §6.560 F4：列表/类别答复（表头 / 没记过 / 只列前几个 / 类比点题）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '什么 属于 动物\n猫 属于 鱼 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o128" 2>&1 ) || true
+grep -q '属于 动物 的 有 ： 猫 、 狗' "$WORK/o128" && grep -q '等（只列前几个）' "$WORK/o128" \
+    && ok "列表答复（表头 + 只列前几个）**照旧**" \
+    || bad "F4-列表" "$(sed -n 's/.*AI > //p' "$WORK/o128" | head -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '什么 属于 什么\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o129" 2>&1 ) || true
+grep -q '的 有 ：' "$WORK/o129" || grep -q '图里 没 记 过' "$WORK/o129" \
+    && ok "空表头路径**照旧**（有命中就列表，没命中就明说没记过）" \
+    || bad "F4-没记过" "$(sed -n 's/.*AI > //p' "$WORK/o129" | tail -1)"
+F4X="$WORK/f4x"; rm -rf "$F4X"; mkdir -p "$F4X"
+cp "$ROOT/session.bin" "$F4X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$F4X/" 2>/dev/null || true
+sed -i 's|^\[say\] 列表\.表头=.*|[say] 列表.表头=$1$2 $3 都 有 谁 ：|' "$F4X/patterns.txt"
+( cd "$F4X" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '什么 属于 动物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '属于 动物 都 有 谁 ：' "$F4X/out.txt" \
+    && ok "**改一行数据** ⇒ 列表表头换掉（槽位都对）" \
+    || bad "F4-改模板" "$(sed -n 's/.*AI > //p' "$F4X/out.txt" | head -1)"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true

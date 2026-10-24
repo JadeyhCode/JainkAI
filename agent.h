@@ -1877,10 +1877,13 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         const char *rdisp = words[base + (has_cat ? 1 : 0)];
         if (oq_neg && strncmp(rdisp, "不", strlen("不")) == 0) rdisp += strlen("不");
         const char *bdisp = words[base + (has_cat ? 2 : 1)];
-        if (cat) off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 （只算 %s） ： ",
-                                         oq_neg ? "不 " : "", rdisp, bdisp, catw);
-        else     off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s %s 的 有 ： ",
-                                         oq_neg ? "不 " : "", rdisp, bdisp);
+        {   /* §6.560 F4：列表头进数据（行尾空格由加载器修掉 ⇒ 接缝空格代码补） */
+            const char *t = cat ? ai_say_tpl("列表.表头带类") : ai_say_tpl("列表.表头");
+            const char *const a[4] = { oq_neg ? "不 " : "", rdisp, bdisp, catw };
+            char hd[192];
+            der_filln(hd, sizeof hd, t ? t : (cat ? "$1$2 $3 的 有 （只算 $4） ：" : "$1$2 $3 的 有 ："), a, 4);
+            off += (size_t)snprintf(buf + off, sizeof buf - off, "%s ", hd);
+        }
         /* §6.149 **先量后改**：`scanned < 64` 会让"第 64 个内容词之后"的答案**永远查不到**。
          * 实测（出厂模型）：`什么 属于 车` 漏掉 `火车`/`汽车` —— 它俩在第 **1045** 个内容词上，
          * 旧上限直接回"图里 没 记 过"（**假否定**）。合成小脑子里池子小、一直没抓到，
@@ -1924,8 +1927,13 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
                                     hits ? " 、 " : "", t->name);
             hits++;
         }
-        if (hits == 0) snprintf(buf + off, sizeof buf - off, "图里 没 记 过（不 编）");
-        else if (hits >= 4) snprintf(buf + off, sizeof buf - off, " 等（只列前几个）");
+        if (hits == 0) {
+            const char *t = ai_say_tpl("列表.没记过");
+            snprintf(buf + off, sizeof buf - off, "%s", t ? t : "图里 没 记 过（不 编）");
+        } else if (hits >= 4) {
+            const char *t = ai_say_tpl("列表.等");
+            snprintf(buf + off, sizeof buf - off, " %s", t ? t : "等（只列前几个）");
+        }
         ai->n_scan_tokens += scanned;          /* §6.150：全图扫描记账（§6.126/§6.128 的规矩）*/
         if (out_conf) *out_conf = hits ? 0.8f : 0.4f;
         char *r = (char *)malloc(strlen(buf) + 1);
@@ -2036,7 +2044,11 @@ static inline int agent_guess_answer(AI *ai, Token *A, uint8_t rid, Token *B, in
              * 用户问的是哪个词，答复就得以它开头（白箱：先说清"我在拿谁比"）。 */
             if (A->name && A->name[0] && !strstr(resp, A->name)) {
                 char tmp[512];
-                snprintf(tmp, sizeof tmp, "（问的是 %s）%s", A->name, resp);
+                {
+                    const char *t = ai_say_tpl("类比.问的是");
+                    const char *const a[2] = { A->name, resp };
+                    der_filln(tmp, sizeof tmp, t ? t : "（问的是 $1）$2", a, 2);
+                }
                 snprintf(resp, respcap, "%s", tmp);
             }
             agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
@@ -2080,7 +2092,11 @@ static inline int agent_guess_answer(AI *ai, Token *A, uint8_t rid, Token *B, in
              "", "");
     if (A->name && A->name[0] && !strstr(resp, A->name)) {
         char tmp[512];
-        snprintf(tmp, sizeof tmp, "（问的是 %s）%s", A->name, resp);
+        {
+            const char *t = ai_say_tpl("类比.问的是");
+            const char *const a[2] = { A->name, resp };
+            der_filln(tmp, sizeof tmp, t ? t : "（问的是 $1）$2", a, 2);
+        }
         snprintf(resp, respcap, "%s", tmp);
     }
     agent_hypo_cache(ai, A, rid, B, want_neg, d->truth);
@@ -2422,9 +2438,15 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
                                   n_yes, yes_name[0] ? yes_name[0] : "?", n_no,
                                   no_name[0] ? no_name[0] : "?");
         else
-            o += (size_t)snprintf(bf + o, sizeof bf - o, "（有 %zu 个 人 这么 想%s%.16s%s）",
-                                  n_who, names[0] ? "：" : "", names[0] ? names[0] : "",
-                                  n_who > 1 ? " 等" : "");
+        {
+            char nwb[32];
+            snprintf(nwb, sizeof nwb, "%zu", n_who);
+            const char *t = ai_say_tpl("他者.有几人");
+            const char *const a[4] = { nwb, names[0] ? "：" : "", names[0] ? names[0] : "",
+                                       n_who > 1 ? " 等" : "" };
+            der_filln(bf + o, sizeof bf - o, t ? t : "（有 $1 个 人 这么 想$2$3$4）", a, 4);
+            o = strlen(bf);
+        }
     }
     if (!found)
         o += (size_t)snprintf(bf + o, sizeof bf - o,
@@ -2433,7 +2455,10 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
                               who, who, aw2, neg2 ? "不 " : "",
                               rw2 ? rw2 : "?", bw2);
     else if (truth == (neg2 ? -1 : 1))
-        o += (size_t)snprintf(bf + o, sizeof bf - o, "这 条 我 图 里 也 记 着。");
+        {
+            const char *t = ai_say_tpl("他者.我也记着");
+            o += (size_t)snprintf(bf + o, sizeof bf - o, "%s", t ? t : "这 条 我 图 里 也 记 着。");
+        }
     else if (truth == 0)
         {
             const char *t = ai_say_tpl("不知道.没这条");
@@ -3287,7 +3312,13 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
             else if (v == -1) { nfalse++; if (!first_false) first_false = items[i]; }
         }
         if (nunk == 0 && nfalse == 0)
-            snprintf(buf, sizeof buf, "对 ， %s 都 %s 这 %zu 个", aw, words[1], ni);
+        {
+            char nb[32];
+            snprintf(nb, sizeof nb, "%zu", ni);
+            const char *t = ai_say_tpl("三选.都对这N个");
+            const char *const a[3] = { aw, words[1], nb };
+            der_filln(buf, sizeof buf, t ? t : "对 ， $1 都 $2 这 $3 个", a, 3);
+        }
         else if (nfalse)
             snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", aw, words[1], first_false);
         else {
