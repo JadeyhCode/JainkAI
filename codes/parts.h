@@ -33,7 +33,8 @@
 #include "ptrtag.h"
 
 #define AIP_PARTS_MAGIC   0x53545250u   /* 'PRTS' */
-#define AIP_PARTS_VERSION 1u
+#define AIP_PARTS_VERSION 2u   /* v2：索引的空闲字节用来存 flags（bit0 = has_causal） */
+#define AIP_PART_IDX_LEN 20u     /* 一条索引：id(4) + off(8) + cnt(4) + flags(2) + pad(2) */
 
 /* 定长边记录（逐字段写，别 memcpy 结构体：那会把 padding 也写进文件 ⇒ 存档不确定） */
 typedef struct {
@@ -50,6 +51,8 @@ typedef struct {
     char     path[256];
     uint64_t *off;              /* 按词 id 索引：段在文件里的偏移（0 = 这个词没有边） */
     uint32_t *cnt;              /* 按词 id 索引：段里几条边 */
+    uint8_t  *flags;            /* 按词 id 索引：段头的 flags（bit0 = 有因果边）*/
+    TokenPool *pool;            /* attach 时挂上：打开索引时顺手把 flags 落到词上 */
     size_t    n_ids;
     size_t    n_loads;          /* 触发了几次"从磁盘读回来"（验收数字） */
     size_t    n_bytes;          /* 一共读了多少字节（验收数字） */
@@ -75,7 +78,7 @@ static inline int aip_parts_save(AI *ai, const char *path) {
 
     /* 索引先占位（每条 16 字节：id / off / cnt / 保留），写完段再回填 */
     uint64_t index_off = (uint64_t)ftell(f);
-    uint8_t zero[16] = {0};
+    uint8_t zero[AIP_PART_IDX_LEN] = {0};
     for (uint32_t i = 0; i < head[3]; ++i)
         if (fwrite(zero, sizeof zero, 1, f) != 1) { fclose(f); return -1; }
 
@@ -104,12 +107,13 @@ static inline int aip_parts_save(AI *ai, const char *path) {
         }
         /* 回填索引 */
         long save = ftell(f);
-        if (fseek(f, (long)(index_off + (uint64_t)n_written * 16u), SEEK_SET) != 0) { fclose(f); return -1; }
+        if (fseek(f, (long)(index_off + (uint64_t)n_written * AIP_PART_IDX_LEN), SEEK_SET) != 0) { fclose(f); return -1; }
         uint32_t id = t->id;
-        uint32_t pad = 0;
+        uint16_t flags = (uint16_t)(t->has_causal ? 1u : 0u);
+        uint16_t pad2 = 0;
         if (fwrite(&id, 4, 1, f) != 1 || fwrite(&seg_off, 8, 1, f) != 1 ||
-            fwrite(&cnt, 4, 1, f) != 1) { fclose(f); return -1; }
-        (void)pad;
+            fwrite(&cnt, 4, 1, f) != 1 || fwrite(&flags, 2, 1, f) != 1 ||
+            fwrite(&pad2, 2, 1, f) != 1) { fclose(f); return -1; }
         if (fseek(f, save, SEEK_SET) != 0) { fclose(f); return -1; }
         n_written++;
     }
@@ -132,14 +136,27 @@ static inline AIParts *aip_parts_open(const char *path) {
     pt->n_ids = 65536;   /* 词 id 是线性小整数；给个够用的表 */
     pt->off = (uint64_t *)calloc(pt->n_ids, sizeof *pt->off);
     pt->cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->cnt);
+    pt->flags = (uint8_t *)calloc(pt->n_ids, sizeof *pt->flags);
     pt->loaded_cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->loaded_cnt);
-    if (!pt->off || !pt->cnt || !pt->loaded_cnt) { fclose(f); free(pt->off); free(pt->cnt); free(pt->loaded_cnt); free(pt); return NULL; }
+    if (!pt->off || !pt->cnt || !pt->flags || !pt->loaded_cnt) {
+        fclose(f); free(pt->off); free(pt->cnt); free(pt->flags); free(pt->loaded_cnt); free(pt); return NULL;
+    }
     uint32_t nseg = head[3];
     fseek(f, 16, SEEK_SET);
+    TokenPool *pool = pt->pool;   /* 可能为 NULL（open 时还没 attach）*/
     for (uint32_t i = 0; i < nseg; ++i) {
-        uint32_t id, cnt; uint64_t off;
-        if (fread(&id, 4, 1, f) != 1 || fread(&off, 8, 1, f) != 1 || fread(&cnt, 4, 1, f) != 1) break;
-        if (id < pt->n_ids) { pt->off[id] = off; pt->cnt[id] = cnt; }
+        uint32_t id, cnt; uint64_t off; uint16_t flags = 0, pad2 = 0;
+        if (fread(&id, 4, 1, f) != 1 || fread(&off, 8, 1, f) != 1 ||
+            fread(&cnt, 4, 1, f) != 1 || fread(&flags, 2, 1, f) != 1 ||
+            fread(&pad2, 2, 1, f) != 1) break;
+        if (id < pt->n_ids) {
+            pt->off[id] = off; pt->cnt[id] = cnt;
+            if (flags & 1u) pt->flags[id] |= 1u;
+            if (pool) {   /* 已经有这个词 ⇒ 直接把"有因果边"标上 */
+                Token *t = pool_token_by_id(pool, id);
+                if (t && (flags & 1u)) t->has_causal = 1;
+            }
+        }
     }
     return pt;
 }
@@ -147,7 +164,7 @@ static inline AIParts *aip_parts_open(const char *path) {
 static inline void aip_parts_close(AIParts *pt) {
     if (!pt) return;
     if (pt->f) fclose(pt->f);
-    free(pt->off); free(pt->cnt); free(pt->loaded_cnt); free(pt);
+    free(pt->off); free(pt->cnt); free(pt->flags); free(pt->loaded_cnt); free(pt);
 }
 
 /* ---------------- 读：把**这一段**读回来，挂到词上 ---------------- */
@@ -155,7 +172,12 @@ static inline void aip_parts_close(AIParts *pt) {
 static inline void aip_parts_load_token(void *ctx, Token *t) {
     AIParts *pt = (AIParts *)ctx;
     if (!pt || !t) return;
-    if (t->id >= pt->n_ids || pt->off[t->id] == 0) return;
+    if (t->id >= pt->n_ids || pt->off[t->id] == 0) {
+        /* 没有段 ⇒ 把它变成"内存里的空边表"。**绝不留** tag + count>0：
+         * 那会让调用方拿到 NULL 数组却按 count 去遍历（实测段错误）。 */
+        token_assocs_set_ram(t, NULL, 0);
+        return;
+    }
     uint32_t cnt = pt->cnt[t->id];
     AssocEntry *as = NULL;
     if (cnt) {
@@ -181,6 +203,8 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
     pt->loaded_cnt[t->id] = cnt;        /* 记住"读回来时是几条"：判脏（§6.566 的换出用） */
     pt->n_loads++;
     pt->n_resident++;                   /* 内存里多了一段（验收数字） */
+    if (getenv("AIP_PARTLOG"))          /* §6.570 取证：谁被读回来了（默认关，写文件不污染 stdout） */
+        fprintf(stderr, "[partload] %s (%u 条)\n", (t->name ? t->name : "?"), cnt);
 }
 
 /* ---------------- 挂上 / 卸下 ---------------- */
@@ -188,6 +212,13 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
 /* 装上"按需加载"的钩子：之后 `token_assocs()` 碰到 AIP_PTR_DISK 就会读回来。 */
 static inline void aip_parts_attach(AI *ai, AIParts *pt) {
     if (!ai || !ai->pool || !pt) return;
+    pt->pool = ai->pool;
+    /* 索引里记着"哪些词有因果边" ⇒ 打开时就落到词上，省得为判断"有没有"去读边（§6.570） */
+    for (size_t i = 0; i < pt->n_ids; ++i) {
+        if (!(pt->flags[i] & 1u)) continue;
+        Token *t = pool_token_by_id(ai->pool, (uint32_t)i);
+        if (t) t->has_causal = 1;
+    }
     ai->pool->parts = pt;
     ai->pool->part_load = aip_parts_load_token;   /* (ctx=parts, t) 形状，与 token.h 的声明一致 */
 }
@@ -196,15 +227,21 @@ static inline void aip_parts_attach(AI *ai, AIParts *pt) {
  * 返回被卸下的词数（有边的那些）。 */
 static inline size_t aip_parts_detach(AI *ai) {
     if (!ai || !ai->pool) return 0;
-    size_t n = 0;
+    AIParts *pt = (AIParts *)ai->pool->parts;
+    size_t n = 0, kept = 0;
     TokenPool *p = ai->pool;
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (!t || t->count == 0) continue;
+        /* §6.570 **只有磁盘上有它的段，才允许放手**：save 之后新学的边没有段，
+         * 硬卸下会把它们默默丢掉（实测：卸下后一句话触发的因果学习就崩在这里）。 */
+        if (!pt || t->id >= pt->n_ids || pt->off[t->id] == 0) { kept++; continue; }
         token_assocs_resolve(t);            /* 已经读回来过就先用着 */
         token_assocs_set_disk(t);           /* 存储层的活：free + 打 DISK 标签（§6.566） */
         n++;
     }
+    if (kept && getenv("AIP_PARTLOG"))
+        fprintf(stderr, "[partdetach] 留下 %zu 个词（磁盘上没有它们的段，卸下会丢数据）\n", kept);
     return n;
 }
 

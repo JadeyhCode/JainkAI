@@ -2122,6 +2122,11 @@ static inline void think_revalidate_caches(AI *ai, Think *t) {
         for (size_t i = 0; i < p->count; ++i) {
             Token *a = p->tokens[i];
             if (!a || a->is_garbage) continue;
+            /* §6.570 局部加载：播种要遍历每条边 ⇒ 图有一部分在磁盘上时**只播内存里的**。
+             * 被跳过的词不满足"推论边起点必进过队列"这条不变式 —— 但它们的边在磁盘上，
+             * 谁要用谁就得先读回来；读回来之后求解器那边**还有一道实时闸**（§6.127 R0：
+             * 拒绝无依据的缓存），所以"漏复核"不会变成"当真"。这个代价照实写在文档里。 */
+            if (!token_assocs_resident(a)) continue;
             for (size_t j = 0; j < a->count; ++j) {
                 ai->n_scan_edges++;
                 AssocEntry *e = &token_assocs(a)[j];

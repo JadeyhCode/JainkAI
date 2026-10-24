@@ -1355,6 +1355,9 @@ static inline int rel_guess(AI *ai, const Token *a, uint8_t rid, const Token *b,
         Token *s = ai->pool->tokens[i];
         if (s->is_garbage || s == a || s == b) continue;
         if (!s->name || s->name[0] == '[') continue;
+        /* §6.570 局部加载：这条扫描要为**每个**词查态度 ⇒ 不设限会把整图读回来
+         * （实测 1265 段）。只扫已在内存的词：结构依据变少，但**不假装"读过全图"**。 */
+        if (!token_assocs_resident(s)) continue;
         int pol = 0;
         int hy = 0;
         if (rel_direct(s, rid, b) || rel_direct_h(ai, s, rid, b, &hy)) pol = +1;

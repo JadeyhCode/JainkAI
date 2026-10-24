@@ -7849,6 +7849,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         for (size_t i = 0; i < ai->pool->count; ++i) {
             Token *t = ai->pool->tokens[i];
             if (t->is_garbage) continue;
+            /* §6.570 局部加载：巩固/衰减是**维护**，不该为它把整图读回来。
+             * 边在磁盘上的词这轮跳过（它们的内容没变，下次读回来再巩固）。 */
+            if (!token_assocs_resident(t)) continue;
             token_consolidate(t);
             ai_write_count(ai, AI_WSRC_DECAY);
             token_decay_hits(t, ai->decay_factor);

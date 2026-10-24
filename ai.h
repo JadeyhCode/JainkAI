@@ -1202,6 +1202,7 @@ typedef struct {
      * 看护可以把上限压到 5，用一个小图证明"到顶就停"（不用真造一个指数爆炸的图）。 */
     size_t sleep_max_visits;
     size_t n_gc_deleted_edges, n_gc_deleted_tokens;
+    size_t n_gc_skipped_partial;    /* §6.570 因为"图有一部分在磁盘上"而跳过的 GC 次数 */
     size_t n_credit_events, n_expr_learned, n_counterfactual;
     /* 因果猜想：见过多少条（第一次见到就算）与其中多少升格成「可信的猜想」。
      * 注意这两个数**不进存档**（瞬态），和 n_counterfactual 一样只是给 ::stats 看的。 */
@@ -4488,6 +4489,14 @@ static inline float ai_gc_rand(AI *ai) {
 static inline void ai_gc(AI *ai) {
     if (!ai || !ai->pool) return;
     TokenPool *p = ai->pool;
+    /* §6.570 局部加载：GC 要**全图的入度**才能判"这条边还有没有人指向"。
+     * 图有一部分在磁盘上时**宁可跳过这一轮**，也不要靠半张图去删东西
+     * （少删一次不会有损；删错一次就真丢知识）。跳到 `::parts detach` 之后仍然成立。 */
+    if (p->part_load) {
+        ai->n_gc_skipped_partial++;
+        if (getenv("AIP_PARTLOG")) fprintf(stderr, "[gc] 跳过：图有一部分在磁盘上（不做全图 GC）\n");
+        return;
+    }
     uint64_t now = p->current_tick;
     uint8_t del_state = ai->gc.gc_delete_state;
     float rate = ai->gc.gc_upgrade_rate;
@@ -4575,6 +4584,8 @@ static inline void ai_set_last_output(AI *ai, Token **toks, size_t n) {
 static inline AssocEntry *ai_causal_edge(Token *from, Token *to, const Token *causal) {
     (void)causal;   /* 判据只有一处（按标记名），不再需要调用方传标记对象 */
     if (!from || !to) return NULL;
+    /* §6.570 没有因果边的词**不必读它的边**（局部加载下这一步是省下的整段读取） */
+    if (!from->has_causal) return NULL;
     for (size_t i = 0; i < from->count; ++i) {
         AssocEntry *e = &token_assocs(from)[i];
         if (e->main != to || !edge_is_causal_guess(e)) continue;
@@ -4600,6 +4611,10 @@ static inline void ai_learn_causal(AI *ai, char **words, size_t n) {
     for (size_t i = 0; i < ai->last_output_n; ++i) {
         Token *did = ai->last_output[i];
         if (!did || !did->name || did->name[0] == '[') continue;
+        /* §6.570 局部加载：因果是**背景统计**，不是知识 ⇒ 边不在内存里的词**跳过**，
+         * 不为它把整段读回来（实测：不跳过时一句问答会把 1265 段全读回）。
+         * 代价照实写：被卸下的词这一轮不参与因果协变计数；读回来之后自然会再参与。 */
+        if (!token_assocs_resident(did)) continue;
         for (size_t j = 0; j < n; ++j) {
             Token *observed = pool_token_intern(ai->pool, words[j]);
             if (observed == did) continue;
@@ -4618,6 +4633,7 @@ static inline void ai_learn_causal(AI *ai, char **words, size_t n) {
              * 落边用 (main, action) 去重：普通观测边可以同时存在，两条互不覆盖。 */
             AssocEntry *ne = token_add_assoc_action_unique(did, observed, ai->causal);
             if (!ne) continue;
+            did->has_causal = 1;            /* §6.570 缓存这一位：下次不必为"有没有"读边 */
             /* 一次巧合 = 暂时（会淡、可被反例雪藏） */
             ne->hits = 1;
             ne->mem_state = MEM_FADING;

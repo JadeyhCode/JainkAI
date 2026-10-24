@@ -57,9 +57,9 @@ int main(int argc, char **argv) {
     aip_parts_stats(pt, &l0, &b0, &r0, &e0);
     ok(l0 == 0 && b0 == 0, "③ 打开索引：0 段、0 字节");
 
+    aip_parts_attach(A, pt);          /* §6.570 先装索引：detach 要知道"哪些词有段" */
     size_t det = aip_parts_detach(A);
     ok(det == with_edges, "④ 卸下：全部段的边离开内存");
-    aip_parts_attach(A, pt);
 
     /* 只问前 N 个"有边的词"：每次问都会触发一次按需读回 */
     const size_t N = 50;

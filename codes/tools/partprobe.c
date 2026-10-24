@@ -71,6 +71,10 @@ int main(void) {
     AIParts *pt = aip_parts_open(path);
     ok(pt != NULL, "② 能只打开**索引**（还没读任何一段边）");
     ok(pt && pt->n_loads == 0, "② 打开索引时 **一次段都没读**");
+    /* §6.570 顺序变了：detach 要知道"磁盘上有没有它的段" ⇒ 必须先 attach（装索引）。
+     * 没 attach 就 detach 现在**不做任何事**（宁可不动手，也不丢数据）。 */
+    ok(aip_parts_detach(A) == 0, "② 没 attach 就 detach ⇒ **一个都不卸**（不丢数据）");
+    aip_parts_attach(A, pt);
     size_t det = aip_parts_detach(A);
     ok(det == with_edges, "③ 卸下：所有带边的词都被扔到磁盘上");
     ok(pt && pt->n_bytes == 0, "③ 卸下这一刻：**一个字节都还没从磁盘读**（惰性是真的）");
