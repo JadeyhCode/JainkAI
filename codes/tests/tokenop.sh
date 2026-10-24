@@ -983,6 +983,30 @@ sed -i 's/^\[say\] 学习\.并列=.*/[say] 学习.并列=（数据）都 记 下
 grep -q '（数据）都 记 下 了：猫 和 狗 都 是 动物' "$_K2/out.txt" && grep -q '（数据）地 点 记 下：我 住 着 在 家' "$_K2/out.txt" \
     && ok "**改两行数据** ⇒ 并列式与地点式都换掉（槽位都对）" \
     || bad "学习-余量改模板" "$(sed -n 's/.*AI > //p' "$_K2/out.txt" | tail -3 | tr '\n' ' ')"
+# §6.547 C2：**推理措辞**（因为/其实是反的/只能猜/没依据）进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '为什么 猫 属于 动物\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o109" 2>&1 ) || true
+grep -q '因为 猫 属于 动物 —— 直接 记 着 的 事实' "$WORK/o109" \
+    && ok "「因为…」**照旧**（直接事实）" \
+    || bad "推理-因为" "$(sed -n 's/.*AI > //p' "$WORK/o109" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '为什么 鲸鱼 属于 动物\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o110" 2>&1 ) || true
+grep -q '多 跳 推 导：鲸鱼' "$WORK/o110" \
+    && ok "「多跳推导」**照旧**（来源那半句也是模板）" \
+    || bad "推理-多跳" "$(sed -n 's/.*AI > //p' "$WORK/o110" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '为什么 猫 会 飞\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o111" 2>&1 ) || true
+grep -q '其实 是 反 的：猫 不 会 飞' "$WORK/o111" \
+    && ok "「其实是反的」**照旧**" \
+    || bad "推理-反" "$(sed -n 's/.*AI > //p' "$WORK/o111" | tail -1)"
+RX2="$WORK/rx2"; rm -rf "$RX2"; mkdir -p "$RX2"
+cp "$ROOT/session.bin" "$RX2/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RX2/" 2>/dev/null || true
+sed -i 's/^\[say\] 推理\.因为=.*/[say] 推理.因为=（数据）$1 $2$3 $4 成立，$5 给的：$6/' "$RX2/patterns.txt"
+( cd "$RX2" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '为什么 猫 属于 动物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫 属于 动物 成立' "$RX2/out.txt" \
+    && ok "**改一行数据** ⇒ 六槽位推理句式换掉（代码没动）" \
+    || bad "推理-改模板" "$(sed -n 's/.*AI > //p' "$RX2/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

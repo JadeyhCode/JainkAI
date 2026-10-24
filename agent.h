@@ -2499,22 +2499,33 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
         if (got_pol != 0) {
             int want = neg ? -1 : 1;
             proof_text(ai, &pf, line, sizeof line);
-            if (got_pol == want)
-                snprintf(buf, sizeof buf, "因为 %s %s%s %s —— %s：%s", aw, neg_txt, rw, bw,
-                         pf.n > 2 ? "多 跳 推 导" : "直接 记 着 的 事实", line);
-            else
-                snprintf(buf, sizeof buf, "其实 是 反 的：%s %s%s %s —— %s：%s", aw, opp_txt, rw, bw,
-                         pf.n > 2 ? "多 跳 推 导" : "直接 记 着 的 事实", line);
+            const char *why = pf.n > 2 ? "多 跳 推 导" : "直接 记 着 的 事实";
+            const char *const ar[6] = { aw, neg_txt, rw, bw, why, line };
+            const char *const ao[6] = { aw, opp_txt, rw, bw, why, line };
+            if (got_pol == want) {   /* §6.547 推理措辞进数据（六槽位） */
+                const char *t = ai_say_tpl("推理.因为");
+                der_filln(buf, sizeof buf, t ? t : "因为 $1 $2$3 $4 —— $5：$6", ar, 6);
+            } else {
+                const char *t = ai_say_tpl("推理.反");
+                der_filln(buf, sizeof buf, t ? t : "其实 是 反 的：$1 $2$3 $4 —— $5：$6", ao, 6);
+            }
             answered = 1;
         }
     }
     if (!answered) {
         if (A && B && rel_guess(ai, A, rid, B, &pf)) {
             proof_text(ai, &pf, line, sizeof line);
-            snprintf(buf, sizeof buf, "我 没有 直接 依据，只 能 猜：%s（推测，不 是 知识）", line);
+            {
+                const char *t = ai_say_tpl("推理.猜");
+                const char *const a1[1] = { line };
+                der_filln(buf, sizeof buf, t ? t : "我 没有 直接 依据，只 能 猜：$1（推测，不 是 知识）", a1, 1);
+            }
         } else {
-            snprintf(buf, sizeof buf, "「%s %s%s %s」这 条 我 图 里 没 有 依据 —— 推 不 出 来。",
-                     aw, neg_txt, rw, bw);
+            {
+                const char *t = ai_say_tpl("推理.无依据");
+                const char *const a4[4] = { aw, neg_txt, rw, bw };
+                der_filln(buf, sizeof buf, t ? t : "「$1 $2$3 $4」这 条 我 图 里 没 有 依据 —— 推 不 出 来。", a4, 4);
+            }
         }
     }
     if (out_conf) *out_conf = 0.7f;
