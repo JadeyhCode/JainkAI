@@ -71,8 +71,16 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z172. C 腿第 1 步：边数组收成一个入口（§6.565）
+## 4z173. C 腿第 2 步：边能放磁盘、按需读回（§6.566）
 
+- `parts.h`：段文件（`*.parts`，逐词一段 + id→偏移索引）、`detach`（free + `AIP_PTR_DISK` 哨兵）、按需读回、per-agent 句柄。
+- `token.h`：两个访问器都解析标签（`_ro` 也解析 —— 不解析会段错误）；存储层 `token_assocs_set_disk/set_ram`；`pool_free` 不 free 带标签指针。
+- 新套件 `partprobe`（第 48 套，24 项）：段文件 8 段、打开索引 0 读、问三条只读 ≤3 段（`n_loads < det`）、`n_bytes>0`、卸下状态追加新边不崩。
+- 判据：整包 **48/48**；`probematrix` **28 行 diff 为空**；assocaudit 走访问器 241 处、0 遗留。
+- 坑：① `_ro` 不解析标签 ⇒ NULL 数组 + count>0 ⇒ 段错误（正确性 > 纯度）；② `token.h` 内部存储函数也要在入口 resolve；③ 审计脚本把注释当代码判红。
+- 边界：只卸**边**；段文件与 `::save` 未串；大图读放大未量；无 LRU/回收；无并发。
+
+## 4z172. C 腿第 1 步：边数组收成一个入口（§6.565）
 - `token.h` 新增 `token_assocs` / `token_assocs_ro` / `token_assoc_count`；9 个文件 **171 处**搬运完毕。
 - 新套件 `assocaudit`（第 47 套）：存储层（`token.h`/`model_io.h`）之外不许直接访问 `->assocs`；顺带报"已走访问器 184 处"。
 - 判据：整包 **47/47**；`probematrix` **28 行 diff 为空**（纯搬运）；selfcheck/asan/patcount/bucketload 全 PASS。

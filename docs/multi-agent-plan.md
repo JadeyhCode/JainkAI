@@ -47,14 +47,19 @@
 `token.h`（分配）与 `model_io.h`（存盘/读盘/校验）这两个**存储层**，由 `tests/assocaudit.sh` 常驻看守
 （新代码一律不许直接摸 `->assocs`）。
 
-**第 2 步（打标签 + 段文件）**：
+**第 2 步（打标签 + 段文件）✅ 已跑通（§6.566）**：`parts.h` 提供
+`aip_parts_save / aip_parts_open / aip_parts_attach / aip_parts_detach`：
+每个有边的词一段；`detach` 把边 free 掉、指针打 `AIP_PTR_DISK`；`token_assocs()` 碰到标签就按需读回。
+探针 `tools/partprobe.c`（第 48 套）证明**只读了一部分**：`n_loads < 被卸下的词数`、`n_bytes > 0`。
+
+**原计划（细节）**：
 - 存档旁生成 `*.edges.<k>` 段文件（每 N 个节点的边一段），主文件只留"段索引"（谁在哪一段、什么偏移）。
 - 加载时可以只读主文件 + 需要的段；没读的节点 `Token.assocs` 存 `tag=1 + 段偏移`。
 - 访问器 `token_assocs(t)`：`tag==0` 直接返回；`tag==1` 触发 `part_load(t)`（读段、挂回、改 tag）；
   `tag==2`（别处/已回收）走 LRU 或拒绝并上报。
 - 验收：新增的 **part 命令**（尚未实现）打印"已加载段数 / 总段数 / 触发读取次数"；`probematrix` diff 必须为空（同一份数据）。
 
-**第 3 步（按需回收）**：内存上限到了就把冷段的边写回段文件并改 tag=2，配 LRU 计数；
+**第 3 步（按需回收，未做）**：内存上限到了就把冷段的边写回段文件并改 tag=2，配 LRU 计数；
 验收用"小上限 + 大图"跑同一批问句，答对率不变、part 命令显示真的换出了。
 
 ## 3. B 腿：修改账下一刀

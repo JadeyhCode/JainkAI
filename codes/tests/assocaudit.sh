@@ -20,11 +20,23 @@ for f in *.h *.c; do
     case "$f" in
     token.h|model_io.h) continue ;;   # 存储层：允许
     esac
-    n=$(grep -o '\->assocs' "$f" 2>/dev/null | wc -l | tr -d ' ')
-    [ "$n" = "0" ] && continue
+    # 注释行（* / /* / //）里的 `->assocs` 不算 —— 那是文档。只认真代码。
+    hits=$(grep -n '\->assocs' "$f" 2>/dev/null | while IFS=: read -r ln rest; do
+               case "$rest" in
+               *'->assocs'*) ;;
+               *) continue ;;
+               esac
+               st=$(printf '%s' "$rest" | sed 's/^[ \t]*//')
+               case "$st" in
+               '* '*|'/*'*|'//'*) continue ;;
+               esac
+               printf '%s\n' "$ln"
+           done)
+    n=$(printf '%s\n' "$hits" | grep -c '[0-9]' || true)
+    [ "${n:-0}" = "0" ] && continue
     total=$((total + n))
     echo "  FAIL $f 还有 $n 处直接访问 ->assocs（改用 token_assocs / token_assocs_ro）"
-    grep -n '\->assocs' "$f" | sed 's/^/         /' | head -5
+    printf '%s\n' "$hits" | head -5 | sed 's/^/         行 /'
     bad=1
 done
 

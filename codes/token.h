@@ -14,6 +14,7 @@
 #define TOKEN_H
 
 #include <stdlib.h>
+#include "ptrtag.h"
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -295,6 +296,50 @@ struct Token {
                                  * 两边位图不相交 ⇒ 一个字符都不共享 ⇒ 分数必然是 0。 */
 };
 
+struct TokenPool {
+    Token     **tokens;
+    size_t      count, cap;
+    /* **池子的序号**（§6.127）：每个 pool_new 领一个**全局单调递增**的号。
+     * 用途：给"跨调用的备忘"当一个不受 malloc 地址复用影响的身份 ——
+     * 工具里连着建两个脑子，`AI*`/`TokenPool*` 很可能落在**同一块地址**上，
+     * 光比指针会串味（实测过：按指针比"永远不命中"，反过来又可能"命中错了"）。 */
+    uint64_t    serial;
+    Token      *unknowing;
+    MeaningFree meaning_free;
+    NameEntry **buckets;
+    size_t      n_buckets, n_entries;
+    uint64_t    current_tick;
+    /* **装载期**（§6.111）：`ai_load_file` 读完之后会重建关系/帧/emb（那里会 touch 一堆边）。
+     * 那些 touch **不是观测**（跟"只有观测进图"一个口径）⇒ 不记进边的**时刻集合**。 */
+    int         loading;
+    /* §6.566 **局部加载**（多智能体/部分图）：
+     * `parts` 是"边段文件"的上下文（定义在 parts.h，用 void* 避免头文件倒序），
+     * `part_load` 是"这条边的数组在磁盘上，去读回来并挂上"的钩子 —— 由 parts.h 装上。
+     * 两者都**不进存档**：它们是"这次打开的方式"，不是图的内容。 */
+    void       *parts;
+    void      (*part_load)(void *ctx, Token *t);   /* ctx = parts；签名写 void* 是为了让 token.h 不依赖 parts.h */
+
+    PerspectiveNode  *perspective_root;
+    PerspectiveNode  *perspective_cur;
+    PerspectiveNode **perspective_pool;
+    size_t            perspective_n, perspective_cap;
+
+    /* **缓存复核候选队列**（§6.127）：见 Token.cache_next 的注释。
+     * `cache_seeded`：读盘/新建之后的**第一趟**要全图播一次种（存档里带的推论边不在队列里），
+     * 播过之后就一直靠写入时入队，不再扫全图。 */
+    Token            *cache_head;
+    size_t            n_cache_queued;
+    uint8_t           cache_seeded;
+
+    /* §6.214 **反查倒排表**（`谁 R B` 用）：按"宾语"分桶的链。
+     * 只追加（打关系标记时写一条），删除/GC 不管 —— 查的时候把候选拿去 `rel_direct*`
+     * 校验，陈旧项自然过滤。载入后一次 O(E) 重建（见 model_io）。
+     * 每条 12 字节（src 4 + meta 4 + next 4）；出厂模型 4.4 万边 ≈ 0.6 MB。 */
+    uint32_t         *rev_src;
+    uint32_t         *rev_meta;   /* rid | neg<<15 */
+    uint32_t         *rev_next;
+    size_t            rev_n, rev_cap;
+};
 /* ============================ §6.565 边数组的**唯一入口** ============================
  *
  * 多智能体 / 局部加载（用户 2026-10-24 的目标）的**前置**：
@@ -307,14 +352,43 @@ struct Token {
  *   · `token_assocs_ro(t)`  —— 只读视图（拿得到 const Token 的地方用这个；它**不**触发加载）
  * 收口进度由 `tests/assocaudit.sh` 盯着：直接访问的处数只许降、不许涨。
  */
+static inline void token_assocs_resolve(Token *t) {
+    if (!t) return;
+    if (aip_ptr_tag(t->assocs) == AIP_PTR_DISK && t->owner && t->owner->part_load)
+        t->owner->part_load(t->owner->parts, t);   /* 读段文件、挂回真数组、清标签 */
+}
 static inline AssocEntry *token_assocs(Token *t) {
-    /* 将来：if (aip_ptr_tag(t->assocs) == AIP_PTR_DISK) token_part_load(t);
-     *       return (AssocEntry *)aip_ptr_strip(t->assocs);                     */
-    return t ? t->assocs : NULL;
+    token_assocs_resolve(t);
+    return t ? (AssocEntry *)aip_ptr_strip(t->assocs) : NULL;
 }
+/* "只读视图"：**也解析标签**（这一点是有意的、也是踩过之后改的）——
+ * 第一版让它不解析（"只读就不该有副作用"），结果 `rel_direct` 这类 const 路径
+ * 在"边已卸到磁盘"时拿到 **NULL 数组 + count>0**，循环里直接解引用 ⇒ 段错误。
+ * 教训：**正确性 > 纯度**。加载只是把磁盘上的东西挂回内存（缓存填充），语义上仍是只读。 */
 static inline const AssocEntry *token_assocs_ro(const Token *t) {
-    return t ? t->assocs : NULL;
+    if (!t) return NULL;
+    token_assocs_resolve((Token *)t);
+    return (const AssocEntry *)aip_ptr_strip(t->assocs);
 }
+/* §6.566 把边"挂回内存"（加载完那一段时用）：存储层的活，应用层不许自己赋指针。 */
+static inline void token_assocs_set_ram(Token *t, AssocEntry *as, size_t cnt) {
+    if (!t) return;
+    if (aip_ptr_tag(t->assocs) == AIP_PTR_RAM && t->assocs != as) free(t->assocs);
+    t->assocs = as;                 /* 真指针 ⇒ 标签自动为 0（RAM） */
+    t->count = cnt;
+    t->cap = cnt;                   /* 下次追加会 realloc 成 2 倍 */
+}
+
+/* §6.566 把边"卸到磁盘"：存储层的活（free + 打标签），所以放在 token.h 里，
+ * 应用层（parts.h）只调这一个函数，不许自己摸指针。
+ * ⚠ 调用方必须保证"磁盘上确实有这一段"（否则读回来是空的）—— parts.h 的 detach 负责这件事。 */
+static inline void token_assocs_set_disk(Token *t) {
+    if (!t) return;
+    if (aip_ptr_tag(t->assocs) == AIP_PTR_RAM) free(t->assocs);
+    t->assocs = (AssocEntry *)(uintptr_t)AIP_PTR_DISK;   /* 哨兵：低 3 位 = DISK，strip 后是 0 */
+    t->cap = 0;                                          /* 想追加会先 resolve（见 add_assoc_ex） */
+}
+
 /* 与访问器成对：边数也从这里读，避免"数组换了、count 还在别处读" */
 static inline size_t token_assoc_count(const Token *t) { return t ? t->count : 0; }
 
@@ -389,7 +463,7 @@ static inline int edge_is_plain(const AssocEntry *e) { return !edge_is_causal_gu
 static inline const AssocEntry *token_premise_link(const Token *from, const Token *to) {
     if (!from || !to) return NULL;
     for (size_t i = 0; i < from->count; ++i) {
-        const AssocEntry *e = &from->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(from)[i];
         if (e->main == to && edge_is_premise_link(e)) return e;
     }
     return NULL;
@@ -399,7 +473,7 @@ static inline const AssocEntry *token_premise_link(const Token *from, const Toke
 static inline int token_has_premise_link(const Token *from) {
     if (!from) return 0;
     for (size_t i = 0; i < from->count; ++i)
-        if (edge_is_premise_link(&from->assocs[i])) return 1;
+        if (edge_is_premise_link(&token_assocs_ro(from)[i])) return 1;
     return 0;
 }
 
@@ -411,12 +485,12 @@ static inline size_t token_premises(const Token *a, const Token *b,
     size_t n = 0;
     if (!a || !b) return 0;
     for (size_t i = 0; i < a->count && n < cap; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         int p = edge_premise_polarity(e);
         if (!p || !e->main) continue;
         const Token *pt = e->main;
         for (size_t j = 0; j < pt->count; ++j)
-            if (pt->assocs[j].main == b) {
+            if (token_assocs_ro(pt)[j].main == b) {
                 if (out) out[n] = pt;
                 if (pol) pol[n] = p;
                 n++;
@@ -522,12 +596,12 @@ static inline int token_order_between(const Token *a, const Token *b,
             /* 从 cur 出发：cur 挂着"之后"标记时，它连到的那些词都在 cur **之前** */
             int cur_after = 0;
             for (size_t i = 0; i < cur->count; ++i) {
-                const Token *m = cur->assocs[i].main;
+                const Token *m = token_assocs_ro(cur)[i].main;
                 if (m && m->name && strcmp(m->name, TOKEN_ORDER_MARK_AFTER) == 0) { cur_after = 1; break; }
             }
             if (!cur_after) continue;
             for (size_t i = 0; i < cur->count && qn < 64; ++i) {
-                const Token *nx = cur->assocs[i].main;
+                const Token *nx = token_assocs_ro(cur)[i].main;
                 if (!nx || nx == cur) continue;
                 if (nx->name && (strcmp(nx->name, TOKEN_ORDER_MARK_AFTER) == 0 ||
                                  strcmp(nx->name, TOKEN_ORDER_MARK_BEFORE) == 0)) continue;
@@ -547,7 +621,7 @@ static inline int token_order_between(const Token *a, const Token *b,
             const Token *y = side ? a : b;
             int aft = 0, bef = 0, linked = 0;
             for (size_t i = 0; i < x->count; ++i) {
-                const Token *m = x->assocs[i].main;
+                const Token *m = token_assocs_ro(x)[i].main;
                 if (!m || !m->name) continue;
                 if (strcmp(m->name, marks[0]) == 0)      aft = 1;
                 else if (strcmp(m->name, marks[1]) == 0) bef = 1;
@@ -694,44 +768,8 @@ struct PerspectiveNode {
     uint32_t         refcount;
 };
 
-struct TokenPool {
-    Token     **tokens;
-    size_t      count, cap;
-    /* **池子的序号**（§6.127）：每个 pool_new 领一个**全局单调递增**的号。
-     * 用途：给"跨调用的备忘"当一个不受 malloc 地址复用影响的身份 ——
-     * 工具里连着建两个脑子，`AI*`/`TokenPool*` 很可能落在**同一块地址**上，
-     * 光比指针会串味（实测过：按指针比"永远不命中"，反过来又可能"命中错了"）。 */
-    uint64_t    serial;
-    Token      *unknowing;
-    MeaningFree meaning_free;
-    NameEntry **buckets;
-    size_t      n_buckets, n_entries;
-    uint64_t    current_tick;
-    /* **装载期**（§6.111）：`ai_load_file` 读完之后会重建关系/帧/emb（那里会 touch 一堆边）。
-     * 那些 touch **不是观测**（跟"只有观测进图"一个口径）⇒ 不记进边的**时刻集合**。 */
-    int         loading;
 
-    PerspectiveNode  *perspective_root;
-    PerspectiveNode  *perspective_cur;
-    PerspectiveNode **perspective_pool;
-    size_t            perspective_n, perspective_cap;
 
-    /* **缓存复核候选队列**（§6.127）：见 Token.cache_next 的注释。
-     * `cache_seeded`：读盘/新建之后的**第一趟**要全图播一次种（存档里带的推论边不在队列里），
-     * 播过之后就一直靠写入时入队，不再扫全图。 */
-    Token            *cache_head;
-    size_t            n_cache_queued;
-    uint8_t           cache_seeded;
-
-    /* §6.214 **反查倒排表**（`谁 R B` 用）：按"宾语"分桶的链。
-     * 只追加（打关系标记时写一条），删除/GC 不管 —— 查的时候把候选拿去 `rel_direct*`
-     * 校验，陈旧项自然过滤。载入后一次 O(E) 重建（见 model_io）。
-     * 每条 12 字节（src 4 + meta 4 + next 4）；出厂模型 4.4 万边 ≈ 0.6 MB。 */
-    uint32_t         *rev_src;
-    uint32_t         *rev_meta;   /* rid | neg<<15 */
-    uint32_t         *rev_next;
-    size_t            rev_n, rev_cap;
-};
 
 /* ---- §6.214 反查倒排表：**只追加 + 读时校验** ---------------------------------
  * `dst->rev_head` 是桶头，条目在 pool 的三条平数组里。
@@ -877,7 +915,9 @@ static inline void pool_free(TokenPool *p) {
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (p->meaning_free && t->meaning) p->meaning_free(t->meaning);
-        free(t->assocs); free(t->emb);
+        /* §6.566 边数组可能在磁盘上（指针带 AIP_PTR_DISK 标签）：带标签的指针**不能 free** */
+        if (aip_ptr_tag(t->assocs) == AIP_PTR_RAM) free(t->assocs);
+        free(t->emb);
         free((void *)t->name); free(t);
     }
     free(p->tokens);
@@ -985,8 +1025,8 @@ static inline Token *pool_unknowing(TokenPool *p) {
 static inline int token_edge_is_derived(const Token *t, const Token *main) {
     if (!t || !main) return 0;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i]))
-            return t->assocs[i].role == ASSOC_ROLE_DERIVED;
+        if (token_assocs_ro(t)[i].main == main && edge_is_plain(&token_assocs_ro(t)[i]))
+            return token_assocs_ro(t)[i].role == ASSOC_ROLE_DERIVED;
     return 0;
 }
 
@@ -1031,13 +1071,14 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
 
 static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     if (!t) return -1;
+    token_assocs_resolve(t);   /* §6.566 边在磁盘上时先读回来，再谈扩容 */
     if (t->count == t->cap) {
         size_t ncap = t->cap ? t->cap * 2 : 4;
         AssocEntry *na = (AssocEntry *)realloc(t->assocs, ncap * sizeof *na);
         if (!na) return -1;
         t->assocs = na; t->cap = ncap;
     }
-    AssocEntry *e = &t->assocs[t->count];
+    AssocEntry *e = &token_assocs(t)[t->count];
     e->main = main; e->action = action;
     e->hits = 0;
     e->seq = t->next_seq++;
@@ -1068,7 +1109,7 @@ static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
 static inline int token_add_assoc_unique(Token *t, Token *main) {
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i])) return 0;
+        if (token_assocs(t)[i].main == main && edge_is_plain(&token_assocs(t)[i])) return 0;
     return token_add_assoc_ex(t, main, NULL);
 }
 /* 找 (main, action) 都对的那条边（没有就 NULL）。
@@ -1077,7 +1118,7 @@ static inline int token_add_assoc_unique(Token *t, Token *main) {
 static inline AssocEntry *token_find_assoc_action(Token *t, Token *main, Token *action) {
     if (!t) return NULL;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && t->assocs[i].action == action) return &t->assocs[i];
+        if (token_assocs(t)[i].main == main && token_assocs(t)[i].action == action) return &token_assocs(t)[i];
     return NULL;
 }
 /* 按 (main, action) 建边：已经有了就把那条返回（不新建、不动 hits）。 */
@@ -1085,7 +1126,7 @@ static inline AssocEntry *token_add_assoc_action_unique(Token *t, Token *main, T
     AssocEntry *e = token_find_assoc_action(t, main, action);
     if (e) return e;
     if (token_add_assoc_ex(t, main, action) != 0) return NULL;
-    return &t->assocs[t->count - 1];
+    return &token_assocs(t)[t->count - 1];
 }
 
 /* 「这条知识是显式教我的（基准），还是我自己经历/推出来的」——
@@ -1098,7 +1139,7 @@ static inline void token_mark_innate(Token *a, Token *b) {
     if (!a || !b) return;
     (void)token_add_assoc_unique(a, b);
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main == b) { a->assocs[i].role = ASSOC_ROLE_INNATE; return; }
+        if (token_assocs(a)[i].main == b) { token_assocs(a)[i].role = ASSOC_ROLE_INNATE; return; }
 }
 
 /* ============================ 逐条可信度（#5） ============================
@@ -1147,7 +1188,7 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
     if (!a || !b || a == b) return -1;
     if (role == ASSOC_ROLE_DERIVED) token_cache_enqueue(a);   /* §6.127：推论边的起点要进复核队列 */
     for (size_t i = 0; i < a->count; ++i) {
-        AssocEntry *e = &a->assocs[i];
+        AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b || !edge_is_plain(e)) continue;
         e->role = role;
         e->topic = topic;
@@ -1157,7 +1198,7 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
         return 0;
     }
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
-    AssocEntry *e = &a->assocs[a->count - 1];
+    AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->role = role;
     e->topic = topic;
     e->pattern = pattern;
@@ -1193,7 +1234,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
-        AssocEntry *e = &a->assocs[i];
+        AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b) continue;
         /* §6.170 **观测/教学压过"记忆里的猜测"**：猜出来的结论只是笔记（`[类比:依据]`），
          * 用户教了 / 观测到了同一条事实，就该把它**升格成知识** ——
@@ -1227,7 +1268,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
         return 0;
     }
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
-    AssocEntry *e = &a->assocs[a->count - 1];
+    AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->rel = bit;
     if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 0);       /* §6.214 */
     e->hits = bump;
@@ -1240,7 +1281,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
-        AssocEntry *e = &a->assocs[i];
+        AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b) continue;
         if (edge_is_guess(e)) {              /* §6.170 同 token_tag_rel：猜测升格成观测 */
             e->action = NULL;
@@ -1263,7 +1304,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
         return 0;
     }
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
-    AssocEntry *e = &a->assocs[a->count - 1];
+    AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->nrel = bit;
     if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 1);       /* §6.214 */
     e->hits = bump;
@@ -1279,7 +1320,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
 static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bump) {
     if (!a || !b || a == b || dyn_id == 0) return -1;
     for (size_t i = 0; i < a->count; ++i) {
-        AssocEntry *e = &a->assocs[i];
+        AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b || !edge_is_plain(e)) continue;
         if (e->dyn == dyn_id) return 0;
         e->dyn = dyn_id;
@@ -1291,7 +1332,7 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
         return 0;
     }
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
-    AssocEntry *e = &a->assocs[a->count - 1];
+    AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->dyn = dyn_id;
     if (a->owner) pool_rev_add(a->owner, b, a->id,
                                (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);
@@ -1304,7 +1345,7 @@ static inline int token_tag_dyn_neg(Token *a, Token *b, uint8_t dyn_id, int neg,
     int rc = token_tag_dyn(a, b, dyn_id, bump);
     if (rc != 0) return rc;
     for (size_t i = 0; i < a->count; ++i) {
-        AssocEntry *e = &a->assocs[i];
+        AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b || e->dyn != dyn_id) continue;
         int fresh_neg = neg && !(e->nrel & (uint16_t)REL_NEG_DYN_BIT);
         if (neg) e->nrel |= (uint16_t)REL_NEG_DYN_BIT;
@@ -1340,7 +1381,7 @@ static inline int token_link_bidirectional(Token *a, Token *b) {
 static inline int token_remove_assoc(Token *t, Token *main) {
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        AssocEntry *e = &token_assocs(t)[i];
         if (e->main != main || !edge_is_plain(e)) continue;
         memmove(e, e + 1, (t->count - i - 1) * sizeof *e);
         t->count--;
@@ -1351,13 +1392,13 @@ static inline int token_remove_assoc(Token *t, Token *main) {
 static inline int token_set_action(Token *t, uint32_t seq, Token *action) {
     if (!t || seq == TOKEN_SEQ_NONE) return -1;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].seq == seq) { t->assocs[i].action = action; return 0; }
+        if (token_assocs(t)[i].seq == seq) { token_assocs(t)[i].action = action; return 0; }
     return -1;
 }
 static inline int token_set_action_by_target(Token *t, Token *main, Token *action) {
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        AssocEntry *e = &token_assocs(t)[i];
         if (e->main != main || !edge_is_plain(e)) continue;
         e->action = action;
         return 0;
@@ -1366,7 +1407,7 @@ static inline int token_set_action_by_target(Token *t, Token *main, Token *actio
 }
 static inline void token_clear_actions(Token *t) {
     if (!t) return;
-    for (size_t i = 0; i < t->count; ++i) t->assocs[i].action = NULL;
+    for (size_t i = 0; i < t->count; ++i) token_assocs(t)[i].action = NULL;
 }
 
 /* ============================ 条件：**不在边上**（v10 起） ============================
@@ -1392,13 +1433,13 @@ static inline int entry_matches(const AssocEntry *e, Token *const *ctx, size_t n
 static inline AssocEntry *token_seq_to_entry(Token *t, uint32_t seq) {
     if (!t || seq == TOKEN_SEQ_NONE) return NULL;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].seq == seq) return &t->assocs[i];
+        if (token_assocs(t)[i].seq == seq) return &token_assocs(t)[i];
     return NULL;
 }
 static inline const AssocEntry *token_seq_to_entry_c(const Token *t, uint32_t seq) {
     if (!t || seq == TOKEN_SEQ_NONE) return NULL;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].seq == seq) return &t->assocs[i];
+        if (token_assocs_ro(t)[i].seq == seq) return &token_assocs_ro(t)[i];
     return NULL;
 }
 static inline Token *token_main_by_seq(const Token *t, uint32_t seq) {
@@ -1426,13 +1467,13 @@ static inline size_t token_associate_idx(const Token *t, Token *const *ctx,
                                          size_t n_ctx, float energy) {
     size_t reach = token_reach(t, energy);
     for (size_t i = 0; i < reach; ++i)
-        if (entry_matches(&t->assocs[i], ctx, n_ctx)) return i;
+        if (entry_matches(&token_assocs_ro(t)[i], ctx, n_ctx)) return i;
     return (size_t)-1;
 }
 static inline Token *token_associate(const Token *t, Token *const *ctx,
                                      size_t n_ctx, float energy) {
     size_t i = token_associate_idx(t, ctx, n_ctx, energy);
-    return i == (size_t)-1 ? NULL : t->assocs[i].main;
+    return i == (size_t)-1 ? NULL : token_assocs_ro(t)[i].main;
 }
 static inline Token *token_associate1(const Token *t, Token *ctx, float energy) {
     if (ctx) { Token *c[1] = { ctx }; return token_associate(t, c, 1, energy); }
@@ -1441,24 +1482,24 @@ static inline Token *token_associate1(const Token *t, Token *ctx, float energy) 
 static inline uint32_t token_associate_seq(const Token *t, Token *const *ctx,
                                            size_t n_ctx, float energy) {
     size_t i = token_associate_idx(t, ctx, n_ctx, energy);
-    return i == (size_t)-1 ? TOKEN_SEQ_NONE : t->assocs[i].seq;
+    return i == (size_t)-1 ? TOKEN_SEQ_NONE : token_assocs_ro(t)[i].seq;
 }
 static inline void token_hit(Token *t, size_t i) {
-    if (t && i < t->count) token_touch_entry(t, &t->assocs[i]);
+    if (t && i < t->count) token_touch_entry(t, &token_assocs(t)[i]);
 }
 static inline Token *token_associate_tap(Token *t, Token *const *ctx,
                                          size_t n_ctx, float energy) {
     size_t i = token_associate_idx(t, ctx, n_ctx, energy);
     if (i == (size_t)-1) return NULL;
-    token_touch_entry(t, &t->assocs[i]);
-    return t->assocs[i].main;
+    token_touch_entry(t, &token_assocs(t)[i]);
+    return token_assocs(t)[i].main;
 }
 static inline uint32_t token_associate_tap_seq(Token *t, Token *const *ctx,
                                                size_t n_ctx, float energy) {
     size_t i = token_associate_idx(t, ctx, n_ctx, energy);
     if (i == (size_t)-1) return TOKEN_SEQ_NONE;
-    token_touch_entry(t, &t->assocs[i]);
-    return t->assocs[i].seq;
+    token_touch_entry(t, &token_assocs(t)[i]);
+    return token_assocs(t)[i].seq;
 }
 static inline Token *token_associate_weighted(const Token *t, Token *const *ctx,
                                               size_t n_ctx, float energy, uint32_t *rng) {
@@ -1467,7 +1508,7 @@ static inline Token *token_associate_weighted(const Token *t, Token *const *ctx,
     size_t reach = token_reach(t, energy);
     uint64_t total = 0;
     for (size_t i = 0; i < reach; ++i) {
-        const AssocEntry *e = &t->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(t)[i];
         if (entry_matches(e, ctx, n_ctx)) total += (uint64_t)e->hits + 1;
     }
     if (total == 0) return NULL;
@@ -1476,7 +1517,7 @@ static inline Token *token_associate_weighted(const Token *t, Token *const *ctx,
     *rng = x;
     uint64_t pick = (uint64_t)x % total, acc = 0;
     for (size_t i = 0; i < reach; ++i) {
-        const AssocEntry *e = &t->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(t)[i];
         if (entry_matches(e, ctx, n_ctx)) {
             acc += (uint64_t)e->hits + 1;
             if (pick < acc) return e->main;
@@ -1490,7 +1531,7 @@ static inline Token *token_associate_weighted(const Token *t, Token *const *ctx,
 static inline uint32_t token_hits_total(const Token *t) {
     if (!t) return 0;
     uint32_t s = 0;
-    for (size_t i = 0; i < t->count; ++i) s += t->assocs[i].hits;
+    for (size_t i = 0; i < t->count; ++i) s += token_assocs_ro(t)[i].hits;
     return s;
 }
 static inline float token_gap(const Token *t) {
@@ -1526,7 +1567,7 @@ static inline void token_decay_hits(Token *t, float factor) {
     if (factor < 0) factor = 0;
     if (factor > 1) factor = 1;
     for (size_t i = 0; i < t->count; ++i)
-        t->assocs[i].hits = (uint32_t)((float)t->assocs[i].hits * factor);
+        token_assocs(t)[i].hits = (uint32_t)((float)token_assocs(t)[i].hits * factor);
     t->recent_misses = (uint32_t)((float)t->recent_misses * factor);
 }
 
@@ -1535,14 +1576,14 @@ static inline void token_decay_hits(Token *t, float factor) {
 static inline void token_observe_pair(Token *a, Token *b) {
     if (!a || !b || a == b) return;
     for (size_t k = 0; k < a->count; ++k) {
-        AssocEntry *e = &a->assocs[k];
+        AssocEntry *e = &token_assocs(a)[k];
         if (e->main == b && edge_is_plain(e)) {
             token_touch_entry(a, e);
             return;
         }
     }
     if (token_add_assoc_ex(a, b, NULL) == 0)
-        token_touch_entry(a, &a->assocs[a->count - 1]);
+        token_touch_entry(a, &token_assocs(a)[a->count - 1]);
 }
 static inline void token_observe(Token *const *seq, size_t n, size_t window) {
     if (!seq || n < 2) return;
@@ -1755,7 +1796,7 @@ static inline void token_activate(Token *t, Token *const *ctx, size_t n_ctx,
     size_t reach = token_reach(t, energy);
     float next_e = energy * a->decay;
     for (size_t i = 0; i < reach; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        AssocEntry *e = &token_assocs(t)[i];
         if (!entry_matches(e, ctx, n_ctx)) continue;
         token_touch_entry(t, e);
         if (e->action) {
@@ -1780,7 +1821,7 @@ static inline void token_activate_action(Token *t, Token *const *ctx,
     size_t reach = token_reach(t, energy);
     float next_e = energy * a->decay;
     for (size_t i = 0; i < reach; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        AssocEntry *e = &token_assocs(t)[i];
         if (!entry_matches(e, ctx, n_ctx)) continue;
         token_touch_entry(t, e);
         if (e->action) {

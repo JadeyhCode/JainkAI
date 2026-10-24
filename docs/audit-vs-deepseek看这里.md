@@ -19592,3 +19592,43 @@ blind4 448→445、blind5 131→130、pert 215→213，三个套件红，靠 A/B
 - 这是一次**纯搬运**：能力零变化、时序零变化（访问器是 `static inline`，`O2` 下没有额外调用）。
 - **局部加载本身还没有做**：现在 `token_assocs` 只是 `return t->assocs`，标签解析那一行还空着（注释里写了将来形态）。
 - 剩下的 6 处直接访问在 `model_io.h`（存盘/读盘/装载校验）+ `token.h` 内部（分配）—— 它们**本来就该**直接管指针。
+
+## §6.566 C 腿第 2 步：边真的能放到磁盘上、按需读回（局部加载跑通了）
+
+上一轮把读边收成了一个入口（`token_assocs`），这一轮把那个入口**真的接上磁盘**：
+
+| 件 | 做了什么 |
+|---|---|
+| `parts.h`（新） | `aip_parts_save` 把**每个有边的词**写成一个段（`*.parts`：头 + id→偏移/条数索引 + 定长记录）；`aip_parts_open` **只读索引**；`aip_parts_load_token` 读回一段；`aip_parts_attach` 装钩子；`aip_parts_detach` 卸下 |
+| `token.h` | 访问器 `token_assocs`/`token_assocs_ro` 解析 `AIP_PTR_DISK` 标签（**两个都解析**）；存储层新增 `token_assocs_set_disk` / `token_assocs_set_ram`；`pool_free` 不 free 带标签的指针；`TokenPool` 加 `parts` + `part_load` 钩子（不进存档） |
+| `tools/partprobe.c`（第 48 套） | 24 项断言：段文件写/索引不读段/卸下/按需读回 **部分** 加载/卸下状态追加新边 |
+
+**怎么证明"只加载了一部分"**（这是这个目标最关键的一件事，必须给机器数字）
+- 卸下后 `AIParts.n_loads == 0`、`n_bytes == 0`；
+- 问一条事实 ⇒ `n_loads >= 1` 且 **`n_loads < 被卸下的词数`**；`n_bytes > 0`；
+- 换一条事实再问 ⇒ 计数继续涨，但仍不超过段数（探针里 `det=8`，问三条只读到 3 段以内）。
+
+**证据**
+
+| 检查 | 结果 |
+|---|---|
+| 新套件 `partprobe` | **24 项全过**（PASS，8 段） |
+| 整包 | **48/48** |
+| **新旧 A/B** | `probematrix` **28 行逐行相同，diff 为空**（默认路径不走磁盘，行为不变） |
+| `selfcheck` / `asan_check` / `patcount` / `bucketload` / `assocaudit` | 全 PASS（assocaudit：走访问器 **241 处**，0 处遗留） |
+
+**踩的坑（三个，都值得记）**
+1. **只读访问器不解析标签 ⇒ 段错误**：第一版 `token_assocs_ro` 按"只读就不该有副作用"不解析，
+   结果 `rel_direct` 这类 const 路径拿到 **NULL 数组 + count>0**，循环里直接解引用 ⇒ 崩。
+   改成**也解析**（加载只是把磁盘的东西挂回内存，语义仍是只读）。教训：**正确性 > 纯度**。
+2. **`token.h` 里还有一批"存储层内部"的直接访问**（`token_tag_rel` 等）——它们在卸下状态下同样会崩。
+   必须让这些函数在入口 `token_assocs_resolve`。为此把 `struct TokenPool` 和访问器**整体上移**到
+   `struct Token` 之后（否则 `t->owner->part_load` 是"不完全类型"）
+3. **审计把注释当成代码**：`parts.h` 注释里写了 `t->assocs` 就被 `assocaudit` 判红。
+   改成"跳过 `*` / `/*` / `//` 开头的行" —— 否则文档都不能提这个字段。
+
+**照实说**
+- 现在只有**边**能卸到磁盘；`Token` 本身、名字、`emb` 都还在内存里（"只加载一部分**图**"目前指的是边）。
+- 段文件是 `aip_parts_save` 单独写的（**没有**跟 `::save` 串起来），主流程默认**不用**它 —— 行为零变化正是靠这一点。
+- 探针里 8 段、读 3 段是**小图**；大图（出厂模型 4 万条边）没量过读放大，也没做 LRU/回收。
+- 没有并发：段文件的 `FILE*` 是 per-agent 的，两个 agent 各开各的句柄（探针 ④ 验过）。
