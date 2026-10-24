@@ -702,6 +702,37 @@ sed -i 's/^\[verdict\] 改口触发=\(.*\)/[verdict] 改口触发=\1,瞎/' "$VX/
 grep -q '改 过来 了' "$VX/after.txt" && ! grep -q '改 过来 了' "$VX/before.txt" \
     && ok "**加一行数据（瞎）** ⇒ 新的改口说法就认出来了（代码没动）" \
     || bad "verdict 加词" "before=$(sed -n 's/.*AI > //p' "$VX/before.txt" | tail -1) after=$(sed -n 's/.*AI > //p' "$VX/after.txt" | tail -1)"
+# §6.535 L2 代词下沉：`[pron]` 四组（指代 / 省略指代 / 人称 / 须分隔）——**规则留代码，词表进数据**
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o74" 2>&1 ) || true
+grep -q 'pron=4' "$WORK/o74" \
+    && ok "代词表**从数据读**：pron=4（指代 6 / 省略指代 4 / 人称 7 / 须分隔 2）" \
+    || bad "pron 桶" "$(grep -o 'pron=[0-9]*' "$WORK/o74")"
+run '猫 属于 动物 吗\n它 属于 动物 吗\n' o75
+[ "$(grep -c 'AI > 对 ， 猫' o75)" -ge 2 ] \
+    && ok "省略主语**照旧**（「它」接上一句主语 ⇒ 答「对」）" \
+    || bad "指代-默认" "$(sed -n 's/.*AI > //p' o75 | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n它 属于 动物 吗\n'; } | \
+    AIP_NODATA=pron "$WORK/aip" --model model.bin > "$WORK/o76" 2>&1 ) || true
+p_on=$(sed -n 's/.*AI > //p' o75 | tail -1)
+p_off=$(sed -n 's/.*AI > //p' "$WORK/o76" | tail -1)
+[ -n "$p_off" ] && [ "$p_off" != "$p_on" ] \
+    && ok "关掉 pron 桶 ⇒ 「它」不再顶替主语（桶在承重）" \
+    || bad "pron 消融" "on=「$p_on」 off=「$p_off」"
+PX="$WORK/px"; rm -rf "$PX"; mkdir -p "$PX"
+cp "$ROOT/model.bin" "$PX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PX/" 2>/dev/null || true
+( cd "$PX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n那些 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > before.txt 2>&1 ) || true
+sed -i 's/^\[pron\] 省略指代=\(.*\)/[pron] 省略指代=\1,那些/' "$PX/patterns.txt"
+( cd "$PX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n那些 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > after.txt 2>&1 ) || true
+pr_b=$(sed -n 's/.*AI > //p' "$PX/before.txt" | tail -1)
+pr_a=$(sed -n 's/.*AI > //p' "$PX/after.txt" | tail -1)
+case "$pr_a" in
+    *对*) [ -n "$pr_a" ] && [ "$pr_a" != "$pr_b" ] \
+        && ok "**加一行数据（那些）** ⇒ 新的指代词就顶得上主语（代码没动）" \
+        || bad "pron 加词" "before=「$pr_b」 after=「$pr_a」" ;;
+    *) bad "pron 加词" "before=「$pr_b」 after=「$pr_a」" ;;
+esac
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

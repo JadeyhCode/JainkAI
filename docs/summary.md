@@ -81,6 +81,7 @@ A 里 21 条"诚实未知"，换成 3 种问法再问：13 条能答，但来源
 | **答复组织下沉**：`[say] 语义位=模板`（判词 + 组织，`$1`/`$2` 槽位）（§6.532） | ✅ | 新旧 `probematrix` **28 行 diff 为空**；改一行模板措辞就变；`bucketload` 13 桶 |
 | **裸短回话下沉**：`[bare]` 3 行 45 词 + `[say] 回话.*`（§6.533）；清单见 `docs/language-inventory.md` | ✅ | 新旧 `probematrix` **28 行 diff 为空**；加一行 `好哒` 就认得出来；`bucketload` 14 桶 |
 | **判词/答词/改口词下沉**：`[verdict]` 六组（§6.534） | ✅ | 新旧 `probematrix` **28 行 diff 为空**；加一行 `瞎` 就触发改口；`bucketload` 15 桶 |
+| **代词下沉**：`[pron]` 四组（指代/省略指代/人称/须分隔）（§6.535） | ✅ | 新旧 `probematrix` **28 行 diff 为空**；加一行 `那些` 就顶得上主语；`bucketload` 16 桶 |
 
 ```
 sh tests/tokenop.sh        # 179 项

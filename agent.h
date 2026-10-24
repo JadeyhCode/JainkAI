@@ -503,10 +503,10 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
-       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_N };
+       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_PRON, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say", "bare", "verdict"
+    "qword", "qpart", "say", "bare", "verdict", "pron"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -529,6 +529,66 @@ static inline int aip_bare_gi(const char *k) {
     if (!strcmp(k, "否定") || !strcmp(k, "no"))      return 1;
     if (!strcmp(k, "不懂") || !strcmp(k, "confuse")) return 2;
     return -1;
+}
+
+/* §6.535 **代词表**（`[pron] 指代=他们,她们,它们,它,这个,那个`）：三处用法共用一张数据表、四个组。
+ *   · 指代      —— 逗号后第二个分句句首的代词（§6.278 认先行词）；
+ *   · 省略指代  —— 整句句首的代词顶替上一句主语（"它 属于 动物 吗"）；
+ *   · 人称      —— 裸回话剥句首代词（只给"没听懂"那组用）；
+ *   · 须分隔    —— 这组词后面必须跟空格/结尾才算指代（`那个猫` 不能被换成 `猫猫`）。
+ * **规则留在代码里**（换谁、怎么换是算法），只有**哪些词算代词**进数据。 */
+#define AIP_PRON_MAX 24
+#define AIP_PRON_LEN 16
+static char g_pron[4][AIP_PRON_MAX][AIP_PRON_LEN];
+static size_t g_pron_n[4];
+static size_t g_pron_lines;
+static int g_pron_data;
+static inline int aip_pron_gi(const char *k) {
+    static const char *names[4] = { "指代", "省略指代", "人称", "须分隔" };
+    for (int i = 0; i < 4; ++i) if (!strcmp(k, names[i])) return i;
+    return -1;
+}
+static const char *const AIP_PRON_SEEDS[4][8] = {
+    { "他们", "她们", "它们", "它", "这个", "那个", NULL, NULL },
+    { "它们", "它", "这个", "那个", NULL, NULL, NULL, NULL },
+    { "我们", "我", "你", "您", "他", "她", "它", NULL },
+    { "这个", "那个", NULL, NULL, NULL, NULL, NULL, NULL }
+};
+/* 前缀命中：返回命中的字节数（0 = 不是代词），`pw` 给命中那个词（可能指向数据或种子）。 */
+static inline size_t aip_pron_prefix_w(int gi, const char *s, const char **pw) {
+    if (pw) *pw = NULL;
+    if (!s || gi < 0 || gi > 3) return 0;
+    if (g_pron_data) {
+        for (size_t i = 0; i < g_pron_n[gi]; ++i) {
+            size_t l = strlen(g_pron[gi][i]);
+            if (l && strncmp(s, g_pron[gi][i], l) == 0) {
+                if (pw) *pw = g_pron[gi][i];
+                return l;
+            }
+        }
+        return 0;
+    }
+    for (size_t i = 0; i < 8 && AIP_PRON_SEEDS[gi][i]; ++i) {
+        size_t l = strlen(AIP_PRON_SEEDS[gi][i]);
+        if (l && strncmp(s, AIP_PRON_SEEDS[gi][i], l) == 0) {
+            if (pw) *pw = AIP_PRON_SEEDS[gi][i];
+            return l;
+        }
+    }
+    return 0;
+}
+static inline size_t aip_pron_prefix(int gi, const char *s) {
+    return aip_pron_prefix_w(gi, s, NULL);
+}
+static inline int aip_pron_eq(int gi, const char *w) {
+    if (!w || gi < 0 || gi > 3) return 0;
+    if (g_pron_data) {
+        for (size_t i = 0; i < g_pron_n[gi]; ++i) if (!strcmp(w, g_pron[gi][i])) return 1;
+        return 0;
+    }
+    for (size_t i = 0; i < 8 && AIP_PRON_SEEDS[gi][i]; ++i)
+        if (!strcmp(w, AIP_PRON_SEEDS[gi][i])) return 1;
+    return 0;
 }
 
 /* §6.534 **判词/答词/改口词的六组表**（`[verdict] 回答肯定=对,是,嗯…`）：
@@ -878,6 +938,42 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.535 代词：`[pron] 指代=他们,她们,它们,它,这个,那个`（四组，逗号分隔，**顺序有意义**：长的在前） */
+        if (!strcmp(kind, "pron")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char *ke = val + strlen(val);
+            while (ke > val && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
+            int gi = aip_pron_gi(val);
+            g_pron_lines++;
+            if (gi < 0) {
+                fprintf(stderr, "[patterns] ⚠ [pron] 认不出这一组：%.40s\n", val);
+                continue;
+            }
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                if (*ws) {
+                    if (g_pron_n[gi] >= AIP_PRON_MAX)
+                        fprintf(stderr, "[patterns] ⚠ [pron] 第 %d 组超过上限 %d，丢弃：%.40s\n",
+                                gi, AIP_PRON_MAX, ws);
+                    else if (strlen(ws) >= AIP_PRON_LEN)
+                        fprintf(stderr, "[patterns] ⚠ [pron] 词太长，丢弃：%.40s\n", ws);
+                    else {
+                        snprintf(g_pron[gi][g_pron_n[gi]], sizeof g_pron[0][0], "%s", ws);
+                        g_pron_n[gi]++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
         /* §6.534 判词/答词/改口：`[verdict] 回答肯定=会,能`（六组，词用逗号分隔） */
         if (!strcmp(kind, "verdict")) {
             char *eq = strchr(val, '=');
@@ -1029,11 +1125,13 @@ continue;
     g_say_data = 1;      /* §6.532 答复模板同上：文件读到了就由数据接管 */
     g_bare_data = 1;     /* §6.533 裸回话词表同理 */
     g_verd_data = 1;     /* §6.534 判词/答词/改口词同理 */
+    g_pron_data = 1;     /* §6.535 代词表同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
-                                g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines};
+                                g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines,
+                                g_pron_lines};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -1071,12 +1169,13 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
                 g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
                 g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
                 g_verd_lines, g_verd_n[0], g_verd_n[1], g_verd_n[2], g_verd_n[3],
-                g_verd_n[4], g_verd_n[5]);
+                g_verd_n[4], g_verd_n[5],
+                g_pron_lines, g_pron_n[0], g_pron_n[1], g_pron_n[2], g_pron_n[3]);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -2359,10 +2458,7 @@ static inline int agent_rewrite_coref(AI *ai, const char *in, char *out, size_t 
     }
     if (sp == (size_t)-1 || sp == 0) return 0;
     const char *cl2 = c + sp + sl;
-    static const char *pron[] = {"他们", "她们", "它们", "它", "这个", "那个", NULL};
-    size_t pl = 0;
-    for (size_t i = 0; pron[i]; ++i)
-        if (strncmp(cl2, pron[i], strlen(pron[i])) == 0) { pl = strlen(pron[i]); break; }
+    size_t pl = aip_pron_prefix(0, cl2);   /* §6.535 词表来自数据（组 0 = 指代） */
     if (!pl) return 0;
     /* 第一个分句解析出 A R B */
     char c1[160];
@@ -3832,17 +3928,12 @@ static inline int agent_bare_reply(const char *input) {
      * 连带把他者模型那条路也绕掉了（features 套件「他者模型」当场红）。 */
     char *bp = b;
     {
-        static const char *pron[] = {"我们", "我", "你", "您", "他", "她", "它", NULL};
-        for (size_t i = 0; pron[i]; ++i) {
-            size_t pl = strlen(pron[i]);
-            /* §6.270 无空格也要剥（`我不明白`）：以前要求代词后面有空格，真人输入没空格
-             * ⇒ 「我 不 明白」掉生成流水线，答出「明白 故意 的」。仍然**只给 confuse 组用**。 */
-            if (strncmp(b, pron[i], pl) == 0) {
-                char *q = b + pl;
-                while (*q == ' ' || *q == '\t') q++;
-                bp = q;
-                break;
-            }
+        /* §6.535 组 2 = 人称（数据里就是这七个词；§6.270 无空格也剥） */
+        size_t pl = aip_pron_prefix(2, b);
+        if (pl) {
+            char *q = b + pl;
+            while (*q == ' ' || *q == '\t') q++;
+            bp = q;
         }
     }
     char *e = b + strlen(b); while (e > b && (e[-1] == ' ' || e[-1] == '\t')) *--e = 0;
@@ -6379,20 +6470,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     {
         const char *q = input;
         while (q && (*q == ' ' || *q == '\t')) q++;
-        static const char *pron[] = {"它们", "它", "这个", "那个", NULL};
         if (q && ai->last_subject[0]) {
-            for (size_t i = 0; pron[i]; ++i) {
-                size_t pl = strlen(pron[i]);
-                if (strncmp(q, pron[i], pl) != 0) continue;
-                /* §6.301 无空格也要认「它」（真人输入不带空格）。
-                 * 只对 它/它们 放宽：`这个/那个` 放宽会把「那个猫」替换成「猫猫」。 */
-                if (!strcmp(pron[i], "这个") || !strcmp(pron[i], "那个")) {
-                    if (q[pl] && q[pl] != ' ' && q[pl] != '\t') continue;
-                }
+            const char *pw = NULL;
+            size_t pl = aip_pron_prefix_w(1, q, &pw);   /* §6.535 组 1 = 省略指代 */
+            /* §6.301 无空格也要认「它」（真人输入不带空格）。
+             * 只对 它/它们 放宽：`这个/那个` 放宽会把「那个猫」替换成「猫猫」——
+             * 所以"须分隔"本身也是数据（组 3），不是写死这两个词。 */
+            if (pl && pw && aip_pron_eq(3, pw) && q[pl] && q[pl] != ' ' && q[pl] != '\t') pl = 0;
+            if (pl) {
                 const char *rest = q + pl;
                 snprintf(decl_in, sizeof decl_in, "%s%s", ai->last_subject, rest);
                 input_eff = decl_in;
-                break;
             }
         }
     }
