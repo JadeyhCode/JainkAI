@@ -625,8 +625,8 @@ q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
     || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
 # §6.532 目标③续：**答复组织下沉**（`[say] 语义位=模板`；`$1`/`$2` 是槽位）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o65" 2>&1 ) || true
-grep -q 'say=14' "$WORK/o65" \
-    && ok "答复模板**从数据读**：say=14（判词 3 + 组织 7 + 回话 4，一行一个语义位）" \
+grep -q 'say=15' "$WORK/o65" \
+    && ok "答复模板**从数据读**：say=15（判词 3 + 组织 7 + 回话 4 + 量词 1，一行一个语义位）" \
     || bad "say 桶" "$(grep -o 'say=[0-9]*' "$WORK/o65")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
     "$WORK/aip" --model model.bin > "$WORK/o66" 2>&1 ) || true
@@ -733,6 +733,29 @@ case "$pr_a" in
         || bad "pron 加词" "before=「$pr_b」 after=「$pr_a」" ;;
     *) bad "pron 加词" "before=「$pr_b」 after=「$pr_a」" ;;
 esac
+# §6.536 L3 量词判据下沉：`[measure]` 词表 + `[say] 不知道.量` 措辞
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o77" 2>&1 ) || true
+grep -q 'measure=1' "$WORK/o77" \
+    && ok "量词表**从数据读**：measure=1 行（原有 11 条 + 数据还能加）" \
+    || bad "measure 桶" "$(grep -o 'measure=[0-9]*' "$WORK/o77")"
+run '猫 有 多大\n' o78
+grep -q '具 体 数 量' o78 \
+    && ok "量词问句**照旧**拒绝（「猫 有 多大」⇒ 不 编）" \
+    || bad "量词-默认" "$(sed -n 's/.*AI > //p' o78 | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 有 多大\n'; } | \
+    AIP_NODATA=measure "$WORK/aip" --model model.bin > "$WORK/o79" 2>&1 ) || true
+m_on=$(sed -n 's/.*AI > //p' o78 | tail -1)
+m_off=$(sed -n 's/.*AI > //p' "$WORK/o79" | tail -1)
+[ -n "$m_off" ] && [ "$m_off" != "$m_on" ] \
+    && ok "关掉 measure 桶 ⇒ 量词问句不再被拦住（桶在承重）" \
+    || bad "measure 消融" "on=「$m_on」 off=「$m_off」"
+# 数据补的洞：`多沉/多老` 以前被当成**陈述学进去**（"记下 了 ： 猫 有 多沉"）
+# ⚠ 必须在仓库根跑：WORK 里没有 patterns.txt（没有数据就只有种子 11 条，补的词不生效）
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 有 多沉\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o80" 2>&1 ) || true
+grep -q '具 体 数 量' "$WORK/o80" \
+    && ok "数据补上的量词（多沉）⇒ 拒答（以前是「记下 了」，把问句学成事实）" \
+    || bad "measure 补洞" "$(sed -n 's/.*AI > //p' "$WORK/o80" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

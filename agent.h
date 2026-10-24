@@ -503,10 +503,11 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
-       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_PRON, AIP_BK_N };
+       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_PRON,
+       AIP_BK_MEASURE, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say", "bare", "verdict", "pron"
+    "qword", "qpart", "say", "bare", "verdict", "pron", "measure"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -530,6 +531,16 @@ static inline int aip_bare_gi(const char *k) {
     if (!strcmp(k, "不懂") || !strcmp(k, "confuse")) return 2;
     return -1;
 }
+
+/* §6.536 **量词/度量问句的词表**（`[measure] 词=有多大,多高,多重,…`）：
+ * 判据是"句子含 `多X` 这种度量问法"—— **判据是规则（strstr），词表是语言**。
+ * 原来 `agent_measure_question` 里写死了 11 个（有多大/多高/…），漏掉的（`多沉`/`多老`）
+ * 会被当成**陈述学进图**（实测「猫 有 多沉」⇒「记下 了 ： 猫 有 多沉」），所以这层也是补漏点。 */
+#define AIP_MEASURE_MAX 32
+#define AIP_MEASURE_LEN 24
+static char g_measure[AIP_MEASURE_MAX][AIP_MEASURE_LEN];
+static size_t g_measure_n, g_measure_lines;
+static int g_measure_data;
 
 /* §6.535 **代词表**（`[pron] 指代=他们,她们,它们,它,这个,那个`）：三处用法共用一张数据表、四个组。
  *   · 指代      —— 逗号后第二个分句句首的代词（§6.278 认先行词）；
@@ -938,6 +949,35 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.536 量词：`[measure] 词=有多大,多高,…`（一组，逗号分隔；strstr 匹配） */
+        if (!strcmp(kind, "measure")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            g_measure_lines++;
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                if (*ws) {
+                    if (g_measure_n >= AIP_MEASURE_MAX)
+                        fprintf(stderr, "[patterns] ⚠ [measure] 超过上限 %d，丢弃：%.40s\n",
+                                AIP_MEASURE_MAX, ws);
+                    else if (strlen(ws) >= AIP_MEASURE_LEN)
+                        fprintf(stderr, "[patterns] ⚠ [measure] 词太长，丢弃：%.40s\n", ws);
+                    else {
+                        snprintf(g_measure[g_measure_n], sizeof g_measure[0], "%s", ws);
+                        g_measure_n++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
         /* §6.535 代词：`[pron] 指代=他们,她们,它们,它,这个,那个`（四组，逗号分隔，**顺序有意义**：长的在前） */
         if (!strcmp(kind, "pron")) {
             char *eq = strchr(val, '=');
@@ -1126,12 +1166,13 @@ continue;
     g_bare_data = 1;     /* §6.533 裸回话词表同理 */
     g_verd_data = 1;     /* §6.534 判词/答词/改口词同理 */
     g_pron_data = 1;     /* §6.535 代词表同理 */
+    g_measure_data = 1;  /* §6.536 量词表同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
                                 g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines,
-                                g_pron_lines};
+                                g_pron_lines, g_measure_lines};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -1169,13 +1210,14 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
                 g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
                 g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
                 g_verd_lines, g_verd_n[0], g_verd_n[1], g_verd_n[2], g_verd_n[3],
                 g_verd_n[4], g_verd_n[5],
-                g_pron_lines, g_pron_n[0], g_pron_n[1], g_pron_n[2], g_pron_n[3]);
+                g_pron_lines, g_pron_n[0], g_pron_n[1], g_pron_n[2], g_pron_n[3],
+                g_measure_lines, g_measure_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
@@ -2529,12 +2571,23 @@ static inline const char *agent_measure_question(const char *input) {
     if (!input) return NULL;
     char b[200];
     if (!agent_nosp(input, b, sizeof b)) return NULL;
-    static const char *mk[] = {"有多大", "多高", "多重", "多远", "多久", "多长",
-                               "多快", "多贵", "多深", "多宽", "多厚", NULL};
-    for (size_t i = 0; mk[i]; ++i)
-        if (strstr(b, mk[i]))
-            return "具 体 数 量 我 不 会 量 —— 我 只 记「A 关系 B」的 事实，不 记 尺 度 和 数 字（不 编）。";
-    return NULL;
+    /* §6.536 词表来自数据（`[measure]`）；没有 patterns.txt 时用这份种子（与旧代码逐字节相同）。 */
+    int hit = 0;
+    if (g_measure_data) {
+        for (size_t i = 0; i < g_measure_n; ++i)
+            if (strstr(b, g_measure[i])) { hit = 1; break; }
+    } else {
+        static const char *mk[] = {"有多大", "多高", "多重", "多远", "多久", "多长",
+                                   "多快", "多贵", "多深", "多宽", "多厚", NULL};
+        for (size_t i = 0; mk[i]; ++i)
+            if (strstr(b, mk[i])) { hit = 1; break; }
+    }
+    if (!hit) return NULL;
+    /* §6.536 措辞也进数据（`[say] 不知道.量`）；没给就用旧句子。 */
+    {
+        const char *t = ai_say_tpl("不知道.量");
+        return t ? t : "具 体 数 量 我 不 会 量 —— 我 只 记「A 关系 B」的 事实，不 记 尺 度 和 数 字（不 编）。";
+    }
 }
 
 /* §6.275 **「你 会 X 吗」不能答成"我会试着 X"**：实测 `你会游泳吗` 走帧层，渲染出

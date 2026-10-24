@@ -58,6 +58,7 @@ say|猫 属于 动物 吗
 bare|好的
 verdict|猫 属于 动物 吗;不对
 pron|猫 属于 动物 吗;它 属于 动物 吗
+measure|猫 有 多大
 TABLE
 
 echo "② 全部关掉（AIP_NODATA=1）时，每条探针都必须变（证明它们都真的依赖数据）"
@@ -87,5 +88,5 @@ TABLE
 echo "  （②没有逐条 OK，只在失败时报；全过就是数据都承重）"
 
 rm -rf "$TMP"
-[ "$fail" -eq 0 ] && echo "PASS bucketload（16 个桶都有'关掉就变'的探针）" \
+[ "$fail" -eq 0 ] && echo "PASS bucketload（17 个桶都有'关掉就变'的探针）" \
                   || { echo "FAIL bucketload"; exit 1; }
