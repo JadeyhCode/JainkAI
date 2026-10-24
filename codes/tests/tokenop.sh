@@ -1251,6 +1251,22 @@ grep -q '只在 #0 的：0 条；只在 #0 的：0 条' "$BD/out.txt" \
 grep -q '从 m.bin 读了一份' "$BD/out.txt" \
     && ok "「brain new 加模型文件」能**从盘上再开一个独立脑**" \
     || bad "多脑-new模型" "$(grep '多脑' "$BD/out.txt" | head -4 | tr '\n' ' ')"
+# §6.573 共享 base + **自己的 delta**：base 不被改、delta 只装改过的那几段、且能读回来
+DL="$WORK/dl"; rm -rf "$DL"; mkdir -p "$DL"
+cp "$ROOT/session.bin" "$DL/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$DL/" 2>/dev/null || true
+( cd "$DL" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::parts save base.parts\n::parts attach base.parts\n::parts detach\n';     printf '猫 属于 动物\n::parts delta d1.delta\n::parts detach\n::parts overlay d1.delta\n猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+base_sz=$(wc -c < "$DL/base.parts" 2>/dev/null || echo 0)
+delta_sz=$(wc -c < "$DL/d1.delta" 2>/dev/null || echo 0)
+[ "${base_sz:-0}" -gt 0 ] && [ "${delta_sz:-0}" -gt 0 ] && [ "$delta_sz" -lt $((base_sz / 3)) ] \
+    && ok "**delta 明显小于 base**（base=${base_sz}B / delta=${delta_sz}B）" \
+    || bad "delta-大小" "base=${base_sz} delta=${delta_sz}"
+grep -q 'base 原样不动' "$DL/out.txt" \
+    && ok "**写 delta 时 base 不动**（命令面明说）" \
+    || bad "delta-不动base" "$(grep 'delta' "$DL/out.txt" | head -2 | tr '\n' ' ')"
+grep -q '覆盖层\] 挂上' "$DL/out.txt" && grep -q '对 ， 猫 -\[属于\]-> 动物' "$DL/out.txt" \
+    && ok "**卸下 + 挂自己的 delta 之后，改过的事实还在**" \
+    || bad "delta-回读" "$(grep -E '覆盖层|对 ，|不 对' "$DL/out.txt" | head -2 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true

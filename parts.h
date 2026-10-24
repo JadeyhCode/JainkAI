@@ -46,13 +46,14 @@ typedef struct {
     uint8_t  n_tset, mem_state, role, topic, pattern, dyn;
 } AIPartEdge;
 
-typedef struct {
+typedef struct AIParts_tag {
     FILE    *f;
     char     path[256];
     uint64_t *off;              /* 按词 id 索引：段在文件里的偏移（0 = 这个词没有边） */
     uint32_t *cnt;              /* 按词 id 索引：段里几条边 */
     uint8_t  *flags;            /* 按词 id 索引：段头的 flags（bit0 = 有因果边）*/
     TokenPool *pool;            /* attach 时挂上：打开索引时顺手把 flags 落到词上 */
+    struct AIParts_tag *overlay;    /* §6.573 覆盖层（delta 文件）：同一个词的段以它为准 */
     size_t    n_ids;
     size_t    n_loads;          /* 触发了几次"从磁盘读回来"（验收数字） */
     size_t    n_bytes;          /* 一共读了多少字节（验收数字） */
@@ -121,6 +122,60 @@ static inline int aip_parts_save(AI *ai, const char *path) {
     return (int)n_written;
 }
 
+/* ---------------- 写 delta：只写"这个脑改过"的段（§6.573） ---------------- */
+
+static inline int aip_parts_save_delta(AI *ai, const char *path) {
+    if (!ai || !ai->pool || !path) return -1;
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    TokenPool *p = ai->pool;
+    uint32_t head[4] = { AIP_PARTS_MAGIC, AIP_PARTS_VERSION, (uint32_t)p->count, 0u };
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (t && t->count > 0 && t->edges_dirty) head[3]++;
+    }
+    if (fwrite(head, sizeof head, 1, f) != 1) { fclose(f); return -1; }
+    uint64_t index_off = (uint64_t)ftell(f);
+    uint8_t zero[AIP_PART_IDX_LEN] = {0};
+    for (uint32_t i = 0; i < head[3]; ++i)
+        if (fwrite(zero, sizeof zero, 1, f) != 1) { fclose(f); return -1; }
+    uint32_t n_written = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (!t || t->count == 0 || !t->edges_dirty) continue;
+        token_assocs_resolve(t);
+        uint32_t cnt = (uint32_t)t->count;
+        uint64_t seg_off = (uint64_t)ftell(f);
+        const AssocEntry *as = token_assocs_ro(t);
+        for (uint32_t k = 0; k < cnt; ++k) {
+            AIPartEdge pe;
+            memset(&pe, 0, sizeof pe);
+            pe.b_id = as[k].main ? as[k].main->id : 0u;
+            pe.a_id = as[k].action ? as[k].action->id : 0u;
+            pe.hits = as[k].hits; pe.seq = as[k].seq;
+            pe.birth = as[k].birth_tick; pe.last = as[k].last_touch_tick;
+            memcpy(pe.tset, as[k].tset, sizeof pe.tset);
+            pe.rel = as[k].rel; pe.nrel = as[k].nrel;
+            pe.n_tset = as[k].n_tset; pe.mem_state = as[k].mem_state;
+            pe.role = as[k].role; pe.topic = as[k].topic;
+            pe.pattern = as[k].pattern; pe.dyn = as[k].dyn;
+            if (fwrite(&pe, sizeof pe, 1, f) != 1) { fclose(f); return -1; }
+        }
+        long save = ftell(f);
+        if (fseek(f, (long)(index_off + (uint64_t)n_written * AIP_PART_IDX_LEN), SEEK_SET) != 0) { fclose(f); return -1; }
+        uint32_t id = t->id;
+        uint16_t flags = (uint16_t)(t->has_causal ? 1u : 0u), pad2 = 0;
+        if (fwrite(&id, 4, 1, f) != 1 || fwrite(&seg_off, 8, 1, f) != 1 ||
+            fwrite(&cnt, 4, 1, f) != 1 || fwrite(&flags, 2, 1, f) != 1 ||
+            fwrite(&pad2, 2, 1, f) != 1) { fclose(f); return -1; }
+        if (fseek(f, save, SEEK_SET) != 0) { fclose(f); return -1; }
+        t->edges_dirty = 0;            /* 已经落进 delta ⇒ 干净了 */
+        n_written++;
+    }
+    fclose(f);
+    return (int)n_written;
+}
+
 /* ---------------- 打开：只读**索引**（不读任何一段） ---------------- */
 
 static inline AIParts *aip_parts_open(const char *path) {
@@ -172,6 +227,9 @@ static inline void aip_parts_close(AIParts *pt) {
 static inline void aip_parts_load_token(void *ctx, Token *t) {
     AIParts *pt = (AIParts *)ctx;
     if (!pt || !t) return;
+    /* §6.573 覆盖层优先（delta 文件里的段是"这个脑自己改过的"） */
+    if (pt->overlay && t->id < pt->overlay->n_ids && pt->overlay->off[t->id] != 0)
+        pt = pt->overlay;
     if (t->id >= pt->n_ids || pt->off[t->id] == 0) {
         /* 没有段 ⇒ 把它变成"内存里的空边表"。**绝不留** tag + count>0：
          * 那会让调用方拿到 NULL 数组却按 count 去遍历（实测段错误）。 */
@@ -205,6 +263,17 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
     pt->n_resident++;                   /* 内存里多了一段（验收数字） */
     if (getenv("AIP_PARTLOG"))          /* §6.570 取证：谁被读回来了（默认关，写文件不污染 stdout） */
         fprintf(stderr, "[partload] %s (%u 条)\n", (t->name ? t->name : "?"), cnt);
+}
+
+/* ---------------- 覆盖层（delta）：base + 自己的改动 ---------------- */
+
+static inline int aip_parts_set_overlay(AIParts *base, const char *delta_path) {
+    if (!base || !delta_path) return -1;
+    AIParts *d = aip_parts_open(delta_path);
+    if (!d) return -1;
+    if (base->overlay && base->overlay != d) aip_parts_close(base->overlay);
+    base->overlay = d;
+    return 0;
 }
 
 /* ---------------- 挂上 / 卸下 ---------------- */

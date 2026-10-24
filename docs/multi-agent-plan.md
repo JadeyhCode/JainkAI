@@ -71,6 +71,13 @@
 **原计划（细节）**：内存上限到了就把冷段的边写回段文件并改 tag=2，配 LRU 计数；
 验收用"小上限 + 大图"跑同一批问句，答对率不变、part 命令显示真的换出了。
 
+## 2.5 共享 base + 自己的 delta（§6.573 已做"边级"，词级还没做）
+
+- 写：`::parts delta <f>` 只写 `edges_dirty` 的段（base 一字节不动）。
+- 读：`::parts attach <base> [delta]` / `::parts overlay <f>`，同一个词的段以 delta 为准。
+- **边界**：delta 按 `Token.id` 存 ⇒ 只对同一个 base 池有效；**新造的词不在 delta 里**（词级 delta 未做）。
+  实测 base 2.85MB / delta 0.43MB（15%）：一次学习会连带弄脏公共节点。
+
 ## 3. B 腿：修改账下一刀
 
 现在记的是**关系写**（`AIMOD_REL`）**与删**（`AIMOD_REL_DEL` / `AIMOD_ASSOC_DEL`，§6.568），

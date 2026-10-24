@@ -71,8 +71,16 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z179. 多脑：从盘上再开一个 + 两本账的 diff（§6.572）
+## 4z180. 共享 base + 自己的 delta（§6.573）
 
+- `Token.edges_dirty`（边写入置脏）+ `aip_parts_save_delta`（只写脏段）+ overlay（delta 优先）。
+- 命令：`::parts delta <f>` / `::parts overlay <f>` / `::parts attach <base> [delta]`。
+- 实测：base 2852260B（1265 段）vs delta 430824B（15%），base 字节不变；卸下+挂 delta 后答对。tokenop **301 项**。
+- 边界：delta 是**边级**（按 Token.id）⇒ 只对"同一个 base 池"有效；**新造词不在 delta 里**；
+  一次学习会脏 15% 的段；overlay 与换出同用的读放大暂回 ~1298 段。
+- 判据：整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
+
+## 4z179. 多脑：从盘上再开一个 + 两本账的 diff（§6.572）
 - `::brain new [模型]`（从盘上读一份独立的脑）、`::brain diff A B`（按事实比：只在 A / 只在 B）。
 - 实测：`diff 1 0` ⇒ 只在 #1：窗户 属于 家具；总数 1 vs 317；`diff 0 0` ⇒ 0/0。
 - 判据：tokenop **298 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。

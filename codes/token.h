@@ -261,6 +261,10 @@ struct Token {
      * 只进内存 + 段文件索引里的 flags 字节（不进 model.bin：读盘后第一次建因果边时会补上，
      * 最坏多读几段，不会答错）。 */
     uint8_t     has_causal;
+    /* §6.573 **这一份边被改过吗**（相对"从段文件读回来时的样子"）：
+     * 存盘/段文件只把脏的写成 delta —— 这就是"每个智能体只维护自己的修改"的落点。
+     * 只进内存：读回来时清 0，任何**边写入**路径置 1（见 token_add_assoc_ex 等）。 */
+    uint8_t     edges_dirty;
     /* §6.208 **入度缓存**（GC 用）：`ai_gc` 开头 O(E) 重建一次，之后 O(1) 读。
      * 只进内存、不存盘（读盘/训练后第一次 GC 会重建）。放在这里是因为
      * `sizeof(Token)` 不写进存档（model_io 逐字段写），加字段不动格式。 */
@@ -1083,6 +1087,7 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
 static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     if (!t) return -1;
     token_assocs_resolve(t);   /* §6.566 边在磁盘上时先读回来，再谈扩容 */
+    t->edges_dirty = 1;        /* §6.573 改过 ⇒ 进 delta */
     if (t->count == t->cap) {
         size_t ncap = t->cap ? t->cap * 2 : 4;
         AssocEntry *na = (AssocEntry *)realloc(t->assocs, ncap * sizeof *na);
@@ -1241,6 +1246,7 @@ static int g_obs_revised = 0;   /* 这一次 tag 改口了吗（tag 入口先清
  * 和 token_tag_full 分开，是因为「出处角色」和「语义关系」是两件事：
  * 一条关系边也可能同时带着回复角色。 */
 static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bump) {
+    if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
     if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
@@ -1288,6 +1294,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
 
 /* 给 a→b 打上**否定**的核心关系（`猫 不 会 飞`） */
 static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bump) {
+    if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
     if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
@@ -1329,6 +1336,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
 
 /* 给 a→b 打上**动态关系**（清单外的谓语，id 从 8 起） */
 static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bump) {
+    if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
     if (!a || !b || a == b || dyn_id == 0) return -1;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &token_assocs(a)[i];
@@ -1353,6 +1361,7 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
 
 /* 动态关系 + 否定：`dyn` 记关系 id，`nrel` 的 15 位记"是否定"（见 REL_NEG_DYN_BIT） */
 static inline int token_tag_dyn_neg(Token *a, Token *b, uint8_t dyn_id, int neg, uint32_t bump) {
+    if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
     int rc = token_tag_dyn(a, b, dyn_id, bump);
     if (rc != 0) return rc;
     for (size_t i = 0; i < a->count; ++i) {
@@ -1390,6 +1399,7 @@ static inline int token_link_bidirectional(Token *a, Token *b) {
     return 0;
 }
 static inline int token_remove_assoc(Token *t, Token *main) {
+    if (t) t->edges_dirty = 1;   /* §6.573 */
     if (!t) return -1;
     for (size_t i = 0; i < t->count; ++i) {
         AssocEntry *e = &token_assocs(t)[i];

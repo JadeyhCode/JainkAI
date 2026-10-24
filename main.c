@@ -1622,17 +1622,27 @@ int main(int argc, char **argv) {
                 const char *sp = strchr(cmd, ' ');
                 const char *sub = sp ? sp + 1 : "";
                 while (*sub == ' ') sub++;
-                char parch[256] = {0};
+                char parch[256] = {0}, ovl[256] = {0};
                 const char *pp = sub;
                 while (*pp && *pp != ' ') pp++;
                 while (*pp == ' ') pp++;
-                snprintf(parch, sizeof parch, "%s", *pp ? pp : "model.parts");
+                {
+                    const char *pe = pp;
+                    while (*pe && *pe != ' ') pe++;
+                    size_t pl = (size_t)(pe - pp);
+                    if (pl >= sizeof parch) pl = sizeof parch - 1;
+                    memcpy(parch, pp, pl); parch[pl] = 0;
+                    if (!parch[0]) snprintf(parch, sizeof parch, "model.parts");
+                    while (*pe == ' ') pe++;
+                    snprintf(ovl, sizeof ovl, "%s", *pe ? pe : "");
+                }
                 AIParts *pt = (AIParts *)a->parts;
                 if (!strncmp(sub, "save", 4)) {
                     int n = aip_parts_save(a->brain, parch);
                     if (n < 0) printf("[分段保存] 写不进去：%s\n", parch);
                     else printf("[分段保存] %d 个有边的词 ⇒ %s（之后可以只读一部分）\n", n, parch);
                 } else if (!strncmp(sub, "attach", 6)) {
+                    /* §6.573 `::parts attach <base> [delta]`：先 base，再挂 delta 覆盖层 */
                     if (pt) { aip_parts_close(pt); a->parts = NULL; }
                     pt = aip_parts_open(parch);
                     if (!pt) { printf("[分段加载] 打不开索引：%s\n", parch); }
@@ -1640,6 +1650,12 @@ int main(int argc, char **argv) {
                         a->parts = pt;
                         aip_parts_attach(a->brain, pt);
                         printf("[分段加载] 索引已挂上：%s（边按需读回）\n", parch);
+                        if (*ovl) {
+                            if (aip_parts_set_overlay(pt, ovl) == 0)
+                                printf("[分段加载] 覆盖层：%s（自己改过的段优先）\n", ovl);
+                            else
+                                printf("[分段加载] 覆盖层打不开：%s\n", ovl);
+                        }
                     }
                 } else if (!strncmp(sub, "detach", 6)) {
                     if (!pt) { printf("[卸下] 还没 attach 过分段文件\n"); }
@@ -1647,6 +1663,16 @@ int main(int argc, char **argv) {
                         size_t n = aip_parts_detach(a->brain);
                         printf("[卸下] %zu 个词的边已离开内存（再问会按需读回）\n", n);
                     }
+                } else if (!strncmp(sub, "overlay", 7)) {
+                    if (!pt) printf("[覆盖层] 先 attach base 再挂 delta\n");
+                    else if (aip_parts_set_overlay(pt, parch) == 0)
+                        printf("[覆盖层] 挂上：%s（自己改过的段优先）\n", parch);
+                    else printf("[覆盖层] 打不开：%s\n", parch);
+                } else if (!strncmp(sub, "delta", 5)) {
+                    /* §6.573 只把**这个脑自己改过**的段写成 delta（base 不动） */
+                    int n = aip_parts_save_delta(a->brain, parch);
+                    if (n < 0) printf("[delta] 写不进去：%s\n", parch);
+                    else printf("[delta] %d 个改过的词 ⇒ %s（base 原样不动）\n", n, parch);
                 } else if (!strncmp(sub, "stats", 5)) {
                     size_t l = 0, b = 0, r = 0, e = 0;
                     if (!pt) { printf("[分段统计] 还没 attach（没有索引）\n"); }
