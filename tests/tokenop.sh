@@ -840,6 +840,33 @@ sed -i 's/^\[say\] 视角\.在=.*/[say] 视角.在=（数据）$1 的 看法 里
 grep -q '（数据）小明 的 看法 里 ：' "$WX/out.txt" \
     && ok "**改一行数据** ⇒ 视角前缀换掉（两个槽位都填对）" \
     || bad "视角-改模板" "$(sed -n 's/.*AI > //p' "$WX/out.txt" | tail -1)"
+# §6.541 L6 关系别名下沉：`[alias] 词=规范关系名`（关系 id 仍由代码枚举定，进数据的只是"哪些词归到哪"）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o91" 2>&1 ) || true
+grep -q 'alias=1' "$WORK/o91" \
+    && ok "关系别名**从数据读**：alias=1 行（5 条别名，词=规范关系名）" \
+    || bad "alias 桶" "$(grep -o 'alias=[0-9]*' "$WORK/o91")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 拥有 毛 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o92" 2>&1 ) || true
+grep -q '猫 -\[属于·继承\]-> 动物' "$WORK/o92" \
+    && ok "别名**照旧**（「猫 拥有 毛 吗」⇒ 经「有」继承答出来）" \
+    || bad "alias-默认" "$(sed -n 's/.*AI > //p' "$WORK/o92" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 拥有 毛 吗\n'; } | \
+    AIP_NODATA=alias "$WORK/aip" --model session.bin > "$WORK/o93" 2>&1 ) || true
+a_on=$(sed -n 's/.*AI > //p' "$WORK/o92" | tail -1)
+a_off=$(sed -n 's/.*AI > //p' "$WORK/o93" | tail -1)
+[ -n "$a_off" ] && [ "$a_off" != "$a_on" ] \
+    && ok "关掉 alias 桶 ⇒「拥有」不再归到「有」（桶在承重）" \
+    || bad "alias 消融" "on=「$a_on」 off=「$a_off」"
+# 改一行数据：把「拥有」改归到「怕」⇒ 同一个词的意义就变了（证明映射由数据定）
+AX="$WORK/ax"; rm -rf "$AX"; mkdir -p "$AX"
+cp "$ROOT/session.bin" "$AX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$AX/" 2>/dev/null || true
+sed -i 's/^\[alias\] 词=.*/[alias] 词=惧怕=怕,喜爱=喜欢,喜好=喜欢,拥有=怕,具有=有/' "$AX/patterns.txt"
+( cd "$AX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 拥有 毛 吗\n'; } | \
+    "$WORK/aip" --model m.bin > after.txt 2>&1 ) || true
+a_new=$(sed -n 's/.*AI > //p' "$AX/after.txt" | tail -1)
+[ -n "$a_new" ] && [ "$a_new" != "$a_on" ] && ! echo "$a_new" | grep -q '属于·继承' \
+    && ok "**改一行数据（拥有=怕）** ⇒ 同一个词的意义就变了（别名映射真的由数据定）" \
+    || bad "alias 改映射" "默认=「$a_on」 改后=「$a_new」"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

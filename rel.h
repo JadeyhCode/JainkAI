@@ -159,6 +159,24 @@ static inline const char *rel_dyn_name(const AI *ai, uint8_t id) {
  * `爱` 已经在核心表里（= 喜欢），所以不列。 */
 typedef struct { const char *word; uint8_t rid; } RelAlias;
 
+/* §6.541 **别名表下沉**：`[alias] 词=规范关系名`（如 `拥有=有`）。
+ * 关系 **id 仍由代码的枚举定**（存档里存的是 id，不能挪），进数据的只是"哪些词算别名、归到哪个规范名"。
+ * 存储放这里（rel.h），因为 `rel_alias_id` 是**唯一**判据，不能有两份实现。 */
+#define REL_ALIAS_MAX 48
+#define REL_ALIAS_LEN 24
+/* ⚠ 这些数组只被 `agent.h` 的加载器写、被 `rel_alias_id` 读；有些 C 级探针（`tools/microtest.c` 等）
+ * 只 include 到 `rel.h`、不加载数据 ⇒ 会撞 `-Wunused-variable`（`-Werror` 下编译不过）。
+ * 所以显式标 unused —— 不是"没人用"，是"当前这层看不到用它的人"。 */
+#if defined(__GNUC__)
+#define REL_MAYBE_UNUSED __attribute__((unused))
+#else
+#define REL_MAYBE_UNUSED
+#endif
+static char g_alias_w[REL_ALIAS_MAX][REL_ALIAS_LEN] REL_MAYBE_UNUSED;
+static char g_alias_rel[REL_ALIAS_MAX][REL_ALIAS_LEN] REL_MAYBE_UNUSED;
+static size_t g_alias_n REL_MAYBE_UNUSED, g_alias_lines REL_MAYBE_UNUSED;
+static int g_alias_data REL_MAYBE_UNUSED;
+
 static const RelAlias REL_ALIASES[] = {
     /* ⚠ 有意**没有**收 `害怕`（尽管语料里 30 次、语义就是「怕」）：
      *   `frames.txt` 里有一条 `[帧:害怕X吗]`（问法就是「你 害怕 <X> 吗」），
@@ -180,6 +198,15 @@ static const RelAlias REL_ALIASES[] = {
 
 static inline uint8_t rel_alias_id(const char *w) {
     if (!w) return 0;
+    if (g_alias_data) {   /* §6.541 数据接管：规范名 → id 用 rel_by_name 现解 */
+        for (size_t i = 0; i < g_alias_n; ++i) {
+            if (strcmp(g_alias_w[i], w) != 0) continue;
+            const RelDef *rd = rel_by_name(g_alias_rel[i]);
+            if (rd) return rd->id;
+            return 0;
+        }
+        return 0;
+    }
     for (size_t i = 0; REL_ALIASES[i].word; ++i)
         if (!strcmp(REL_ALIASES[i].word, w)) return REL_ALIASES[i].rid;
     return 0;

@@ -504,10 +504,10 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
        AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_BARE, AIP_BK_VERD, AIP_BK_PRON,
-       AIP_BK_MEASURE, AIP_BK_REFUSE, AIP_BK_N };
+       AIP_BK_MEASURE, AIP_BK_REFUSE, AIP_BK_ALIAS, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart", "say", "bare", "verdict", "pron", "measure", "refuse"
+    "qword", "qpart", "say", "bare", "verdict", "pron", "measure", "refuse", "alias"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -949,6 +949,40 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.541 关系别名：`[alias] 词=拥有=有,…`（一条一条用逗号分隔，每条形如 `词=规范关系名`） */
+        if (!strcmp(kind, "alias")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            g_alias_lines++;
+            char *w = eq + 1;
+            while (w && *w) {
+                char *comma = strchr(w, ',');
+                if (comma) *comma = 0;
+                char *ws = w;
+                while (*ws == ' ' || *ws == '\t') ws++;
+                char *we = ws + strlen(ws);
+                while (we > ws && (we[-1] == ' ' || we[-1] == '\t')) *--we = 0;
+                char *e2 = ws ? strchr(ws, '=') : NULL;
+                if (e2) {
+                    *e2 = 0;
+                    const char *reln = e2 + 1;
+                    while (*reln == ' ' || *reln == '\t') reln++;
+                    if (!*ws || !*reln || !rel_by_name(reln)) {
+                        fprintf(stderr, "[patterns] ⚠ [alias] 认不出这一条（要有 <词>=<已知关系名>）：%.50s\n", ws);
+                    } else if (g_alias_n >= REL_ALIAS_MAX || strlen(ws) >= REL_ALIAS_LEN ||
+                               strlen(reln) >= REL_ALIAS_LEN) {
+                        fprintf(stderr, "[patterns] ⚠ [alias] 超上限/太长，丢弃：%.50s\n", ws);
+                    } else {
+                        snprintf(g_alias_w[g_alias_n], sizeof g_alias_w[0], "%s", ws);
+                        snprintf(g_alias_rel[g_alias_n], sizeof g_alias_rel[0], "%s", reln);
+                        g_alias_n++;
+                    }
+                }
+                w = comma ? comma + 1 : NULL;
+            }
+            continue;
+        }
         /* §6.537 兜底说法池：`[refuse] 说法=这个我 不 太 懂,…`（一组，逗号分隔） */
         if (!strcmp(kind, "refuse")) {
             char *eq = strchr(val, '=');
@@ -1196,13 +1230,14 @@ continue;
     g_pron_data = 1;     /* §6.535 代词表同理 */
     g_measure_data = 1;  /* §6.536 量词表同理 */
     g_refuse_data = 1;   /* §6.537 兜底说法池同理 */
+    g_alias_data = 1;    /* §6.541 关系别名同理 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
                                 g_qword_n, g_qpart_n, g_say_n, g_bare_lines, g_verd_lines,
                                 g_pron_lines, g_measure_lines,
-                                g_refuse_n ? 1 : 0};
+                                g_refuse_n ? 1 : 0, g_alias_lines};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -1240,7 +1275,7 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu refuse=%zu refuse_n=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu refuse=%zu refuse_n=%zu alias=%zu alias_n=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
                 g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
                 g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
@@ -1248,7 +1283,7 @@ continue;
                 g_verd_n[4], g_verd_n[5],
                 g_pron_lines, g_pron_n[0], g_pron_n[1], g_pron_n[2], g_pron_n[3],
                 g_measure_lines, g_measure_n,
-                (size_t)(g_refuse_n ? 1 : 0), g_refuse_n);
+                (size_t)(g_refuse_n ? 1 : 0), g_refuse_n, g_alias_lines, g_alias_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */
