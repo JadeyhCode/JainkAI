@@ -1135,6 +1135,28 @@ sed -i 's|^\[say\] 信念\.说法不一=.*|[say] 信念.说法不一=（数据�
 grep -q '（数据）猫 会 飞 与 不 会 打 平（1 比 1；我 不 这么 看）' "$C9Y/out.txt" \
     && ok "**改一行数据** ⇒ 不一致句换掉（七个槽位都对）" \
     || bad "C9b-改模板" "$(sed -n 's/.*AI > //p' "$C9Y/out.txt" | tail -1)"
+# §6.559 F1：学习/改口确认五句进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '猫 属于 动物 吗\n对\n猫 会 飞 吗\n不对\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o126" 2>&1 ) || true
+grep -q '嗯 ， 那 我 就 这 么 记 着 ： 猫 属于 动物' "$WORK/o126" \
+    && ok "「那我就这么记着」**照旧**（确认不写图）" \
+    || bad "F1-确认" "$(sed -n 's/.*AI > //p' "$WORK/o126" | sed -n 2p)"
+grep -q '改 过来 了 ： 猫 会 飞（我 刚才 说 反 了）' "$WORK/o126" \
+    && ok "「改过来了」**照旧**（说反了就地改）" \
+    || bad "F1-改过来" "$(sed -n 's/.*AI > //p' "$WORK/o126" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '猫 会 游\n猫 会 跑\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o127" 2>&1 ) || true
+grep -q '记下 了 ： 猫 会 游' "$WORK/o127" \
+    && ok "「记下了：…」**照旧**（学习汇总）" \
+    || bad "F1-汇总" "$(sed -n 's/.*AI > //p' "$WORK/o127" | head -1)"
+F1X="$WORK/f1x"; rm -rf "$F1X"; mkdir -p "$F1X"
+cp "$ROOT/session.bin" "$F1X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$F1X/" 2>/dev/null || true
+sed -i 's|^\[say\] 改口\.确认=.*|[say] 改口.确认=（数据）好 的 记 下：$1 $2$3 $4|' "$F1X/patterns.txt"
+( cd "$F1X" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '猫 属于 动物 吗\n对\n猫 会 游\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）好 的 记 下：猫 属于 动物' "$F1X/out.txt" \
+    && ok "**改两行数据** ⇒ 确认语与汇总语都换掉" \
+    || bad "F1-改模板" "$(sed -n 's/.*AI > //p' "$F1X/out.txt" | tr '\n' ' ' | cut -c1-120)"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true

@@ -6427,8 +6427,11 @@ static inline int agent_askback_reply(AI *ai, const char *input, char *out, size
     if (ai_write_rel(ai, A, B, rid, tneg, AI_WSRC_RELATION) != 0) return 0;
     ai->n_rel_learned++;
     const char *rn = rel_name_of(ai, rid);
-    snprintf(out, cap, "好 ， 记下 了 ： %s %s%s %s（你 说 的）",
-             A->name, tneg ? "不 " : "", rn ? rn : "?", B->name);
+    {   /* §6.559 F1：学习/改口确认都进数据 */
+        const char *t = ai_say_tpl("学习.你说的");
+        const char *const a[4] = { A->name, tneg ? "不 " : "", rn ? rn : "?", B->name };
+        der_filln(out, cap, t ? t : "好 ， 记下 了 ： $1 $2$3 $4（你 说 的）", a, 4);
+    }
     return 1;
 }
 
@@ -6509,8 +6512,11 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
     if (!A || !B || rid == 0) return 0;
     const char *rn = rel_name_of(ai, rid);
     if (is_conf) {                        /* 确认：不写图，只说"记着" */
-        snprintf(out, cap, "嗯 ， 那 我 就 这 么 记 着 ： %s %s%s %s",
-                 A->name, fact_neg ? "不 " : "", rn ? rn : "?", B->name);
+        {
+            const char *t = ai_say_tpl("改口.确认");
+            const char *const a[4] = { A->name, fact_neg ? "不 " : "", rn ? rn : "?", B->name };
+            der_filln(out, cap, t ? t : "嗯 ， 那 我 就 这 么 记 着 ： $1 $2$3 $4", a, 4);
+        }
         return 1;
     }
     int want = fact_neg ? 0 : 1;          /* 取反 */
@@ -6534,8 +6540,11 @@ static inline int agent_correct_reply(AI *ai, const char *input, char *out, size
          * `micro_drain_queue` 末尾清队列，所以这里冲完不会把意图留到下一轮。 */
         (void)micro_drain_queue(ai);
     }
-    snprintf(out, cap, "改 过来 了 ： %s %s%s %s（我 刚才 说 反 了）",
-             A->name, want ? "不 " : "", rn ? rn : "?", B->name);
+    {
+        const char *t = ai_say_tpl("改口.改过来");
+        const char *const a[4] = { A->name, want ? "不 " : "", rn ? rn : "?", B->name };
+        der_filln(out, cap, t ? t : "改 过来 了 ： $1 $2$3 $4（我 刚才 说 反 了）", a, 4);
+    }
     return 1;
 }
 
@@ -6584,8 +6593,11 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
                 if (r) {
                     /* 换成"补全后"的说明，别让用户以为是原句 */
                     char fix[160];
-                    snprintf(fix, sizeof fix, "记下 了 ： %s %s %s（接着 上 一 句）",
-                             cw[0], prev_rw, prev_obj);
+                    {
+                        const char *t = ai_say_tpl("学习.接着");
+                        const char *const a[3] = { cw[0], prev_rw, prev_obj };
+                        der_filln(fix, sizeof fix, t ? t : "记下 了 ： $1 $2 $3（接着 上 一 句）", a, 3);
+                    }
                     free(r); r = (char *)malloc(strlen(fix) + 1);
                     if (r) memcpy(r, fix, strlen(fix) + 1);
                 }
@@ -6622,7 +6634,11 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
     }
     if (!learned_n) return NULL;
     char full[420];
-    snprintf(full, sizeof full, "记下 了 ： %s", out);
+    {
+        const char *t = ai_say_tpl("学习.汇总");
+        const char *const a[1] = { out };
+        der_filln(full, sizeof full, t ? t : "记下 了 ： $1", a, 1);
+    }
     if (out_conf) *out_conf = 0.75f;
     if (learned_n > 1) ai->n_rel_learned += learned_n - 1;
     char *rr = (char *)malloc(strlen(full) + 1);
