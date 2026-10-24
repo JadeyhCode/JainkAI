@@ -6036,26 +6036,35 @@ static inline int agent_quantity_compare_note(AI *ai, char *const *words, size_t
             char how[48];
             if (has_q) snprintf(how, sizeof how, "几 %s %s", q, nm);
             else       snprintf(how, sizeof how, "几 %s", nm);
-            if (has)
-                snprintf(out, cap,
-                         "我 不 知 道 %.20s 有 %.40s —— 图 里 只 记 了 %.20s 有 %.16s ， 没 记 数 目（不 编）。",
-                         subj, how, subj, nm);
-            else
-                snprintf(out, cap,
-                         "我 不 知 道 %.20s 有 %.40s —— 图 里 没 记 过 数 目（不 编）。",
-                         subj, how);
+            if (has) {   /* §6.553 "不知道"变体也进数据 */
+                const char *t = ai_say_tpl("不知道.数目已知");
+                const char *const a[3] = { subj, how, nm };
+                der_filln(out, cap,
+                          t ? t : "我 不 知 道 $1 有 $2 —— 图 里 只 记 了 $1 有 $3 ， 没 记 数 目（不 编）。", a, 3);
+            } else {
+                const char *t = ai_say_tpl("不知道.数目");
+                const char *const a[2] = { subj, how };
+                der_filln(out, cap, t ? t : "我 不 知 道 $1 有 $2 —— 图 里 没 记 过 数 目（不 编）。", a, 2);
+            }
             return 1;
         }
         /* ①' 分词把"几个"并成一个词 */
         if (strcmp(words[i + 1], "几个") == 0 && i + 2 < n) {
-            snprintf(out, cap, "我 不 知 道 %.20s 有 几 个 %.16s —— 图 里 没 记 过 数 目（不 编）。",
-                     subj, words[i + 2]);
+            {
+                const char *t = ai_say_tpl("不知道.几个");
+                const char *const a[2] = { subj, words[i + 2] };
+                der_filln(out, cap, t ? t : "我 不 知 道 $1 有 几 个 $2 —— 图 里 没 记 过 数 目（不 编）。", a, 2);
+            }
             return 1;
         }
     }
     /* ② `A 几 岁 了 / 几 岁 吗` */
     if (n >= 3 && strcmp(words[1], "几") == 0 && strcmp(words[2], "岁") == 0) {
-        snprintf(out, cap, "我 不 知 道 %.20s 几 岁 —— 图 里 没 记 过 年龄（不 编）。", words[0]);
+        {
+            const char *t = ai_say_tpl("不知道.岁");
+            const char *const a[1] = { words[0] };
+            der_filln(out, cap, t ? t : "我 不 知 道 $1 几 岁 —— 图 里 没 记 过 年龄（不 编）。", a, 1);
+        }
         return 1;
     }
     /* ③ 比较：`A 比 B <形容词> 吗/呢` 或 `A 和/跟 B 哪个 <形容词>` */
@@ -6104,12 +6113,16 @@ static inline int agent_identity_note(AI *ai, char *const *words, size_t n,
         cat = e->main->name;
         break;
     }
-    if (cat)
-        snprintf(out, cap,
-                 "我 不 知 道 %.20s 是 谁 —— 图 里 没 记 过 名 字（只 记 了 %.20s 属 于 %.20s）。",
-                 subj, subj, cat);
-    else
-        snprintf(out, cap, "我 不 知 道 %.20s 是 谁 —— 图 里 没 记 过 名 字（不 编）。", subj);
+    if (cat) {
+        const char *t = ai_say_tpl("不知道.是谁有类");
+        const char *const a[2] = { subj, cat };
+        der_filln(out, cap,
+                  t ? t : "我 不 知 道 $1 是 谁 —— 图 里 没 记 过 名 字（只 记 了 $1 属 于 $2）。", a, 2);
+    } else {
+        const char *t = ai_say_tpl("不知道.是谁");
+        const char *const a[1] = { subj };
+        der_filln(out, cap, t ? t : "我 不 知 道 $1 是 谁 —— 图 里 没 记 过 名 字（不 编）。", a, 1);
+    }
     return 1;
 }
 

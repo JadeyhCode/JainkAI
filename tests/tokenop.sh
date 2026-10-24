@@ -1078,6 +1078,25 @@ sed -i 's/^\[say\] 能力\.会=.*/[say] 能力.会=（数据）你 会 $1/; s/^\
 grep -q '（数据）你 会 游泳' "$CXX/out.txt" && grep -q '（数据）早 就 记 着：猫 属于 动物' "$CXX/out.txt" \
     && ok "**改两行数据** ⇒ 两句都换掉（槽位都对）" \
     || bad "能力-改模板" "$(sed -n 's/.*AI > //p' "$CXX/out.txt" | tail -3 | tr '\n' ' ')"
+# §6.553 C8："不知道"变体三句（几个 / 几岁 / 是谁）进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 有 几 个 头\n猫 几 岁\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o119" 2>&1 ) || true
+grep -q '我 不 知 道 猫 有 几 个 头' "$WORK/o119" && grep -q '我 不 知 道 猫 几 岁' "$WORK/o119" \
+    && ok "「不知道有几个/几岁」**照旧**" \
+    || bad "C8-默认" "$(sed -n 's/.*AI > //p' "$WORK/o119" | tail -2 | tr '\n' ' ')"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 是 谁\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o120" 2>&1 ) || true
+grep -q '我 不 知 道 猫 是 谁 —— 图 里 没 记 过 名 字（只 记 了 猫 属 于 动物）' "$WORK/o120" \
+    && ok "「不知道是谁（带类别）」**照旧**" \
+    || bad "C8-是谁" "$(sed -n 's/.*AI > //p' "$WORK/o120" | tail -1)"
+C8X="$WORK/c8x"; rm -rf "$C8X"; mkdir -p "$C8X"
+cp "$ROOT/session.bin" "$C8X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$C8X/" 2>/dev/null || true
+sed -i 's/^\[say\] 不知道\.数目=.*/[say] 不知道.数目=（数据）$1 有 $2 我 没 记 数 目/; s/^\[say\] 不知道\.岁=.*/[say] 不知道.岁=（数据）$1 几 岁 我 没 记/' "$C8X/patterns.txt"
+( cd "$C8X" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 有 几 个 头\n猫 几 岁\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫 有 几 个 头 我 没 记 数 目' "$C8X/out.txt" && grep -q '（数据）猫 几 岁 我 没 记' "$C8X/out.txt" \
+    && ok "**改两行数据** ⇒ 两句都换掉（槽位都对）" \
+    || bad "C8-改模板" "$(sed -n 's/.*AI > //p' "$C8X/out.txt" | tail -2 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
