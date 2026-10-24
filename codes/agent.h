@@ -3071,24 +3071,35 @@ static inline char *agent_multi_subj(AI *ai, char *const *words, size_t n,
     if (!rn) return NULL;
     char buf[320];
     size_t o = 0;
-    if (n_yes == nit)
-        o += (size_t)snprintf(buf + o, sizeof buf - o, "对 ， ");
-    else if (n_no == nit)
-        o += (size_t)snprintf(buf + o, sizeof buf - o, "不 对 ， ");
+    /* §6.556 多主语列表答复的**头/项后缀/尾**都进数据（取证：这批探针里命中 11 次 ⇒ 可达） */
+    if (n_yes == nit || n_no == nit) {
+        /* ⚠ 数据行行尾空格会被加载器修掉 ⇒ "头 + 列表"之间那个空格由代码补（同 §6.543） */
+        const char *t = ai_say_tpl(n_yes == nit ? "多主.头对" : "多主.头不对");
+        o += (size_t)snprintf(buf + o, sizeof buf - o, "%s ", t ? t : (n_yes == nit ? "对 ，" : "不 对 ，"));
+    }
     for (size_t j = 0; j < nit; ++j) {
         const char *nm = item[j];
         if (n_yes == nit)
             o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s", j ? " 、 " : "", nm);
         else if (n_no == nit)
             o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s", j ? " 、 " : "", nm);
-        else
-            o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s%s", j ? " ； " : "",
-                                  nm, known[j] ? (val[j] > 0 ? "：对" : "：不 对") : "：图里 没 记 过");
+        else {
+            const char *sfx = known[j] ? (val[j] > 0 ? ai_say_tpl("多主.项对")
+                                                      : ai_say_tpl("多主.项不对"))
+                                       : ai_say_tpl("多主.项没记过");
+            o += (size_t)snprintf(buf + o, sizeof buf - o, "%s%s%s", j ? " ； " : "", nm,
+                                  sfx ? sfx : (known[j] ? (val[j] > 0 ? "：对" : "：不 对")
+                                                        : "：图里 没 记 过"));
+        }
     }
-    if (n_yes == nit)
-        o += (size_t)snprintf(buf + o, sizeof buf - o, " 都 %s %s", rn, bw);
-    else if (n_no == nit)
-        o += (size_t)snprintf(buf + o, sizeof buf - o, " 都 不 %s %s", rn, bw);
+    if (n_yes == nit || n_no == nit) {
+        /* ⚠ 数据行行首空格会被加载器修掉 ⇒ 那个前导空格由代码补（§6.556，同 §6.543 的教训） */
+        char tail[160];
+        const char *t = ai_say_tpl(n_yes == nit ? "多主.尾都" : "多主.尾都不");
+        const char *const a[2] = { rn, bw };
+        der_filln(tail, sizeof tail, t ? t : (n_yes == nit ? "都 $1 $2" : "都 不 $1 $2"), a, 2);
+        o += (size_t)snprintf(buf + o, sizeof buf - o, " %s", tail);
+    }
     if (out_conf) *out_conf = (n_un == 0) ? 0.8f : 0.55f;
     if (out_is_q) *out_is_q = 1;
     char *r = (char *)malloc(strlen(buf) + 1);
@@ -3279,9 +3290,10 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
             snprintf(buf, sizeof buf, "对 ， %s 都 %s 这 %zu 个", aw, words[1], ni);
         else if (nfalse)
             snprintf(buf, sizeof buf, "不 对 ： %s 不 %s %s", aw, words[1], first_false);
-        else
+        else {
             snprintf(buf, sizeof buf, "我 不 确定 ： %s 的 这几 个 里 我 没 记 过 %s %s",
                      aw, words[1], first_unk ? first_unk : "?");
+        }
         if (out_conf) *out_conf = (nunk == 0 && nfalse == 0) ? 0.85f : 0.5f;
     }
     if (out_is_q) *out_is_q = is_q;
@@ -6179,10 +6191,11 @@ static inline int agent_unknown_relation_note(AI *ai, char *const *words, size_t
     int pov = aip_is_second(aw);
     const char *as = pov ? aip_pov_subj(aw) : aw;
     const char *bs = pov ? aip_pov_obj(bw) : bw;
-    if (is_neg)
+    if (is_neg) {
         snprintf(out, cap, "我 不 确定 %s 是不是 不 %s %s —— 图里 没 记 过（不 编）。", as, rw, bs);
-    else
+    } else {
         snprintf(out, cap, "我 不 确定 %s %s 不 %s %s —— 图里 没 记 过（不 编）。", as, rw, rw, bs);
+    }
     return 1;
 }
 
