@@ -625,8 +625,8 @@ q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
     || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
 # §6.532 目标③续：**答复组织下沉**（`[say] 语义位=模板`；`$1`/`$2` 是槽位）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o65" 2>&1 ) || true
-grep -q 'say=15' "$WORK/o65" \
-    && ok "答复模板**从数据读**：say=15（判词 3 + 组织 7 + 回话 4 + 量词 1，一行一个语义位）" \
+grep -q 'say=21' "$WORK/o65" \
+    && ok "答复模板**从数据读**：say=21（判词 3 + 组织 7 + 回话 4 + 量词 1 + 列表 6，一行一个语义位）" \
     || bad "say 桶" "$(grep -o 'say=[0-9]*' "$WORK/o65")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
     "$WORK/aip" --model model.bin > "$WORK/o66" 2>&1 ) || true
@@ -781,6 +781,29 @@ sed -i 's/^\[refuse\] 说法=.*/[refuse] 说法=（数据）我 想 想 再 说/
 grep -q '（数据）我 想 想 再 说' "$RX/out.txt" \
     && ok "**改一行数据** ⇒ 兜底的说法就换掉（说话方式真的是数据）" \
     || bad "refuse 改池" "$(sed -n 's/.*AI > //p' "$RX/out.txt" | tail -1)"
+# §6.538 L5 列表式答复下沉：`[say] 列表.头/项分隔/余/空/空类别/空地点`
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o84" 2>&1 ) || true
+grep -q 'say=21' "$WORK/o84" \
+    && ok "列表答复模板**从数据读**：say=21（新增 列表.头/项分隔/余/空/空类别/空地点 6 行）" \
+    || bad "列表模板" "$(grep -o 'say=[0-9]*' "$WORK/o84")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 吃 什么\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o85" 2>&1 ) || true
+grep -q '我 记 的 是 ： 猫 吃 鱼 、 肉' "$WORK/o85" \
+    && ok "列表答复**照旧**（「猫 吃 什么」⇒「我 记 的 是 ： 猫 吃 鱼 、 肉 …」）" \
+    || bad "列表-默认" "$(sed -n 's/.*AI > //p' "$WORK/o85" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '麒麟 在 哪\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o86" 2>&1 ) || true
+grep -q '什么 ， 图里 没 记 过' "$WORK/o86" \
+    && ok "列表为空**照旧**（「麒麟 在 哪」⇒「… 什么 ， 图里 没 记 过（不 编）」）" \
+    || bad "列表-空" "$(sed -n 's/.*AI > //p' "$WORK/o86" | tail -1)"
+LX="$WORK/lx"; rm -rf "$LX"; mkdir -p "$LX"
+cp "$ROOT/session.bin" "$LX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LX/" 2>/dev/null || true
+sed -i 's/^\[say\] 列表\.头=.*/[say] 列表.头=（数据）$1$2$3/; s/^\[say\] 列表\.项分隔=.*/[say] 列表.项分隔=｜/' "$LX/patterns.txt"
+( cd "$LX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 吃 什么\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫吃 鱼 ｜ 肉' "$LX/out.txt" \
+    && ok "**改两行数据** ⇒ 列表的头与分隔符都换掉（答复组织真的是数据）" \
+    || bad "列表改模板" "$(sed -n 's/.*AI > //p' "$LX/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

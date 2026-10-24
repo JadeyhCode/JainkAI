@@ -1590,6 +1590,48 @@ static inline int agent_compound_ok(AI *ai, char *const *w, size_t k) {
     return bytes >= 6 && bytes <= 12;
 }
 
+/* §6.538 **列表式答复的组织**（`我 记 的 是 ： 猫 吃 鱼 、 肉 、 老鼠`）：头 / 分隔符 / 余数 / 空 全是数据。
+ * 原来这套措辞写在两处 `snprintf` 里（严格形状一处、多字主语放宽一处），改一句要改两遍。
+ * 槽位：`$1` 主语、`$2` 否定词（`不 ` 或空）、`$3` 关系名。 */
+static inline size_t agent_list_head(char *buf, size_t cap, const char *subj, int neg, const char *rel) {
+    const char *t = ai_say_tpl("列表.头");
+    char head[220];
+    if (t) der_fill3(head, sizeof head, t, subj ? subj : "?", neg ? "不 " : "", rel ? rel : "?");
+    else snprintf(head, sizeof head, "我 记 的 是 ： %s %s%s",
+                  subj ? subj : "?", neg ? "不 " : "", rel ? rel : "?");
+    return (size_t)snprintf(buf, cap, "%s ", head);
+}
+static inline size_t agent_list_empty(char *buf, size_t cap, size_t o, const char *key,
+                                      const char *seed, const char *arg) {
+    char tmp[220];
+    const char *t = key ? ai_say_tpl(key) : NULL;
+    /* §6.538 ⚠ 种子也要过 `$1` 填槽：否则"没有数据"时 hint 被**静默吞掉**（optest 抓到过一次） */
+    der_fill3(tmp, sizeof tmp, t ? t : (seed ? seed : "什么 ， 图里 没 记 过（不 编）"),
+              arg, NULL, NULL);
+    if (o >= cap) return o;
+    return o + (size_t)snprintf(buf + o, cap - o, "%s", tmp);
+}
+static inline size_t agent_list_items(char *buf, size_t cap, size_t o, Token *const *items, size_t n) {
+    const char *sep = ai_say_tpl("列表.项分隔");
+    if (!sep || !*sep) sep = "、";
+    size_t shown = n > 4 ? 4 : n;
+    for (size_t i = 0; i < shown && o + 1 < cap; ++i) {
+        if (i) o += (size_t)snprintf(buf + o, cap - o, " %s ", sep);
+        o += (size_t)snprintf(buf + o, cap - o, "%s",
+                              (items[i] && items[i]->name) ? items[i]->name : "?");
+    }
+    if (n > 4) {
+        char nb[32];
+        snprintf(nb, sizeof nb, "%zu", n);
+        const char *t = ai_say_tpl("列表.余");
+        char tail[96];
+        if (t) der_fill3(tail, sizeof tail, t, nb, NULL, NULL);
+        else snprintf(tail, sizeof tail, " … 共 %zu 个", n);
+        o += (size_t)snprintf(buf + o, cap - o, "%s", tail);
+    }
+    return o;
+}
+
 static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, float *out_conf) {
     /* 开关在**函数里**也要把一道（不只是调用点）——"关着就一定不接"这种保证，
      * 写在唯一入口上比写在每个调用点上可靠（第一版只写在调用点，测试直接调它就漏了）。 */
@@ -1688,22 +1730,23 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
         size_t off = 0;
         const char *rd1 = words[rpos];
         if (rneg && strncmp(rd1, "不", strlen("不")) == 0) rd1 += strlen("不");
-        off += (size_t)snprintf(buf + off, sizeof buf - off, "我 记 的 是 ： %s %s%s ",
-                                a->name ? a->name : "?", rneg ? "不 " : "", rd1);
+        off = agent_list_head(buf, sizeof buf, a->name, rneg, rd1);   /* §6.538 */
         if (got == 0) {
             /* §6.269 第一人称"地点没记"时给一句怎么教：实测「我 在 哪」答成
              * 「我 记 的 是 ： 我 在 什么 ， 图里 没 记 过」—— 像在复述问题，用户拿不到下一步。 */
             if (!rneg && a->name && strcmp(a->name, "我") == 0 && rid == REL_AT)
-                snprintf(buf + off, sizeof buf - off,
-                         "什么 ， 你 还 没 告诉 我 你 在 哪 —— 说 一 句「我 在 上海」我 就 记 住（不 编）");
+                off = agent_list_empty(buf, sizeof buf, off, "列表.空地点",
+                                       "什么 ， 你 还 没 告诉 我 你 在 哪 —— 说 一 句「我 在 上海」我 就 记 住（不 编）",
+                                       NULL);
             /* §6.147：带类别提示时把提示原样带回这句里（「… 属于 什么 动物 ， 图里 没 记 过」）*/
-            else if (hint) snprintf(buf + off, sizeof buf - off, "什么 %s ， 图里 没 记 过（不 编）", hint);
-            else      snprintf(buf + off, sizeof buf - off, "什么 ， 图里 没 记 过（不 编）");
+            else if (hint)
+                off = agent_list_empty(buf, sizeof buf, off, "列表.空类别",
+                                       "什么 $1 ， 图里 没 记 过（不 编）", hint);
+            else
+                off = agent_list_empty(buf, sizeof buf, off, "列表.空",
+                                       "什么 ， 图里 没 记 过（不 编）", NULL);
         } else {
-            for (size_t i = 0; i < got && i < 4; ++i)
-                off += (size_t)snprintf(buf + off, sizeof buf - off, "%s%s",
-                                        i ? " 、 " : "", out[i]->name ? out[i]->name : "?");
-            if (got > 4) snprintf(buf + off, sizeof buf - off, " … 共 %zu 个", got);
+            off = agent_list_items(buf, sizeof buf, off, out, got);
         }
         if (out_conf) *out_conf = 0.8f;
         char *r = (char *)malloc(strlen(buf) + 1);
@@ -1751,19 +1794,13 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
                 uint8_t hyp2[8];
                 size_t got2 = rel_next_cands(ai, a2, rjd, rjneg, out2, hyp2,
                                              (size_t)(sizeof out2 / sizeof out2[0]));
-                size_t o2 = 0;
-                o2 += (size_t)snprintf(buf + o2, sizeof buf - o2, "我 记 的 是 ： %s %s%s ",
-                                       subj, rjneg ? "不 " : "",
-                                       rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "?");
+                size_t o2 = agent_list_head(buf, sizeof buf, subj, rjneg,
+                                            rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "?");   /* §6.538 */
                 if (got2 == 0)
-                    snprintf(buf + o2, sizeof buf - o2, "什么 ， 图里 没 记 过（不 编）");
-                else {
-                    for (size_t i = 0; i < got2 && i < 4; ++i)
-                        o2 += (size_t)snprintf(buf + o2, sizeof buf - o2, "%s%s",
-                                               i ? " 、 " : "",
-                                               out2[i]->name ? out2[i]->name : "?");
-                    if (got2 > 4) snprintf(buf + o2, sizeof buf - o2, " … 共 %zu 个", got2);
-                }
+                    o2 = agent_list_empty(buf, sizeof buf, o2, "列表.空",
+                                          "什么 ， 图里 没 记 过（不 编）", NULL);
+                else
+                    o2 = agent_list_items(buf, sizeof buf, o2, out2, got2);
             }
             if (out_conf) *out_conf = a2 ? 0.8f : 0.6f;
             char *r2 = (char *)malloc(strlen(buf) + 1);
