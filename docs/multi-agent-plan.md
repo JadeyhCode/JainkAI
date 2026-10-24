@@ -59,7 +59,7 @@
   `tag==2`（别处/已回收）走 LRU 或拒绝并上报。
 - 验收：新增的 **part 命令**（尚未实现）打印"已加载段数 / 总段数 / 触发读取次数"；`probematrix` diff 必须为空（同一份数据）。
 
-**第 3 步（按需回收）✅ 跑通（§6.567）**：`aip_parts_evict(ai, keep, &skipped)` 把**干净**的段换回磁盘
+**第 3 步（按需回收）✅ 跑通（§6.567；§6.575 改成真 LRU）**：`aip_parts_evict(ai, keep, &skipped)` 把**干净**的段换回磁盘
 （`token_assocs_set_disk`），`aip_parts_stats` 给四个验收数字（loads/bytes/resident/evicted）。
 **读放大（§6.570）**：一次问答从"必然读回全图 1265 段/2.8MB"压到 **29~34 段（≈11%）**——
 逐条抓的是"谁在摸全图"（思考播种、因果学习、结构扫描、巩固、GC、因果边查询），

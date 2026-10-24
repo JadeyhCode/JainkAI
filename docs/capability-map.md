@@ -71,8 +71,14 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z181. 词级流水 journal/replay（§6.574）
+## 4z182. 换出改真 LRU + 三处老隐患暴露（§6.575）
 
+- `parts.h`：`last_seq/use_seq` + 每轮挑**最久没用**的干净段；`token.h`：`part_touch` 钩子（读边时记"用"）。
+- `partprobe` ⑤ 加三条：热点换出后仍在内存 / 热点再问仍对 / 被换出的那条再问仍对且又读一次。
+- 顺带修：`agent.h` 两处 `%s` 截断（改 `%.*s`）、`ai_push_trace` 的 `memmove` 常量长度（改"一半"）—— 都是内联变化后才暴露的老隐患。
+- 判据：整包 **49/49**、`probematrix` 28 行 diff 为空、asan 90 命令全干净。
+
+## 4z181. 词级流水 journal/replay（§6.574）
 - `::parts journal <f>`：只写 **edges_dirty** 的词的关系边（按名字）；`::parts replay <f>`：逐行经 `agent_step` 重学。
 - 读盘结束清 `edges_dirty`（否则流水会把 base 抄一遍：278 条 vs 3 条）。
 - 判据：tokenop **303 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。

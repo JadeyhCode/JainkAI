@@ -2564,8 +2564,12 @@ static inline void ai_push_trace(AI *ai, Token *t) {
     }
     ai->trace[ai->trace_n++] = t;
     if (ai->trace_n > 2048) {
-        memmove(ai->trace, ai->trace + 1024, 1024 * sizeof *ai->trace);
-        ai->trace_n = 1024;
+        /* §6.575 用"当前长度的一半"而不是常量 1024：语义一样（2048 时就是 1024），
+         * 但 GCC 看不到 realloc 后的容量时会按"常量 1024 × 8 > 已分配 512"报
+         * `-Werror=array-bounds` 假阳性 —— 这是加了 part_touch 之后内联变化才暴露的。 */
+        size_t half = ai->trace_n / 2;
+        memmove(ai->trace, ai->trace + half, half * sizeof *ai->trace);
+        ai->trace_n = half;
     }
 }
 

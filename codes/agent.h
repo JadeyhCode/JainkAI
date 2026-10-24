@@ -4175,7 +4175,11 @@ static inline int agent_history_kind(const char *input) {
 static inline void agent_history_record(AI *ai, const char *input) {
     if (!ai || !input || !input[0]) return;
     size_t slot = ai->hist_head % 6;
-    snprintf(ai->hist[slot], sizeof ai->hist[slot], "%s", input);
+    /* 有界拷贝：`input` 可能是 1KB 的调用方缓冲，直接 `%s` 会在 -Werror 下被
+     * `-Wformat-truncation` 拦（§6.575：加了 part_touch 之后内联变了才暴露出来）。
+     * 截断是**故意的**：这本来就只存最近 6 句的**原文前缀**（答复里复述用）。 */
+    snprintf(ai->hist[slot], sizeof ai->hist[slot], "%.*s",
+             (int)(sizeof ai->hist[slot] - 1), input);
     ai->hist_head = (ai->hist_head + 1) % 6;
     if (ai->hist_n < 6) ai->hist_n++;
 }
@@ -6971,7 +6975,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
         /* §6.373 剥掉的是反问标记 ⇒ 把问句性质补回去（没有 吗/呢 就补一个）。
          * 这一条挡的是"反问句被当成陈述学进去/触发改口"，不是给某个说法加分支。 */
-        snprintf(g_pre_rhet, sizeof g_pre_rhet, "%s", input_eff);   /* §6.448 补 `吗` 之前的文本 */
+        /* §6.575 有界：`input_eff` 可能来自 1KB 的调用方缓冲（同上一条） */
+        snprintf(g_pre_rhet, sizeof g_pre_rhet, "%.*s",
+                 (int)(sizeof g_pre_rhet - 1), input_eff);   /* §6.448 补 `吗` 之前的文本 */
         if (was_rhet && !strstr(input_eff, "吗") && !strstr(input_eff, "呢") &&
             !strstr(input_eff, "?")) {
             /* ⚠ 不能直接 snprintf(decl_in, "%s 吗", input_eff)：`input_eff` 可能**就是**

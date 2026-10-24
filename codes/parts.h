@@ -60,6 +60,8 @@ typedef struct AIParts_tag {
     size_t    n_resident;       /* 现在内存里有多少个词的边（验收数字） */
     size_t    n_evicted;        /* 被换出过几次（验收数字） */
     uint32_t *loaded_cnt;       /* 按 id 记"读回来时是几条" —— 用来判断这一份有没有被改脏 */
+    uint32_t *last_seq;         /* 按 id 记"最后一次被用到"的序号（§6.575：换出按 LRU 挑） */
+    uint32_t  use_seq;          /* 单调递增的使用计数 */
 } AIParts;
 
 /* ---------------- 写：把每个词的边写成一个段 ---------------- */
@@ -192,9 +194,10 @@ static inline AIParts *aip_parts_open(const char *path) {
     pt->off = (uint64_t *)calloc(pt->n_ids, sizeof *pt->off);
     pt->cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->cnt);
     pt->flags = (uint8_t *)calloc(pt->n_ids, sizeof *pt->flags);
+    pt->last_seq = (uint32_t *)calloc(pt->n_ids, sizeof *pt->last_seq);
     pt->loaded_cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->loaded_cnt);
-    if (!pt->off || !pt->cnt || !pt->flags || !pt->loaded_cnt) {
-        fclose(f); free(pt->off); free(pt->cnt); free(pt->flags); free(pt->loaded_cnt); free(pt); return NULL;
+    if (!pt->off || !pt->cnt || !pt->flags || !pt->last_seq || !pt->loaded_cnt) {
+        fclose(f); free(pt->off); free(pt->cnt); free(pt->flags); free(pt->last_seq); free(pt->loaded_cnt); free(pt); return NULL;
     }
     uint32_t nseg = head[3];
     fseek(f, 16, SEEK_SET);
@@ -219,7 +222,7 @@ static inline AIParts *aip_parts_open(const char *path) {
 static inline void aip_parts_close(AIParts *pt) {
     if (!pt) return;
     if (pt->f) fclose(pt->f);
-    free(pt->off); free(pt->cnt); free(pt->flags); free(pt->loaded_cnt); free(pt);
+    free(pt->off); free(pt->cnt); free(pt->flags); free(pt->last_seq); free(pt->loaded_cnt); free(pt);
 }
 
 /* ---------------- 读：把**这一段**读回来，挂到词上 ---------------- */
@@ -259,6 +262,7 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
     }
     token_assocs_set_ram(t, as, cnt);   /* 存储层的活：挂回真数组、清标签、定容量 */
     pt->loaded_cnt[t->id] = cnt;        /* 记住"读回来时是几条"：判脏（§6.566 的换出用） */
+    pt->last_seq[t->id] = ++pt->use_seq; /* §6.575 LRU：最近用过的排后面 */
     pt->n_loads++;
     pt->n_resident++;                   /* 内存里多了一段（验收数字） */
     if (getenv("AIP_PARTLOG"))          /* §6.570 取证：谁被读回来了（默认关，写文件不污染 stdout） */
@@ -279,6 +283,13 @@ static inline int aip_parts_set_overlay(AIParts *base, const char *delta_path) {
 /* ---------------- 挂上 / 卸下 ---------------- */
 
 /* 装上"按需加载"的钩子：之后 `token_assocs()` 碰到 AIP_PTR_DISK 就会读回来。 */
+/* §6.575 "被用到"：只更新 LRU 序号（不读盘、不改数据） */
+static inline void aip_parts_touch(void *ctx, Token *t) {
+    AIParts *pt = (AIParts *)ctx;
+    if (!pt || !t || t->id >= pt->n_ids) return;
+    pt->last_seq[t->id] = ++pt->use_seq;
+}
+
 static inline void aip_parts_attach(AI *ai, AIParts *pt) {
     if (!ai || !ai->pool || !pt) return;
     pt->pool = ai->pool;
@@ -290,6 +301,7 @@ static inline void aip_parts_attach(AI *ai, AIParts *pt) {
     }
     ai->pool->parts = pt;
     ai->pool->part_load = aip_parts_load_token;   /* (ctx=parts, t) 形状，与 token.h 的声明一致 */
+    ai->pool->part_touch = aip_parts_touch;       /* §6.575 LRU：记"最近用过" */
 }
 
 /* 把边数组**扔给磁盘**：free 掉，`assocs` 变成带 DISK 标签的哨兵，`count` 留着。
@@ -345,15 +357,32 @@ static inline size_t aip_parts_evict(AI *ai, size_t keep, size_t *skipped) {
         if (!t || t->count == 0) continue;
         if (token_assocs_resident(t)) resident++;
     }
-    for (size_t i = 0; i < ai->pool->count && resident > keep; ++i) {
-        Token *t = ai->pool->tokens[i];
-        if (!t || t->count == 0) continue;
-        if (!token_assocs_resident(t)) continue;
-        if (t->id >= pt->n_ids || pt->off[t->id] == 0) { skip++; continue; }   /* 磁盘上没有它的段 */
-        if (pt->loaded_cnt[t->id] == 0 || t->count != pt->loaded_cnt[t->id]) { skip++; continue; }  /* 脏 */
+    /* §6.575 **按 LRU 挑**：每次挑"最久没被用到"的干净段换出去。
+     * （原来按 token id 顺序挑：id 小的先走，和"用得少"没关系 —— 那是假 LRU。） */
+    while (resident > keep) {
+        size_t best = (size_t)-1;
+        uint32_t best_seq = 0xFFFFFFFFu;
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (!t || t->count == 0) continue;
+            if (!token_assocs_resident(t)) continue;
+            if (t->id >= pt->n_ids || pt->off[t->id] == 0) continue;          /* 磁盘上没有它的段 */
+            if (pt->loaded_cnt[t->id] == 0 || t->count != pt->loaded_cnt[t->id]) continue;  /* 脏 */
+            uint32_t sq = pt->last_seq[t->id];
+            if (sq < best_seq) { best_seq = sq; best = i; }
+        }
+        if (best == (size_t)-1) break;          /* 剩下的都不能换（脏/没段） */
+        Token *t = ai->pool->tokens[best];
         token_assocs_set_disk(t);
         evicted++; resident--;
         pt->n_evicted++; pt->n_resident--;
+    }
+    /* 被跳过的（脏的/磁盘上没段的）数一遍，给命令面看 */
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->count == 0 || !token_assocs_resident(t)) continue;
+        if (t->id >= pt->n_ids || pt->off[t->id] == 0 || pt->loaded_cnt[t->id] == 0 ||
+            t->count != pt->loaded_cnt[t->id]) skip++;
     }
     if (skipped) *skipped = skip;
     return evicted;

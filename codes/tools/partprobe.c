@@ -117,6 +117,10 @@ int main(void) {
         aip_parts_stats(pt2, &loads0, &bytes0, &resident0, &evicted0);
         ok(resident0 > 0, "⑤ 现在内存里确实有已加载的段");
         ok(bytes0 > 0, "⑤ 读回来的字节数 > 0（下面是换出前的基线）");
+        /* §6.575 先明确"刚用过的是哪个"，再验 LRU：最久没用过的先被换出 */
+        Token *hot = pool_find(A->pool, "猫");
+        ok(hot != NULL, "⑤ 找到刚问过的词（热点）");
+        ok(hot && token_assocs_resident(hot), "⑤ 它现在在内存里");
         size_t skip = 0;
         size_t ev = aip_parts_evict(A, 1, &skip);
         ok(ev > 0, "⑤ 换出成功：有干净段被扔回磁盘");
@@ -127,7 +131,9 @@ int main(void) {
         size_t loads1 = 0;
         aip_parts_stats(pt2, &loads1, NULL, NULL, NULL);
         ok(loads1 == loads0, "⑤ 换出本身**不读磁盘**（只是放手）");
-        ok(knows(A, "猫", "属于", "动物") == 1, "⑤ 换出之后**再问还答得对**（会按需再读回来）");
+        ok(hot && token_assocs_resident(hot), "⑤ **热点还在内存里**（LRU 换的是最久没用过的，不是它）");
+        ok(knows(A, "猫", "属于", "动物") == 1, "⑤ 热点再问仍然答得对（它本来就在内存里）");
+        ok(knows(A, "狗", "属于", "动物") == 1, "⑤ **被换出的那条**再问也答得对");
         size_t loads2 = 0;
         aip_parts_stats(pt2, &loads2, NULL, NULL, NULL);
         ok(loads2 > loads1, "⑤ 而且确实**又读了一次**（换出不是数据丢失）");

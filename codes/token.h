@@ -328,6 +328,9 @@ struct TokenPool {
      * 两者都**不进存档**：它们是"这次打开的方式"，不是图的内容。 */
     void       *parts;
     void      (*part_load)(void *ctx, Token *t);   /* ctx = parts；签名写 void* 是为了让 token.h 不依赖 parts.h */
+    /* §6.575 这一份边**被用到**（换出按"最久没用"挑，所以"用"要能记下来）。
+     * 只有 attach 过段文件时才非空 ⇒ 平时这条路径只多一次判空。 */
+    void      (*part_touch)(void *ctx, Token *t);
 
     PerspectiveNode  *perspective_root;
     PerspectiveNode  *perspective_cur;
@@ -369,6 +372,7 @@ static inline void token_assocs_resolve(Token *t) {
 }
 static inline AssocEntry *token_assocs(Token *t) {
     token_assocs_resolve(t);
+    if (t && t->owner && t->owner->part_touch) t->owner->part_touch(t->owner->parts, t);
     return t ? (AssocEntry *)aip_ptr_strip(t->assocs) : NULL;
 }
 /* "只读视图"：**也解析标签**（这一点是有意的、也是踩过之后改的）——
@@ -378,6 +382,7 @@ static inline AssocEntry *token_assocs(Token *t) {
 static inline const AssocEntry *token_assocs_ro(const Token *t) {
     if (!t) return NULL;
     token_assocs_resolve((Token *)t);
+    if (t->owner && t->owner->part_touch) t->owner->part_touch(t->owner->parts, (Token *)t);
     return (const AssocEntry *)aip_ptr_strip(t->assocs);
 }
 /* §6.567 这段边现在在内存里吗？（换出/统计用；应用层不许自己看指针标签） */
