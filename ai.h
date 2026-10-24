@@ -131,7 +131,7 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
  *
  * 键名是**语义位**，不是句子：`判词.对` / `判词.不对` / `判词.不定` / `组织.定` / `组织.符号` /
  * `组织.猜一` / `组织.猜多` / `组织.假设` / `组织.缺` / `组织.空`。 */
-#define AI_SAY_MAX 64   /* §6.547 40 → 64：模板已到 43 条，40 会**静默丢**最后 3 行（撞过第二次） */
+#define AI_SAY_MAX 96   /* §6.554 64 → 96：模板已到 69 条（第三次撞上限）—— 干脆留足 */
 #define AI_SAY_KEY_LEN 40   /* §6.540 24 → 40：`不知道.没听他说过` 是 25 字节，24 会静默丢行 */
 #define AI_SAY_TXT_LEN 340   /* §6.542 220 → 340：`删除.不行` 约 240 字节，220 会静默丢掉整行 */
 static char g_say_key[AI_SAY_MAX][AI_SAY_KEY_LEN];

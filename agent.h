@@ -5952,13 +5952,21 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
     const char *bn = B->name ? B->name : "?";
     /* 我自己的知识：另起半句（"别人的看法 ≠ 我的知识"） */
     int own = rel_direct(A, rid, B) ? +1 : (rel_direct_neg(A, rid, B) ? -1 : 0);
-    const char *own_txt = own > 0 ? "我 也 这么 看"
-                        : (own < 0 ? "我 不 这么 看" : "我 自己 也 不 知道");
+    /* §6.554 我的立场三句也进数据（没有槽位） */
+    const char *own_txt = own > 0 ? (ai_say_tpl("信念.我同意") ? ai_say_tpl("信念.我同意") : "我 也 这么 看")
+                        : (own < 0 ? (ai_say_tpl("信念.我不同意") ? ai_say_tpl("信念.我不同意") : "我 不 这么 看")
+                                   : (ai_say_tpl("信念.我也不知道") ? ai_say_tpl("信念.我也不知道")
+                                                                    : "我 自己 也 不 知道"));
     switch (v.verdict) {
-    case OBV_YES:
-        snprintf(out, out_cap, "大家 都 说 ： %s %s%s %s（%zu 个人 说 过 ；%s）",
-                 an, is_neg ? "不 " : "", rn ? rn : "?", bn, v.n_who, own_txt);
+    case OBV_YES: {
+        const char *t = ai_say_tpl("信念.大家都说");
+        char nb[32];
+        snprintf(nb, sizeof nb, "%zu", v.n_who);
+        const char *const a[6] = { an, is_neg ? "不 " : "", rn ? rn : "?", bn, nb, own_txt };
+        der_filln(out, out_cap,
+                  t ? t : "大家 都 说 ： $1 $2$3 $4（$5 个人 说 过 ；$6）", a, 6);
         break;
+    }
     case OBV_NO:
         snprintf(out, out_cap, "大家 都 说 ： %s 不 %s %s（%zu 个人 说 过 ；%s）",
                  an, rn ? rn : "?", bn, v.n_who, own_txt);
@@ -5974,8 +5982,11 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
             snprintf(out, out_cap,
                      "这 件 事 他们 没 说 过（只 有 %zu 条 相关 说法 ， 不 算 答案 ；%s）",
                      v.n_related, own_txt);
-        else
-            snprintf(out, out_cap, "这 件 事 他们 没 说 过（%s）", own_txt);
+        else {
+            const char *t = ai_say_tpl("信念.没说过");
+            const char *const a[1] = { own_txt };
+            der_filln(out, out_cap, t ? t : "这 件 事 他们 没 说 过（$1）", a, 1);
+        }
         break;
     }
     return 1;

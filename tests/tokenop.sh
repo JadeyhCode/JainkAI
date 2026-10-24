@@ -1097,6 +1097,25 @@ sed -i 's/^\[say\] 不知道\.数目=.*/[say] 不知道.数目=（数据）$1 �
 grep -q '（数据）猫 有 几 个 头 我 没 记 数 目' "$C8X/out.txt" && grep -q '（数据）猫 几 岁 我 没 记' "$C8X/out.txt" \
     && ok "**改两行数据** ⇒ 两句都换掉（槽位都对）" \
     || bad "C8-改模板" "$(sed -n 's/.*AI > //p' "$C8X/out.txt" | tail -2 | tr '\n' ' ')"
+# §6.554 C9 他者信念（**开关 `::others ask on` 才可达**）：投一票 + 我的立场
+( cd "$ROOT" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n大家 都 说 猫 会 飞 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o121" 2>&1 ) || true
+grep -q '大家 都 说 ： 猫 会 飞（1 个人 说 过 ；我 不 这么 看）' "$WORK/o121" \
+    && ok "「大家都说」**照旧**（开关打开时）" \
+    || bad "C9-大家" "$(sed -n 's/.*AI > //p' "$WORK/o121" | tail -1)"
+( cd "$ROOT" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n大家 都 说 猫 会 游 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o122" 2>&1 ) || true
+grep -q '这 件 事 他们 没 说 过（我 自己 也 不 知道）' "$WORK/o122" \
+    && ok "「他们没说过」**照旧**" \
+    || bad "C9-没说过" "$(sed -n 's/.*AI > //p' "$WORK/o122" | tail -1)"
+C9X="$WORK/c9x"; rm -rf "$C9X"; mkdir -p "$C9X"
+cp "$ROOT/session.bin" "$C9X/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$C9X/" 2>/dev/null || true
+sed -i 's/^\[say\] 信念\.大家都说=.*/[say] 信念.大家都说=（数据）$1 $2$3 $4（$5 人；$6）/; s/^\[say\] 信念\.我不同意=.*/[say] 信念.我不同意=（数据）我 不 认/' "$C9X/patterns.txt"
+( cd "$C9X" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n大家 都 说 猫 会 飞 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫 会 飞（1 人；（数据）我 不 认）' "$C9X/out.txt" \
+    && ok "**改两行数据** ⇒ 投一票句与我的立场都换掉（槽位都对）" \
+    || bad "C9-改模板" "$(sed -n 's/.*AI > //p' "$C9X/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
