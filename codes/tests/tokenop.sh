@@ -1237,6 +1237,20 @@ n_known=$(grep -c '对 ， 窗户 -\[属于\]-> 家具' "$BW/out.txt" || true)
 [ "${n_unknown:-0}" -ge 1 ] && [ "${n_known:-0}" -ge 1 ] \
     && ok "**互不串台**：#0 不知道（说没记过）、#1 知道（对）" \
     || bad "多脑-隔离" "unknown=${n_unknown:-0} known=${n_known:-0}"
+# §6.572 `::brain diff A B`：两本账各自多了什么（按图里的事实比）
+BD="$WORK/bd"; rm -rf "$BD"; mkdir -p "$BD"
+cp "$ROOT/session.bin" "$BD/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$BD/" 2>/dev/null || true
+( cd "$BD" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new\n窗户 属于 家具\n::brain diff 1 0\n::brain diff 0 0\n::brain new m.bin\n::brain list\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '只在 #1：窗户 属于 家具' "$BD/out.txt" \
+    && ok "**diff 说得清谁多了什么**（只在 #1：窗户 属于 家具）" \
+    || bad "多脑-diff" "$(grep -E '只在 #' "$BD/out.txt" | head -2 | tr '\n' ' ')"
+grep -q '只在 #0 的：0 条；只在 #0 的：0 条' "$BD/out.txt" \
+    && ok "**自己跟自己 diff 是 0/0**（不会凭空造差别）" \
+    || bad "多脑-diff自己" "$(grep '的差' -A1 "$BD/out.txt" | head -3 | tr '\n' ' ')"
+grep -q '从 m.bin 读了一份' "$BD/out.txt" \
+    && ok "「brain new 加模型文件」能**从盘上再开一个独立脑**" \
+    || bad "多脑-new模型" "$(grep '多脑' "$BD/out.txt" | head -4 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true

@@ -1693,6 +1693,19 @@ int main(int argc, char **argv) {
                         if (!nb) printf("[多脑] 建不出来（内存不够？）\n");
                         else {
                             nb->brain->rel_verify_hook = aip_rel_verify;
+                            /* §6.572 `::brain new <模型文件>`：从盘上再开一个**独立**的脑
+                             * （各自一份图；不是共享底层 —— 共享/差量还没做） */
+                            if (arg && *arg) {
+                                AI *m2 = ai_load_file(arg);
+                                if (!m2) printf("[多脑] 读不到 %s（就当空白脑开了）\n", arg);
+                                else {
+                                    ai_free(nb->brain);
+                                    nb->brain = m2;
+                                    nb->brain->rel_verify_hook = aip_rel_verify;
+                                    aip_shell_mirror_lead(nb->brain);
+                                    printf("[多脑] 从 %s 读了一份\n", arg);
+                                }
+                            }
                             g_brains[g_nbrains] = nb;
                             a = nb;
                             g_curbrain = g_nbrains;
@@ -1714,6 +1727,70 @@ int main(int argc, char **argv) {
                     if (k >= g_nbrains) printf("[多脑] 说「::brain use N」，N 在 0..%zu 之间\n",
                                                g_nbrains ? g_nbrains - 1 : 0);
                     else { a = g_brains[k]; g_curbrain = k; printf("[多脑] 切到 #%zu\n", k); }
+                } else if (!strncmp(sb, "diff", 4) && sb[4] == 0) {
+                    /* §6.572 `::brain diff A B`：**两本账各自改了什么**（按"图里的事实"比） */
+                    size_t ia = (size_t)-1, ib = (size_t)-1;
+                    if (arg) {
+                        char tmp[64]; snprintf(tmp, sizeof tmp, "%s", arg);
+                        char *sp3 = strchr(tmp, ' ');
+                        if (sp3) { *sp3 = 0; ia = (size_t)strtoul(tmp, NULL, 10); ib = (size_t)strtoul(sp3 + 1, NULL, 10); }
+                        else ia = (size_t)strtoul(tmp, NULL, 10);
+                    }
+                    if (ia == (size_t)-1 || ib == (size_t)-1 || ia >= g_nbrains || ib >= g_nbrains) {
+                        printf("[多脑] 说「::brain diff A B」（两个都写，0..%zu）\n", g_nbrains ? g_nbrains - 1 : 0);
+                    } else {
+                        AI *ba = g_brains[ia]->brain, *bb = g_brains[ib]->brain;
+                        size_t only_a = 0, only_b = 0, shown = 0;
+                        printf("[多脑] #%zu 与 #%zu 的差（按图里的事实比）\n", ia, ib);
+                        /* A 有、B 没有 */
+                        for (size_t i = 0; i < ba->pool->count && shown < 12; ++i) {
+                            Token *x = ba->pool->tokens[i];
+                            if (!x || !x->name || x->name[0] == '[' || x->is_garbage) continue;
+                            Token *xb = pool_find(bb->pool, x->name);
+                            for (size_t k = 0; k < x->count; ++k) {
+                                const AssocEntry *e = &token_assocs_ro(x)[k];
+                                if (!e->main || !e->main->name || e->main->name[0] == '[') continue;
+                                if (!e->rel && !e->nrel) continue;
+                                for (uint8_t r = 1; r <= REL_NEED; ++r) {
+                                    int pos = (e->rel & REL_BIT(r)) != 0;
+                                    int neg = (e->nrel & REL_BIT(r)) != 0;
+                                    if (!pos && !neg) continue;
+                                    Token *yb = xb ? pool_find(bb->pool, e->main->name) : NULL;
+                                    int has = yb && (pos ? rel_direct(xb, r, yb) : rel_direct_neg(xb, r, yb));
+                                    if (!has) {
+                                        only_a++;
+                                        if (shown < 12 && ia != ib) {
+                                            printf("  只在 #%zu：%s %s%s %s\n", ia, x->name,
+                                                   neg ? "不 " : "",
+                                                   rel_name_of(ba, r) ? rel_name_of(ba, r) : "?", e->main->name);
+                                            shown++;
+                                        }
+                                    }
+                                    if (neg && pos) break;
+                                }
+                            }
+                        }
+                        /* B 有、A 没有（只数，不重复列 —— 上面已经列了 A 侧） */
+                        for (size_t i = 0; i < bb->pool->count; ++i) {
+                            Token *x = bb->pool->tokens[i];
+                            if (!x || !x->name || x->name[0] == '[' || x->is_garbage) continue;
+                            Token *xa = pool_find(ba->pool, x->name);
+                            for (size_t k = 0; k < x->count; ++k) {
+                                const AssocEntry *e = &token_assocs_ro(x)[k];
+                                if (!e->main || !e->main->name || e->main->name[0] == '[') continue;
+                                if (!e->rel && !e->nrel) continue;
+                                for (uint8_t r = 1; r <= REL_NEED; ++r) {
+                                    int pos = (e->rel & REL_BIT(r)) != 0;
+                                    int neg = (e->nrel & REL_BIT(r)) != 0;
+                                    if (!pos && !neg) continue;
+                                    Token *ya = xa ? pool_find(ba->pool, e->main->name) : NULL;
+                                    int has = ya && (pos ? rel_direct(xa, r, ya) : rel_direct_neg(xa, r, ya));
+                                    if (!has) only_b++;
+                                }
+                            }
+                        }
+                        printf("  只在 #%zu 的：%zu 条；只在 #%zu 的：%zu 条\n", ia, only_a, ib, only_b);
+                    }
                 } else if (!strncmp(sb, "mods", 4) && sb[4] == 0) {
                     size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : g_curbrain;
                     if (k >= g_nbrains) printf("[多脑] 没有 #%zu\n", k);
@@ -1736,11 +1813,12 @@ int main(int argc, char **argv) {
                         }
                     }
                 } else {
-                    printf("[用法] ::brain new|list|use N|mods N\n");
-                    printf("  new      再开一个脑（当前切到它；各脑的图/账/parts 各自独立）\n");
+                    printf("[用法] ::brain new [模型]|list|use N|mods N|diff A B\n");
+                    printf("  new [模型] 再开一个脑（当前切到它；给了模型文件就从盘上读一份）\n");
                     printf("  list     列出现在有几个、各多少词/多少条改动\n");
                     printf("  use N    切到第 N 个\n");
                     printf("  mods N   看第 N 个脑自己的改动账\n");
+                    printf("  diff A B 两本账各自多了什么（按图里的事实比）\n");
                 }
                 continue;
             }
