@@ -1137,6 +1137,13 @@ static inline AI *ai_load_file(const char *path) {
     /* §6.248 读盘路径**不经过 ai_new()** ⇒ 环境变量开关要在这里再读一次
      * （不读的话 `AIP_VERIFYWRITES=1` 对开场就加载的模型完全无效 —— 实测踩过）。 */
     { const char *vw = getenv("AIP_VERIFYWRITES"); ai->verify_writes = (vw && vw[0] == '1') ? 1 : 0; }
+    /* §6.574 读盘把每条边都"写"了一遍（走的是 add_assoc 那条路）⇒ 全被标脏了。
+     * 但"脏"的语义是**相对 base 改过**，刚读进来时一份都没改 ⇒ 这里统一清掉。
+     * 不清的话 `::parts journal` 会把整个 base 抄一遍（实测 278 条而不是 1 条）。 */
+    for (size_t i = 0; i < np->count; ++i) {
+        Token *t = np->tokens[i];
+        if (t) t->edges_dirty = 0;
+    }
     free(buf);
     return ai;
 

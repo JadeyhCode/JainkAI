@@ -1267,6 +1267,18 @@ grep -q 'base 原样不动' "$DL/out.txt" \
 grep -q '覆盖层\] 挂上' "$DL/out.txt" && grep -q '对 ， 猫 -\[属于\]-> 动物' "$DL/out.txt" \
     && ok "**卸下 + 挂自己的 delta 之后，改过的事实还在**" \
     || bad "delta-回读" "$(grep -E '覆盖层|对 ，|不 对' "$DL/out.txt" | head -2 | tr '\n' ' ')"
+# §6.574 词级流水：只记**自己改过的**（不是把 base 抄一遍）+ replay 走学习同一条路
+JR="$WORK/jr"; rm -rf "$JR"; mkdir -p "$JR"
+cp "$ROOT/session.bin" "$JR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$JR/" 2>/dev/null || true
+( cd "$JR" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new base.bin\n::brain use 1\n小龙 属于 神兽\n::parts journal j.txt\n';     printf '::brain use 0\n::parts replay j.txt\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+jl=$(wc -l < "$JR/j.txt" 2>/dev/null || echo 0)
+[ "${jl:-0}" -ge 1 ] && [ "${jl:-0}" -le 10 ] \
+    && ok "流水**只记自己改过的**（$jl 条，不是几百条 base 事实）" \
+    || bad "流水-条数" "jl=$jl"
+grep -q '照着改了 [0-9]* 条' "$JR/out.txt" \
+    && ok "replay 真的走了（按流水条数）" \
+    || bad "流水-replay" "$(grep '流水' "$JR/out.txt" | head -2 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true

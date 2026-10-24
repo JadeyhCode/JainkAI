@@ -628,6 +628,67 @@ typedef struct {
     CmdId       id;
 } CmdDef;
 
+/* §6.574 词级流水的两个动作。**为什么放在 main.c 而不用 parts.h**：
+ * replay 要走**和学习完全同一条路**（独占关系的撤回、新词登记、答复组织），
+ * 那条路在 `agent_step` 里；在 parts.h 里重写一份就等于造了第二条"学习路径"，
+ * 两条路迟早不一致（这项目在别处已经吃过这个亏）。所以 replay 就是"照着流水说一遍话"。 */
+static int cmd_journal_save(Agent *a, const char *path) {
+    if (!a || !a->brain || !path) return -1;
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    AI *ai = a->brain;
+    int n = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || !t->name || t->name[0] == '[' || t->count == 0) continue;
+        if (!t->edges_dirty) continue;             /* 只记**自己改过的**词 */
+        for (size_t k = 0; k < t->count; ++k) {
+            const AssocEntry *e = &token_assocs_ro(t)[k];
+            if (!e->main || !e->main->name || e->main->name[0] == '[') continue;
+            if (!e->rel && !e->nrel) continue;     /* 只装关系边（共现是"听到的"）*/
+            for (uint8_t r = 1; r <= REL_NEED; ++r) {
+                const char *rn = rel_name_of(ai, r);
+                if (!rn) continue;
+                if (e->rel & REL_BIT(r))  { fprintf(f, "R\t%s\t%s\t%s\t1\n", t->name, rn, e->main->name); n++; }
+                if (e->nrel & REL_BIT(r)) { fprintf(f, "R\t%s\t%s\t%s\t0\n", t->name, rn, e->main->name); n++; }
+            }
+        }
+    }
+    fclose(f);
+    return n;
+}
+
+static int cmd_journal_replay(Agent *a, const char *path, int *out_skipped) {
+    if (out_skipped) *out_skipped = 0;
+    if (!a || !a->brain || !path) return -1;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    char line[1024], out[512];
+    int applied = 0, skipped = 0;
+    while (fgets(line, sizeof line, f)) {
+        size_t L = strlen(line);
+        while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
+        if (L < 4 || line[0] != 'R' || line[1] != '\t') continue;
+        char *s1 = strchr(line, '\t'); if (!s1) continue;
+        char *s2 = strchr(s1 + 1, '\t'); if (!s2) continue;
+        char *s3 = strchr(s2 + 1, '\t'); if (!s3) continue;
+        *s1 = 0; *s2 = 0; *s3 = 0;
+        const char *an = line + 2, *rn = s1 + 1, *bn = s2 + 1;
+        int pol = atoi(s3 + 1);
+        /* 照着"说一遍"：走的就是学习那条路（独占撤回/新词登记都在里面） */
+        char a40[96], r40[64], b40[96], sent[768];   /* 有界：流水行最长 1KB */
+        snprintf(a40, sizeof a40, "%.95s", an);
+        snprintf(r40, sizeof r40, "%.63s", rn);
+        snprintf(b40, sizeof b40, "%.95s", bn);
+        snprintf(sent, sizeof sent, "%s %s%s %s", a40, pol ? "" : "不 ", r40, b40);
+        agent_step(a, sent, out, sizeof out);
+        applied++;
+    }
+    fclose(f);
+    if (out_skipped) *out_skipped = skipped;
+    return applied;
+}
+
 static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
       "这份帮助", CMD_HELP },
@@ -1663,6 +1724,18 @@ int main(int argc, char **argv) {
                         size_t n = aip_parts_detach(a->brain);
                         printf("[卸下] %zu 个词的边已离开内存（再问会按需读回）\n", n);
                     }
+                } else if (!strncmp(sub, "journal", 7)) {
+                    /* §6.574 **词级改动流水**：只记自己改过的词的关系边，按**名字**写。
+                     * 跨池可用（另一具脑子照着改一遍就能有同样的知识）—— 这是"每个智能体
+                     * 只维护自己的修改"真正能带走的那一份。 */
+                    int n = cmd_journal_save(a, parch);
+                    if (n < 0) printf("[流水] 写不进去：%s\n", parch);
+                    else printf("[流水] %d 条关系改动 ⇒ %s（按名字记，别的脑能照着改）\n", n, parch);
+                } else if (!strncmp(sub, "replay", 6)) {
+                    int sk = 0;
+                    int r = cmd_journal_replay(a, parch, &sk);
+                    if (r < 0) printf("[流水] 打不开：%s\n", parch);
+                    else printf("[流水] 照着改了 %d 条（跳过 %d 条：认不出的关系/词）\n", r, sk);
                 } else if (!strncmp(sub, "overlay", 7)) {
                     if (!pt) printf("[覆盖层] 先 attach base 再挂 delta\n");
                     else if (aip_parts_set_overlay(pt, parch) == 0)

@@ -71,8 +71,16 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z180. 共享 base + 自己的 delta（§6.573）
+## 4z181. 词级流水 journal/replay（§6.574）
 
+- `::parts journal <f>`：只写 **edges_dirty** 的词的关系边（按名字）；`::parts replay <f>`：逐行经 `agent_step` 重学。
+- 读盘结束清 `edges_dirty`（否则流水会把 base 抄一遍：278 条 vs 3 条）。
+- 判据：tokenop **303 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
+- **负面发现（照实记）**：replay 是"再学一遍"而非"抄事实" —— 目标脑若已有相反知识（独占关系），它会拒绝/撤回，
+  于是 `diff` 仍显示两边不同。跨脑复制一致性需要先定"谁的规则优先"（产品决定）。
+- 边界：流水只装关系边；共现不装；replay 的条数=尝试条数（不等于成功条数）。
+
+## 4z180. 共享 base + 自己的 delta（§6.573）
 - `Token.edges_dirty`（边写入置脏）+ `aip_parts_save_delta`（只写脏段）+ overlay（delta 优先）。
 - 命令：`::parts delta <f>` / `::parts overlay <f>` / `::parts attach <base> [delta]`。
 - 实测：base 2852260B（1265 段）vs delta 430824B（15%），base 字节不变；卸下+挂 delta 后答对。tokenop **301 项**。
