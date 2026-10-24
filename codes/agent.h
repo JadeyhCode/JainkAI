@@ -2245,12 +2245,17 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     }
     char buf[224];
     if (retracted && old_place[0])
+        /* §6.551 ⚠ 这一支实测**零命中**（blind4/blind5/holdout/pert/genprobe 共约 1000 句），
+         * 保留但**不可达**（与 `学习.在`/`推理.猜` 同类）。没有搬它。 */
         snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（先前 记 的 %s 在 %s 撤 掉 了 ——"
                  " 一个人 不 会 同时 在 两 个 地方）%s", words[0], bl, words[0], old_place,
                  dropped[0] ? "；动词 那 半 句 我 没 记 关系" : "");
-    else if (dropped[0])
-        snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（「%s」这 半 句 我 没 记 关系）",
-                 words[0], bl, dropped);
+    else if (dropped[0]) {
+        /* §6.551 半句式（实测在 blind4/pert 里各命中 4/2 次 ⇒ 可达）：三槽位 主语/地点/没记的那半句 */
+        const char *t = ai_say_tpl("学习.在半");
+        const char *const a[3] = { words[0], bl, dropped };
+        der_filln(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2（「$3」这 半 句 我 没 记 关系）", a, 3);
+    }
     else {
         const char *t = ai_say_tpl("学习.在");   /* §6.546 */
         der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2", words[0], bl, NULL, NULL, NULL);
