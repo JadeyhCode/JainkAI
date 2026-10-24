@@ -1902,6 +1902,31 @@ int main(int argc, char **argv) {
                         }
                         printf("  只在 #%zu 的：%zu 条；只在 #%zu 的：%zu 条\n", ia, only_a, ib, only_b);
                     }
+                } else if (!strncmp(sb, "save", 4) && sb[4] == 0) {
+                    /* §6.577 把**指定的那个脑**存盘（多脑时 `::save` 只存当前那个） */
+                    size_t k = g_curbrain;
+                    char fn[256] = {0};
+                    if (arg) {
+                        char tmp[256]; snprintf(tmp, sizeof tmp, "%s", arg);
+                        char *sp3 = strchr(tmp, ' ');
+                        if (sp3) {
+                            *sp3 = 0;
+                            k = (size_t)strtoul(tmp, NULL, 10);
+                            sp3++;
+                            while (*sp3 == ' ') sp3++;
+                            snprintf(fn, sizeof fn, "%s", sp3);
+                        }
+                        else if (tmp[0] >= '0' && tmp[0] <= '9') k = (size_t)strtoul(tmp, NULL, 10);
+                        else snprintf(fn, sizeof fn, "%s", tmp);
+                    }
+                    if (k >= g_nbrains) printf("[多脑] 没有 #%zu\n", k);
+                    else {
+                        char def[64];
+                        if (!fn[0]) { snprintf(def, sizeof def, "brain%zu.bin", k); snprintf(fn, sizeof fn, "%s", def); }
+                        size_t bytes = ai_save_file(g_brains[k]->brain, fn);
+                        if (bytes) printf("[多脑] #%zu 存到 %s（%zu 字节）\n", k, fn, bytes);
+                        else printf("[多脑] #%zu 存不进去：%s\n", k, fn);
+                    }
                 } else if (!strncmp(sb, "mods", 4) && sb[4] == 0) {
                     size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : g_curbrain;
                     if (k >= g_nbrains) printf("[多脑] 没有 #%zu\n", k);

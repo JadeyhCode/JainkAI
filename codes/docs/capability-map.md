@@ -71,8 +71,15 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z183. `::parts verify` 自检 + delta 自动挂覆盖层（§6.576）
+## 4z184. 多脑各自落盘（§6.577）
 
+- `::brain save N [文件]`：把指定脑存盘（默认 `brainN.bin`）。
+- 实测：#1（32 词）6998B、#0 3096934B；用 `b1.bin` 重开仍知道自己教过的「小龙2 属于 神兽2」。
+- 判据：tokenop **308 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
+- 坑：`while (…) ;` 与 `if` 同行 ⇒ `-Werror=misleading-indentation`（拆行）。
+- 边界：只存图（不存账/parts 挂载/假设层）；无 `brain drop`。
+
+## 4z183. `::parts verify` 自检 + delta 自动挂覆盖层（§6.576）
 - `aip_parts_verify`：有备份 / 还没写 delta / **stale（段条数≠内存条数，必须 0）** / 孤儿索引。
 - `::parts delta` 写完后**自动挂成覆盖层**（刚写的 delta 就是内存镜像 ⇒ verify 立刻归零，detach 后不会退回旧值）。
 - 实测：save+attach ⇒ stale 0；教一句 ⇒ stale 5（警告）；delta ⇒ stale 0；detach 后仍答对。

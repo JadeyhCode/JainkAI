@@ -1292,6 +1292,22 @@ bad_stale=$(grep -c '⚠ 有 .* 个词的段和内存不一致' "$VR/out.txt" ||
 grep -q '还没写 delta 0 个 / 段条数不一致 0 个' "$VR/out.txt" && grep -q '对 ， 猫 -\[属于\]-> 动物' "$VR/out.txt" \
     && ok "**写完 delta + 卸下之后仍然对得上、答得对**" \
     || bad "verify-归零" "$(grep '自检' "$VR/out.txt" | tail -2 | tr '\n' ' ')"
+# §6.577 `::brain save N [文件]`：把**指定那个脑**存盘，读回来它自己的知识还在
+BS="$WORK/bs"; rm -rf "$BS"; mkdir -p "$BS"
+cp "$ROOT/session.bin" "$BS/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$BS/" 2>/dev/null || true
+( cd "$BS" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new\n小明同学 属于 人类\n::brain save 1 saved.bin\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+grep -q '#1 存到 saved.bin' "$BS/out.txt" \
+    && ok "**能存指定那个脑**（#1 ⇒ saved.bin）" \
+    || bad "brain-save" "$(grep '多脑' "$BS/out.txt" | tail -2 | tr '\n' ' ')"
+[ -s "$BS/saved.bin" ] \
+    && ok "存出来的文件非空（不是空壳）" \
+    || bad "brain-save-文件" "大小=0"
+( cd "$BS" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '小明同学 属于 人类 吗\n'; } | \
+    "$WORK/aip" --model saved.bin > out2.txt 2>&1 ) || true
+grep -q '对 ， 小明同学 -\[属于\]-> 人类' "$BS/out2.txt" \
+    && ok "**读回来还是它自己的知识**（不是 base 的）" \
+    || bad "brain-save-回读" "$(grep 'AI >' "$BS/out2.txt" | tail -1)"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true
