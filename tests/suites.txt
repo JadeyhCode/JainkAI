@@ -85,6 +85,8 @@ multiagent|gcc -std=c11 -O2 -Wall -Wextra -o build_multiagent tools/multiagent.c
 assocaudit|sh tests/assocaudit.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.566 局部加载：段文件 + 卸下 + 按需读回（指针打 AIP_PTR_DISK 标签）
 partprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_partprobe tools/partprobe.c -lm && ./build_partprobe > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.567 真实图上量局部加载（4 万条边：问 50 词读回多少段/字节）
+partbench|gcc -std=c11 -O2 -Wall -Wextra -o build_partbench tools/partbench.c -lm && ./build_partbench model.bin > ctest.log 2>&1; rc=$?; tail -10 ctest.log; [ "$rc" -eq 0 ]
 # 反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化（本机实测 3.2s）
 biastest|gcc -std=c11 -O2 -Wall -Wextra -o build_biastest tools/biastest.c -lm && ./build_biastest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 假设的作用域回溯：按序号/主语/内容撤**指定**那层（本机实测 2.7s）

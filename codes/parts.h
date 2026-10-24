@@ -53,6 +53,9 @@ typedef struct {
     size_t    n_ids;
     size_t    n_loads;          /* 触发了几次"从磁盘读回来"（验收数字） */
     size_t    n_bytes;          /* 一共读了多少字节（验收数字） */
+    size_t    n_resident;       /* 现在内存里有多少个词的边（验收数字） */
+    size_t    n_evicted;        /* 被换出过几次（验收数字） */
+    uint32_t *loaded_cnt;       /* 按 id 记"读回来时是几条" —— 用来判断这一份有没有被改脏 */
 } AIParts;
 
 /* ---------------- 写：把每个词的边写成一个段 ---------------- */
@@ -129,7 +132,8 @@ static inline AIParts *aip_parts_open(const char *path) {
     pt->n_ids = 65536;   /* 词 id 是线性小整数；给个够用的表 */
     pt->off = (uint64_t *)calloc(pt->n_ids, sizeof *pt->off);
     pt->cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->cnt);
-    if (!pt->off || !pt->cnt) { fclose(f); free(pt->off); free(pt->cnt); free(pt); return NULL; }
+    pt->loaded_cnt = (uint32_t *)calloc(pt->n_ids, sizeof *pt->loaded_cnt);
+    if (!pt->off || !pt->cnt || !pt->loaded_cnt) { fclose(f); free(pt->off); free(pt->cnt); free(pt->loaded_cnt); free(pt); return NULL; }
     uint32_t nseg = head[3];
     fseek(f, 16, SEEK_SET);
     for (uint32_t i = 0; i < nseg; ++i) {
@@ -143,7 +147,7 @@ static inline AIParts *aip_parts_open(const char *path) {
 static inline void aip_parts_close(AIParts *pt) {
     if (!pt) return;
     if (pt->f) fclose(pt->f);
-    free(pt->off); free(pt->cnt); free(pt);
+    free(pt->off); free(pt->cnt); free(pt->loaded_cnt); free(pt);
 }
 
 /* ---------------- 读：把**这一段**读回来，挂到词上 ---------------- */
@@ -174,7 +178,9 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
         pt->n_bytes += (size_t)cnt * sizeof(AIPartEdge);
     }
     token_assocs_set_ram(t, as, cnt);   /* 存储层的活：挂回真数组、清标签、定容量 */
+    pt->loaded_cnt[t->id] = cnt;        /* 记住"读回来时是几条"：判脏（§6.566 的换出用） */
     pt->n_loads++;
+    pt->n_resident++;                   /* 内存里多了一段（验收数字） */
 }
 
 /* ---------------- 挂上 / 卸下 ---------------- */
@@ -200,6 +206,51 @@ static inline size_t aip_parts_detach(AI *ai) {
         n++;
     }
     return n;
+}
+
+/* ---------------- 统计（验收数字；没有它等于"看起来跑了"） ---------------- */
+
+static inline void aip_parts_stats(const AIParts *pt, size_t *loads, size_t *bytes,
+                                   size_t *resident, size_t *evicted) {
+    if (loads) *loads = pt ? pt->n_loads : 0;
+    if (bytes) *bytes = pt ? pt->n_bytes : 0;
+    if (resident) *resident = pt ? pt->n_resident : 0;
+    if (evicted) *evicted = pt ? pt->n_evicted : 0;
+}
+
+/* ---------------- 换出：内存上限到了就把**干净**的段扔回磁盘 ----------------
+ *
+ * 这是"暂时只加载一部分"里的**暂时**：
+ *   · 只换出**干净**的（`count` 与读回来时一致）—— 脏的（新加了边/改过）不换，返回 skipped，
+ *     否则一换就把没落盘的新知识丢了；
+ *   · 换出 = `token_assocs_set_disk`（free + 打 DISK 标签），字段回到"下次读"的状态；
+ *   · `keep` 是"想留多少个词的边在内存里"（0 = 全换出）。
+ * ⚠ 这是**启发式**判脏（只看条数）：改了已有边的内容但没加条数，判不出来 —— 照实写在文档里。
+ */
+static inline size_t aip_parts_evict(AI *ai, size_t keep, size_t *skipped) {
+    if (skipped) *skipped = 0;
+    if (!ai || !ai->pool) return 0;
+    AIParts *pt = (AIParts *)ai->pool->parts;
+    if (!pt) return 0;
+    size_t evicted = 0, skip = 0, resident = 0;
+    /* 先数一遍内存里还有多少段的边 */
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->count == 0) continue;
+        if (token_assocs_resident(t)) resident++;
+    }
+    for (size_t i = 0; i < ai->pool->count && resident > keep; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->count == 0) continue;
+        if (!token_assocs_resident(t)) continue;
+        if (t->id >= pt->n_ids || pt->off[t->id] == 0) { skip++; continue; }   /* 磁盘上没有它的段 */
+        if (pt->loaded_cnt[t->id] == 0 || t->count != pt->loaded_cnt[t->id]) { skip++; continue; }  /* 脏 */
+        token_assocs_set_disk(t);
+        evicted++; resident--;
+        pt->n_evicted++; pt->n_resident--;
+    }
+    if (skipped) *skipped = skip;
+    return evicted;
 }
 
 #endif /* AIP_PARTS_H */

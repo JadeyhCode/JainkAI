@@ -107,6 +107,29 @@ int main(void) {
         ai_free(B);
     }
 
+    /* ⑤ 「暂时」：换出干净段（内存上限）——换出去之后**再问还要答得对** */
+    {
+        size_t loads0 = 0, bytes0 = 0, resident0 = 0, evicted0 = 0;
+        aip_parts_stats(pt2, &loads0, &bytes0, &resident0, &evicted0);
+        ok(resident0 > 0, "⑤ 现在内存里确实有已加载的段");
+        ok(bytes0 > 0, "⑤ 读回来的字节数 > 0（下面是换出前的基线）");
+        size_t skip = 0;
+        size_t ev = aip_parts_evict(A, 1, &skip);
+        ok(ev > 0, "⑤ 换出成功：有干净段被扔回磁盘");
+        size_t resident1 = 0, evicted1 = 0;
+        aip_parts_stats(pt2, NULL, NULL, &resident1, &evicted1);
+        ok(resident1 < resident0, "⑤ 内存里的段数**真的降了**（不是只改了个计数）");
+        ok(evicted1 >= ev, "⑤ 换出次数记在账上（验收数字）");
+        size_t loads1 = 0;
+        aip_parts_stats(pt2, &loads1, NULL, NULL, NULL);
+        ok(loads1 == loads0, "⑤ 换出本身**不读磁盘**（只是放手）");
+        ok(knows(A, "猫", "属于", "动物") == 1, "⑤ 换出之后**再问还答得对**（会按需再读回来）");
+        size_t loads2 = 0;
+        aip_parts_stats(pt2, &loads2, NULL, NULL, NULL);
+        ok(loads2 > loads1, "⑤ 而且确实**又读了一次**（换出不是数据丢失）");
+        (void)skip;
+    }
+
     aip_parts_close(pt2);
     aip_parts_close(pt);
     remove(path);

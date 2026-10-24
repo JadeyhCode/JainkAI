@@ -370,6 +370,11 @@ static inline const AssocEntry *token_assocs_ro(const Token *t) {
     token_assocs_resolve((Token *)t);
     return (const AssocEntry *)aip_ptr_strip(t->assocs);
 }
+/* §6.567 这段边现在在内存里吗？（换出/统计用；应用层不许自己看指针标签） */
+static inline int token_assocs_resident(const Token *t) {
+    return t && aip_ptr_tag(t->assocs) == AIP_PTR_RAM;
+}
+
 /* §6.566 把边"挂回内存"（加载完那一段时用）：存储层的活，应用层不许自己赋指针。 */
 static inline void token_assocs_set_ram(Token *t, AssocEntry *as, size_t cnt) {
     if (!t) return;
