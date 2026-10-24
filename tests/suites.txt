@@ -81,6 +81,8 @@ natrel|sh tests/natrel.sh
 dertest|gcc -std=c11 -O2 -o build_dertest tools/dertest.c -lm && ./build_dertest model.bin > ctest.log 2>&1; rc=$?; tail -12 ctest.log; [ "$rc" -eq 0 ]
 # §6.564 多智能体地基：一个进程两个 AI（各记各的修改账）+ 指针标签往返
 multiagent|gcc -std=c11 -O2 -Wall -Wextra -o build_multiagent tools/multiagent.c -lm && ./build_multiagent > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.565 边数组收口：读边只走 token_assocs（局部加载的前置）
+assocaudit|sh tests/assocaudit.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # 反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化（本机实测 3.2s）
 biastest|gcc -std=c11 -O2 -Wall -Wextra -o build_biastest tools/biastest.c -lm && ./build_biastest > ctest.log 2>&1; rc=$?; tail -3 ctest.log; [ "$rc" -eq 0 ]
 # 假设的作用域回溯：按序号/主语/内容撤**指定**那层（本机实测 2.7s）

@@ -1403,7 +1403,7 @@ static inline int ai_premise_wellfounded(const AI *ai, const Token *p) {
     if (p->name && p->name[0] == '[') return 0;         /* 内核自有标记也不算 */
     size_t solid = 0;
     for (size_t i = 0; i < p->count; ++i) {
-        const AssocEntry *e = &p->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(p)[i];
         if (!e->main || e->hits < AI_PREMISE_MIN_HITS) continue;
         if (e->role == ASSOC_ROLE_DERIVED) continue;          /* 缓存不算"据" */
         if (e->main->name && e->main->name[0] == '[') continue; /* 内核标记不算 */
@@ -1502,10 +1502,10 @@ static inline double ai_pair_jaccard(const Token *a, const Token *b) {
     if (sa == 0 || sb == 0) return 0.0;
     size_t common = 0;
     for (size_t i = 0; i < sa; ++i) {
-        const Token *m = a->assocs[i].main;
+        const Token *m = token_assocs_ro(a)[i].main;
         if (!m) continue;
         for (size_t j = 0; j < sb; ++j)
-            if (b->assocs[j].main == m) { common++; break; }
+            if (token_assocs_ro(b)[j].main == m) { common++; break; }
     }
     size_t uni = sa + sb - common;
     return uni ? (double)common / (double)uni : 0.0;
@@ -2195,12 +2195,12 @@ static inline void ai_inner_update(AI *ai, float surprise, int correct) {
     if (!self) return;
     if (correct) {
         for (size_t i = 0; i < self->count; ++i)
-            if (self->assocs[i].main == ai->good)
-                token_touch_entry(self, &self->assocs[i]);
+            if (token_assocs(self)[i].main == ai->good)
+                token_touch_entry(self, &token_assocs(self)[i]);
     } else {
         for (size_t i = 0; i < self->count; ++i)
-            if (self->assocs[i].main == ai->bad)
-                token_touch_entry(self, &self->assocs[i]);
+            if (token_assocs(self)[i].main == ai->bad)
+                token_touch_entry(self, &token_assocs(self)[i]);
     }
 }
 
@@ -2458,7 +2458,7 @@ static inline void ai_self_update(AI *ai) {
     Token *self = ai->self;
     float c = ai->inner.comfort, a = ai->inner.arousal, f = ai->inner.fatigue;
     for (size_t i = 0; i < self->count; ++i) {
-        AssocEntry *e = &self->assocs[i];
+        AssocEntry *e = &token_assocs(self)[i];
         if (e->main == ai->good) {
             if (c * (1.0f - f) > 0.5f) token_touch_entry(self, e);
         } else if (e->main == ai->bad) {
@@ -2475,7 +2475,7 @@ static inline void ai_boost_reply_bridge(AI *ai, Token *tail, Token *head) {
     Token *sp = ai->split_tok;
     if (tail) {
         for (size_t i = 0; i < tail->count; ++i) {
-            AssocEntry *e = &tail->assocs[i];
+            AssocEntry *e = &token_assocs(tail)[i];
             if (e->main != sp) continue;
             /* 顶 24 次，相当于在语料里多见了 24 遍 */
             if (e->hits < 24) e->hits = 24;
@@ -2484,7 +2484,7 @@ static inline void ai_boost_reply_bridge(AI *ai, Token *tail, Token *head) {
     }
     if (head) {
         for (size_t i = 0; i < sp->count; ++i) {
-            AssocEntry *e = &sp->assocs[i];
+            AssocEntry *e = &token_assocs(sp)[i];
             if (e->main != head) continue;
             if (e->hits < 24) e->hits = 24;
             else e->hits += 4;
@@ -2523,7 +2523,7 @@ static inline Token *ai_predict_readonly(const AI *ai, Token *cur) {
     AssocEntry *best = NULL;
     uint32_t best_w = 0;
     for (size_t i = 0; i < cur->count; ++i) {
-        AssocEntry *e = &cur->assocs[i];
+        AssocEntry *e = &token_assocs(cur)[i];
         if (edge_is_causal_guess(e)) continue;   /* 因果猜想不是知识，预测不认它 */
         if (e->mem_state >= MEM_DORMANT) continue;
         if (e->main && e->main->name && e->main->name[0] == '[') continue;  /* 跳过原语 */
@@ -2535,7 +2535,7 @@ static inline Token *ai_predict_readonly(const AI *ai, Token *cur) {
 static inline void ai_weaken_edge(Token *from, Token *to) {
     if (!from || !to) return;
     for (size_t i = 0; i < from->count; ++i) {
-        AssocEntry *e = &from->assocs[i];
+        AssocEntry *e = &token_assocs(from)[i];
         if (e->main != to || edge_is_causal_guess(e)) continue;
         if (e->hits > 0) e->hits--;
         if (e->hits == 0 && e->mem_state == MEM_ACTIVE) e->mem_state = MEM_FADING;
@@ -2581,7 +2581,7 @@ static inline float sig_conflict(const Token *t, Token *const *ctx, size_t n_ctx
     uint32_t best = 0, second = 0;
     size_t n_match = 0;
     for (size_t i = 0; i < reach; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(t)[i];
         if (!entry_matches(e, ctx, n_ctx)) continue;
         if (e->mem_state >= MEM_DORMANT) continue;
         uint32_t w = e->hits + 1; n_match++;
@@ -2599,7 +2599,7 @@ static inline float sig_low_activation(const Token *t, Token *const *ctx, size_t
     uint32_t best = 0;
     int found = 0;
     for (size_t i = 0; i < reach; ++i) {
-        AssocEntry *e = &t->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(t)[i];
         if (!entry_matches(e, ctx, n_ctx)) continue;
         if (e->mem_state >= MEM_DORMANT) continue;
         found = 1;
@@ -2693,8 +2693,8 @@ static inline const char *ai_render_expr(AI *ai, ExprMode mode) {
     Token *pick = token_associate_weighted(root, NULL, 0, 1.0f, &ai->rng);
     if (!pick) return NULL;
     for (size_t i = 0; i < root->count; ++i) {
-        if (root->assocs[i].main == pick) {
-            token_touch_entry(root, &root->assocs[i]);
+        if (token_assocs(root)[i].main == pick) {
+            token_touch_entry(root, &token_assocs(root)[i]);
             break;
         }
     }
@@ -2718,8 +2718,8 @@ static inline void ai_learn_expression(AI *ai, ExprMode mode, int feedback) {
         if (feedback > 0) {
             token_add_assoc_unique(ctx, root);
             for (size_t k = 0; k < ctx->count; ++k)
-                if (ctx->assocs[k].main == root) {
-                    token_touch_entry(ctx, &ctx->assocs[k]);
+                if (token_assocs(ctx)[k].main == root) {
+                    token_touch_entry(ctx, &token_assocs(ctx)[k]);
                     break;
                 }
         } else {
@@ -2741,7 +2741,7 @@ static inline int ai_is_expr_scaffold(const AI *ai, const Token *t) {
         if (!root) continue;
         if (t == root) return 1;
         for (size_t j = 0; j < root->count; ++j)
-            if (root->assocs[j].main == t) return 1;
+            if (token_assocs(root)[j].main == t) return 1;
     }
     return 0;
 }
@@ -2788,7 +2788,7 @@ static inline int ai_can_continue_from(AI *ai, const Token *from, const Token *t
     if (t == from) return 0;               /* 自环不算出路 */
     if (ai_is_reply_end(t)) return 1;      /* 合法的收句点 */
     for (size_t i = 0; i < t->count; ++i)
-        if (ai_edge_walkable(ai, &t->assocs[i], energy)) return 1;
+        if (ai_edge_walkable(ai, &token_assocs_ro(t)[i], energy)) return 1;
     /* 没有任何可用出边的词一律算死胡同 —— 包括 [原语:分割]。
      * 语料里所有 [原语:分割] 都在行尾、后面什么都没有（320 行全如此），
      * 走进去必然断句；必须靠「不能续」把它挡在外面，句长才能靠
@@ -2992,9 +2992,9 @@ static inline void ai_embed_build(AI *ai) {
         Token *t = p->tokens[i];
         if (!t->name || t->name[0] == '[') continue;
         for (size_t j = 0; j < t->count; ++j) {
-            Token *m = t->assocs[j].main;
+            Token *m = token_assocs(t)[j].main;
             if (!m || !m->name || m->name[0] == '[') continue;
-            if (t->assocs[j].hits) df[m->id]++;
+            if (token_assocs(t)[j].hits) df[m->id]++;
         }
     }
     const uint32_t DF_MAX = (uint32_t)(n_content * 15 / 100);
@@ -3006,9 +3006,9 @@ static inline void ai_embed_build(AI *ai) {
         Token *t = p->tokens[i];
         if (!t->name || t->name[0] == '[') continue;
         for (size_t j = 0; j < t->count; ++j) {
-            Token *m = t->assocs[j].main;
+            Token *m = token_assocs(t)[j].main;
             if (!m || !EMB_CTX_OK(m)) continue;
-            uint32_t h = t->assocs[j].hits;
+            uint32_t h = token_assocs(t)[j].hits;
             if (h == 0) continue;
             marg[i] += h;
             tot += h;
@@ -3022,9 +3022,9 @@ static inline void ai_embed_build(AI *ai) {
         Token *t = p->tokens[i];
         if (!t->name || t->name[0] == '[' || marg[i] == 0) continue;
         for (size_t j = 0; j < t->count; ++j) {
-            Token *m = t->assocs[j].main;
+            Token *m = token_assocs(t)[j].main;
             if (!m || !EMB_CTX_OK(m)) continue;
-            uint32_t h = t->assocs[j].hits;
+            uint32_t h = token_assocs(t)[j].hits;
             if (h == 0) continue;
             size_t mi = m->id;
             if (mi >= n) continue;
@@ -3928,7 +3928,7 @@ static inline Token *ai_pick_next_role_pat(AI *ai, Token *cur, float energy, int
         uint64_t total = 0;
         for (size_t r = 0; r < n_order && total == 0; ++r) {
             for (size_t i = 0; i < cur->count; ++i) {
-                AssocEntry *e = &cur->assocs[i];
+                AssocEntry *e = &token_assocs(cur)[i];
                 if (e->role != order[r]) continue;
                 if (!ai_edge_walkable(ai, e, energy)) continue;
                 if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
@@ -3951,7 +3951,7 @@ static inline Token *ai_pick_next_role_pat(AI *ai, Token *cur, float energy, int
                                   tier, (unsigned)use, (unsigned long long)total,
                                   ai->rng, (unsigned long long)pick);
         for (size_t i = 0; i < cur->count; ++i) {
-            AssocEntry *e = &cur->assocs[i];
+            AssocEntry *e = &token_assocs(cur)[i];
             if (e->role != use) continue;
             if (!ai_edge_walkable(ai, e, energy)) continue;
             if (!ai_can_continue_from(ai, cur, e->main, energy)) continue;
@@ -4007,7 +4007,7 @@ static inline Token *ai_pick_next_topic(AI *ai, Token *cur, float energy, int do
             uint64_t total = 0;
             for (size_t r = 0; r < n_order && total == 0; ++r) {
                 for (size_t i = 0; i < cur->count; ++i) {
-                    AssocEntry *e = &cur->assocs[i];
+                    AssocEntry *e = &token_assocs(cur)[i];
                     if (e->role != order[r]) continue;
                     if (pass == 0 && e->topic != topic) continue;
                     if (pass == 1 && e->topic == topic) continue;
@@ -4032,7 +4032,7 @@ static inline Token *ai_pick_next_topic(AI *ai, Token *cur, float energy, int do
                                       pass, tier, (unsigned)use, (unsigned long long)total,
                                       ai->rng, (unsigned long long)pick);
             for (size_t i = 0; i < cur->count; ++i) {
-                AssocEntry *e = &cur->assocs[i];
+                AssocEntry *e = &token_assocs(cur)[i];
                 if (e->role != use) continue;
                 if (pass == 0 && e->topic != topic) continue;
                 if (pass == 1 && e->topic == topic) continue;
@@ -4139,7 +4139,7 @@ static inline char *ai_generate_scored_topic(AI *ai, Token *seed, float energy,
     float score = 0;
     for (size_t i = 0; i < path_n; ++i)
         for (size_t j = 0; j < path[i]->count; ++j) {
-            Token *m = path[i]->assocs[j].main;
+            Token *m = token_assocs_ro(path[i])[j].main;
             if (m == ai->good) score += 1.0f;
             if (m == ai->bad)  score -= 1.0f;
         }
@@ -4232,10 +4232,10 @@ static inline size_t ai_jaccard(const Token *a, const Token *b) {
     if (!a || !b || a->count == 0 || b->count == 0) return 0;
     size_t inter = 0;
     for (size_t i = 0; i < a->count; ++i) {
-        Token *m = a->assocs[i].main;
+        Token *m = token_assocs_ro(a)[i].main;
         if (!m || (m->name && m->name[0] == '[')) continue;
         for (size_t j = 0; j < b->count; ++j)
-            if (b->assocs[j].main == m) { inter++; break; }
+            if (token_assocs_ro(b)[j].main == m) { inter++; break; }
     }
     size_t uni = a->count + b->count - inter;
     return uni ? (inter * 100) / uni : 0;
@@ -4258,7 +4258,7 @@ static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
         for (size_t k = 0; k < t->count; ++k) {
-            Token *m = t->assocs[k].main;
+            Token *m = token_assocs(t)[k].main;
             if (!m || (m->name && m->name[0] == '[')) continue;
             if (m->id >= n) continue;
             ecount++;
@@ -4275,7 +4275,7 @@ static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
         for (size_t k = 0; k < t->count; ++k) {
-            Token *m = t->assocs[k].main;
+            Token *m = token_assocs(t)[k].main;
             if (!m || (m->name && m->name[0] == '[')) continue;
             if (m->id >= n) continue;
             in_off[m->id + 1]++;
@@ -4289,7 +4289,7 @@ static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
         for (size_t i = 0; i < n; ++i) {
             Token *t = p->tokens[i];
             for (size_t k = 0; k < t->count; ++k) {
-                Token *m = t->assocs[k].main;
+                Token *m = token_assocs(t)[k].main;
                 if (!m || (m->name && m->name[0] == '[')) continue;
                 if (m->id >= n) continue;
                 uint32_t pos = cur[m->id]++;
@@ -4307,7 +4307,7 @@ static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
         /* 候选 = a 的邻居们的"入边来源"（去重、只要 id > i）*/
         size_t ncand = 0;
         for (size_t k = 0; k < a->count; ++k) {
-            Token *m = a->assocs[k].main;
+            Token *m = token_assocs(a)[k].main;
             if (!m || (m->name && m->name[0] == '[')) continue;
             if (m->id >= n) continue;
             for (uint32_t q = in_off[m->id]; q < in_off[m->id + 1]; ++q) {
@@ -4342,7 +4342,7 @@ static inline void ai_form_abstractions_slice(AI *ai, size_t from, size_t to,
             token_set_parent(a, c);
             token_set_parent(b, c);
             for (size_t k = 0; k < a->count; ++k) {
-                Token *m = a->assocs[k].main;
+                Token *m = token_assocs(a)[k].main;
                 if (!m || m == ai->good || m == ai->bad) continue;
                 token_add_assoc_unique(c, m);
             }
@@ -4430,7 +4430,7 @@ static inline int ai_gc_protected(const AI *ai, const Token *t) {
 static inline int ai_gc_has_valence(const AI *ai, const Token *t) {
     if (!t) return 0;
     for (size_t i = 0; i < t->count; ++i) {
-        Token *m = t->assocs[i].main;
+        Token *m = token_assocs_ro(t)[i].main;
         if (m == ai->good || m == ai->bad) return 1;
     }
     return 0;
@@ -4447,7 +4447,7 @@ static inline void ai_gc_rebuild_indegree(TokenPool *p) {
         Token *from = p->tokens[i];
         if (!from || from->is_garbage) continue;
         for (size_t j = 0; j < from->count; ++j)
-            if (from->assocs[j].main) from->assocs[j].main->in_degree++;
+            if (token_assocs(from)[j].main) token_assocs(from)[j].main->in_degree++;
     }
 }
 
@@ -4462,7 +4462,7 @@ static inline size_t ai_gc_indegree(const TokenPool *p, const Token *t) {
         const Token *from = p->tokens[i];
         if (!from || from->is_garbage) continue;
         for (size_t j = 0; j < from->count; ++j)
-            if (from->assocs[j].main == t) n++;
+            if (token_assocs_ro(from)[j].main == t) n++;
     }
     if (n != t->in_degree)
         fprintf(stderr, "[incheck] %s: 缓存=%u 现算=%zu（不一致！）\n",
@@ -4513,7 +4513,7 @@ static inline void ai_gc(AI *ai) {
         Token *t = p->tokens[i];
         if (t->is_garbage) continue;
         for (size_t j = 0; j < t->count; ++j) {
-            AssocEntry *e = &t->assocs[j];
+            AssocEntry *e = &token_assocs(t)[j];
             ai->n_scan_edges++;
             if (e->mem_state >= del_state) continue;
             uint64_t age = now - e->birth_tick, rec = now - e->last_touch_tick;
@@ -4540,7 +4540,7 @@ static inline void ai_gc(AI *ai) {
         }
         ai->n_scan_edges += t->count;
         for (size_t j = 0; j < t->count; ) {
-            AssocEntry *e = &t->assocs[j];
+            AssocEntry *e = &token_assocs(t)[j];
             int remove = 0;
             if (e->main && e->main->is_garbage) remove = 1;
             if (!remove && e->action && e->action->is_garbage) remove = 1;
@@ -4576,7 +4576,7 @@ static inline AssocEntry *ai_causal_edge(Token *from, Token *to, const Token *ca
     (void)causal;   /* 判据只有一处（按标记名），不再需要调用方传标记对象 */
     if (!from || !to) return NULL;
     for (size_t i = 0; i < from->count; ++i) {
-        AssocEntry *e = &from->assocs[i];
+        AssocEntry *e = &token_assocs(from)[i];
         if (e->main != to || !edge_is_causal_guess(e)) continue;
         return e;
     }
@@ -4866,7 +4866,7 @@ static inline Token *ai_when_did_i(AI *ai, Token *what) {
         Token *t = ai->timeline[idx];
         if (!t) continue;
         for (size_t j = 0; j < t->count; ++j)
-            if (t->assocs[j].main == what) return t;
+            if (token_assocs(t)[j].main == what) return t;
     }
     return NULL;
 }
@@ -4988,9 +4988,9 @@ static inline void ai_inner_dialogue(AI *ai) {
             Token *tj = ai->focus_ring[j];
             if (!tj) continue;
             for (size_t k = 0; k < ti->count; ++k) {
-                if (ti->assocs[k].main == tj) {
+                if (token_assocs(ti)[k].main == tj) {
                     ai->focus_weight[j] += ai->inner_dialogue_gain *
-                                           (float)(ti->assocs[k].hits + 1);
+                                           (float)(token_assocs(ti)[k].hits + 1);
                     if (ai->focus_weight[j] > 3.0f) ai->focus_weight[j] = 3.0f;
                     break;
                 }
@@ -5166,13 +5166,13 @@ static inline char *ai_narrate(AI *ai, size_t n_recent) {
         Token *focus = NULL;
         uint32_t best_h = 0;
         for (size_t j = 0; j < t->count; ++j) {
-            Token *m = t->assocs[j].main;
+            Token *m = token_assocs(t)[j].main;
             if (!m || !m->name || m->name[0] == '[') continue;
             /* §6.141 **别把叙事说成"我最近在想 我"**：每个 `[时刻:]` 都挂着「我」（自指边），
              * 而它命中数最高 ⇒ 以前叙事几乎永远只输出「我」。跳过自指与自环，
              * 让叙事说**它那一刻在想什么**（焦点词）。 */
             if (m == ai->self || m == t) continue;
-            uint32_t h = t->assocs[j].hits;
+            uint32_t h = token_assocs(t)[j].hits;
             if (h >= best_h) { best_h = h; focus = m; }
         }
         if (!focus) continue;

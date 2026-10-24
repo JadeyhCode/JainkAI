@@ -476,7 +476,7 @@ static inline int der_base_credibility(const AI *ai, const Derivation *d) {
         if (s->kind == DER_FACT || s->kind == DER_KNOWN) {
             if (s->subj && s->obj) {
                 long ei = micro_edge_index(s->subj, s->obj);
-                if (ei >= 0) return ai_credibility(ai, &s->subj->assocs[ei]);
+                if (ei >= 0) return ai_credibility(ai, &token_assocs(s->subj)[ei]);
             }
             return 50;
         }
@@ -493,7 +493,7 @@ static inline const char *der_base_source(const Derivation *d) {
         if (s->kind == DER_FACT || s->kind == DER_KNOWN) {
             if (s->subj && s->obj) {
                 long ei = micro_edge_index(s->subj, s->obj);
-                if (ei >= 0) return assoc_role_name(s->subj->assocs[ei].role);
+                if (ei >= 0) return assoc_role_name(token_assocs(s->subj)[ei].role);
             }
             return (s->kind == DER_KNOWN) ? "推论" : "观测";
         }

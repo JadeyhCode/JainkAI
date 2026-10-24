@@ -38,7 +38,7 @@ static uint64_t state_fingerprint(const AI *ai) {
         MIX(t->perspective_of ? t->perspective_of->id : TOKEN_ID_NONE);
         MIX(t->count);
         for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
+            const AssocEntry *e = &token_assocs_ro(t)[j];
             MIX(e->main ? e->main->id : TOKEN_ID_NONE);
             MIX(e->action ? e->action->id : TOKEN_ID_NONE);
             MIX(e->hits); MIX(e->seq); MIX(e->mem_state);
@@ -65,7 +65,7 @@ static void fingerprint_dims(const AI *ai) {
         MIXH(hp, t->next_in_time ? t->next_in_time->id : TOKEN_ID_NONE);
         MIXH(hp, t->perspective_of ? t->perspective_of->id : TOKEN_ID_NONE);
         for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
+            const AssocEntry *e = &token_assocs_ro(t)[j];
             MIXH(he, e->main ? e->main->id : TOKEN_ID_NONE);
             MIXH(he, e->action ? e->action->id : TOKEN_ID_NONE);
             MIXH(he, e->hits); MIXH(he, e->seq); MIXH(he, e->mem_state);
@@ -92,7 +92,7 @@ static void fingerprint_all(const AI *ai) {
         MIXH(hm, t->count); MIXH(hm, t->cap); MIXH(hm, t->next_seq);
         if (t->name) for (const char *s = t->name; *s; ++s) MIXH(hm, (unsigned char)*s);
         for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
+            const AssocEntry *e = &token_assocs_ro(t)[j];
             MIXH(he, e->main ? e->main->id : TOKEN_ID_NONE);
             MIXH(he, e->action ? e->action->id : TOKEN_ID_NONE);
             MIXH(he, e->hits); MIXH(he, e->seq); MIXH(he, e->mem_state);
@@ -999,7 +999,7 @@ static void cmd_edges(const AI *ai, const char *word) {
     if (!t) { printf("[没有这个符号节点: %s]\n", word); return; }
     printf("[%s] 有 %zu 条边：\n", word, t->count);
     for (size_t i = 0; i < t->count; ++i) {
-        const AssocEntry *e = &t->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(t)[i];
         printf("  → %-16s hits=%-4u seq=%-4u 角色=%u 状态=%u",
                e->main && e->main->name ? e->main->name : "(无名)",
                e->hits, e->seq, (unsigned)e->role, (unsigned)e->mem_state);
@@ -1039,7 +1039,7 @@ static void proc_print_one(const Token *root) {
     const AssocEntry *conds[PROC_SHOW_MAX], *elses[PROC_SHOW_MAX], *excs[PROC_SHOW_MAX];
     size_t ns = 0, nc = 0, nb = 0, np = 0, ncd = 0, nel = 0, nex = 0;
     for (size_t i = 0; i < root->count; ++i) {
-        const AssocEntry *e = &root->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(root)[i];
         if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
         else if (edge_is_cond(e))        { if (ncd < PROC_SHOW_MAX) conds[ncd++] = e; }
         else if (edge_is_else(e))        { if (nel < PROC_SHOW_MAX) elses[nel++] = e; }
@@ -1375,8 +1375,8 @@ static void proc_gen(AI *ai, const char *bare) {
     int step_idx[32];
     size_t ns = 0;
     for (size_t i = 0; i < root->count && ns < 32; ++i) {
-        int k = edge_step_index(&root->assocs[i]);
-        if (k > 0 && root->assocs[i].main) { step_tok[ns] = root->assocs[i].main; step_idx[ns] = k; ns++; }
+        int k = edge_step_index(&token_assocs_ro(root)[i]);
+        if (k > 0 && token_assocs_ro(root)[i].main) { step_tok[ns] = token_assocs_ro(root)[i].main; step_idx[ns] = k; ns++; }
     }
     for (size_t i = 0; i + 1 < ns; ++i)
         for (size_t j = i + 1; j < ns; ++j)
@@ -1395,7 +1395,7 @@ static void proc_gen(AI *ai, const char *bare) {
             PG_ADD("[原语:执行] ");
     }
     for (size_t i = 0; i < root->count; ++i) {
-        const AssocEntry *e = &root->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(root)[i];
         if (!edge_is_cond(e)) continue;
         char cb[64];
         (void)proc_mark_bare(e->action ? e->action->name : NULL, PROC_COND_PREFIX, cb, sizeof cb);
@@ -1403,10 +1403,10 @@ static void proc_gen(AI *ai, const char *bare) {
         PG_ADD(e->main && e->main->name ? e->main->name : "?");
         PG_ADD(" ");
         for (size_t k = 0; k < root->count; ++k)        /* 否则支（只取第一条） */
-            if (edge_is_else(&root->assocs[k])) {
+            if (edge_is_else(&token_assocs_ro(root)[k])) {
                 PG_ADD("[原语:否则] [原语:对象] ");
-                PG_ADD(root->assocs[k].main && root->assocs[k].main->name
-                       ? root->assocs[k].main->name : "?");
+                PG_ADD(token_assocs_ro(root)[k].main && token_assocs_ro(root)[k].main->name
+                       ? token_assocs_ro(root)[k].main->name : "?");
                 PG_ADD(" ");
                 break;
             }
@@ -2125,7 +2125,7 @@ int main(int argc, char **argv) {
                 if (!t) { printf("[没有 %s]\n", arg); continue; }
                 printf("[%s] count=%zu cap=%zu next_seq=%u\n", arg, t->count, t->cap, t->next_seq);
                 for (size_t j = 0; j < t->count; ++j) {
-                    const AssocEntry *e = &t->assocs[j];
+                    const AssocEntry *e = &token_assocs_ro(t)[j];
                     printf("  E%zu main=%s act=%s hits=%u seq=%u mem=%u bt=%llu lt=%llu",
                            j, e->main ? e->main->name : "-",
                            e->action ? e->action->name : "-", e->hits, e->seq,
@@ -2569,7 +2569,7 @@ int main(int argc, char **argv) {
                             Token *tk = a->brain->pool->tokens[i];
                             if (!tk || tk->is_garbage) continue;
                             for (size_t j = 0; j < tk->count; ++j)
-                                if (edge_is_guess(&tk->assocs[j])) gone++;
+                                if (edge_is_guess(&token_assocs_ro(tk)[j])) gone++;
                         }
                         printf("[清记忆] 有 %zu 条猜测记忆（本次不清图，只报数 —— "
                                "要真删走撤销路：观测覆盖它 / 依据没了思维层自动撤）\n", gone);
@@ -2585,7 +2585,7 @@ int main(int argc, char **argv) {
                         Token *tk = a->brain->pool->tokens[i];
                         if (!tk || tk->is_garbage) continue;
                         for (size_t j = 0; j < tk->count; ++j) {
-                            const AssocEntry *e = &tk->assocs[j];
+                            const AssocEntry *e = &token_assocs_ro(tk)[j];
                             if (!edge_is_guess(e) || !e->main) continue;
                             for (uint8_t r = 1; r <= REL_CORE_MAX; ++r) {
                                 uint16_t bit = REL_BIT(r);
@@ -2644,7 +2644,7 @@ int main(int argc, char **argv) {
                 size_t shown = 0;
                 printf("[%s] 的关系知识:\n", arg);
                 for (size_t i = 0; i < t->count; ++i) {
-                    const AssocEntry *e = &t->assocs[i];
+                    const AssocEntry *e = &token_assocs_ro(t)[i];
                     if (!e->main || !e->main->name) continue;
                     /* 否定关系 */
                     if (e->nrel) {
@@ -2693,7 +2693,7 @@ int main(int argc, char **argv) {
                     if (dup_id || !rel_is_excl(a->brain, rid)) continue;
                     size_t nobj = 0;
                     for (size_t i = 0; i < t->count; ++i) {
-                        const AssocEntry *e = &t->assocs[i];
+                        const AssocEntry *e = &token_assocs_ro(t)[i];
                         if (!e->main || !e->main->name) continue;
                         if (e->role == ASSOC_ROLE_DERIVED) continue;   /* 推论不算观测 */
                         if (e->rel & REL_BIT(rid)) nobj++;
@@ -2728,7 +2728,7 @@ int main(int argc, char **argv) {
                     long lei = micro_edge_index(A, B);
                     if (lei >= 0)
                         printf("[依据租约] %s 与 %s 之间那条：%s\n", w[0], w[2],
-                               ai_lease_name(ai_edge_lease(a->brain, &A->assocs[lei])));
+                               ai_lease_name(ai_edge_lease(a->brain, &token_assocs_ro(A)[lei])));
                 }
                 if (!A || !B) { printf("[词不在图里]\n"); free(dup); continue; }
                 Proof pf;
@@ -2835,8 +2835,8 @@ int main(int argc, char **argv) {
                     nrev++;
                     const char *back = "-";
                     for (size_t j = 0; j < t->count; ++j)
-                        if (t->assocs[j].main && t->assocs[j].main->name) {
-                            back = t->assocs[j].main->name;
+                        if (token_assocs_ro(t)[j].main && token_assocs_ro(t)[j].main->name) {
+                            back = token_assocs_ro(t)[j].main->name;
                             break;
                         }
                     printf("    %s  ←  %s\n", t->name, back);
@@ -2955,7 +2955,7 @@ int main(int argc, char **argv) {
                         Token *t = p->tokens[i];
                         if (!t || t->is_garbage) continue;
                         for (size_t k = 0; k < t->count; ++k) {
-                            const AssocEntry *e = &t->assocs[k];
+                            const AssocEntry *e = &token_assocs_ro(t)[k];
                             if (!e->main) continue;
                             for (uint8_t r = 1; r < REL_DYN_BASE; ++r) {
                                 uint16_t bit = REL_BIT(r);
@@ -3117,7 +3117,7 @@ int main(int argc, char **argv) {
                            (unsigned)t->mem_state,
                            (unsigned long long)t->birth_tick, (unsigned long long)t->last_touch_tick);
                     for (size_t j = 0; j < t->count; ++j) {
-                        const AssocEntry *e = &t->assocs[j];
+                        const AssocEntry *e = &token_assocs_ro(t)[j];
                         printf("  E %d h=%u s=%u mem=%u role=%u top=%u pat=%u rel=%u nrel=%u dyn=%u b=%llu tt=%llu act=%d",
                                e->main ? (int)e->main->id : -1, e->hits, e->seq,
                                (unsigned)e->mem_state, (unsigned)e->role, (unsigned)e->topic,
@@ -3529,7 +3529,7 @@ int main(int argc, char **argv) {
                          * `::feat 毛` 答"动物/有/都"，而不是"猫"）⇒ 收窄之后才对。 */
                         int points = 0;
                         for (size_t e = 0; e < T2->count; ++e) {
-                            const AssocEntry *ed = &T2->assocs[e];
+                            const AssocEntry *ed = &token_assocs_ro(T2)[e];
                             if (ed->main != f) continue;
                             if (!ed->rel && !ed->nrel && !ed->dyn) continue;
                             points = 1; break;
@@ -3537,7 +3537,7 @@ int main(int argc, char **argv) {
                         if (!points) continue;
                         uint64_t wsum = 0;
                         for (size_t e = 0; e < T2->count; ++e) {
-                            const AssocEntry *ed2 = &T2->assocs[e];
+                            const AssocEntry *ed2 = &token_assocs_ro(T2)[e];
                             if (ed2->main != f) continue;
                             if (!ed2->rel && !ed2->nrel && !ed2->dyn) continue;
                             wsum += ai_edge_weight(b, ed2);
@@ -3597,7 +3597,7 @@ int main(int argc, char **argv) {
                         Token *t = a->brain->pool->tokens[i];
                         if (!t || t->is_garbage) continue;
                         for (size_t e = 0; e < t->count; ++e) {
-                            if (t->assocs[e].n_tset) { t->assocs[e].n_tset = 0; n++; }
+                            if (token_assocs(t)[e].n_tset) { token_assocs(t)[e].n_tset = 0; n++; }
                         }
                     }
                     printf("[时刻集合] 清了 %zu 条边（**只清这份历史记录**，不动 birth/last 两个时刻）\n", n);
@@ -3607,7 +3607,7 @@ int main(int argc, char **argv) {
                 if (!t) { printf("[时刻集合] 图上没有 %s\n", arg); continue; }
                 printf("[%s] 的边各自被观测过的 tick：\n", arg);
                 for (size_t e = 0; e < t->count; ++e) {
-                    const AssocEntry *ed = &t->assocs[e];
+                    const AssocEntry *ed = &token_assocs_ro(t)[e];
                     if (!ed->n_tset) continue;
                     printf("  → %-16s {", ed->main && ed->main->name ? ed->main->name : "?");
                     for (uint8_t k = 0; k < ed->n_tset && k < 4; ++k) printf("%s%u", k ? "," : "", ed->tset[k]);
@@ -3673,8 +3673,8 @@ int main(int argc, char **argv) {
                         if (!m || !m->name || strncmp(m->name, "[时刻:", 9) != 0) continue;
                         int ha = 0, hb = 0;
                         for (size_t j = 0; j < m->count; ++j) {
-                            if (m->assocs[j].main == A) ha = 1;
-                            if (m->assocs[j].main == B) hb = 1;
+                            if (token_assocs_ro(m)[j].main == A) ha = 1;
+                            if (token_assocs_ro(m)[j].main == B) hb = 1;
                         }
                         if (!(ha && hb)) continue;
                         unsigned long long n = strtoull(m->name + 9, NULL, 10);
@@ -3814,7 +3814,7 @@ int main(int argc, char **argv) {
                 /* ① 我的图里这条边在不在、是哪一档、命中多少 */
                 long ei = micro_edge_index(A, B);
                 if (ei >= 0) {
-                    const AssocEntry *e = &A->assocs[ei];
+                    const AssocEntry *e = &token_assocs_ro(A)[ei];
                     int pos = (e->rel & REL_BIT(rid)) != 0;
                     int negb = (e->nrel & REL_BIT(rid)) != 0;
                     printf("  我的图：%s（来源=%s，命中=%u，首次 seq=%u，**可信度=%d**）\n",
@@ -3891,7 +3891,7 @@ int main(int argc, char **argv) {
                 /* ③a 租约（TTL）：这条依据现在算稳定/减弱/过期 —— 降级只改状态，不改记录 */
                 if (ei >= 0)
                     printf("  租约：%s（TTL %u tick，弱阈值 可信度<%d；**降级不删记录**）\n",
-                           ai_lease_name(ai_edge_lease(a->brain, &A->assocs[ei])),
+                           ai_lease_name(ai_edge_lease(a->brain, &token_assocs_ro(A)[ei])),
                            (unsigned)AI_LEASE_TTL_TICKS, AI_LEASE_WEAK_CRED);
                 /* ③b **反向也报一句**（来源账要能双向问：A→B 有，B→A 未必） */
                 {

@@ -154,7 +154,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         if (token_is_temp(t)) continue;
         saved_tokens++;
         for (size_t j = 0; j < t->count; ++j)
-            if (!mio_edge_saved(&t->assocs[j])) continue;
+            if (!mio_edge_saved(&token_assocs_ro(t)[j])) continue;
             else total_assocs++;
     }
     w.len = 0;
@@ -171,7 +171,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         const Token *t = p->tokens[i];
         if (token_is_temp(t)) continue;
         uint32_t n_saved_edges = 0;
-        for (size_t j = 0; j < t->count; ++j) if (mio_edge_saved(&t->assocs[j])) n_saved_edges++;
+        for (size_t j = 0; j < t->count; ++j) if (mio_edge_saved(&token_assocs_ro(t)[j])) n_saved_edges++;
         uint32_t nlen = t->name ? (uint32_t)strlen(t->name) : 0;
         mw_u32(&w, t->id);
         mw_str(&w, t->name ? t->name : "", nlen);
@@ -188,7 +188,7 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         mw_u32(&w, n_saved_edges);
 
         for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
+            const AssocEntry *e = &token_assocs_ro(t)[j];
             if (!mio_edge_saved(e)) continue;
             /* v10：语境那两段（n_subs + 裸 id / n_not + 裸 id）不再写。 */
             mw_u32(&w, e->main ? e->main->id : TOKEN_ID_NONE);
@@ -478,7 +478,7 @@ static inline void ai_recount_evidence(AI *ai) {
         if (t->name && strncmp(t->name, MICRO_REVISE_TOKEN_PREFIX, plen) == 0) revised++;
         if (t->name && strncmp(t->name, MICRO_REVOKE_TOKEN_PREFIX, vlen) == 0) revoked++;
         for (size_t j = 0; j < t->count; ++j) {
-            const AssocEntry *e = &t->assocs[j];
+            const AssocEntry *e = &token_assocs(t)[j];
             if (!e->main) continue;
             if (e->rel || e->nrel) {
                 /* 基准（装载时打的标）不算"现场学到"；**推论缓存也不算**（它另有一本账） */
@@ -658,7 +658,7 @@ static inline AI *ai_load_file(const char *path) {
             Token *t = pool_token_by_id(np, id);
             if (!t || t->count != na) goto fail;
             for (uint32_t j = 0; j < na; ++j) {
-                AssocEntry *e = &t->assocs[j];
+                AssocEntry *e = &token_assocs(t)[j];
                 if (has_ctx) {
                     /* 旧格式的语境字段：**跳过去**（字段在 v10 里已删）。
                      * 出厂模型实测全 0 ⇒ 无损；非空的旧文件会少一层条件（登记在案，§6.50）。 */
@@ -1084,7 +1084,7 @@ static inline AI *ai_load_file(const char *path) {
                 Token *t = rp->tokens[ti];
                 if (!t || t->is_garbage) continue;
                 for (size_t ei = 0; ei < t->count; ++ei) {
-                    const AssocEntry *e = &t->assocs[ei];
+                    const AssocEntry *e = &token_assocs(t)[ei];
                     if (!e->main) continue;
                     for (uint8_t r = 1; r < REL_DYN_BASE; ++r) {
                         uint16_t bit = REL_BIT(r);

@@ -19556,3 +19556,39 @@ blind4 448→445、blind5 131→130、pert 215→213，三个套件红，靠 A/B
 - C 腿只落了**指针标签这件工具**，真正的"只加载一部分图"**还没开始**：
   先要把 ~170 处 `->assocs` 直接访问收成访问器（纯搬运、行为不变），才谈得上让 `assocs` 指向磁盘。
 - 多智能体目前是"同一进程两个 AI"，**不是**多进程/多线程；没有并发同步（也没测并发）。
+
+## §6.565 C 腿第 1 步：把「边数组」收成一个入口（局部加载的前置）
+
+**为什么先做这个**：局部加载的实现路线是"边的指针打 `AIP_PTR_DISK` 标签、用的时候才读"。
+但全仓原来有 **~170 处** 直接 `t->assocs[i]` —— 只要还剩一处，那处代码在"边在磁盘上"时就会
+**解引用一个带标签的指针**（崩）。所以先收口，再谈标签。
+
+**改了什么**
+
+| 位置 | 改动 |
+|---|---|
+| `token.h` | 新增三个访问器：`token_assocs(t)`（可写、将来在这里触发按需加载）、`token_assocs_ro(t)`（只读）、`token_assoc_count(t)` |
+| 9 个文件 | `X->assocs[…]` → `token_assocs(X)[…]` / `token_assocs_ro(X)[…]`，**共 171 处**（rel 31、ai 50、micro 23、agent 17、frame 9、think 6、model_io 6、token_lang 3、derive 2、main 24） |
+| `tests/assocaudit.sh`（新，第 47 套） | 除**存储层**（`token.h` 分配/增长、`model_io.h` 存盘/读盘/校验）外，`->assocs` 直接访问**必须为 0**；并打印"已走访问器的处数"（只许涨） |
+
+**证据**
+
+| 检查 | 结果 |
+|---|---|
+| 整包 | **47/47**（新增 assocaudit）|
+| **新旧 A/B** | `probematrix` **28 行逐行相同，diff 为空**（纯搬运，行为零变化）|
+| `selfcheck` / `asan_check` / `patcount` / `bucketload` | 全 PASS / 全干净 / PASS / PASS |
+| `assocaudit` | 0 处遗留；**已走访问器 184 处** |
+
+**踩的坑（机械替换的两个真坑）**
+1. **链式访问**：`m->target->assocs[i]` 被正则按"最后一个标识符"替换成 `m->token_assocs(target)[i]` ⇒
+   编译报 `ModIntent has no member token_assocs`。正确形态是 `token_assocs(m->target)[i]`。
+   **批量改代码时，正则要盯着"最内层那个对象"，不是"最后一个词"。**
+2. **const 传染**：访问器参数是 `Token*`，而很多函数拿的是 `const Token*` ⇒
+   `discarded-qualifiers`（`-Werror` 下 74 条）。所以访问器要**两个版本**（可写 / 只读），
+   按调用点选 —— 这也正好是将来"只读视图不触发磁盘读"的语义分野。
+
+**照实说**
+- 这是一次**纯搬运**：能力零变化、时序零变化（访问器是 `static inline`，`O2` 下没有额外调用）。
+- **局部加载本身还没有做**：现在 `token_assocs` 只是 `return t->assocs`，标签解析那一行还空着（注释里写了将来形态）。
+- 剩下的 6 处直接访问在 `model_io.h`（存盘/读盘/装载校验）+ `token.h` 内部（分配）—— 它们**本来就该**直接管指针。

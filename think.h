@@ -1478,7 +1478,7 @@ static inline int think_mech_prem_process(AI *ai, Think *t, const ThinkGoal *g, 
     char list[THINK_WHY];
     list[0] = 0;
     for (size_t i = 0; i < g->a->count; ++i) {
-        const AssocEntry *e = &g->a->assocs[i];
+        const AssocEntry *e = &token_assocs(g->a)[i];
         int pol = edge_premise_polarity(e);
         if (!pol || !e->main) continue;
         const char *pn = e->main->name ? e->main->name : "?";
@@ -2124,7 +2124,7 @@ static inline void think_revalidate_caches(AI *ai, Think *t) {
             if (!a || a->is_garbage) continue;
             for (size_t j = 0; j < a->count; ++j) {
                 ai->n_scan_edges++;
-                AssocEntry *e = &a->assocs[j];
+                AssocEntry *e = &token_assocs(a)[j];
                 if (e->role == ASSOC_ROLE_DERIVED && e->main) { token_cache_enqueue(a); break; }
             }
         }
@@ -2139,7 +2139,7 @@ static inline void think_revalidate_caches(AI *ai, Think *t) {
             ai->n_scan_tokens++;
             int still = 0;                  /* 处理完还留着推论边吗（留 ⇒ 下一轮接着复核） */
             for (size_t j = 0; j < a->count; ++j) {
-                AssocEntry *e = &a->assocs[j];
+                AssocEntry *e = &token_assocs(a)[j];
                 ai->n_scan_edges++;
                 if (e->role != ASSOC_ROLE_DERIVED || !e->main) continue;
                 still = 1;
@@ -2675,7 +2675,7 @@ static inline int think_thin_question(const AI *ai, Token *w,
     /* ① 它自己的关系边：命中次数最高的那条 */
     const AssocEntry *best = NULL;
     for (size_t i = 0; i < w->count; ++i) {
-        const AssocEntry *e = &w->assocs[i];
+        const AssocEntry *e = &token_assocs(w)[i];
         if (!e->main || e->main == w || e->main->is_garbage) continue;
         if (e->rel == 0) continue;                     /* 只认肯定关系边（见上面的 ⚠） */
         if (!best || e->hits > best->hits) best = e;
@@ -2695,10 +2695,10 @@ static inline int think_thin_question(const AI *ai, Token *w,
     }
     /* ② 接一条链：W →（普通边）→ Z →（关系边）→ X ⇒ 问「W R X 吗」 */
     for (size_t i = 0; i < w->count; ++i) {
-        Token *z = w->assocs[i].main;
+        Token *z = token_assocs(w)[i].main;
         if (!z || z == w || z->is_garbage) continue;
         for (size_t j = 0; j < z->count; ++j) {
-            const AssocEntry *f = &z->assocs[j];
+            const AssocEntry *f = &token_assocs(z)[j];
             Token *x = f->main;
             if (f->rel == 0 || !x || x == w || x == z || x->is_garbage || !x->name) continue;
             uint8_t rid = 0;

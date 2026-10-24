@@ -295,6 +295,30 @@ struct Token {
                                  * 两边位图不相交 ⇒ 一个字符都不共享 ⇒ 分数必然是 0。 */
 };
 
+/* ============================ §6.565 边数组的**唯一入口** ============================
+ *
+ * 多智能体 / 局部加载（用户 2026-10-24 的目标）的**前置**：
+ * 现在 `Token.assocs` 是一段 malloc 出来的内存，全仓有 ~170 处 `t->assocs[i]` 直接访问。
+ * 将来"边暂时在磁盘上"就是把这个指针打上 `AIP_PTR_DISK` 标签（见 `ptrtag.h`）——
+ * 那时**所有读边的地方都必须经过这里**，否则解引用一个带标签的指针会崩。
+ *
+ * 所以从这一轮起：**新增代码不许直接摸 `t->assocs`**，一律走
+ *   · `token_assocs(t)`     —— 要写 / 要可能触发**按需加载**（加载本身是写：挂回数组、清标签）
+ *   · `token_assocs_ro(t)`  —— 只读视图（拿得到 const Token 的地方用这个；它**不**触发加载）
+ * 收口进度由 `tests/assocaudit.sh` 盯着：直接访问的处数只许降、不许涨。
+ */
+static inline AssocEntry *token_assocs(Token *t) {
+    /* 将来：if (aip_ptr_tag(t->assocs) == AIP_PTR_DISK) token_part_load(t);
+     *       return (AssocEntry *)aip_ptr_strip(t->assocs);                     */
+    return t ? t->assocs : NULL;
+}
+static inline const AssocEntry *token_assocs_ro(const Token *t) {
+    return t ? t->assocs : NULL;
+}
+/* 与访问器成对：边数也从这里读，避免"数组换了、count 还在别处读" */
+static inline size_t token_assoc_count(const Token *t) { return t ? t->count : 0; }
+
+
 /* ============================ 前提符号节点（淘汰「语境」后的表示） ============================
  *
  * 用户的澄清（原话）：「联想本来不依赖前提，可以正常联想；前提符号节点可以被正常联想到，

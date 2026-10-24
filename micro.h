@@ -301,7 +301,7 @@ static inline int micro_endpoint_reserved(const Token *t) {
 static inline long micro_edge_index(const Token *t, const Token *main) {
     if (!t || !main) return -1;
     for (size_t i = 0; i < t->count; ++i)
-        if (t->assocs[i].main == main && edge_is_plain(&t->assocs[i])) return (long)i;
+        if (token_assocs_ro(t)[i].main == main && edge_is_plain(&token_assocs_ro(t)[i])) return (long)i;
     return -1;
 }
 static inline int micro_has_edge(const Token *t, const Token *main) {
@@ -319,7 +319,7 @@ static inline size_t micro_neighbors(const Token *t, Token **out, size_t cap) {
     size_t n = 0;
     if (!t) return 0;
     for (size_t i = 0; i < t->count && n < cap; ++i) {
-        Token *m = t->assocs[i].main;
+        Token *m = token_assocs_ro(t)[i].main;
         if (micro_token_reserved(m)) continue;
         out[n++] = m;
     }
@@ -493,7 +493,7 @@ static inline int micro_token_has_in_edge(const TokenPool *p, const Token *t) {
         const Token *s = p->tokens[i];
         if (!s || s == t) continue;
         for (size_t j = 0; j < s->count; ++j)
-            if (s->assocs[j].main == t) return 1;
+            if (token_assocs_ro(s)[j].main == t) return 1;
     }
     return 0;
 }
@@ -617,7 +617,7 @@ static inline SafeReason safety_review(const SafetyKernel *sk, const TokenPool *
          * **例外**：推出来沉淀的（ASSOC_ROLE_DERIVED）是缓存，
          * 它本来就可能过时 —— 被推翻时允许撤销（见 docs/thinking.md）。
          * 判据只有一份：micro_edge_removable()。 */
-        if (!micro_edge_removable(&m->target->assocs[i])) return SAFE_DENY_RELATION;
+        if (!micro_edge_removable(&token_assocs(m->target)[i])) return SAFE_DENY_RELATION;
         return SAFE_OK;
     }
     /* **在 A 与 B 之间插一个符号节点**：A→N→B，且（可选）让 A、B 不直连。
@@ -1689,7 +1689,7 @@ static inline void micro_detect_conditional(AI *ai, char *const *words, size_t n
             Token *B = u[j];
             long ei = micro_edge_index(A, B);
             if (ei < 0) continue;                              /* 没连结就不谈前提 */
-            if (A->assocs[ei].hits < MICRO_D4_MIN_PAIR_HITS) continue;  /* 刚造的边不算证据 */
+            if (token_assocs(A)[ei].hits < MICRO_D4_MIN_PAIR_HITS) continue;  /* 刚造的边不算证据 */
             cond_bump_pair(mk, A, B);                          /* 分母：所有 (A,B,·) 行 +1 */
             for (size_t k = 0; k < nu; ++k) {                  /* 分子：P 在场的那一行 +1 */
                 if (k == i || k == j) continue;
@@ -1768,7 +1768,7 @@ static inline void micro_detect_prune(AI *ai, Micro *mk) {
         Token *t = ai->pool->tokens[i];
         if (micro_token_reserved(t) || t->count < MICRO_D1_MIN_EDGES) continue;
         for (size_t j = 0; j < t->count && budget; ++j) {
-            AssocEntry *e = &t->assocs[j];
+            AssocEntry *e = &token_assocs(t)[j];
             if (e->hits || e->rel || e->nrel || e->dyn) continue;
             if (edge_is_causal_guess(e)) continue;   /* 猜想边不剪（它不是知识，另有雪藏路径） */
             if (!e->main || micro_token_reserved(e->main)) continue;
@@ -1826,7 +1826,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         int created = !micro_has_edge(m->target, Mn);
         if (token_add_assoc_unique(m->target, Mn) != 0) return -1;
         long idx = micro_edge_index(m->target, Mn);
-        if (idx >= 0 && m->bump) m->target->assocs[idx].hits += m->bump;
+        if (idx >= 0 && m->bump) token_assocs(m->target)[idx].hits += m->bump;
         if (m->action) token_set_action_by_target(m->target, Mn, m->action);
         if (m->flags & MOD_FLAG_PROCESS) {
             /* 过程记号（第 9 条 ②/⑤）：和 `[前提]` 同一个规矩 —— 记号本身在**这一步内** intern，
@@ -1847,7 +1847,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
             }
         }
         if (idx >= 0 && (m->flags & MOD_FLAG_PROCESS))
-            m->target->assocs[idx].role = ASSOC_ROLE_PROCESS;   /* 过程边（第 9 条 ①） */
+            token_assocs(m->target)[idx].role = ASSOC_ROLE_PROCESS;   /* 过程边（第 9 条 ①） */
         if (note) snprintf(note, note_cap, "%s→%s%s",
                            m->target->name ? m->target->name : "?",
                            Mn->name ? Mn->name : "?",
@@ -1862,7 +1862,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         if (token_add_assoc_unique(m->target, m->main) != 0) return -1;
         long idx = micro_edge_index(m->target, m->main);
         if (idx < 0) return -1;
-        AssocEntry *e = &m->target->assocs[idx];
+        AssocEntry *e = &token_assocs(m->target)[idx];
         uint16_t bit = REL_BIT(m->rel_id);
         if (!m->neg) {
             if (e->rel & bit) {
@@ -1913,8 +1913,8 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
     case MOD_BUMP_HITS: {
         long idx = micro_edge_index(m->target, m->main);
         if (idx < 0) return -1;
-        m->target->assocs[idx].hits += m->bump ? m->bump : 1;
-        m->target->assocs[idx].last_touch_tick = p->current_tick;
+        token_assocs(m->target)[idx].hits += m->bump ? m->bump : 1;
+        token_assocs(m->target)[idx].last_touch_tick = p->current_tick;
         if (note) snprintf(note, note_cap, "hits+%u", m->bump ? m->bump : 1u);
         return 1;
     }
@@ -1955,9 +1955,9 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         {   /* 给这两条中转边一点初始权重：hits==0 的边会被当成「没语义依据的残留」 */
             uint32_t bump = m->bump ? m->bump : 1;
             for (size_t k = 0; k < A->count; ++k)
-                if (A->assocs[k].main == N) A->assocs[k].hits += bump;
+                if (token_assocs(A)[k].main == N) token_assocs(A)[k].hits += bump;
             for (size_t k = 0; k < N->count; ++k)
-                if (N->assocs[k].main == B) N->assocs[k].hits += bump;
+                if (token_assocs(N)[k].main == B) token_assocs(N)[k].hits += bump;
         }
         /* **前提**：把 A→N 标成「前提链接」——N 就是这两个词之间的**前提符号节点**。
          * 它是行为符号节点（标记）挂在动作槽上，所以：联想照走（A→N→B 都是普通边）、
@@ -1973,7 +1973,7 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         if (m->flags & MOD_FLAG_SPLIT_DIRECT) {
             long i = micro_edge_index(A, B);
             if (i >= 0) {
-                if (micro_edge_removable(&A->assocs[i])) {
+                if (micro_edge_removable(&token_assocs(A)[i])) {
                     if (token_remove_assoc(A, B) == 0) cut = 1;
                 } else {
                     kept = 1;      /* 直连是**知识**（观测关系边）→ 铁律 2：不许拆 */
@@ -2261,7 +2261,7 @@ static inline int token_op_add_step(AI *ai, char *const *args, size_t n, ModQueu
         if (n >= 3 && args[2] && args[2][0]) idx = atoi(args[2]);
         if (idx <= 0) {                        /* 自动排号：现有步骤里最大的 +1 */
             for (size_t i = 0; i < root->count; ++i) {
-                int s = edge_step_index(&root->assocs[i]);
+                int s = edge_step_index(&token_assocs(root)[i]);
                 if (s > idx) idx = s;
             }
             idx++;
@@ -2371,7 +2371,7 @@ static inline int token_op_add_exec(AI *ai, char *const *args, size_t n, ModQueu
     /* 步号：接着现有的排 */
     int idx = 0;
     for (size_t i = 0; i < root->count; ++i) {
-        int sN = edge_step_index(&root->assocs[i]);
+        int sN = edge_step_index(&token_assocs(root)[i]);
         if (sN > idx) idx = sN;
     }
     idx++;
@@ -2423,7 +2423,7 @@ static inline int token_op_add_claim(AI *ai, char *const *args, size_t n, ModQue
     }
     if (idx <= 0) {
         for (size_t i = 0; i < root->count; ++i) {
-            int sN = edge_step_index(&root->assocs[i]);
+            int sN = edge_step_index(&token_assocs(root)[i]);
             if (sN > idx) idx = sN;
         }
         idx++;
@@ -2524,7 +2524,7 @@ static inline int token_op_add_say(AI *ai, char *const *args, size_t n, ModQueue
     if (!root) { snprintf(note, cap, "没有这个过程：%s", args[0]); return -1; }
     int idx = 0;
     for (size_t i = 0; i < root->count; ++i) {
-        int sN = edge_step_index(&root->assocs[i]);
+        int sN = edge_step_index(&token_assocs(root)[i]);
         if (sN > idx) idx = sN;
     }
     idx++;
@@ -2680,7 +2680,7 @@ static inline int token_op_premise_tie(AI *ai, char *const *args, size_t n, ModQ
     {   /* 前提链接：A —[前提]→ P（没有就先建一个标记） */
         AssocEntry *link = NULL;
         for (size_t i = 0; i < A->count; ++i)
-            if (A->assocs[i].main == P) { link = &A->assocs[i]; break; }
+            if (token_assocs(A)[i].main == P) { link = &token_assocs(A)[i]; break; }
         if (!link) {
             /* A —[前提]→ P：先加边，再挂标记（两步都过安全内核） */
             ModIntent e2;

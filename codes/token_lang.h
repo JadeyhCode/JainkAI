@@ -502,8 +502,8 @@ static inline void interp_exec_prim(Interp *ip, Token *prim, Token *param) {
         if (!nested) break;
         Token *left = NULL, *rest = NULL;
         for (size_t i = 0; i < nested->count; ++i) {
-            if (!left) left = nested->assocs[i].main;
-            else if (!rest) { rest = nested->assocs[i].main; break; }
+            if (!left) left = token_assocs(nested)[i].main;
+            else if (!rest) { rest = token_assocs(nested)[i].main; break; }
         }
         if (left) interp_push(ip, left);
         if (rest) interp_push(ip, rest);
@@ -839,7 +839,7 @@ static inline Token *focus_selector_top_hits(Token *f, Token *const *ctx,
     if (!f || f->count == 0) return NULL;
     AssocEntry *best = NULL;
     for (size_t i = 0; i < f->count; ++i) {
-        AssocEntry *e = &f->assocs[i];
+        AssocEntry *e = &token_assocs(f)[i];
         if (!entry_matches(e, ctx, n_ctx)) continue;
         if (!best || e->hits > best->hits) best = e;
     }

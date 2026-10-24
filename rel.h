@@ -319,7 +319,7 @@ static inline int rel_obs_opposite(const Token *a, uint8_t rid, const Token *b, 
     if (!a || !b || rid == 0 || rid >= REL_DYN_BASE) return 0;
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->role == ASSOC_ROLE_DERIVED) continue;      /* 缓存不是观测，该被推翻 */
         if (neg ? (e->rel & bit) : (e->nrel & bit)) return 1;
@@ -427,7 +427,7 @@ static inline void rel_excl_build(AI *ai) {
             const Token *obj[64];
             size_t no = 0;
             for (size_t j = 0; j < t->count && no < 64; ++j) {
-                const AssocEntry *e = &t->assocs[j];
+                const AssocEntry *e = &token_assocs(t)[j];
                 if (!(e->rel & bit) || !e->main || e->main == t) continue;
                 /* **统计只看观测**：独占/多值是从**数据**里量出来的，
                  * 而推理沉淀下来的缓存是自己推的 —— 拿它当数据会自我印证
@@ -607,7 +607,7 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
     if (rid >= REL_DYN_BASE) {            /* 动态关系走自己的那套（§6.80：否定旗子在 nrel 15 位） */
         uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
         for (size_t i = 0; i < a->count; ++i) {
-            const AssocEntry *e = &a->assocs[i];
+            const AssocEntry *e = &token_assocs_ro(a)[i];
             if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
             if (edge_dyn_neg(e)) continue;         /* 要的是**肯定**那条 */
             if (derived) *derived = edge_is_guess(e) ? 2
@@ -618,7 +618,7 @@ static inline int rel_direct_as(const Token *a, uint8_t rid, const Token *b, int
     }
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->rel & bit) {
             if (derived) *derived = edge_is_guess(e) ? 2
@@ -634,7 +634,7 @@ static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b,
     if (rid >= REL_DYN_BASE) {            /* 同上：动态关系的否定看 15 位 */
         uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
         for (size_t i = 0; i < a->count; ++i) {
-            const AssocEntry *e = &a->assocs[i];
+            const AssocEntry *e = &token_assocs_ro(a)[i];
             if (e->main != b || e->dyn != d || edge_is_causal_guess(e)) continue;
             if (!edge_dyn_neg(e)) continue;        /* 要的是**否定**那条 */
             if (derived) *derived = edge_is_guess(e) ? 2
@@ -645,7 +645,7 @@ static inline int rel_direct_neg_as(const Token *a, uint8_t rid, const Token *b,
     }
     uint16_t bit = (uint16_t)(1u << (rid - 1));
     for (size_t i = 0; i < a->count; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->nrel & bit) {
             if (derived) *derived = edge_is_guess(e) ? 2
@@ -661,14 +661,14 @@ static inline int rel_direct(const Token *a, uint8_t rid, const Token *b) {
     if (rid >= REL_DYN_BASE) {                      /* 动态关系 */
         uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
         for (size_t i = 0; i < a->count; ++i)
-            if (a->assocs[i].main == b && a->assocs[i].dyn == d &&
-                !edge_is_guess(&a->assocs[i])) return 1;
+            if (token_assocs_ro(a)[i].main == b && token_assocs_ro(a)[i].dyn == d &&
+                !edge_is_guess(&token_assocs_ro(a)[i])) return 1;
         return 0;
     }
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main == b && !edge_is_guess(&a->assocs[i]) &&
-            (a->assocs[i].rel & bit)) return 1;      /* §6.125 猜测记忆**不算知识** */
+        if (token_assocs_ro(a)[i].main == b && !edge_is_guess(&token_assocs_ro(a)[i]) &&
+            (token_assocs_ro(a)[i].rel & bit)) return 1;      /* §6.125 猜测记忆**不算知识** */
     return 0;
 }
 
@@ -676,8 +676,8 @@ static inline int rel_direct_neg(const Token *a, uint8_t rid, const Token *b) {
     if (!a || !b || rid == 0 || rid >= REL_DYN_BASE) return 0;  /* 否定只支持核心关系 */
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main == b && !edge_is_guess(&a->assocs[i]) &&
-            (a->assocs[i].nrel & bit)) return 1;     /* §6.125 同上 */
+        if (token_assocs_ro(a)[i].main == b && !edge_is_guess(&token_assocs_ro(a)[i]) &&
+            (token_assocs_ro(a)[i].nrel & bit)) return 1;     /* §6.125 同上 */
     return 0;
 }
 
@@ -718,7 +718,7 @@ static inline size_t rel_next_cands(const AI *ai, const Token *a, uint8_t rid,
     if (rid < REL_DYN_BASE) {
         uint16_t bit = REL_BIT(rid);
         for (size_t i = 0; i < a->count && n < cap; ++i) {
-            const AssocEntry *e = &a->assocs[i];
+            const AssocEntry *e = &token_assocs_ro(a)[i];
             if (!e->main || e->main == a) continue;
             /* 缓存当中间跳要**先有依据**：没依据的缓存不算路（和 R0 同一道闸）。
              * §6.131 例外：**记忆里的猜测**本来就"重推不出来"（它正是为这个才被记下来的），
@@ -737,7 +737,7 @@ static inline size_t rel_next_cands(const AI *ai, const Token *a, uint8_t rid,
     } else {
         uint8_t d = (uint8_t)(rid - REL_DYN_BASE + 1);
         for (size_t i = 0; i < a->count && n < cap; ++i) {
-            const AssocEntry *e = &a->assocs[i];
+            const AssocEntry *e = &token_assocs_ro(a)[i];
             if (!e->main || e->main == a || e->dyn != d) continue;
             if (neg_want ? !edge_dyn_neg(e) : edge_dyn_neg(e)) continue;   /* §6.80：否定也算一档 */
             out[n++] = e->main;
@@ -780,7 +780,7 @@ static inline size_t ai_hypo_conflicts(const AI *ai, const Token *view_who,
             const Token *y = seq[j];
             if (!y || y == x) continue;
             for (size_t k = 0; k < x->count; ++k) {
-                const AssocEntry *e = &x->assocs[k];
+                const AssocEntry *e = &token_assocs_ro(x)[k];
                 if (e->main != y) continue;
                 for (uint8_t r = 1; r <= REL_CORE_MAX; ++r) {
                     uint16_t bit = REL_BIT(r);
@@ -872,7 +872,7 @@ static inline int rel_direct_review(const Token *a, uint8_t rid, const Token *b,
     if (!a || !b || rid == 0 || rid >= REL_DYN_BASE) return 0;
     uint16_t bit = REL_BIT(rid);
     for (size_t i = 0; i < a->count; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         if (e->main != b || edge_is_causal_guess(e)) continue;
         if (e->role == ASSOC_ROLE_DERIVED) continue;       /* 缓存不算依据 */
         if ((e->rel & bit) && (e->nrel & bit)) continue;   /* 自己打架的边不算依据 */
@@ -979,7 +979,7 @@ static inline Token *rel_need_witness(AI *ai, const Token *x, const Token *y, in
 static inline int rel_cw_ok(const AI *ai, const Token *a) {
     if (!ai || !ai->closed_world || !a) return 0;
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].rel || a->assocs[i].nrel || a->assocs[i].dyn) return 1;
+        if (token_assocs_ro(a)[i].rel || token_assocs_ro(a)[i].nrel || token_assocs_ro(a)[i].dyn) return 1;
     return 0;
 }
 
@@ -1125,7 +1125,7 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
          * 由 `tools/optest.c` / `tests/tokenop.sh` 钉住：前提在提问里 → 用；不在 → 不用。 */
         if (!spec_blocked) {
             for (size_t i = 0; i < a->count; ++i) {
-                const AssocEntry *pe = &a->assocs[i];
+                const AssocEntry *pe = &token_assocs_ro(a)[i];
                 int ppol = edge_premise_polarity(pe);
                 if (!ppol || !pe->main) continue;
                 Token *P = pe->main;
@@ -1312,15 +1312,15 @@ static inline int rel_struct_sim(const Token *a, const Token *s, size_t *out_com
     if (!a || !s || a == s) return 0;
     size_t sa = 0, ss = 0, inter = 0;
     for (size_t i = 0; i < a->count; ++i)
-        if (a->assocs[i].main && (a->assocs[i].rel || a->assocs[i].nrel)) sa++;
+        if (token_assocs_ro(a)[i].main && (token_assocs_ro(a)[i].rel || token_assocs_ro(a)[i].nrel)) sa++;
     for (size_t j = 0; j < s->count; ++j)
-        if (s->assocs[j].main && (s->assocs[j].rel || s->assocs[j].nrel)) ss++;
+        if (token_assocs_ro(s)[j].main && (token_assocs_ro(s)[j].rel || token_assocs_ro(s)[j].nrel)) ss++;
     if (sa == 0 || ss == 0) return 0;
     for (size_t i = 0; i < a->count; ++i) {
-        const AssocEntry *e = &a->assocs[i];
+        const AssocEntry *e = &token_assocs_ro(a)[i];
         if (!e->main || (!e->rel && !e->nrel)) continue;
         for (size_t j = 0; j < s->count; ++j) {
-            const AssocEntry *f = &s->assocs[j];
+            const AssocEntry *f = &token_assocs_ro(s)[j];
             if (f->main != e->main) continue;
             if ((f->rel & e->rel) || (f->nrel & e->nrel)) { inter++; break; }
         }

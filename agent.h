@@ -475,10 +475,10 @@ static inline void aip_shell_refresh(const AI *ai) {
             continue;
         }
         for (size_t k = 0; k < t->count; ++k) {
-            const Token *tg = t->assocs[k].main;
+            const Token *tg = token_assocs_ro(t)[k].main;
             if (tg && tg->name && strcmp(tg->name, "外壳标记") == 0) {
                 snprintf(g_shell[g_shell_n].w, sizeof g_shell[0].w, "%s", t->name);
-                const Token *act = t->assocs[k].action;
+                const Token *act = token_assocs_ro(t)[k].action;
                 g_shell_q[g_shell_n] = (act && act->name && !strcmp(act->name, "[外壳:问]")) ? 1 : 0;
                 ++g_shell_n;
                 break;
@@ -1985,7 +1985,7 @@ static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
      * （我按"非 0 才成功"写，于是一建边就 return，留下一条没打标记的观测边 ✗）。
      * 照 `micro.h` 的 `MOD_TAG_DERIVED`：纯建边 → 置位 → **角色最后打** → 拒绝降级观测。 */
     for (size_t i = 0; i < A->count; ++i)
-        if (edge_premise_polarity(&A->assocs[i])) return;   /* 这条边上挂着前提（条件缓存）：不掺和 */
+        if (edge_premise_polarity(&token_assocs(A)[i])) return;   /* 这条边上挂着前提（条件缓存）：不掺和 */
     char mark[80];
     snprintf(mark, sizeof mark, AI_GUESS_MARK_PREFIX ":%s]", sib->name);
     Token *m = pool_token_intern(ai->pool, mark);
@@ -1993,7 +1993,7 @@ static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
     if (token_add_assoc_unique(A, B) != 0) return;   /* 0 = 成功（这个家族都是这个约定） */
     AssocEntry *e = NULL;
     for (size_t i = 0; i < A->count; ++i)
-        if (A->assocs[i].main == B && edge_is_plain(&A->assocs[i])) { e = &A->assocs[i]; break; }
+        if (token_assocs(A)[i].main == B && edge_is_plain(&token_assocs(A)[i])) { e = &token_assocs(A)[i]; break; }
     if (!e) return;
     uint16_t bit = REL_BIT(rid);
     if ((e->rel & bit) && e->role != ASSOC_ROLE_DERIVED) return;   /* 已是观测：拒绝降级 */
@@ -2252,7 +2252,7 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     {
         uint16_t bit = REL_BIT(REL_AT);
         for (size_t i = 0; i < A->count; ++i) {
-            AssocEntry *e = &A->assocs[i];
+            AssocEntry *e = &token_assocs(A)[i];
             if (!e->main || e->main == B) continue;
             if (!(e->rel & bit)) continue;
             e->rel &= (uint16_t)~bit;
@@ -4049,7 +4049,7 @@ static inline void ai_hypo_cache_sweep(AI *ai) {
         if (!rel_solve_ignoring_caches(ai, A, rid, B, neg)) { ++i; continue; }  /* 还推不出：留着 */
         /* 升格：摘掉前提（把 A→P 那条前提链接的 action 清掉 ⇒ 它不再是前提链接） */
         for (size_t k = 0; k < A->count; ++k) {
-            AssocEntry *e = &A->assocs[k];
+            AssocEntry *e = &token_assocs(A)[k];
             if (e->main == P && edge_is_premise_link(e)) { e->action = NULL; break; }
         }
         char note[160];
@@ -4082,7 +4082,7 @@ static inline void agent_hypo_cache(AI *ai, Token *A, uint8_t rid, Token *B, int
     if (neg) (void)token_tag_nrel(A, B, rid, REL_BOOST);
     else     (void)token_tag_rel(A, B, rid, REL_BOOST);
     for (size_t k = 0; k < A->count; ++k) {
-        AssocEntry *e = &A->assocs[k];
+        AssocEntry *e = &token_assocs(A)[k];
         if (e->main == B && ((neg && (e->nrel & REL_BIT(rid))) || (!neg && (e->rel & REL_BIT(rid))))) {
             e->role = ASSOC_ROLE_DERIVED;
             token_cache_enqueue(A);              /* §6.127：同上 */
@@ -4674,7 +4674,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
         uint16_t bit = REL_BIT(rid);
         int has_edge = 0;
         for (size_t i = 0; i < A->count && !has_edge; ++i)
-            if (A->assocs[i].rel & bit) has_edge = 1;
+            if (token_assocs(A)[i].rel & bit) has_edge = 1;
         if (!has_edge) {
             char rb[220];
             /* §6.367 第二人称主语 ⇒ 换到我这一侧（`你 属于 动物 吗` 答"我不知道我属不属于动物"）*/
@@ -4699,7 +4699,7 @@ static inline char *agent_answer_relation_inner(AI *ai, char *const *words, size
     if (!solved && rid == REL_IS_A && A && bw && rw) {
         uint16_t bit = REL_BIT(REL_IS_A);
         for (size_t i = 0; i < A->count; ++i) {
-            AssocEntry *at = &A->assocs[i];
+            AssocEntry *at = &token_assocs(A)[i];
             if (!at->rel || !(at->rel & bit) || at->nrel) continue;
             Token *C = at->main;
             if (!C || C == B) continue;
@@ -5303,7 +5303,7 @@ static inline int proc_step_run(AI *ai, Token *root, const AssocEntry *se, int i
     {
         size_t hits = 0;
         for (size_t k = 0; k < act->count; ++k)
-            if (act->assocs[k].hits > 0) hits++;
+            if (token_assocs_ro(act)[k].hits > 0) hits++;
         if (n_added) {
             printf("    %s %-12s ≈ 干跑：**过**（假定前提「%s」成立%s —— 记进假设层：%s 需要 %s，跑完 pop）\n",
                    label, act->name ? act->name : "?",
@@ -5428,7 +5428,7 @@ static inline size_t proc_exec(AI *ai, const char *bare, int depth, ProcRun *pr,
     const AssocEntry *conds[PROC_SHOW_MAX], *elses[PROC_SHOW_MAX], *excs[PROC_SHOW_MAX];
     size_t ns = 0, nc = 0, nb = 0, ncd = 0, nel = 0, nex = 0;
     for (size_t i = 0; i < root->count; ++i) {
-        const AssocEntry *e = &root->assocs[i];
+        const AssocEntry *e = &token_assocs(root)[i];
         if (edge_step_index(e) > 0)      { if (ns < PROC_SHOW_MAX) steps[ns++] = e; }
         else if (edge_is_cond(e))        { if (ncd < PROC_SHOW_MAX) conds[ncd++] = e; }
         else if (edge_is_else(e))        { if (nel < PROC_SHOW_MAX) elses[nel++] = e; }
@@ -5738,7 +5738,7 @@ static inline void think_note_process(AI *ai, char *const *words, size_t n) {
         /* 数一下过程有多少步（只读） */
         size_t steps = 0;
         for (size_t e = 0; e < r->count; ++e)
-            if (edge_step_index(&r->assocs[e]) > 0) steps++;
+            if (edge_step_index(&token_assocs(r)[e]) > 0) steps++;
         char note[THINK_WHY];
         snprintf(note, sizeof note, "这件事我记过过程「%s」（%zu 步）", bare, steps);
         if (ai->proc_run) {
@@ -5792,7 +5792,7 @@ static inline int dialog_try_proc_plan(AI *ai, char *const *words, size_t n,
                                 "我 记过 过程 「 %s 」 ：", bare);
         size_t nstep = 0;
         for (size_t e = 0; e < r->count && off + 24 < out_cap; ++e) {
-            const AssocEntry *ed = &r->assocs[e];
+            const AssocEntry *ed = &token_assocs(r)[e];
             const char *nm = ed->main && ed->main->name ? ed->main->name : "?";
             if (edge_step_index(ed) > 0) {
                 off += (size_t)snprintf(out + off, out_cap - off, " 第 %d 步 %s ；",
@@ -6097,7 +6097,7 @@ static inline int agent_has_attr(AI *ai, Token *A, Token *B) {
     if (rel_direct(A, REL_HAS, B)) return 1;
     uint16_t is_a = REL_BIT(REL_IS_A);
     for (size_t i = 0; i < A->count; ++i) {
-        AssocEntry *e = &A->assocs[i];
+        AssocEntry *e = &token_assocs(A)[i];
         if (!(e->rel & is_a) || !e->main) continue;
         if (rel_direct(e->main, REL_HAS, B)) return 1;
     }
@@ -6209,7 +6209,7 @@ static inline int agent_identity_note(AI *ai, char *const *words, size_t n,
     /* 类别：顺一层 属于 */
     const char *cat = NULL;
     for (size_t i = 0; i < A->count; ++i) {
-        AssocEntry *e = &A->assocs[i];
+        AssocEntry *e = &token_assocs(A)[i];
         if (!(e->rel & REL_BIT(REL_IS_A)) || !e->main) continue;
         cat = e->main->name;
         break;

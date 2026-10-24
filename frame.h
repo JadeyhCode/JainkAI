@@ -166,22 +166,22 @@ static inline int fr_dice(const Token *a, const Token *b) {
      * `你知道动物吗` 就从「我知道动物」退化成降级答复了。
      * 换句说：别让人工知识去污染分布统计。 */
     for (size_t i = 0; i < a->count; ++i) {
-        Token *m = a->assocs[i].main;
+        Token *m = token_assocs_ro(a)[i].main;
         if (!m || (m->name && m->name[0] == '[')) continue;
-        if (a->assocs[i].rel) continue;
+        if (token_assocs_ro(a)[i].rel) continue;
         size_t k;
-        for (k = 0; k < i; ++k) if (a->assocs[k].main == m) break;
+        for (k = 0; k < i; ++k) if (token_assocs_ro(a)[k].main == m) break;
         if (k < i) continue;
         na++;
         for (size_t j = 0; j < b->count; ++j)
-            if (b->assocs[j].main == m) { inter++; break; }
+            if (token_assocs_ro(b)[j].main == m) { inter++; break; }
     }
     for (size_t j = 0; j < b->count; ++j) {
-        Token *m = b->assocs[j].main;
+        Token *m = token_assocs_ro(b)[j].main;
         if (!m || (m->name && m->name[0] == '[')) continue;
-        if (b->assocs[j].rel) continue;
+        if (token_assocs_ro(b)[j].rel) continue;
         size_t k;
-        for (k = 0; k < j; ++k) if (b->assocs[k].main == m) break;
+        for (k = 0; k < j; ++k) if (token_assocs_ro(b)[k].main == m) break;
         if (k < j) continue;
         nb++;
     }
@@ -215,8 +215,8 @@ static inline int fr_cover100(const Token *cand, Token *const *ex, size_t ne) {
     size_t hit = 0;
     for (size_t i = 0; i < ne; ++i) {
         for (size_t j = 0; j < cand->count; ++j)
-            if (cand->assocs[j].main == ex[i] &&
-                cand->assocs[j].role == ASSOC_ROLE_COINED) { hit++; break; }
+            if (token_assocs_ro(cand)[j].main == ex[i] &&
+                token_assocs_ro(cand)[j].role == ASSOC_ROLE_COINED) { hit++; break; }
     }
     return (int)((hit * 100) / ne);
 }
