@@ -1785,10 +1785,15 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
             Token *a2 = pool_find(ai->pool, subj);
             char buf[256];
             if (!a2) {
-                snprintf(buf, sizeof buf,
-                         "我 还 不 认识 「%s」（图里 没 这 个 词）—— 你 教 一 句「%s %s …」"
-                         "我 就 记 住（不 编）。", subj, subj,
-                         rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "属于");
+                {
+                    /* §6.539 `$1` 主语、`$3` 关系名（`$2` 留给"否定词"，这里没有） */
+                    const char *t = ai_say_tpl("不知道.不认识");
+                    char tmp[220];
+                    der_fill3(tmp, sizeof tmp,
+                              t ? t : "我 还 不 认识 「$1」（图里 没 这 个 词）—— 你 教 一 句「$1 $3 …」我 就 记 住（不 编）。",
+                              subj, NULL, rel_name_of(ai, rjd) ? rel_name_of(ai, rjd) : "属于");
+                    snprintf(buf, sizeof buf, "%s", tmp);
+                }
             } else {
                 Token *out2[8];
                 uint8_t hyp2[8];
@@ -2388,7 +2393,11 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
     else if (truth == (neg2 ? -1 : 1))
         o += (size_t)snprintf(bf + o, sizeof bf - o, "这 条 我 图 里 也 记 着。");
     else if (truth == 0)
-        o += (size_t)snprintf(bf + o, sizeof bf - o, "我 图 里 没 记 过 这 条（不 编）。");
+        {
+            const char *t = ai_say_tpl("不知道.没这条");
+            o += (size_t)snprintf(bf + o, sizeof bf - o, "%s",
+                                  t ? t : "我 图 里 没 记 过 这 条（不 编）。");
+        }
     else
         o += (size_t)snprintf(bf + o, sizeof bf - o,
                               "我 图 里 记 的 是 反 的：%.24s %.24s%.24s %.24s。",
@@ -2729,9 +2738,14 @@ static inline int agent_self_ability(AI *ai, const char *input, char *out, size_
      * §6.391 但宾语也要换：`你 会 想 我 吗` ⇒ 「我 会 想 **你**」（以前写成「我 会 想 我」）。*/
     char obj_me[64];
     aip_pov_flip_obj(obj, obj_me, sizeof obj_me);
-    snprintf(out, cap,
-             "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「我 会 %.40s」。"
-             "你 想 教 我 就 说「你 会 %.40s」，我 就 记 下（存盘 之后 还 在）。", obj_me, obj);
+    {
+        /* §6.539 带槽位的整句也进数据（`$1` = 我会的宾语、`$2` = 教我那半句的宾语） */
+        const char *t = ai_say_tpl("不知道.不敢说会");
+        der_fill3(out, cap,
+                  t ? t : "这 件 事 我 不 敢 说 会 —— 图 里 没 记 过「我 会 $1」。"
+                          "你 想 教 我 就 说「你 会 $2」，我 就 记 下（存盘 之后 还 在）。",
+                  obj_me, obj, NULL);
+    }
     return 1;
 }
 
