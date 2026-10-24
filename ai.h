@@ -122,6 +122,47 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
         if (ai_token_has_question_word(words[i])) return 1;
     return 0;
 }
+/* §6.532 **答复组织下沉成数据**（`[say] 键=模板`）：把"结论怎么说"从 derive.h 的判断里搬出来。
+ *
+ * 为什么：`对` / `不 对` / `结论 ， 推导链` / `大概 吧 ， …` 这些措辞原来写死在 `der_say`。
+ * 改一句措辞、加一种说法都要改代码 —— 而"答复组织"和"外壳"一样，是语言件，不是引擎。
+ * 现在：`patterns.txt` 的 `[say]` 行是唯一来源，模板里 `$1`/`$2` 是槽位
+ * （`$1` = 推导链或判词/数字，`$2` = 第二槽：链或跳数）。没有 patterns.txt 时退回下面的种子表。
+ *
+ * 键名是**语义位**，不是句子：`判词.对` / `判词.不对` / `判词.不定` / `组织.定` / `组织.符号` /
+ * `组织.猜一` / `组织.猜多` / `组织.假设` / `组织.缺` / `组织.空`。 */
+#define AI_SAY_MAX 24
+#define AI_SAY_KEY_LEN 24
+#define AI_SAY_TXT_LEN 220
+static char g_say_key[AI_SAY_MAX][AI_SAY_KEY_LEN];
+static char g_say_txt[AI_SAY_MAX][AI_SAY_TXT_LEN];
+static size_t g_say_n;
+static int g_say_data;      /* 1 = patterns.txt 读到了（数据接管；缺席的键走"退化"而不是种子） */
+static const struct { const char *k, *v; } AI_SAY_SEEDS[] = {
+    { "判词.对",   "对" },
+    { "判词.不对", "不 对" },
+    { "判词.不定", "不 确定" },
+    { "组织.定",   "$1 ， $2" },
+    { "组织.符号", "$1 ： $2" },
+    { "组织.猜一", "大概 吧 ， $1 （其中一环是**推测**的，不是知道）" },
+    { "组织.猜多", "大概 吧 ， $1 （其中 $2 环是**推测**的，不是知道）" },
+    { "组织.假设", "在 假设 下 ： $1 ， $2" },
+    { "组织.缺",   "推不出来（链上缺 $1 步，不能下结论）" },
+    { "组织.空",   "推不出来" },
+    { NULL, NULL }
+};
+/* 查一条答复模板：数据里有就用数据；数据接管了但没有这一条 ⇒ NULL（调用方走退化形态）；
+ * 完全没数据（没有 patterns.txt）⇒ 用种子（保证套件在没有数据的临时目录里也照常回答）。 */
+static inline const char *ai_say_tpl(const char *key) {
+    if (!key) return NULL;
+    for (size_t i = 0; i < g_say_n; ++i)
+        if (!strcmp(g_say_key[i], key)) return g_say_txt[i];
+    if (g_say_data) return NULL;
+    for (size_t i = 0; AI_SAY_SEEDS[i].k; ++i)
+        if (!strcmp(AI_SAY_SEEDS[i].k, key)) return AI_SAY_SEEDS[i].v;
+    return NULL;
+}
+
 /* ============================ 参数区（ai.h 这一层的上界） ============================
  *
  * 按项目的「不要滥用硬编码」：**参数**（上界/阈值/频率）留在 `#define` 里，

@@ -503,10 +503,10 @@ static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了�
  * 行数本来就不等，不参与这个比较（它有自己的 patcount 套件）。*/
 enum { AIP_BK_LEAD, AIP_BK_SLOT, AIP_BK_CONFUSE, AIP_BK_REPLY, AIP_BK_SYN,
        AIP_BK_AFFIX, AIP_BK_TAIL, AIP_BK_FILL, AIP_BK_CLASS,
-       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_N };
+       AIP_BK_QWORD, AIP_BK_QPART, AIP_BK_SAY, AIP_BK_N };
 static const char *const g_bucket_names[AIP_BK_N] = {
     "lead", "slot", "confuse", "reply", "syn", "affix", "tail", "fill", "class",
-    "qword", "qpart"
+    "qword", "qpart", "say"
 };
 /* §6.375 **副词填充**（`[fill] 真的` / `[fill] 确 实`）：删掉不改语义的语气副词。
  * 与 `[lead]` 不同，它出现在句子**任何位置**（`猫 真的 会 飞 吗`），而且分词可能把它拆成几个词
@@ -833,6 +833,31 @@ continue;
             g_class_n++;
             continue;
         }
+        /* §6.532 答复组织下沉：`[say] 键=模板`（模板里 `$1`/`$2` 是槽位；存储端与种子在 ai.h） */
+        if (!strcmp(kind, "say")) {
+            char *eq = strchr(val, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char *tpl = eq + 1;
+            while (*tpl == ' ' || *tpl == '\t') tpl++;
+            /* 键去掉尾部空白 */
+            char *ke = val + strlen(val);
+            while (ke > val && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = 0;
+            if (!val[0] || !*tpl) continue;
+            if (g_say_n >= AI_SAY_MAX) {
+                fprintf(stderr, "[patterns] ⚠ [say] 超过上限 %d，这一行被丢弃：%.50s\n",
+                        AI_SAY_MAX, val);
+                continue;
+            }
+            if (strlen(val) >= AI_SAY_KEY_LEN || strlen(tpl) >= AI_SAY_TXT_LEN) {
+                fprintf(stderr, "[patterns] ⚠ [say] 键/模板太长，这一行被丢弃：%.50s\n", val);
+                continue;
+            }
+            snprintf(g_say_key[g_say_n], sizeof g_say_key[0], "%s", val);
+            snprintf(g_say_txt[g_say_n], sizeof g_say_txt[0], "%s", tpl);
+            g_say_n++;
+            continue;
+        }
         /* §6.531 疑问词表下沉：`[qword]` 整词 / `[qpart]` 子串（存储端在 ai.h，
          * 因为 `ai_token_has_question_word` 是**唯一**判据，不能有两份实现） */
         if (!strcmp(kind, "qword")) {
@@ -883,11 +908,12 @@ continue;
      * 于是"关掉就变"能被量出来 —— 这正是消融要的）。没有文件时仍退回 ai.h 的种子表。 */
     g_qword_data = 1;
     g_qpart_data = 1;
+    g_say_data = 1;      /* §6.532 答复模板同上：文件读到了就由数据接管 */
     /* §6.371 默认就喊（不只在 AIP_PATDBG 下）：文件行数 > 进表行数 ⇒ 有行被静默丢了 */
     {
         size_t got[AIP_BK_N] = {g_lead_n, g_slot_n, g_confuse_n, g_reply_n,
                                 g_syn_n, g_aff_n, g_tail_n, g_fill_n, g_class_n,
-                                g_qword_n, g_qpart_n};
+                                g_qword_n, g_qpart_n, g_say_n};
         for (int i = 0; i < AIP_BK_N; ++i) {
             if (got[i] < seen[i])
                 fprintf(stderr,
@@ -925,9 +951,9 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
-                g_fill_n, g_class_n, g_qword_n, g_qpart_n);
+                g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n);
 }
 /* §6.285 **加载自检**：数据层静默丢弃过一次（§6.284 的长度检查），所以要把
  * "读到了多少行" 说出来。`AIP_PATDBG=1` 时启动打印；也留给 `::patterns` 用。 */

@@ -623,6 +623,30 @@ q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
 [ -n "$q_on" ] && [ "$q_on" != "$q_off" ] \
     && ok "关掉 qword 桶 ⇒ 答复就变（**桶在承重**；反证：改前这个开关对写死的表毫无作用）" \
     || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
+# §6.532 目标③续：**答复组织下沉**（`[say] 语义位=模板`；`$1`/`$2` 是槽位）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o65" 2>&1 ) || true
+grep -q 'say=10' "$WORK/o65" \
+    && ok "答复模板**从数据读**：say=10（判词 3 + 组织 7，patterns.txt 一行一个语义位）" \
+    || bad "say 桶" "$(grep -o 'say=[0-9]*' "$WORK/o65")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model model.bin > "$WORK/o66" 2>&1 ) || true
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
+    AIP_NODATA=say "$WORK/aip" --model model.bin > "$WORK/o67" 2>&1 ) || true
+s_on=$(sed -n 's/.*AI > //p' "$WORK/o66" | tail -1)
+s_off=$(sed -n 's/.*AI > //p' "$WORK/o67" | tail -1)
+[ -n "$s_on" ] && [ "$s_on" != "$s_off" ] \
+    && ok "关掉 say 桶 ⇒ 答复组织就变（判词消失、只剩推导链：数据在承重）" \
+    || bad "say 消融" "on=「$s_on」 off=「$s_off」"
+# 改**一行数据**就能换措辞（代码不动）—— 用一个临时目录，别弄脏真数据
+SX="$WORK/sx"; rm -rf "$SX"; mkdir -p "$SX"
+cp "$ROOT/model.bin" "$SX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$SX/" 2>/dev/null || true
+( cd "$SX" && printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n' | cat - > /dev/null ) || true
+sed -i 's/^\[say\] 组织\.定=.*/[say] 组织.定=（数据改的）$1 ⇒ $2/' "$SX/patterns.txt"
+( cd "$SX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据改的）' "$SX/out.txt" \
+    && ok "**改一行 [say] 组织.定** ⇒ 答复措辞跟着变（答复组织真的是数据）" \
+    || bad "say 改模板" "$(sed -n 's/.*AI > //p' "$SX/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

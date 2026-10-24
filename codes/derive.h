@@ -619,6 +619,30 @@ static inline void der_symbol_text(const AI *ai, const Derivation *d,
 
 /* 把链渲染成**回复**（这才是「语言」所在的地方）。
  * 注意：gaps > 0 时**绝不下断言** —— 只会说「推不出来」。 */
+/* §6.532 模板槽位：只认 `$1`/`$2`（`$2` 给 NULL 时按空串），别的字符原样抄 —— 够用且好查。
+ * 不做转义：模板是数据，写 `$` 就当槽位（这条写进 `docs/data-layer.md`）。*/
+static inline void der_fill(char *out, size_t cap, const char *tpl,
+                            const char *a, const char *b) {
+    if (!out || !cap) return;
+    size_t o = 0;
+    for (const char *p = tpl; *p && o + 8 < cap; ) {
+        if (p[0] == '$' && p[1] == '1') {
+            const char *v = a ? a : "";
+            size_t l = strlen(v);
+            if (o + l + 1 >= cap) break;
+            memcpy(out + o, v, l); o += l; p += 2; continue;
+        }
+        if (p[0] == '$' && p[1] == '2') {
+            const char *v = b ? b : "";
+            size_t l = strlen(v);
+            if (o + l + 1 >= cap) break;
+            memcpy(out + o, v, l); o += l; p += 2; continue;
+        }
+        out[o++] = *p++;
+    }
+    out[o] = 0;
+}
+
 static inline void der_say(const AI *ai, Derivation *d, int style,
                            char *out, size_t cap) {
     if (!out || cap == 0) return;
@@ -634,18 +658,33 @@ static inline void der_say(const AI *ai, Derivation *d, int style,
     if (style == DER_STYLE_SYMBOL) der_symbol_text(ai, d, chain, sizeof chain);
     else der_chain_text(ai, d, chain, sizeof chain);
 
-    /* 有缺口：不许下断言。这是整层最要紧的一条规矩。 */
+    /* 有缺口：不许下断言。这是整层最要紧的一条规矩。
+     * §6.532 措辞来自数据（`组织.空` / `组织.缺`）；数据接管但缺这条 ⇒ 只给链（退化，不编）。 */
     if (d->gaps > 0) {
-        if (style == DER_STYLE_TERSE) snprintf(out, cap, "推不出来");
-        else if (style == DER_STYLE_CHAIN) snprintf(out, cap, "%s", chain);
-        else snprintf(out, cap, "推不出来（链上缺 %d 步，不能下结论）", d->gaps);
+        char gnum[24];
+        snprintf(gnum, sizeof gnum, "%d", d->gaps);
+        const char *t_plain = ai_say_tpl("组织.缺");
+        if (style == DER_STYLE_TERSE) {
+            const char *t = ai_say_tpl("组织.空");
+            snprintf(out, cap, "%s", t ? t : "推不出来");
+        } else if (style == DER_STYLE_CHAIN) {
+            snprintf(out, cap, "%s", chain);
+        } else if (t_plain) {
+            der_fill(out, cap, t_plain, gnum, NULL);
+        } else {
+            snprintf(out, cap, "%s", chain);
+        }
         return;
     }
     int has_hyp = 0;
     for (size_t i = 0; i < d->n; ++i)
         if (d->step[i].kind == DER_HYP) { has_hyp = 1; break; }
-    /* 判定词只此一处（下面 agent 层要靠它认"这条是没答上来"，别在两处各写一份字符串） */
-    const char *verdict = (d->truth > 0) ? "对" : (d->truth < 0 ? "不 对" : DER_VERDICT_UNSURE);
+    /* 判定词只此一处（下面 agent 层要靠它认"这条是没答上来"，别在两处各写一份字符串）。
+     * §6.532 三个判词的**措辞**来自数据；数据接管但缺这条 ⇒ 空串（只给链，不硬编一句）。 */
+    const char *vk = (d->truth > 0) ? "判词.对"
+                   : (d->truth < 0 ? "判词.不对" : "判词.不定");
+    const char *vt = ai_say_tpl(vk);
+    const char *verdict = vt ? vt : (g_say_data ? "" : DER_VERDICT_UNSURE);
     switch (style) {
     case DER_STYLE_TERSE:
         snprintf(out, cap, "%s", verdict);
@@ -653,26 +692,34 @@ static inline void der_say(const AI *ai, Derivation *d, int style,
     case DER_STYLE_CHAIN:
         snprintf(out, cap, "%s", chain);
         break;
-    case DER_STYLE_SYMBOL:
-        snprintf(out, cap, "%s ： %s", verdict, chain);
+    case DER_STYLE_SYMBOL: {
+        const char *t = ai_say_tpl("组织.符号");
+        if (t) der_fill(out, cap, t, verdict, chain);
+        else snprintf(out, cap, "%s", chain);
         break;
+    }
     case DER_STYLE_PLAIN:
     default:
-        if (d->guessed)
+        if (d->guessed) {
             /* 推测链（含"记忆里的猜测"）：**不说"对"** —— 链上有一环是猜的，
-             * 说成「大概吧，对，…」自相矛盾。只给链，并点明这不是知识。 */
-            /* §6.131 **按跳数说清楚**：一环照旧（措辞逐字节不变），多环要报数 ——
+             * 说成「大概吧，对，…」自相矛盾。只给链，并点明这不是知识。
+             * §6.131 **按跳数说清楚**：一环照旧，多环要报数 ——
              * "猜了一次"和"猜了三次"在把握上不是一回事，话也不能一样。 */
-            if (d->guess_hops > 1)
-                snprintf(out, cap, "大概 吧 ， %s （其中 %d 环是**推测**的，不是知道）",
-                         chain, d->guess_hops);
-            else
-                snprintf(out, cap, "大概 吧 ， %s （其中一环是**推测**的，不是知道）", chain);
-        else if (has_hyp)
+            char hn[24];
+            snprintf(hn, sizeof hn, "%d", d->guess_hops);
+            const char *t = ai_say_tpl(d->guess_hops > 1 ? "组织.猜多" : "组织.猜一");
+            if (t) der_fill(out, cap, t, chain, hn);
+            else snprintf(out, cap, "%s", chain);
+        } else if (has_hyp) {
             /* 反事实：必须写明是**在假设下**的结论，不能说得像真的一样 */
-            snprintf(out, cap, "在 假设 下 ： %s ， %s", verdict, chain);
-        else
-            snprintf(out, cap, "%s ， %s", verdict, chain);
+            const char *t = ai_say_tpl("组织.假设");
+            if (t) der_fill(out, cap, t, verdict, chain);
+            else snprintf(out, cap, "%s", chain);
+        } else {
+            const char *t = ai_say_tpl("组织.定");
+            if (t) der_fill(out, cap, t, verdict, chain);
+            else snprintf(out, cap, "%s", chain);
+        }
         break;
     }
 }

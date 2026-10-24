@@ -53,6 +53,7 @@ fill|猫 真的 会 飞 吗
 class|你 嫌 我 吗
 qword|猫 哪儿 在
 qpart|请问猫是什么
+say|猫 属于 动物 吗
 TABLE
 
 echo "② 全部关掉（AIP_NODATA=1）时，每条探针都必须变（证明它们都真的依赖数据）"
@@ -76,9 +77,11 @@ fill|猫 真的 会 飞 吗
 class|你 嫌 我 吗
 qword|猫 哪儿 在
 qpart|请问猫是什么
+# say 不列在②里：它的**种子表就是同一批字符串**（没有数据时兜底），
+# 所以"全部关掉"不改变答复；它靠①单桶消融证明承重（§6.532）。
 TABLE
 echo "  （②没有逐条 OK，只在失败时报；全过就是数据都承重）"
 
 rm -rf "$TMP"
-[ "$fail" -eq 0 ] && echo "PASS bucketload（12 个桶都有'关掉就变'的探针）" \
+[ "$fail" -eq 0 ] && echo "PASS bucketload（13 个桶都有'关掉就变'的探针）" \
                   || { echo "FAIL bucketload"; exit 1; }
