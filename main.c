@@ -1745,7 +1745,19 @@ int main(int argc, char **argv) {
                     /* §6.573 只把**这个脑自己改过**的段写成 delta（base 不动） */
                     int n = aip_parts_save_delta(a->brain, parch);
                     if (n < 0) printf("[delta] 写不进去：%s\n", parch);
-                    else printf("[delta] %d 个改过的词 ⇒ %s（base 原样不动）\n", n, parch);
+                    else {
+                        printf("[delta] %d 个改过的词 ⇒ %s（base 原样不动）\n", n, parch);
+                        /* §6.576 刚写出来的 delta 就是这份内存的镜像 ⇒ 顺手挂成覆盖层，
+                         * 这样 `verify` 立刻能对上，之后 detach/再读也不会回到旧值。 */
+                        if (pt && aip_parts_set_overlay(pt, parch) == 0)
+                            printf("[delta] 已挂成覆盖层（之后读优先用 delta）\n");
+                    }
+                } else if (!strncmp(sub, "verify", 6)) {
+                    /* §6.576 自检：内存 vs 段文件到底对不对得上（stale 必须为 0） */
+                    AIPartsVerify v = aip_parts_verify(a->brain);
+                    printf("[自检] 有备份 %zu 个 / 还没写 delta %zu 个 / 段条数不一致 %zu 个 / 索引里的孤儿 %zu 个\n",
+                           v.covered, v.nobackup, v.stale, v.orphan);
+                    if (v.stale) printf("  ⚠ 有 %zu 个词的段和内存不一致 —— 先 `::parts delta` 再 detach\n", v.stale);
                 } else if (!strncmp(sub, "stats", 5)) {
                     size_t l = 0, b = 0, r = 0, e = 0;
                     if (!pt) { printf("[分段统计] 还没 attach（没有索引）\n"); }

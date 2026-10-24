@@ -336,6 +336,38 @@ static inline void aip_parts_stats(const AIParts *pt, size_t *loads, size_t *byt
     if (evicted) *evicted = pt ? pt->n_evicted : 0;
 }
 
+/* ---------------- §6.576 自检：每个"有边的词"到底有没有备份 ----------------
+ *
+ * 这是给这套机制自己的安全网。它查三件事（都只读索引，不读段）：
+ *   ① `stale`      —— 有备份、但**段里的条数**和内存里不一样（说明文件不是这份内存的备份）；
+ *   ② `nobackup`  —— 内存里有边、磁盘上没它的段（**正常**：save 之后新学的，还没写 delta）；
+ *   ③ `orphan`    —— 索引里有它的段、但这个词在池里已经没了（正常：旧文件配新模型，别当真）。
+ * 退出码式的返回值：**stale 必须为 0**，其余两个是信息。
+ */
+typedef struct { size_t stale, nobackup, orphan, covered; } AIPartsVerify;
+
+static inline AIPartsVerify aip_parts_verify(AI *ai) {
+    AIPartsVerify v = { 0, 0, 0, 0 };
+    if (!ai || !ai->pool) return v;
+    AIParts *pt = (AIParts *)ai->pool->parts;
+    if (!pt) return v;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->count == 0) continue;
+        int has_base = (t->id < pt->n_ids && pt->off[t->id] != 0);
+        int has_ovl  = (pt->overlay && t->id < pt->overlay->n_ids && pt->overlay->off[t->id] != 0);
+        if (!has_base && !has_ovl) { v.nobackup++; continue; }
+        v.covered++;
+        uint32_t fcnt = has_ovl ? pt->overlay->cnt[t->id] : pt->cnt[t->id];
+        if (token_assocs_resident(t) && t->count != fcnt) v.stale++;
+    }
+    for (size_t id = 0; id < pt->n_ids; ++id) {
+        if (pt->off[id] == 0 && !(pt->overlay && id < pt->overlay->n_ids && pt->overlay->off[id] != 0)) continue;
+        if (!pool_token_by_id(ai->pool, (uint32_t)id)) v.orphan++;
+    }
+    return v;
+}
+
 /* ---------------- 换出：内存上限到了就把**干净**的段扔回磁盘 ----------------
  *
  * 这是"暂时只加载一部分"里的**暂时**：

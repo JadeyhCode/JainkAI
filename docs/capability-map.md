@@ -71,8 +71,15 @@
   `寂寞=孤独` 是死行（目标词自己也不认识）；`恐惧=怕` 没有改善（问 `怕` 本来就答那句绕的）。
 - **输入带字间空格时同义词表失效**（`你 疲 惫 吗` 匹配不到 `疲惫`）；探针要写真人写法（不空格）。
 
-## 4z182. 换出改真 LRU + 三处老隐患暴露（§6.575）
+## 4z183. `::parts verify` 自检 + delta 自动挂覆盖层（§6.576）
 
+- `aip_parts_verify`：有备份 / 还没写 delta / **stale（段条数≠内存条数，必须 0）** / 孤儿索引。
+- `::parts delta` 写完后**自动挂成覆盖层**（刚写的 delta 就是内存镜像 ⇒ verify 立刻归零，detach 后不会退回旧值）。
+- 实测：save+attach ⇒ stale 0；教一句 ⇒ stale 5（警告）；delta ⇒ stale 0；detach 后仍答对。
+- 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
+- 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
+
+## 4z182. 换出改真 LRU + 三处老隐患暴露（§6.575）
 - `parts.h`：`last_seq/use_seq` + 每轮挑**最久没用**的干净段；`token.h`：`part_touch` 钩子（读边时记"用"）。
 - `partprobe` ⑤ 加三条：热点换出后仍在内存 / 热点再问仍对 / 被换出的那条再问仍对且又读一次。
 - 顺带修：`agent.h` 两处 `%s` 截断（改 `%.*s`）、`ai_push_trace` 的 `memmove` 常量长度（改"一半"）—— 都是内联变化后才暴露的老隐患。

@@ -1279,6 +1279,19 @@ jl=$(wc -l < "$JR/j.txt" 2>/dev/null || echo 0)
 grep -q '照着改了 [0-9]* 条' "$JR/out.txt" \
     && ok "replay 真的走了（按流水条数）" \
     || bad "流水-replay" "$(grep '流水' "$JR/out.txt" | head -2 | tr '\n' ' ')"
+# §6.576 `::parts verify` 自检：内存 vs 段文件对不对得上（改写之后必须报 stale，写完 delta 必须归零）
+VR="$WORK/vr"; rm -rf "$VR"; mkdir -p "$VR"
+cp "$ROOT/session.bin" "$VR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$VR/" 2>/dev/null || true
+( cd "$VR" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::parts save b.parts\n::parts attach b.parts\n::parts verify\n';     printf '猫 属于 动物\n::parts verify\n::parts delta v.parts\n::parts verify\n';     printf '::parts detach\n猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+n0=$(grep -c '段条数不一致 0 个' "$VR/out.txt" || true)
+bad_stale=$(grep -c '⚠ 有 .* 个词的段和内存不一致' "$VR/out.txt" || true)
+[ "${n0:-0}" -ge 1 ] && [ "${bad_stale:-0}" -ge 1 ] \
+    && ok "自检**能报出"改过但没写 delta"**（stale>0 时会警告），写完之后归零" \
+    || bad "verify-检出" "zero=${n0:-0} warn=${bad_stale:-0}"
+grep -q '还没写 delta 0 个 / 段条数不一致 0 个' "$VR/out.txt" && grep -q '对 ， 猫 -\[属于\]-> 动物' "$VR/out.txt" \
+    && ok "**写完 delta + 卸下之后仍然对得上、答得对**" \
+    || bad "verify-归零" "$(grep '自检' "$VR/out.txt" | tail -2 | tr '\n' ' ')"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true
