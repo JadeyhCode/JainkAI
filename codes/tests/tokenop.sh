@@ -625,8 +625,8 @@ q_off=$(sed -n 's/.*AI > //p' "$WORK/o64" | tail -1)
     || bad "qword 消融" "on=「$q_on」 off=「$q_off」"
 # §6.532 目标③续：**答复组织下沉**（`[say] 语义位=模板`；`$1`/`$2` 是槽位）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o65" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o65" \
-    && ok "答复模板**从数据读**：say=32（判词 3 + 组织 7 + 回话 4 + 量词 1 + 列表 6 + 不知道 3 + 视角/没听过 2 + 删除 2 + 历史 4）" \
+grep -q 'say=33' "$WORK/o65" \
+    && ok "答复模板**从数据读**：say=33（判词 3 + 组织 7 + 回话 4 + 量词 1 + 列表 6 + 不知道 3 + 视角/没听过 2 + 删除 2 + 历史 4 + 教学 1）" \
     || bad "say 桶" "$(grep -o 'say=[0-9]*' "$WORK/o65")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物 吗\n'; } | \
     "$WORK/aip" --model model.bin > "$WORK/o66" 2>&1 ) || true
@@ -783,7 +783,7 @@ grep -q '（数据）我 想 想 再 说' "$RX/out.txt" \
     || bad "refuse 改池" "$(sed -n 's/.*AI > //p' "$RX/out.txt" | tail -1)"
 # §6.538 L5 列表式答复下沉：`[say] 列表.头/项分隔/余/空/空类别/空地点`
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o84" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o84" \
+grep -q 'say=33' "$WORK/o84" \
     && ok "列表答复模板**从数据读**（含后加的 不知道 3 行 ⇒ 总数 24）" \
     || bad "列表模板" "$(grep -o 'say=[0-9]*' "$WORK/o84")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 吃 什么\n'; } | \
@@ -806,7 +806,7 @@ grep -q '（数据）猫吃 鱼 ｜ 肉' "$LX/out.txt" \
     || bad "列表改模板" "$(sed -n 's/.*AI > //p' "$LX/out.txt" | tail -1)"
 # §6.539 L4 续：带槽位的"不知道"整句也进 `[say]`（不认识 / 不敢说会 / 没这条）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o87" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o87" \
+grep -q 'say=33' "$WORK/o87" \
     && ok "带槽位的不知道说法**也从数据读**：say=26（新增 不认识 / 不敢说会 / 没这条）" \
     || bad "不知道槽位" "$(grep -o 'say=[0-9]*' "$WORK/o87")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '你 会 飞 吗\n'; } | \
@@ -824,7 +824,7 @@ grep -q '（数据）这 个 我 没 学 过：飞' "$NX/out.txt" \
     || bad "不敢说会-改模板" "$(sed -n 's/.*AI > //p' "$NX/out.txt" | tail -1)"
 # §6.540 视角前缀 + "没听他说过"也进 `[say]`（§6.278 他人立场）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o89" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o89" \
+grep -q 'say=33' "$WORK/o89" \
     && ok "视角/没听过**从数据读**：say=26（新增 视角.在、不知道.没听他说过）" \
     || bad "视角模板" "$(grep -o 'say=[0-9]*' "$WORK/o89")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '小明 以为 猫 会 飞\n小明 以为 猫 属于 鱼 吗\n'; } | \
@@ -869,8 +869,8 @@ a_new=$(sed -n 's/.*AI > //p' "$AX/after.txt" | tail -1)
     || bad "alias 改映射" "默认=「$a_on」 改后=「$a_new」"
 # §6.542 清单外第一类：**删除请求的答复**（`忘掉/删掉 X R Y`）进 `[say]`
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o94" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o94" \
-    && ok "删除答复**从数据读**：say=32（含后加的 删除 2 / 历史 4）" \
+grep -q 'say=33' "$WORK/o94" \
+    && ok "删除答复**从数据读**：say=33（含后加的 删除 2 / 历史 4 / 教学 1）" \
     || bad "删除模板" "$(grep -o 'say=[0-9]*' "$WORK/o94")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '忘掉 猫 属于 动物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o95" 2>&1 ) || true
@@ -892,8 +892,8 @@ grep -q '（数据）删 不 掉：猫 属于 动物' "$FX/out.txt" \
     || bad "删除-改模板" "$(sed -n 's/.*AI > //p' "$FX/out.txt" | tail -1)"
 # §6.543 清单外第二类：**"刚才说了什么/聊了什么"的答复**进 `[say]`（`历史.*`）
 ( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o97" 2>&1 ) || true
-grep -q 'say=32' "$WORK/o97" \
-    && ok "历史回顾**从数据读**：say=32（新增 历史.你说/我们/还没说/还没聊）" \
+grep -q 'say=33' "$WORK/o97" \
+    && ok "历史回顾**从数据读**：say=33（含后加的 历史 4 / 教学 1）" \
     || bad "历史模板" "$(grep -o 'say=[0-9]*' "$WORK/o97")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 属于 动物\n刚才 我 说 了 什么\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o98" 2>&1 ) || true
@@ -913,6 +913,31 @@ sed -i 's/^\[say\] 历史\.你说=.*/[say] 历史.你说=（数据）你 刚 才
 grep -q '（数据）你 刚 才 说 的 是 ： 猫 属于 动物' "$HX/out.txt" \
     && ok "**改一行数据** ⇒ 历史回顾前缀换掉（槽位填对）" \
     || bad "历史-改模板" "$(sed -n 's/.*AI > //p' "$HX/out.txt" | tail -1)"
+# §6.544 X5 先量清（天气/时间**本来就是 [reply] 数据**）+ X4 教学提示下沉
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '现在 几点\n'; } | \
+    AIP_NODATA=reply "$WORK/aip" --model session.bin > "$WORK/o100" 2>&1 ) || true
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '现在 几点\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o101" 2>&1 ) || true
+grep -q '我 没有 时 钟' "$WORK/o101" && ! grep -q '我 没有 时 钟' "$WORK/o100" \
+    && ok "天气/时间**本来就是 `[reply]` 数据**（关掉 reply 桶就不再说「我没时钟」）" \
+    || bad "X5-消融" "off=$(sed -n 's/.*AI > //p' "$WORK/o100" | tail -1)"
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o102" 2>&1 ) || true
+grep -q 'say=33' "$WORK/o102" \
+    && ok "教学提示**从数据读**：say=33（新增 教学.规则）" \
+    || bad "教学模板" "$(grep -o 'say=[0-9]*' "$WORK/o102")"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '教你 会飞 的 动物 是 鸟\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o103" 2>&1 ) || true
+grep -q '这 是 一 条 规则' "$WORK/o103" \
+    && ok "「规则句学不进」**照旧**" \
+    || bad "教学-默认" "$(sed -n 's/.*AI > //p' "$WORK/o103" | tail -1)"
+TX="$WORK/tx"; rm -rf "$TX"; mkdir -p "$TX"
+cp "$ROOT/session.bin" "$TX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TX/" 2>/dev/null || true
+sed -i 's/^\[say\] 教学\.规则=.*/[say] 教学.规则=（数据）这 条 是 规则，别 教 形 式/' "$TX/patterns.txt"
+( cd "$TX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '教你 会飞 的 动物 是 鸟\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）这 条 是 规则' "$TX/out.txt" \
+    && ok "**改一行数据** ⇒ 教学提示换掉（代码没动）" \
+    || bad "教学-改模板" "$(sed -n 's/.*AI > //p' "$TX/out.txt" | tail -1)"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

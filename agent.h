@@ -6772,9 +6772,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     }
     /* §6.269 「教你 会飞 的 动物 是 鸟」这类**规则句**：明说学不进（别掉流水线出词串）。 */
     if (agent_rule_teach(input_eff) && input_eff != input) {
-        snprintf(out, out_cap,
-                 "这 是 一 条 规则（「…的…是…」），我 只 学 事 实：「A 关系 B」。"
-                 "你 先 教「鸟 会 飞」和「鸟 属于 动物」，多 跳 推 理 会 用 上 它 们。");
+        /* §6.544 教学提示也进数据（一句话没槽位） */
+        const char *t = ai_say_tpl("教学.规则");
+        snprintf(out, out_cap, "%s",
+                 t ? t : "这 是 一 条 规则（「…的…是…」），我 只 学 事 实：「A 关系 B」。"
+                         "你 先 教「鸟 会 飞」和「鸟 属于 动物」，多 跳 推 理 会 用 上 它 们。");
         return agent_say(ai, out);
     }
     {   /* §6.288 形状表（`patterns.txt` 的 `[shape]` 桶）：整句等长的语序改写。
