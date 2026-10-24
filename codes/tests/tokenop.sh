@@ -1026,6 +1026,20 @@ sed -i 's/^\[say\] 过程\.没有=.*/[say] 过程.没有=（数据）查 无 此
 grep -q '（数据）查 无 此 过 程：从没建过' "$PCX/out.txt" && grep -q '（数据）查 跑 了，每 一步 都 过 得 去' "$PCX/out.txt" \
     && ok "**改两行数据** ⇒ 过程答复都换掉（槽位都对）" \
     || bad "过程-改模板" "$(sed -n 's/.*AI > //p' "$PCX/out.txt" | tail -3 | tr '\n' ' ')"
+# §6.549 C3 余量：建过程 / 加步骤 / 多个过程的答复也进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '记个过程 泡茶\n第1步 烧水\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o114" 2>&1 ) || true
+grep -q '好 ， 过程 「 泡茶 」 记下 了' "$WORK/o114" && grep -q '记下 了 ： 过程 「 泡茶 」 第 1 步 是 「 烧水 」' "$WORK/o114" \
+    && ok "建过程 / 加步骤**照旧**" \
+    || bad "过程-建与步" "$(sed -n 's/.*AI > //p' "$WORK/o114" | tail -2 | tr '\n' ' ')"
+PCY="$WORK/pcy"; rm -rf "$PCY"; mkdir -p "$PCY"
+cp "$ROOT/session.bin" "$PCY/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PCY/" 2>/dev/null || true
+sed -i 's/^\[say\] 过程\.建了=.*/[say] 过程.建了=（数据）建 好 了：$1（$2）/; s/^\[say\] 过程\.加了步=.*/[say] 过程.加了步=（数据）$1 的 第 $2 步：$3/' "$PCY/patterns.txt"
+( cd "$PCY" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '记个过程 泡茶\n第1步 烧水\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）建 好 了：泡茶' "$PCY/out.txt" && grep -q '（数据）泡茶 的 第 1 步：烧水' "$PCY/out.txt" \
+    && ok "**改两行数据** ⇒ 建过程/加步骤的答复都换掉（槽位都对）" \
+    || bad "过程-余量改模板" "$(sed -n 's/.*AI > //p' "$PCY/out.txt" | tail -3 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

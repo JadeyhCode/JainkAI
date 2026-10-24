@@ -5757,7 +5757,11 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
             char note[160];
             char *a[1] = { nm };
             if (token_op_run(ai, "建过程", a, 1, note, sizeof note) >= 0) {
-                snprintf(out, out_cap, "好 ， 过程 「 %s 」 记下 了 （ %s ）", nm, note);
+                {
+                    const char *t = ai_say_tpl("过程.建了");   /* §6.549 */
+                    const char *const a[2] = { nm, note };
+                    der_filln(out, out_cap, t ? t : "好 ， 过程 「 $1 」 记下 了 （ $2 ）", a, 2);
+                }
                 return 1;
             }
         }
@@ -5785,7 +5789,14 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
                 }
             }
             if (nproc != 1) {
-                snprintf(out, out_cap, "我 这儿 有 %zu 个 过程 —— 说 「 记个过程 <名字> 」 先 定 一个", nproc);
+                {
+                    char nb2[32];
+                    snprintf(nb2, sizeof nb2, "%zu", nproc);
+                    const char *t = ai_say_tpl("过程.多个");
+                    const char *const a[1] = { nb2 };
+                    der_filln(out, out_cap,
+                              t ? t : "我 这儿 有 $1 个 过程 —— 说 「 记个过程 <名字> 」 先 定 一个", a, 1);
+                }
                 return 1;
             }
             char note[160], act[64];
@@ -5795,8 +5806,11 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
             char nb[16];
             if (idx > 0) { snprintf(nb, sizeof nb, "%d", idx); a[2] = nb; an = 3; }
             if (act[0] && token_op_run(ai, "加步骤", a, an, note, sizeof note) >= 0) {
-                snprintf(out, out_cap, "记下 了 ： 过程 「 %s 」 第 %s 步 是 「 %s 」", pname,
-                         idx > 0 ? nb : "（自动排）", act);
+                {
+                    const char *t = ai_say_tpl("过程.加了步");
+                    const char *const a[3] = { pname, idx > 0 ? nb : "（自动排）", act };
+                    der_filln(out, out_cap, t ? t : "记下 了 ： 过程 「 $1 」 第 $2 步 是 「 $3 」", a, 3);
+                }
                 return 1;
             }
         }
