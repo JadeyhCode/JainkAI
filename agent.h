@@ -5994,21 +5994,34 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
                   t ? t : "大家 都 说 ： $1 $2$3 $4（$5 个人 说 过 ；$6）", a, 6);
         break;
     }
-    case OBV_NO:
-        snprintf(out, out_cap, "大家 都 说 ： %s 不 %s %s（%zu 个人 说 过 ；%s）",
-                 an, rn ? rn : "?", bn, v.n_who, own_txt);
+    case OBV_NO: {
+        const char *t = ai_say_tpl("信念.大家都说不");   /* §6.557 */
+        char nb[32];
+        snprintf(nb, sizeof nb, "%zu", v.n_who);
+        const char *const a[5] = { an, rn ? rn : "?", bn, nb, own_txt };
+        der_filln(out, out_cap, t ? t : "大家 都 说 ： $1 不 $2 $3（$4 个人 说 过 ；$5）", a, 5);
         break;
-    case OBV_DEFER:
-        snprintf(out, out_cap,
-                 "这 件 事 大家 说 法 不 一致 ： 有人 说 %s %s %s 、 有人 说 不 %s"
-                 "（%zu 认 / %zu 不认 —— 待验 ， 不是 否定 ；%s）",
-                 an, rn ? rn : "?", bn, rn ? rn : "?", v.n_yes, v.n_no, own_txt);
+    }
+    case OBV_DEFER: {
+        const char *t = ai_say_tpl("信念.说法不一");
+        char ny[32], nn[32];
+        snprintf(ny, sizeof ny, "%zu", v.n_yes);
+        snprintf(nn, sizeof nn, "%zu", v.n_no);
+        const char *const a[7] = { an, rn ? rn : "?", bn, rn ? rn : "?", ny, nn, own_txt };
+        der_filln(out, out_cap,
+                  t ? t : "这 件 事 大家 说 法 不 一致 ： 有人 说 $1 $2 $3 、 有人 说 不 $4"
+                          "（$5 认 / $6 不认 —— 待验 ， 不是 否定 ；$7）", a, 7);
         break;
+    }
     default:
-        if (v.n_related)
-            snprintf(out, out_cap,
-                     "这 件 事 他们 没 说 过（只 有 %zu 条 相关 说法 ， 不 算 答案 ；%s）",
-                     v.n_related, own_txt);
+        if (v.n_related) {
+            const char *t = ai_say_tpl("信念.有相关");
+            char nr[32];
+            snprintf(nr, sizeof nr, "%zu", v.n_related);
+            const char *const a[2] = { nr, own_txt };
+            der_filln(out, out_cap,
+                      t ? t : "这 件 事 他们 没 说 过（只 有 $1 条 相关 说法 ， 不 算 答案 ；$2）", a, 2);
+        }
         else {
             const char *t = ai_say_tpl("信念.没说过");
             const char *const a[1] = { own_txt };

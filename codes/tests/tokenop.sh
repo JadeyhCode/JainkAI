@@ -1116,6 +1116,25 @@ sed -i 's/^\[say\] 信念\.大家都说=.*/[say] 信念.大家都说=（数据�
 grep -q '（数据）猫 会 飞（1 人；（数据）我 不 认）' "$C9X/out.txt" \
     && ok "**改两行数据** ⇒ 投一票句与我的立场都换掉（槽位都对）" \
     || bad "C9-改模板" "$(sed -n 's/.*AI > //p' "$C9X/out.txt" | tail -1)"
+# §6.557 C9 余量：说法不一致 / 大家都说不 / 有相关说法（**都要先 `::others ask on`**）
+( cd "$ROOT" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 不 会 飞\n她 以为 猫 会 飞\n大家 都 说 猫 会 飞 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o124" 2>&1 ) || true
+grep -q '这 件 事 大家 说 法 不 一致 ： 有人 说 猫 会 飞 、 有人 说 不 会（1 认 / 1 不认' "$WORK/o124" \
+    && ok "「说法不一致」**照旧**（两人各说一边 ⇒ 待验不否定）" \
+    || bad "C9b-不一致" "$(sed -n 's/.*AI > //p' "$WORK/o124" | tail -1)"
+( cd "$ROOT" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 不 会 飞\n大家 都 说 猫 会 飞 吗\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o125" 2>&1 ) || true
+grep -q '大家 都 说 ： 猫 不 会 飞（1 个人 说 过 ；我 不 这么 看）' "$WORK/o125" \
+    && ok "「大家都说不」**照旧**" \
+    || bad "C9b-都不" "$(sed -n 's/.*AI > //p' "$WORK/o125" | tail -1)"
+C9Y="$WORK/c9y"; rm -rf "$C9Y"; mkdir -p "$C9Y"
+cp "$ROOT/session.bin" "$C9Y/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$C9Y/" 2>/dev/null || true
+sed -i 's|^\[say\] 信念\.说法不一=.*|[say] 信念.说法不一=（数据）$1 $2 $3 与 不 $4 打 平（$5 比 $6；$7）|' "$C9Y/patterns.txt"
+( cd "$C9Y" && { printf '::others ask on\n::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 不 会 飞\n她 以为 猫 会 飞\n大家 都 说 猫 会 飞 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）猫 会 飞 与 不 会 打 平（1 比 1；我 不 这么 看）' "$C9Y/out.txt" \
+    && ok "**改一行数据** ⇒ 不一致句换掉（七个槽位都对）" \
+    || bad "C9b-改模板" "$(sed -n 's/.*AI > //p' "$C9Y/out.txt" | tail -1)"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true
