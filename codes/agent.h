@@ -5821,11 +5821,19 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
         }
         const char *bare = nm;
         if (arg_from == n && !proc_root_of(ai, bare)) {   /* 整串也找不到 ⇒ 报"没有这个" */
-            snprintf(out, out_cap, "没有 「 %s 」 这个 过程", bare);
+            {
+                const char *t = ai_say_tpl("过程.没有");   /* §6.548 */
+                const char *const a[1] = { bare };
+                der_filln(out, out_cap, t ? t : "没有 「 $1 」 这个 过程", a, 1);
+            }
             return 1;
         }
         if (!ai->proc_run) {
-            snprintf(out, out_cap, "过程 「 %s 」 在 ， 可 执行 引擎 关着 （ ::proc on 打开 ）", bare);
+            {
+                const char *t = ai_say_tpl("过程.关着");
+                const char *const a[1] = { bare };
+                der_filln(out, out_cap, t ? t : "过程 「 $1 」 在 ， 可 执行 引擎 关着 （ ::proc on 打开 ）", a, 1);
+            }
             return 1;
         }
         /* §6.524 P1-3：过程里**说过话**就把那句话当答复（`加说` 的模板），
@@ -5844,8 +5852,11 @@ static inline int dialog_try_proc(AI *ai, char *const *words, size_t n, char *ou
                 snprintf(out, out_cap, "%.200s", pr.say);
             return 1;
         }
-        snprintf(out, out_cap, "跑 完 了 「 %s 」 ： %s", bare,
-                 gaps ? "有 断点 —— 停 在 断点 上" : "每 一步 都 过 得 去");
+        {
+            const char *t = ai_say_tpl("过程.跑完");
+            const char *const a[2] = { bare, gaps ? "有 断点 —— 停 在 断点 上" : "每 一步 都 过 得 去" };
+            der_filln(out, out_cap, t ? t : "跑 完 了 「 $1 」 ： $2", a, 2);
+        }
         return 1;
     }
     return 0;

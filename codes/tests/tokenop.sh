@@ -1007,6 +1007,25 @@ sed -i 's/^\[say\] 推理\.因为=.*/[say] 推理.因为=（数据）$1 $2$3 $4 
 grep -q '（数据）猫 属于 动物 成立' "$RX2/out.txt" \
     && ok "**改一行数据** ⇒ 六槽位推理句式换掉（代码没动）" \
     || bad "推理-改模板" "$(sed -n 's/.*AI > //p' "$RX2/out.txt" | tail -1)"
+# §6.548 C3：过程引擎答复（没有/关着/跑完了）进 `[say]`
+( cd "$ROOT" && { printf '::proc on\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '跑 从没建过\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o112" 2>&1 ) || true
+grep -q '没有 「 从没建过 」 这个 过程' "$WORK/o112" \
+    && ok "「没有这个过程」**照旧**" \
+    || bad "过程-没有" "$(sed -n 's/.*AI > //p' "$WORK/o112" | tail -1)"
+( cd "$ROOT" && { printf '::proc on\n::proc dry off\n::op 建过程 查\n::proc dry off\n::char off\n'; printf '跑 查\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o113" 2>&1 ) || true
+grep -q '跑 完 了 「 查 」 ： 每 一步 都 过 得 去' "$WORK/o113" \
+    && ok "「跑完了」**照旧**" \
+    || bad "过程-跑完" "$(sed -n 's/.*AI > //p' "$WORK/o113" | tail -1)"
+PCX="$WORK/pcx"; rm -rf "$PCX"; mkdir -p "$PCX"
+cp "$ROOT/session.bin" "$PCX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PCX/" 2>/dev/null || true
+sed -i 's/^\[say\] 过程\.没有=.*/[say] 过程.没有=（数据）查 无 此 过 程：$1/; s/^\[say\] 过程\.跑完=.*/[say] 过程.跑完=（数据）$1 跑 了，$2/' "$PCX/patterns.txt"
+( cd "$PCX" && { printf '::proc on\n::proc dry off\n::op 建过程 查\n::proc dry off\n::char off\n'; printf '跑 从没建过\n跑 查\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）查 无 此 过 程：从没建过' "$PCX/out.txt" && grep -q '（数据）查 跑 了，每 一步 都 过 得 去' "$PCX/out.txt" \
+    && ok "**改两行数据** ⇒ 过程答复都换掉（槽位都对）" \
+    || bad "过程-改模板" "$(sed -n 's/.*AI > //p' "$PCX/out.txt" | tail -3 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \
