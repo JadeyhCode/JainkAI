@@ -1040,6 +1040,25 @@ sed -i 's/^\[say\] 过程\.建了=.*/[say] 过程.建了=（数据）建 好 了
 grep -q '（数据）建 好 了：泡茶' "$PCY/out.txt" && grep -q '（数据）泡茶 的 第 1 步：烧水' "$PCY/out.txt" \
     && ok "**改两行数据** ⇒ 建过程/加步骤的答复都换掉（槽位都对）" \
     || bad "过程-余量改模板" "$(sed -n 's/.*AI > //p' "$PCY/out.txt" | tail -3 | tr '\n' ' ')"
+# §6.550 C4：假设层答复（撤一层 / 撤指定 / 找不到）进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '如果 猫 会 飞\n如果 猫 会 游\n算了\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o115" 2>&1 ) || true
+grep -q '好 的（还有 别的 假设）' "$WORK/o115" \
+    && ok "撤一层（还有别的）**照旧**" \
+    || bad "假设-撤层" "$(sed -n 's/.*AI > //p' "$WORK/o115" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '如果 猫 会 飞\n算了\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o116" 2>&1 ) || true
+grep -q 'AI > 好 的' "$WORK/o116" && ! grep -q '还有 别的 假设' "$WORK/o116" \
+    && ok "撤一层（最后一层）**照旧**（不带尾巴）" \
+    || bad "假设-最后一层" "$(sed -n 's/.*AI > //p' "$WORK/o116" | tail -1)"
+HXX="$WORK/hxx"; rm -rf "$HXX"; mkdir -p "$HXX"
+cp "$ROOT/session.bin" "$HXX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$HXX/" 2>/dev/null || true
+sed -i 's/^\[say\] 假设\.撤一层=.*/[say] 假设.撤一层=（数据）撤 掉 一 层/; s/^\[say\] 假设\.撤层还有=.*/[say] 假设.撤层还有=（数据）撤 一 层（还 有 $1 层）/' "$HXX/patterns.txt"
+( cd "$HXX" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '如果 猫 会 飞\n如果 猫 会 游\n算了\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）撤 一 层（还 有 1 层）' "$HXX/out.txt" \
+    && ok "**改两行数据** ⇒ 撤一层的答复换掉（槽位填对）" \
+    || bad "假设-改模板" "$(sed -n 's/.*AI > //p' "$HXX/out.txt" | tail -2 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

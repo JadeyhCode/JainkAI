@@ -3676,7 +3676,15 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
         cot_push(ai, COT_HYP, 1, 80, "撤回一层假设", note);
         ai->n_cot++;
         char resp0[128];
-        snprintf(resp0, sizeof resp0, "好 的%s", ai->hypo.depth ? "（还有 别的 假设）" : "");
+        {
+            /* §6.550 假设层答复也进数据（两条：还有别的 / 最后一层） */
+            const char *t = ai_say_tpl(ai->hypo.depth ? "假设.撤层还有" : "假设.撤一层");
+            char dn2[32];
+            snprintf(dn2, sizeof dn2, "%zu", ai->hypo.depth);
+            const char *const a[1] = { dn2 };
+            der_filln(resp0, sizeof resp0,
+                      t ? t : (ai->hypo.depth ? "好 的（还有 别的 假设）" : "好 的"), a, 1);
+        }
         if (out_conf) *out_conf = 0.7f;
         char *r = (char *)malloc(strlen(resp0) + 1);
         if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -3762,7 +3770,13 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
                 cot_push(ai, COT_HYP, 1, 80, "撤回指定的一层假设（作用域回溯）", note);
                 ai->n_cot++;
                 char resp0[240];
-                snprintf(resp0, sizeof resp0, "撤了 第 %d 层（%s）", target + 1, what);
+                {
+                    char lay[16];
+                    snprintf(lay, sizeof lay, "%d", target + 1);
+                    const char *t = ai_say_tpl("假设.撤指定");
+                    const char *const a[2] = { lay, what };
+                    der_filln(resp0, sizeof resp0, t ? t : "撤了 第 $1 层（$2）", a, 2);
+                }
                 if (out_conf) *out_conf = 0.7f;
                 char *r = (char *)malloc(strlen(resp0) + 1);
                 if (r) memcpy(r, resp0, strlen(resp0) + 1);
@@ -3771,8 +3785,13 @@ static inline char *agent_set_hypothesis(AI *ai, char *const *words, size_t n,
             if (ai->hypo.depth == 0) return NULL;      /* 没有假设：交给别的层 */
             /* 找不着就别乱撤 —— 如实说 */
             char resp0[200];
-            snprintf(resp0, sizeof resp0, "没 找到 那条 假设（%s；现在 有 %zu 层）",
-                     how ? how : "没听清", ai->hypo.depth);
+            {
+                char dn[32];
+                snprintf(dn, sizeof dn, "%zu", ai->hypo.depth);
+                const char *t = ai_say_tpl("假设.找不到");
+                const char *const a[2] = { how ? how : "没听清", dn };
+                der_filln(resp0, sizeof resp0, t ? t : "没 找到 那条 假设（$1；现在 有 $2 层）", a, 2);
+            }
             if (out_conf) *out_conf = 0.5f;
             char *r = (char *)malloc(strlen(resp0) + 1);
             if (r) memcpy(r, resp0, strlen(resp0) + 1);
