@@ -22,6 +22,9 @@ typedef struct {
     size_t           n_learned_lines;
     size_t           n_spoke;
     int              verbose;
+    /* §6.569 **局部加载的上下文**（`parts.h` 的 AIParts，用 void* 让 agent.h 不依赖它）。
+     * 每个 Agent 一份 ⇒ 多智能体时各自开各自的段文件、各带各的索引。 */
+    void            *parts;
 } Agent;
 
 /* ============================ 关系层（L2）的两步 ============================
@@ -474,6 +477,12 @@ static inline void aip_shell_refresh(const AI *ai) {
             if (g_shell[g_shell_n].w[0]) { g_shell_q[g_shell_n] = 0; ++g_shell_n; }
             continue;
         }
+        /* §6.569 **局部加载**：这一支要扫"每条边找外壳标记" ⇒ 会把**整张图**读回内存
+         * （实测：卸下之后问一句就把 1259 段全读了 —— 局部加载当场失效）。
+         * 所以只扫**已经在内存里**的边：`[外壳:词]` 命名空间那两支（上面）照旧，
+         * 它们不依赖边；"边→外壳标记"这种记号在段没读回来之前先看不见（下次读回自然会看见）。
+         * 代价写在文档里：**不强制加载**比"悄悄把全图拉回来"更重要。 */
+        if (!token_assocs_resident(t)) continue;
         for (size_t k = 0; k < t->count; ++k) {
             const Token *tg = token_assocs_ro(t)[k].main;
             if (tg && tg->name && strcmp(tg->name, "外壳标记") == 0) {

@@ -11,6 +11,7 @@
 #include "token_lang.h"
 #include "lex.h"          /* ASCII 代码词法（线 A ③；`::lex` / `::ascii`） */
 #include "model_io.h"
+#include "parts.h"      /* §6.569 局部加载：::parts 命令 */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -602,6 +603,7 @@ typedef enum {
     CMD_REVCHECK,
     CMD_WTRACE,
     CMD_MODS,               /* §6.568 本智能体自己的修改账（B 腿） */
+    CMD_PARTS,              /* §6.569 局部加载：save/attach/detach/stats/evict */
     CMD_NONE
 } CmdId;
 
@@ -623,6 +625,8 @@ static const CmdDef CMDS[] = {
       "统计（符号节点/边/状态/计数器）", CMD_STATS },
     { "mods", NULL, 1, "基本",
       "这个脑自己的改动记账（只记本脑，不串别的脑）", CMD_MODS },
+    { "parts", NULL, 1, "基本",
+      "局部加载：save/attach/detach/stats/evict（边可以暂放磁盘，按需读回）", CMD_PARTS },
     { "save", NULL, 1, "基本",
       "保存完整模型快照（默认 %M）", CMD_SAVE },
     { "load", NULL, 1, "基本",
@@ -1597,6 +1601,64 @@ int main(int argc, char **argv) {
                 ai_stats(a->brain);
                 (void)micro_of(a->brain); micro_stats(a->brain);
                 (void)think_of(a->brain); think_stats(a->brain);
+                continue;
+            }
+            /* §6.569 局部加载：把"边"搬到磁盘、按需读回（`parts.h`） */
+            case CMD_PARTS: {
+                const char *sp = strchr(cmd, ' ');
+                const char *sub = sp ? sp + 1 : "";
+                while (*sub == ' ') sub++;
+                char parch[256] = {0};
+                const char *pp = sub;
+                while (*pp && *pp != ' ') pp++;
+                while (*pp == ' ') pp++;
+                snprintf(parch, sizeof parch, "%s", *pp ? pp : "model.parts");
+                AIParts *pt = (AIParts *)a->parts;
+                if (!strncmp(sub, "save", 4)) {
+                    int n = aip_parts_save(a->brain, parch);
+                    if (n < 0) printf("[分段保存] 写不进去：%s\n", parch);
+                    else printf("[分段保存] %d 个有边的词 ⇒ %s（之后可以只读一部分）\n", n, parch);
+                } else if (!strncmp(sub, "attach", 6)) {
+                    if (pt) { aip_parts_close(pt); a->parts = NULL; }
+                    pt = aip_parts_open(parch);
+                    if (!pt) { printf("[分段加载] 打不开索引：%s\n", parch); }
+                    else {
+                        a->parts = pt;
+                        aip_parts_attach(a->brain, pt);
+                        printf("[分段加载] 索引已挂上：%s（边按需读回）\n", parch);
+                    }
+                } else if (!strncmp(sub, "detach", 6)) {
+                    if (!pt) { printf("[卸下] 还没 attach 过分段文件\n"); }
+                    else {
+                        size_t n = aip_parts_detach(a->brain);
+                        printf("[卸下] %zu 个词的边已离开内存（再问会按需读回）\n", n);
+                    }
+                } else if (!strncmp(sub, "stats", 5)) {
+                    size_t l = 0, b = 0, r = 0, e = 0;
+                    if (!pt) { printf("[分段统计] 还没 attach（没有索引）\n"); }
+                    else {
+                        aip_parts_stats(pt, &l, &b, &r, &e);
+                        printf("[分段统计] 读回 %zu 段 / %zu 字节；内存里 %zu 段；换出过 %zu 次\n",
+                               l, b, r, e);
+                    }
+                } else if (!strncmp(sub, "evict", 5)) {
+                    if (!pt) { printf("[换出] 还没 attach\n"); }
+                    else {
+                        size_t keep = 0, skip = 0;
+                        const char *kp = sub + 5;
+                        while (*kp == ' ') kp++;
+                        if (*kp) keep = (size_t)strtoul(kp, NULL, 10);
+                        size_t ev = aip_parts_evict(a->brain, keep, &skip);
+                        printf("[换出] 换出 %zu 段 / 跳过 %zu 段（脏的或磁盘上没有的不换）\n", ev, skip);
+                    }
+                } else {
+                    printf("[用法] ::parts save|attach|detach|stats|evict [路径|保留段数]\n");
+                    printf("  save   [路径]   把每个有边的词写成一个段（默认 model.parts）\n");
+                    printf("  attach [路径]   只读索引、装上按需读回的钩子\n");
+                    printf("  detach          把边交还给磁盘（内存里不再留）\n");
+                    printf("  stats           读回段数/字节、内存驻留段数、换出次数\n");
+                    printf("  evict N         换出到只剩 N 段（只换干净的）\n");
+                }
                 continue;
             }
             /* §6.568 B 腿：**本机这具脑子**的改动账（多智能体时各看各的） */

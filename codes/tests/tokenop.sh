@@ -1202,6 +1202,25 @@ grep -q '加关系  猫 会 打呼噜' "$WORK/o133" && grep -q '加关系  窗�
 grep -q '#2 加关系' "$WORK/o133" \
     && ok "**最新在前**（序号 2 排在 1 前面）" \
     || bad "mods-顺序" "$(grep -o '#[0-9]* 加关系' "$WORK/o133" | head -2 | tr '\n' ' ')"
+# §6.569 局部加载从命令面可用：::parts save/attach/detach/stats，且**问一句只读一部分**
+PW="$WORK/pw"; rm -rf "$PW"; mkdir -p "$PW"
+cp "$ROOT/session.bin" "$PW/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PW/" 2>/dev/null || true
+( cd "$PW" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '窗户 属于 家具\n::parts save t.parts\n::parts attach t.parts\n::parts detach\n::parts stats\n';     printf '窗户 属于 家具 吗\n::parts stats\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '\[分段保存\]' "$PW/out.txt" && grep -q '\[分段加载\] 索引已挂上' "$PW/out.txt" \
+    && grep -q '\[卸下\]' "$PW/out.txt" \
+    && ok "parts save/attach/detach 三步都在" \
+    || bad "parts-三连" "$(grep -E '分段|卸下' "$PW/out.txt" | head -3 | tr '\n' ' ')"
+grep -q '读回 0 段 / 0 字节' "$PW/out.txt" \
+    && ok "卸下之后 **0 段在内存**" \
+    || bad "parts-卸下后" "$(grep -o '读回 [0-9]* 段' "$PW/out.txt" | head -1)"
+l=$(grep -o '读回 [0-9]* 段' "$PW/out.txt" | tail -1 | grep -o '[0-9]*' || true)
+[ -n "$l" ] && [ "$l" -gt 0 ] && [ "$l" -lt 500 ] \
+    && ok "问一句只读回 **$l** 段（不是把上千段全读回来）" \
+    || bad "parts-部分加载" "读回=${l:-无}"
+grep -q '对 ， 窗户 -\[属于\]-> 家具' "$PW/out.txt" \
+    && ok "**卸下状态下问句仍然答得对**" \
+    || bad "parts-答对" "$(grep -E '对 ，|不 对' "$PW/out.txt" | head -1)"
 # §6.562 他者学习确认 + 过程实参超限
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n'; printf '他 以为 猫 会 飞\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o131" 2>&1 ) || true
