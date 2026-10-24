@@ -964,6 +964,25 @@ sed -i 's/^\[say\] 学习\.事实分隔=.*/[say] 学习.事实分隔=（数据�
 grep -q '（数据）学 会 了：猫 会 打呼噜' "$LX2/out.txt" \
     && ok "**改一行数据** ⇒ 学习确认换掉（四个槽位都填对）" \
     || bad "学习-改模板" "$(sed -n 's/.*AI > //p' "$LX2/out.txt" | tail -1)"
+# §6.546 C1 余量：**「记下了」的并列式 / 地点式**也进 `[say]`
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 是 动物\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o107" 2>&1 ) || true
+grep -q '记下 了 ： 猫 和 狗 都 是 动物' "$WORK/o107" \
+    && ok "并列学习确认**照旧**" \
+    || bad "学习-并列" "$(sed -n 's/.*AI > //p' "$WORK/o107" | tail -1)"
+( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '我 在 家\n'; } | \
+    "$WORK/aip" --model session.bin > "$WORK/o108" 2>&1 ) || true
+grep -q '记下 了 ： 我 在 家' "$WORK/o108" \
+    && ok "地点学习确认**照旧**" \
+    || bad "学习-地点" "$(sed -n 's/.*AI > //p' "$WORK/o108" | tail -1)"
+_K2="$WORK/k2"; rm -rf "$_K2"; mkdir -p "$_K2"
+cp "$ROOT/session.bin" "$_K2/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$_K2/" 2>/dev/null || true
+sed -i 's/^\[say\] 学习\.并列=.*/[say] 学习.并列=（数据）都 记 下 了：$1 和 $2 都 $3 $4/; s/^\[say\] 学习\.事实分隔=.*/[say] 学习.事实分隔=（数据）地 点 记 下：$1 住 着 $2 $3/' "$_K2/patterns.txt"
+( cd "$_K2" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 是 动物\n我 在 家\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '（数据）都 记 下 了：猫 和 狗 都 是 动物' "$_K2/out.txt" && grep -q '（数据）地 点 记 下：我 住 着 在 家' "$_K2/out.txt" \
+    && ok "**改两行数据** ⇒ 并列式与地点式都换掉（槽位都对）" \
+    || bad "学习-余量改模板" "$(sed -n 's/.*AI > //p' "$_K2/out.txt" | tail -3 | tr '\n' ' ')"
 # §6.522 B3 续：**动作命令里的 `$1`..`$4` 也替换**（以前只有断言/条件会换）
 run '::act on\n::proc on\n::proc dry off\n::op 建过程 说\n::op 加执行 说 echo $1\n::proc run 说 猫\n' o49
 grep -q '真执行了.*echo 猫' o49 \

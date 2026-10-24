@@ -2251,8 +2251,10 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     else if (dropped[0])
         snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（「%s」这 半 句 我 没 记 关系）",
                  words[0], bl, dropped);
-    else
-        snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s", words[0], bl);
+    else {
+        const char *t = ai_say_tpl("学习.在");   /* §6.546 */
+        der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2", words[0], bl, NULL, NULL, NULL);
+    }
     if (out_conf) *out_conf = 0.7f;
     char *r = (char *)malloc(strlen(buf) + 1);
     if (r) memcpy(r, buf, strlen(buf) + 1);
@@ -2911,12 +2913,16 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
         ai->n_rel_learned++;
         if (wa) aip_note_fact(aw, rw, cw);
         else    aip_note_fact(bw, rw, cw);
-        if (wa && wb)
-            snprintf(buf, sizeof buf, "记下 了 ： %s 和 %s 都 %s %s", aw, bw, rw, cw);
-        else if (wa)
-            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）", aw, rw, cw, bw);
-        else
-            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）", bw, rw, cw, aw);
+        if (wa && wb) {
+            const char *t = ai_say_tpl("学习.并列");   /* §6.546 */
+            der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 和 $2 都 $3 $4", aw, bw, rw, cw, NULL);
+        } else if (wa) {
+            const char *t = ai_say_tpl("学习.半知");
+            der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 $2 $3（$4 我 还 不 认识）", aw, rw, cw, bw, NULL);
+        } else {
+            const char *t = ai_say_tpl("学习.半知");
+            der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 $2 $3（$4 我 还 不 认识）", bw, rw, cw, aw, NULL);
+        }
         if (out_conf) *out_conf = 0.75f;
     } else {
         if (!C) return NULL;
@@ -3216,11 +3222,14 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
         if (!learned) return NULL;
         ai->n_rel_learned++;
         aip_note_fact(aw, words[1], items[0]);
-        if (skipped)
-            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s（%s 我 还 不 认识）",
-                     aw, words[1], wrote, missed);
-        else
-            snprintf(buf, sizeof buf, "记下 了 ： %s %s %s", aw, words[1], wrote);
+        if (skipped) {
+            const char *t = ai_say_tpl("学习.半知");   /* §6.546 */
+            der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 $2 $3（$4 我 还 不 认识）",
+                      aw, words[1], wrote, missed, NULL);
+        } else {
+            const char *t = ai_say_tpl("学习.事实分隔");
+            der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 $2 $3", aw, words[1], wrote, NULL, NULL);
+        }
         if (out_conf) *out_conf = 0.75f;
     } else {
         int nfalse = 0, nunk = 0;
