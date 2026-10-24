@@ -137,6 +137,14 @@ static inline int ai_has_question_word(char *const *words, size_t n) {
 static char g_say_key[AI_SAY_MAX][AI_SAY_KEY_LEN];
 static char g_say_txt[AI_SAY_MAX][AI_SAY_TXT_LEN];
 static size_t g_say_n;
+/* §6.563 撞名计数：加载时检测，撞名的后一行丢弃（先出现的赢）。
+ * 标 unused：探针程序（tools/microtest.c 等）只 include 到 ai.h、不加载数据 ⇒ 否则 -Werror 编译不过（同 §6.541）。 */
+#if defined(__GNUC__)
+#define AI_SAY_MAYBE_UNUSED __attribute__((unused))
+#else
+#define AI_SAY_MAYBE_UNUSED
+#endif
+static size_t g_say_dup AI_SAY_MAYBE_UNUSED;
 static int g_say_data;      /* 1 = patterns.txt 读到了（数据接管；缺席的键走"退化"而不是种子） */
 static const struct { const char *k, *v; } AI_SAY_SEEDS[] = {
     { "判词.对",   "对" },

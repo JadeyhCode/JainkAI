@@ -1204,6 +1204,21 @@ sed -i 's|^\[say\] 学习\.他以为反=.*|[say] 学习.他以为反=（数据�
 grep -q '（数据）他 说 猫 会 飞，我 不 认' "$L5/out.txt" \
     && ok "**改一行数据** ⇒ 他者确认换掉（六槽都对）" \
     || bad "他者-改模板" "$(sed -n 's/.*AI > //p' "$L5/out.txt" | tail -1)"
+# §6.563 数据键**撞名必须报出来**（以前是静默覆盖：§6.560 撞过一次，blind4 −3）
+( cd "$ROOT" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o132" 2>&1 ) || true
+grep -q 'say_dup=0' "$WORK/o132" \
+    && ok "出厂数据**没有重复键**（say_dup=0）" \
+    || bad "撞名-出厂" "$(grep -o 'say_dup=[0-9]*' "$WORK/o132" || echo 缺字段)"
+DX="$WORK/dx"; rm -rf "$DX"; mkdir -p "$DX"
+cp "$ROOT/session.bin" "$DX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$DX/" 2>/dev/null || true
+printf '[say] 判词.对=撞名的后一句\n' >> "$DX/patterns.txt"
+( cd "$DX" && printf '::quit\n' | AIP_PATDBG=1 "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q 'say_dup=1' "$DX/out.txt" \
+    && ok "**人为撞名** ⇒ 被计数（say_dup=1），不再静默覆盖" \
+    || bad "撞名-检测" "$(grep -o 'say_dup=[0-9]*' "$DX/out.txt" || echo 缺字段)"
+grep -q '重复键' "$DX/out.txt" \
+    && ok "撞名时**点名报出**（带键名，方便改）" \
+    || bad "撞名-报名字" "$(grep -c '重复键' "$DX/out.txt")"
 # §6.555 C7 余量：并列（都对/不对/一边）+ 三选一（对/都不对/不确定）
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '猫 和 狗 都 属于 动物 吗\n猫 属于 动物 还是 植物\n猫 属于 鱼 还是 植物\n'; } | \
     "$WORK/aip" --model session.bin > "$WORK/o123" 2>&1 ) || true

@@ -1169,6 +1169,20 @@ continue;
                 fprintf(stderr, "[patterns] ⚠ [say] 键/模板太长，这一行被丢弃：%.50s\n", val);
                 continue;
             }
+            /* §6.563 撞名检测（这套格式原本是**静默覆盖**：§6.560 撞过一次，blind4 −3）：
+             * 先出现的赢，后一行丢弃并按需求报出来（`AIP_PATDBG` 时点名，平时只计数）。 */
+            {
+                size_t dj = (size_t)-1;
+                for (size_t i2 = 0; i2 < g_say_n; ++i2)
+                    if (!strcmp(g_say_key[i2], val)) { dj = i2; break; }
+                if (dj != (size_t)-1) {
+                    g_say_dup++;
+                    if (getenv("AIP_PATDBG"))
+                        fprintf(stderr, "[patterns] ⚠ [say] 重复键「%s」—— 保留先出现的那条（第 %zu 条），"
+                                        "后一行丢弃\n", val, dj + 1);
+                    continue;
+                }
+            }
             snprintf(g_say_key[g_say_n], sizeof g_say_key[0], "%s", val);
             snprintf(g_say_txt[g_say_n], sizeof g_say_txt[0], "%s", tpl);
             g_say_n++;
@@ -1275,9 +1289,9 @@ continue;
     }
     aip_shell_mirror_lead(ai);          /* §6.515 桶 → 图（默认关；AIP_SHELLMIRROR=1 才建边） */
     if (getenv("AIP_PATDBG"))
-        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu refuse=%zu refuse_n=%zu alias=%zu alias_n=%zu\n",
+        fprintf(stderr, "[patterns] lead=%zu slot=%zu confuse=%zu reply=%zu shape=%zu syn=%zu affix=%zu tail=%zu fill=%zu class=%zu qword=%zu qpart=%zu say=%zu say_dup=%zu bare=%zu bare_yes=%zu bare_no=%zu bare_cf=%zu verdict=%zu verd_a_y=%zu verd_a_n=%zu verd_j_y=%zu verd_j_n=%zu verd_c=%zu verd_k=%zu pron=%zu pron_coref=%zu pron_subj=%zu pron_you=%zu pron_sep=%zu measure=%zu measure_n=%zu refuse=%zu refuse_n=%zu alias=%zu alias_n=%zu\n",
                 g_lead_n, g_slot_n, g_confuse_n, g_reply_n, g_shape_n, g_syn_n, g_aff_n, g_tail_n,
-                g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n,
+                g_fill_n, g_class_n, g_qword_n, g_qpart_n, g_say_n, g_say_dup,
                 g_bare_lines, g_bare_n[0], g_bare_n[1], g_bare_n[2],
                 g_verd_lines, g_verd_n[0], g_verd_n[1], g_verd_n[2], g_verd_n[3],
                 g_verd_n[4], g_verd_n[5],
