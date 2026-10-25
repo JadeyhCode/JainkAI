@@ -26,6 +26,8 @@ while [ -f "tests/genprobe${i}.txt" ]; do
     row "genprobe${i}" "tests/genprobe${i}.txt"
     i=$((i + 1))
 done
+# §6.606 带标点的教法单独一行：以前矩阵里没有一行带标点，§6.605 的修复在 A/B 里看不见
+[ -f tests/teachpunct.txt ] && row "teachpunct" tests/teachpunct.txt
 for f in tests/blind4.txt tests/blind5.txt tests/blind9.txt tests/holdout.txt tests/holdout_pert.txt; do
     [ -f "$f" ] && row "$(basename "$f" .txt)" "$f"
 done

@@ -1697,7 +1697,9 @@ grep -q '关掉 #1' "$DP/out.txt" \
 grep -q '#[12] 是当前那个，先用 ::brain use 切走' "$DP/out.txt" \
     && ok "**当前那个不许关**（明确拒绝，不静默）" \
     || bad "brain-drop当前" "$(grep '是当前' "$DP/out.txt" | head -1)"
-n_list=$(grep -c '#0  1474 词' "$DP/out.txt" || true)   # §6.593 加了 5 行 [lead] ⇒ 外壳词数 1469→1474
+# ⚠ 别钉外壳词数（§6.593 钉 1474、§6.606 加连接词后又变 1482）——那只是"加载了几个词"的指纹，
+# 与这条要看的东西（**槽位被新脑复用**）无关。改成只要求"有一个 #0 的词数行"。
+n_list=$(grep -cE '#0  [0-9]+ 词' "$DP/out.txt" || true)
 [ "${n_list:-0}" -ge 1 ] && grep -q '\* #1  32 词' "$DP/out.txt" \
     && ok "**关掉后列表少了一个、且槽位被新脑复用**（* #1 32 词）" \
     || bad "brain-drop-复用" "$(grep -E '^\s+[* ]#|\* #' "$DP/out.txt" | tail -3 | tr '\n' ' ')"
