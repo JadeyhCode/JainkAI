@@ -334,10 +334,14 @@ printf '%s\n' "$out" | reps | sed -n 2p | grep -q "对 ， 鸟 -\[会\]-> 飞" \
 printf '%s\n' "$out" | reps | sed -n 3p | grep -q "对 ， 鱼 -\[会\]-> 游泳" \
     && chk "复句里学的第二条查得到" 1 \
     || chk "复句第二条" 0 "$(printf '%s\n' "$out" | reps | sed -n 3p)"
+# §6.607 改法：以前"混了问句就整句回落（不半答）"；现在**两件都说** ——
+# 陈述那半句学到什么要说出来，问句那半句也要回答（不是只答一半）
 out=$(run "猫 属于 动物，狗 会 飞 吗")
-printf '%s\n' "$out" | reps | sed -n 1p | grep -q "记下 了 ：" \
-    && chk "混了问句就整句回落（不半答）" 0 "$(printf '%s\n' "$out" | reps | sed -n 1p)" \
-    || chk "混了问句就整句回落（不半答）" 1
+_line1=$(printf '%s\n' "$out" | reps | sed -n 1p)
+printf '%s\n' "$_line1" | grep -q "记下 了 ： 猫 属于 动物" \
+    && printf '%s\n' "$_line1" | grep -qE "不 太 懂|不 知道|不 会" \
+    && chk "混句：**记下了什么 + 问句的答案**都说（§6.607）" 1 \
+    || chk "混句：记下了什么 + 问句的答案" 0 "$_line1"
 
 echo "㉕ §6.243 复句里的省略/指代（「狗 也 是」）"
 out=$(run "猫 属于 动物，狗 也 是" "狗 属于 动物 吗")

@@ -1334,6 +1334,23 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.607 **"陈述 + 问句"混在一句**：学到的要说出来（以前学会了却静默）
+MX="$WORK/mx"; rm -rf "$MX"; mkdir -p "$MX"
+cp "$ROOT/model.bin" "$MX/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$MX/" 2>/dev/null || true
+( cd "$MX" && { printf '::notepad off\n::char off\n'; printf '麒麟 属于 神兽， 你 记住 了 吗\n麒麟 属于 神兽 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 麒麟 属于 神兽' "$MX/out1.txt" \
+    && ok "「X 属于 Y，你 记住 了 吗」⇒ 先说**记下了什么**（以前静默学会、只回「不太懂」）" \
+    || bad "混句-记下" "$(grep -a 'AI >' "$MX/out1.txt" | head -1)"
+grep -qaF '对 ， 麒麟 -[属于]-> 神兽' "$MX/out1.txt" \
+    && ok "混句**确实学进去了**（下一句回问为对）" \
+    || bad "混句-学进去" "$(grep -a 'AI >' "$MX/out1.txt" | tail -1)"
+( cd "$MX" && { printf '::notepad off\n::char off\n'; printf '猫 属于 动物，狗 属于 宠物，你 记住 了 吗\n狗 属于 宠物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 猫 属于 动物 ； 狗 属于 宠物' "$MX/out2.txt" \
+    && ok "**两个陈述 + 问句**：两条都学、都报出来（以前一句 `return NULL` 全丢）" \
+    || bad "混句-两条" "$(grep -a 'AI >' "$MX/out2.txt" | head -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

@@ -7320,7 +7320,24 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
         if (e <= b || e - b < 3 || e - b > 8) return NULL;
         char *const *cw = words + b;
         size_t cn = e - b;
-        if (ai_has_question_word(cw, cn)) return NULL;
+        /* §6.607 这一句是问句 ⇒ **停在这里**，别把前面已经学会的那半句扔掉
+         * （以前是 `return NULL`：`麒麟 属于 神兽， 你 记住 了 吗` 学进去了却不说）。 */
+        if (ai_has_question_word(cw, cn)) {
+            /* §6.607 **陈述 + 问句**：陈述那半句学到的先攒进 `ai->learn_note`，
+             * 然后返回 NULL ⇒ 后面的问答流水线照常回答问句；答复定下来之后这条
+             * "记下了：…" 会拼到前面（以前学会了却不吭声）。 */
+            if (learned_n > 0) {
+                const char *t = ai_say_tpl("学习.汇总");
+                const char *const a1[1] = { out };
+                der_filln(ai->learn_note, sizeof ai->learn_note,
+                          t ? t : "记下 了 ： $1", a1, 1);
+                /* 问句那半句要是「你 记住 了 吗」这类**元问题**，那"记下了：…"本身就是回答
+                 * ⇒ 别再拼一句"这个我 不 太 懂"（实测很别扭）。 */
+                for (size_t ci2 = 0; ci2 < cn; ++ci2)
+                    if (cw[ci2] && strstr(cw[ci2], "记住")) { ai->learn_note_only = 1; break; }
+            }
+            return NULL;
+        }
         /* §6.605 去掉词里的标点再派发：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
          * 都是人话，标点不该让"A R B"切不出来（实测这两种说法以前整句掉兜底）。 */
         char cw_clean[8][64];
@@ -7364,7 +7381,13 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
         if (!r) r = agent_learn_locative(ai, cw, cn, &rc);
         if (!r) r = agent_learn_relation(ai, cw, cn, &rc);
         if (!r) r = agent_learn_new_words(ai, cw, cn, &rc);
-        if (!r) return NULL;
+        if (getenv("AIP_MULTIDBG"))
+            fprintf(stderr, "[multi] clause=%zu b=%zu cn=%zu got=%s\n", c, b, cn, r ? "有" : "空");
+        /* §6.607 **别把已经学会的那半句扔掉**：以前这一句 `return NULL`，于是
+         * `麒麟 属于 神兽， 你 记住 了 吗` 的第一句**学进去了却不说**，而后面那句问句
+         * 抢先答复（实测回「这个我 不 太 懂」）。现在：这一句没学成 ⇒ **停在这里**，
+         * 把前面学到的汇总返回（"记下了：…" 本身就是对"记住了吗"的回答）。 */
+        if (!r) break;
         /* 记下这句的谓语/宾语，供下一句省略用 */
         {
             char jb[64]; const char *aw2 = NULL, *bw2 = NULL, *rw2 = NULL;
@@ -7518,6 +7541,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     out[0] = 0;
 
     AI *ai = a->brain;
+    ai->learn_note[0] = 0;      /* §6.607 每轮重置："混句里学到的"只在本轮内有效 */
+    ai->learn_note_only = 0;
     ai->pool->current_tick++;
     a->cycle++;
     /* §6.168 追问回话：上一轮我说"推不出来"的那个问句，这一轮用户只回
@@ -8562,6 +8587,17 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         break;
     }
     ai->last_expr_mode = (int)mode;
+    /* §6.607 把"混句里学到的"拼到答复前面（两件事都说出来：记下了什么 + 问句的答案）*/
+    if (ai->learn_note[0] && ai->learn_note_only) {
+        /* 元问题：只回"记下了"就够（有界拷贝，调用方缓冲可能只有 400 字节）*/
+        snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), ai->learn_note);
+    } else if (ai->learn_note[0] && out[0] &&
+               strncmp(out, ai->learn_note, strlen(ai->learn_note)) != 0) {
+        char both[600];
+        /* 有界拼接：`out` 可能只有 512 字节（调用方缓冲），别让 -Wformat-truncation 抓到 */
+        snprintf(both, sizeof both, "%s ； %.250s", ai->learn_note, out);
+        snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), both);
+    }
 
     /* 思维接管输出（默认关，::thinkout on 打开）。
      * 只处理既有流水线给不出的两种情况 —— 矛盾、跨轮想通；

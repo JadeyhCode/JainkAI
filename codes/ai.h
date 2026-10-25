@@ -948,6 +948,10 @@ typedef struct {
      * 长会话里每遇冲突都问会烦；关掉之后照样**说清**冲突，只是不挂"待确认"。
      * `AIP_ASKCONFLICT=0` 也能关（`::askconflict off` 同一个开关）。 */
     int    ask_conflict;
+    /* §6.607 `A 属于 B，你 记住 了 吗` 这类"陈述 + 问句"混一句时：
+     * 陈述那半句学到的东西先攒在这里（`记下 了 ： …`），等这一轮的答复定下来再**拼到前面** */
+    char   learn_note[420];
+    int    learn_note_only;      /* §6.607 问句那半句本身是"你 记住 了 吗" ⇒ 只回"记下了"，别再拼一句 */
     int    ask_pending;
     int    ask_restored;             /* §6.188：载入后扫过一次 `[追问:…]` 标记了吗（只扫一次）*/
     char   ask_mark[96];             /* §6.188：这一条 pending 对应的标记节点名（回收时按它找）*/
