@@ -3612,6 +3612,49 @@ static inline int aip_has_punct(const char *w) {
     return 0;
 }
 
+/* §6.605 **标点不该参与"A R B"的切分**（用户打字本来就带标点）：
+ * 把词里的标点**按字符**去掉（`麒麟，` → `麒麟`），返回去掉的字节数。
+ * 只给"学一句"的派发用 —— 答复/问句判定的路径不动，免得把「？」的语气弄丢。 */
+static inline size_t aip_strip_punct_chars(const char *src, char *dst, size_t cap) {
+    if (!dst || cap == 0) return 0;
+    dst[0] = 0;
+    if (!src) return 0;
+    static const char *p[] = { "，", "。", "；", "、", "！", "？", "：", "…", "——", NULL };
+    size_t out = 0, removed = 0;
+    const char *q = src;
+    while (*q && out + 1 < cap) {
+        size_t hit = 0;
+        for (size_t i = 0; p[i]; ++i) {
+            size_t pl = strlen(p[i]);
+            if (pl && !strncmp(q, p[i], pl)) { hit = pl; break; }
+        }
+        if (!hit && (unsigned char)*q < 0x80 &&
+            (*q == ',' || *q == '.' || *q == ';' || *q == '!' || *q == '?' || *q == ':')) {
+            hit = 1;
+        }
+        if (hit) { q += hit; removed += hit; continue; }
+        dst[out++] = *q++;
+    }
+    dst[out] = 0;
+    return removed;
+}
+
+/* §6.605 把整句的词逐个去标点，写进 `buf`/`out`（空词丢掉），返回新词数。
+ * 给"学一句"的各条派发用：标点不该让"A R B"切不出来。 */
+static inline size_t aip_words_nopunct(char *const *words, size_t n,
+                                       char buf[][64], char **out, size_t cap) {
+    size_t m = 0;
+    if (!words || !buf || !out) return 0;
+    for (size_t i = 0; i < n && m < cap; ++i) {
+        if (!words[i]) continue;
+        (void)aip_strip_punct_chars(words[i], buf[m], 64);
+        if (!buf[m][0]) continue;
+        out[m] = buf[m];
+        m++;
+    }
+    return m;
+}
+
 /* §6.589 把 `A --rid--> old` 的**关系位**清掉（共现留着、推论/猜测不动）。
  * 一处实现：§6.586 的"回「对」"和 §6.589 的"不对，X"共用。返回 1 = 真的清了。 */
 static inline int agent_retract_clear(Token *A, uint8_t rid, Token *old) {
@@ -7242,14 +7285,28 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
     if (!ai || ai->rel_off || !words || n < 5 || n > 24) return NULL;
     size_t seg[9]; size_t nseg = 0;
     seg[0] = 0;
-    for (size_t i = 0; i < n; ++i) {
-        const char *t = words[i];
-        if (!t) continue;
-        if (!strcmp(t, "，") || !strcmp(t, ",") || !strcmp(t, "；") || !strcmp(t, ";") ||
-            !strcmp(t, "。") || !strcmp(t, ".")) {
+    /* §6.605 **标点只在"两边都够一句"时才算分句**：`麒麟，属于 神兽` 里的逗号
+     * 其实是"麒麟"这个词被打字的人断开的位置（分词器还把 麒麟 切成了 麒/麟），
+     * 左边只有 2 个词 —— 按它分句就会把 麒麟 和 属于 拆开，整句学不进（实测掉兜底）。
+     * 判据：分隔符左右各去掉标点后都 ≥3 个实词才分；否则**不分**（当整句处理，标点稍后丢掉）。 */
+    {
+        char tmpb[24][64]; char *tmpw[24];
+        size_t m = aip_words_nopunct(words, n, tmpb, tmpw, 24);
+        for (size_t i = 0; i < n; ++i) {
+            const char *t = words[i];
+            if (!t) continue;
+            int is_sep = (!strcmp(t, "，") || !strcmp(t, ",") || !strcmp(t, "；") ||
+                          !strcmp(t, ";") || !strcmp(t, "。") || !strcmp(t, "."));
+            if (!is_sep) continue;
+            /* 数一数左边/右边各有多少**非标点**词 */
+            size_t left = 0, right = 0;
+            for (size_t k = 0; k < i; ++k) if (words[k]) { char c[64]; (void)aip_strip_punct_chars(words[k], c, sizeof c); if (c[0]) left++; }
+            for (size_t k = i + 1; k < n; ++k) if (words[k]) { char c[64]; (void)aip_strip_punct_chars(words[k], c, sizeof c); if (c[0]) right++; }
+            if (left < 3 || right < 3) continue;
             if (nseg + 1 >= sizeof seg / sizeof seg[0]) return NULL;
             seg[++nseg] = i + 1;
         }
+        (void)m; (void)tmpw;
     }
     if (!nseg) return NULL;
     size_t ncl = nseg + 1;
@@ -7264,6 +7321,18 @@ static inline char *agent_learn_multi(AI *ai, char *const *words, size_t n, floa
         char *const *cw = words + b;
         size_t cn = e - b;
         if (ai_has_question_word(cw, cn)) return NULL;
+        /* §6.605 去掉词里的标点再派发：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
+         * 都是人话，标点不该让"A R B"切不出来（实测这两种说法以前整句掉兜底）。 */
+        char cw_clean[8][64];
+        char *cw2[8];
+        size_t cn2 = 0;
+        for (size_t ci = 0; ci < cn && cn2 < 8; ++ci) {
+            (void)aip_strip_punct_chars(cw[ci], cw_clean[cn2], sizeof cw_clean[cn2]);
+            if (cw_clean[cn2][0]) { cw2[cn2] = cw_clean[cn2]; cn2++; }
+        }
+        if (cn2 < 3) return NULL;
+        cw = cw2;
+        cn = cn2;
         float rc = 0.5f;
         char *r = NULL;
         /* 省略句：`[X][也][R]`（也/同样），用上一句补全 */
@@ -8081,6 +8150,24 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (getenv("AIP_NATDBG2")) {
         fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
+    }
+    /* §6.605 学一句之前先把标点从词里去掉：`麒麟，属于 神兽` 和 `我 教 你 ， 麒麟 属于 神兽`
+     * 都是人话（以前这两种说法整句掉兜底）。答复/问句路径不受影响。 */
+    {
+        char npb[24][64]; char *npw[24];
+        size_t npm = aip_words_nopunct(words, n, npb, npw, 24);
+        if (!resp && npm >= 3) {
+            float rc = 0.5f;
+            resp = agent_learn_relation(ai, npw, npm, &rc);
+            if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] relation(nopunct)=%s\n", resp ? "有" : "空");
+            if (resp) conf = rc;
+        }
+        if (!resp && npm >= 3) {
+            float rc = 0.5f;
+            resp = agent_learn_new_words(ai, npw, npm, &rc);
+            if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] newwords(nopunct)=%s\n", resp ? "有" : "空");
+            if (resp) conf = rc;
+        }
     }
     if (!resp) {
         float rc = 0.5f;

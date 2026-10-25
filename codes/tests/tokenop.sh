@@ -1334,6 +1334,25 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
+PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
+cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true
+( cd "$PC" && { printf '::notepad off\n::char off\n'; printf '麒麟，属于 神兽\n麒麟 属于 神兽 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '对 ， 麒麟 -[属于]-> 神兽' "$PC/out1.txt" \
+    && ok "**逗号不断词**：`麒麟，属于 神兽` 能学进去（以前整句掉兜底）" \
+    || bad "punct-逗号" "$(grep -a 'AI >' "$PC/out1.txt" | tail -2 | tr '\n' ' ')"
+( cd "$PC" && { printf '::notepad off\n::char off\n'; printf '我 教 你 ， 麒麟 属于 神兽\n麒麟 属于 神兽 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '对 ， 麒麟 -[属于]-> 神兽' "$PC/out2.txt" \
+    && ok "**引导语 + 逗号**（`我 教 你 ， …`）也能学进去" \
+    || bad "punct-引导语" "$(grep -a 'AI >' "$PC/out2.txt" | tail -2 | tr '\n' ' ')"
+( cd "$PC" && { printf '::notepad off\n::char off\n'; printf '猫 属于 动物，狗 属于 宠物\n狗 属于 宠物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out3.txt 2>&1 ) || true
+grep -qaF '对 ， 狗 -[属于]-> 宠物' "$PC/out3.txt" && ! grep -qaiE '宠物，狗' "$PC/out3.txt" \
+    && ok "**真分句仍然分**（`猫 属于 动物，狗 属于 宠物` 两条都学、不拼成一个怪词）" \
+    || bad "punct-分句" "$(grep -a 'AI >' "$PC/out3.txt" | tail -2 | tr '\n' ' ')"
+
 # §6.602 `::contradict`：全图扫独占关系的矛盾（只报不改；包含关系不算矛盾）
 CT="$WORK/ct"; rm -rf "$CT"; mkdir -p "$CT"
 cp "$ROOT/model.bin" "$CT/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$CT/" 2>/dev/null || true
