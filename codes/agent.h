@@ -3675,6 +3675,82 @@ static inline int aip_has_punct(const char *w) {
     return 0;
 }
 
+/* §6.616b 带**引导语**的属性句：`我 教 你 ， 南极 很 冷`。
+ * 这一步在**分词之前**（reply 桶也是在那之前命中）—— 不带引导语的 `南极 很 冷` 仍走聊天，
+ * 只有"明确在教"的时候才照实说"属性我学不进"。 */
+static inline int agent_attr_teach_raw(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !input || !out || cap == 0) return 0;
+    const char *p = input;
+    static const char *leads[] = { "我 教 你", "教你", "教我", "请 记住", "记住",
+                                   "告诉 你", "告诉你", "帮我记住", NULL };
+    int had = 0;
+    for (int layer = 0; layer < 2; ++layer) {
+        int hit = 0;
+        for (size_t i = 0; leads[i]; ++i) {
+            size_t pl = strlen(leads[i]);
+            if (strncmp(p, leads[i], pl) != 0) continue;
+            p += pl; hit = 1; had = 1;
+            break;
+        }
+        if (!hit) break;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!strncmp(p, "，", 3) || !strncmp(p, "。", 3) || *p == ',' || *p == '.') p += (*p == ',' || *p == '.') ? 1 : 3;
+        while (*p == ' ' || *p == '\t') p++;
+    }
+    if (!had || !*p) return 0;
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", p);
+    char *w[4]; size_t n = 0;
+    char *save = NULL;
+    for (char *t = buf; *t && n < 4; ) {
+        while (*t == ' ' || *t == '\t') t++;
+        if (!*t) break;
+        w[n++] = t;
+        while (*t && *t != ' ' && *t != '\t') t++;
+        if (*t) { *t = 0; t++; }
+    }
+    (void)save;
+    if (n != 3) return 0;
+    static const char *deg[] = { "很", "挺", "太", "非常", "特别", "真", "好", NULL };
+    int is_deg = 0;
+    for (size_t i = 0; deg[i]; ++i) if (!strcmp(w[1], deg[i])) { is_deg = 1; break; }
+    if (!is_deg) return 0;
+    static const char *pro[] = { "我", "你", "他", "她", "它", "咱", "我们", "你们",
+                                 "他们", "她们", "它们", "自己", NULL };
+    for (size_t i = 0; pro[i]; ++i) if (!strcmp(w[0], pro[i])) return 0;
+    {   /* 去掉尾巴上的标点 */
+        size_t l = strlen(w[2]);
+        while (l && (w[2][l - 1] == ',' || w[2][l - 1] == '.')) w[2][--l] = 0;
+    }
+    const char *t = ai_say_tpl("学习.属性学不进");
+    const char *const a[2] = { w[0], w[2] };
+    der_filln(out, cap, t ? t : "「$1 很 $2」这 种 属性 我 现在 学 不 进 —— 我 只 认 A 关系 B", a, 2);
+    return 1;
+}
+
+/* §6.616 **「X 很 Y」是属性，不是关系**：项目里还没有属性（形容词）学习通路 ——
+ * 以前这类句子整句掉生成流水线，实测回出「冷 很 亮 的 处 我 秋」这种词串（用户以为它疯了）。
+ * 现在**照实说学不进**，并给一条能用的教法。只认最窄的形状：整句恰好 3 个词、中间是程度词、
+ * 主语不是代词（`我 很 累` 是聊天，不是教东西）。返回 1 = 已答复。 */
+static inline int agent_attr_teach(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0) return 0;
+    if (n != 3) return 0;
+    static const char *deg[] = { "很", "挺", "太", "非常", "特别", "真", "好", NULL };
+    int is_deg = 0;
+    for (size_t i = 0; deg[i]; ++i) if (words[1] && !strcmp(words[1], deg[i])) { is_deg = 1; break; }
+    if (!is_deg) return 0;
+    if (!words[0] || !words[2]) return 0;
+    /* 代词开头的多半是"我很想你/他很累"这种聊天 —— 不抢 */
+    static const char *pro[] = { "我", "你", "他", "她", "它", "咱", "我们", "你们",
+                                 "他们", "她们", "它们", "自己", NULL };
+    for (size_t i = 0; pro[i]; ++i) if (!strcmp(words[0], pro[i])) return 0;
+    if (!agent_subj_ok(words[0])) return 0;
+    const char *t = ai_say_tpl("学习.属性学不进");
+    const char *const a[2] = { words[0], words[2] };
+    der_filln(out, cap, t ? t : "「$1 很 $2」这 种 属性 我 现在 学 不 进 —— 我 只 认 A 关系 B", a, 2);
+    return 1;
+}
+
 /* §6.605 **标点不该参与"A R B"的切分**（用户打字本来就带标点）：
  * 把词里的标点**按字符**去掉（`麒麟，` → `麒麟`），返回去掉的字节数。
  * 只给"学一句"的派发用 —— 答复/问句判定的路径不动，免得把「？」的语气弄丢。 */
@@ -7678,6 +7754,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
      * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
      * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
+    /* §6.616b 明确在教"属性句"（`我 教 你 ， 南极 很 冷`）⇒ 照实说学不进（别回聊天）*/
+    if (!ai->ask_pending) {
+        char ab[512];
+        if (agent_attr_teach_raw(ai, input, ab, sizeof ab)) {
+            snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), ab);
+            return agent_say(ai, out);
+        }
+    }
     if (!ai->ask_pending) {
         const char *dr = aip_reply_lookup(input);
         if (dr) {
@@ -8268,6 +8352,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         float rc = 0.5f;
         resp = agent_learn_new_words(ai, lw, ln, &rc);
         if (resp) conf = rc;
+    }
+    /* §6.616 属性句（`南极 很 冷`）：没有学习通路就**照实说**，别掉进生成流水线出词串 */
+    if (!resp) {
+        char ab[512];
+        if (agent_attr_teach(ai, lw, ln, ab, sizeof ab)) {
+            resp = (char *)malloc(strlen(ab) + 1);
+            if (resp) memcpy(resp, ab, strlen(ab) + 1);
+            conf = 0.5f;
+        }
     }
     /* 「他 觉得 <问题>」→ 站到他的立场（只留归他的假设层），
      * 然后把「他 觉得」摘掉，剩下的当普通问题继续走。 */
