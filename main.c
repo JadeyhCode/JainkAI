@@ -4439,12 +4439,24 @@ int main(int argc, char **argv) {
                 if (!ta || !tb) { printf("[教 不了] 造词失败（词太长或池满）\n"); continue; }
                 uint8_t rid = rel_id_of(a->brain, R, 1);
                 if (rid == 0) { printf("[教 不了] 认不出关系词：%s\n", R); continue; }
+                /* §6.585 教一条独占关系的新值时，先看有没有**互不包含**的旧值（只看不撤）*/
+                Token *conflict = NULL;
+                if (!neg && rel_is_excl(a->brain, rid))
+                    conflict = rel_excl_witness(a->brain, ta, rid, tb, 0);
                 int w = ai_write_rel(a->brain, ta, tb, rid, neg, AI_WSRC_RELATION);
                 if (w != 0) { printf("[教 不了] 写入被拦（::safe 里能看理由）\n"); continue; }
                 size_t made = a->brain->pool->count - before;
                 a->brain->n_rel_learned++;
                 printf("[教 会 了] %s %s%s %s\n", ta->name, neg ? "不 " : "",
                        rel_name_of(a->brain, rid), tb->name);
+                if (conflict) {
+                    /* §6.585 冲突**不静默**：说清跟哪条冲突 + 怎么撤（撤 = 显式说不属于）*/
+                    a->brain->n_conflict_shown++;
+                    printf("            跟 以前 记 的「%s %s %s」冲突（两 条 都 在；要 撤 旧 的 就 说「::teach %s 不 %s %s」）\n",
+                           ta->name, rel_name_of(a->brain, rid),
+                           conflict->name ? conflict->name : "?", ta->name,
+                           rel_name_of(a->brain, rid), conflict->name ? conflict->name : "?");
+                }
                 if (made)
                     printf("            当场造词 %zu 个（已进词表：以后能整词识别，也会随模型存盘）\n", made);
                 continue;

@@ -1304,6 +1304,28 @@ grep -q '覆盖 1' "$BR/out.txt" \
 grep -q '冲突未写' "$BR/out.txt" && grep -q '强行覆盖' "$BR/out.txt" \
     && ok "两种落法都进了本脑的账（冲突未写 / 强行覆盖）" \
     || bad "冲突-账" "$(grep -E '冲突未写|强行覆盖' "$BR/out.txt" | tr '\n' ' ')"
+# §6.585 新旧知识冲突：教互不包含的独占事实 ⇒ **冲突可见**（不静默删知识）+ 显式「不」才撤
+LC="$WORK/lc"; rm -rf "$LC"; mkdir -p "$LC"
+cp "$ROOT/model.bin" "$LC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LC/" 2>/dev/null || true
+# ⚠ 这一组**必须有 patterns.txt**：要验的就是"冲突措辞进了数据"（没有它就退回代码兜底文案）
+( cd "$LC" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '狗 属于 植物\n狗 属于 动物 吗\n狗 不 属于 动物\n狗 属于 动物 吗\n::mods\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qa '冲突' "$LC/out.txt" \
+    && ok "独占冲突：学的时候**说清冲突**（措辞来自 [say] 学习.冲突 / 改口.还冲突）" \
+    || bad "冲突-措辞" "$(grep 'AI >' "$LC/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '对 ， 狗 -[属于]-> 动物' "$LC/out.txt" \
+    && ok "冲突之后旧值**仍在**（不静默删知识，§6.199 的老判定）" \
+    || bad "冲突-旧值" "$(grep '动物' "$LC/out.txt" | head -1)"
+grep -qaF '改 过来 了' "$LC/out.txt" \
+    && ok "显式说「狗 不 属于 动物」⇒ 改 过来 了（可追溯的撤）" \
+    || bad "冲突-显式撤" "$(grep '改 过来' "$LC/out.txt" | head -1)"
+grep -qaF '不 对 ， 狗 -[不 属于·独占]-> 动物' "$LC/out.txt" \
+    && ok "显式撤之后旧值答「不 对」" \
+    || bad "冲突-撤后" "$(grep '动物' "$LC/out.txt" | tail -1)"
+grep -qa '加关系' "$LC/out.txt" \
+    && ok "账里看得见「加关系」（每次学都记账）" \
+    || bad "冲突-账" "$(grep -E '加关系|删关系' "$LC/out.txt" | tr '\n' ' ')"
+
 # §6.584 反查表在"边搬去磁盘再读回来"之后必须重建：`::revcheck` 必须报"缺 0 条"
 RV="$WORK/revb"; rm -rf "$RV"; mkdir -p "$RV"
 cp "$ROOT/model.bin" "$RV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RV/" 2>/dev/null || true
@@ -1630,10 +1652,15 @@ rm -f lexicon.txt
 # ⚠ "切开 vs 整词"的**机械判据在 C 级**（optest ㉟：ai_tokenize 数 token）——
 #    这里原想用"学不学得成"当判据，实测**两种切法都学得成**（断言前提是错的），所以只留正向那条。
 printf '泡茶\n' > lexicon.txt
-run '猫 属于 泡茶\n' o59
-grep -aq '记下 了 ： 猫 属于 泡茶' o59 \
+run '猫 属于 泡茶\n猫 属于 泡茶 吗\n' o59
+# §6.585 之后学习答复有两种合法形态：「记下 了」（没冲突）或「改 过 来 了…撤 掉 了」
+# （`泡茶` 与 `动物` 互不包含 ⇒ 后说的算）。**判据是"学得成"**，不是措辞：
+grep -aqE '记下 了 ： 猫 属于 泡茶|改 过 来 了 ： 猫 属于 泡茶' o59 \
     && ok "有词表时：**整词切** ⇒ 同一句话学得成（数据驱动，不动算法）" \
     || bad "整词切" "$(grep -m2 "AI >" o59)"
+grep -aqF '对 ， 猫 -[属于]-> 泡茶' o59 \
+    && ok "整词切之后这条事实**问得出来**（学得成 → 用得上）" \
+    || bad "整词切-回读" "$(grep -m3 "AI >" o59)"
 rm -f lexicon.txt
 
 echo "== ㉑ 特征集合 → 概念（只读；答的是「像什么」不是「是什么」） =="

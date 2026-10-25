@@ -856,6 +856,9 @@ typedef struct {
     size_t n_xcopy_added, n_xcopy_known, n_xcopy_conflict, n_xcopy_override,
            n_xcopy_bad, n_xcopy_newwords;
     size_t n_revised;               /* 其中「改口」的次数：后说的观测替掉了先说的对立极性 */
+    /* §6.585 学过的新事实**与已有独占值冲突**的次数（冲突不静默：回复里会说"跟以前记的哪条冲突"）。
+     * 只进内存，给 `::stats`/探针看。 */
+    size_t n_conflict_shown;
     size_t n_rel_yes;               /* 靠关系推理答「是」的次数 */
     size_t n_rel_no;                /* 靠关系推理答「不是」的次数 */
     size_t n_rel_deep;              /* 其中需要多跳推导（不是直接边）的次数 */
@@ -5492,6 +5495,10 @@ static inline const AIModEntry *ai_modlog_at(const AI *ai, size_t i) {
 /* §6.568 记"删掉了一条边"（B 腿：账里不能只有"加"，没有"删/改"） */
 static inline void ai_modlog_note_del(AI *ai, Token *a, Token *b, AiWriteSrc s, AIModKind kind) {
     ai_modlog_note(ai, a, b, 0, 0, s, kind);
+}
+/* §6.585 撤掉一条**关系位**（不是删整条边）：要带上关系 id，否则 `::mods` 只能显示 "?" */
+static inline void ai_modlog_note_retract(AI *ai, Token *a, Token *b, uint8_t rid, AiWriteSrc s) {
+    ai_modlog_note(ai, a, b, rid, 0, s, AIMOD_REL_DEL);
 }
 
 

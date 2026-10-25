@@ -154,8 +154,8 @@ static inline int aip_check_ai(AI *ai, AiCheck *ck) {
         if (t->id != i) aip_check_fail(ck, "id 与下标不一致：名字=%s id=%u 下标=%zu", t->name ? t->name : "?", t->id, i);
         if (t->owner != p) aip_check_fail(ck, "owner 不是本池：名字=%s 下标=%zu", t->name ? t->name : "?", i);
         /* ---- ② 边数组的三种合法形态 ---- */
-        int tag = token_assocs_in_ram(t) ? AIP_PTR_RAM
-                : (token_assocs_on_disk(t) ? AIP_PTR_DISK : -1);
+        int tag = token_assocs_in_ram(t) ? (int)AIP_PTR_RAM
+                : (token_assocs_on_disk(t) ? (int)AIP_PTR_DISK : -1);
         /* `cap<count` 只对**内存里**的边表成立：`detach` 故意把 cap 置 0（边在磁盘上）*/
         if (tag == AIP_PTR_RAM && t->cap < t->count)
             aip_check_fail(ck, "cap<count：名字=%s cap=%zu count=%zu", t->name ? t->name : "?", t->cap, t->count);
@@ -234,6 +234,19 @@ static inline int aip_check_ai(AI *ai, AiCheck *ck) {
     }
 
     return (ck && ck->bad) ? 0 : 1;
+}
+
+/* ---- 探针用的小包装（打印第一条）---- */
+static inline int ai_check_ok(AI *ai) {
+    AiCheck ck;
+    if (aip_check_ai(ai, &ck)) return 1;
+    printf("      [不变式] bad=%zu warn=%zu：%s\n", ck.bad, ck.warn, ck.first);
+    return 0;
+}
+static inline void ai_check_dump_if_bad(AI *ai, const char *tag) {
+    AiCheck ck;
+    if (aip_check_ai(ai, &ck)) printf("      [不变式] %s 干净\n", tag ? tag : "");
+    else printf("      [不变式] %s 坏了：bad=%zu %s\n", tag ? tag : "", ck.bad, ck.first);
 }
 
 #endif /* AICHECK_H */

@@ -932,11 +932,21 @@ static inline Token *rel_excl_witness(AI *ai, const Token *a, uint8_t rid,
     for (size_t i = 0; i < nc; ++i) {
         Token *b1 = cands[i];
         if (!b1 || b1 == b || b1 == a) continue;
-        /* b1 与 b 互不包含 —— 用 属于 的闭包判，两向都要查 */
-        if (rel_direct(b1, REL_IS_A, b)) continue;
-        if (rel_direct(b, REL_IS_A, b1)) continue;
-        if (rel_solve_go(ai, b1, REL_IS_A, b, 0, NULL, depth + 1, NULL, 0)) continue;
-        if (rel_solve_go(ai, b, REL_IS_A, b1, 0, NULL, depth + 1, NULL, 0)) continue;
+        /* b1 与 b 互不包含 —— 用 属于 的闭包判，两向都要查。
+         * §6.585 **修一个真 bug**：`rel_solve_go` 的返回值是"解出来了"（status 可能是 **-1 = 解出否定**），
+         * 不是"解出肯定"。以前这里只看返回值 ⇒ 当求解器能证明「b1 **不** 属于 b」（R6/独占已经
+         * 判定两者不相交）时，被误当成"b1 ⊂ b"⇒ 当成包含 ⇒ `rel_excl_witness` 返回 NULL
+         * ⇒ 独占冲突**看不见**（实测：`狗 属于 植物` 之后再教 `狗 属于 猫科`，两条都留下、
+         * 都答"对"）。这里要求 `pf.status > 0`（真的解出肯定）才算包含。 */
+        {
+            Proof ipf;
+            memset(&ipf, 0, sizeof ipf);
+            if (rel_solve_go(ai, b1, REL_IS_A, b, 0, &ipf, depth + 1, NULL, 0) && ipf.status > 0)
+                continue;
+            memset(&ipf, 0, sizeof ipf);
+            if (rel_solve_go(ai, b, REL_IS_A, b1, 0, &ipf, depth + 1, NULL, 0) && ipf.status > 0)
+                continue;
+        }
         return b1;
     }
     return NULL;

@@ -3513,6 +3513,13 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
         cot_push(ai, COT_LEARN, 1, 70, "这条关系我本来就知道", resp0);
         ai->n_cot++;
     } else {
+        /* §6.585 **新旧知识冲突：不静默删旧知识，但要当场说出来 + 教用户怎么撤**。
+         * 为什么不在学习时自动撤：这是项目原有的判定（§6.199「独占关系被记多个宾语时，
+         * 学习不拦，至少要能查出来」）；而且"属于"有嵌套，自动删真知识的风险大于收益。
+         * 于是这一轮补的是**冲突可见**：学完立刻告诉用户"跟以前记的哪条冲突"，
+         * 以及"要撤就说不属于"（那条路本来就走"极性改口"，是显式、可追溯的）。 */
+        Token *conflict = NULL;
+        if (!is_neg && rel_is_excl(ai, rid)) conflict = rel_excl_witness(ai, A, rid, B, 0);
         /* 统一写入通道：关系事实是**知识**，开关打开时改走受审通道（默认直写）。 */
         int rc = ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION);
         if (rc != 0) return NULL;
@@ -3529,6 +3536,20 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
             cot_push(ai, COT_LEARN, 1, 85, "改口：后说的观测替换先说的（同一条边只留一个极性）",
                      resp0);
             ai->n_cot++;
+            /* §6.585 极性改口的同时，**另一条互不包含的旧值可能还在**（例：狗 属于 植物 与
+             * 狗 属于 动物 并存）—— 顺口带上，别让用户以为"改过来"就把旧类清掉了。 */
+            if (conflict) {
+                const char *ct = ai_say_tpl("改口.还冲突");
+                const char *const ca[3] = { aw, rw, conflict->name ? conflict->name : "?" };
+                size_t cl = strlen(resp0);
+                if (cl < sizeof resp0) {
+                    const char *piece = ct ? ct : "（另外 我 这 儿 还 记 着 $1 $2 $3）";
+                    char tmp[192];
+                    der_filln(tmp, sizeof tmp, piece, ca, 3);
+                    snprintf(resp0 + cl, sizeof resp0 - cl, "%s", tmp);
+                }
+                ai->n_conflict_shown++;
+            }
             /* **修正的记忆 / 来源监控**：留一个 [修正:…] 标记节点（连回主语），
              * 这样「这件事被改口过」**记得住**，而旧观测不会冒充知识复活。
              * 走的是同一条受审通道（安全内核 + 预算 + 审计），并且**幂等**：
@@ -3542,6 +3563,20 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                 snprintf(in.source, sizeof in.source, "来源:改口");
                 (void)mod_propose(&micro_of(ai)->queue, &in);
             }
+        } else if (conflict) {
+            /* §6.585 新旧冲突：新的记下了，但**旧的那条也还在** —— 说出来 + 给撤法。
+             * 措辞进数据（`[say] 学习.冲突`），五槽位：$1 主语 $2 关系 $3 新宾语 $4 旧宾语。 */
+            const char *t = ai_say_tpl("学习.冲突");
+            der_fill5(resp0, sizeof resp0,
+                      t ? t : "记下 了 ： $1 $2 $3（跟 以前 记 的 $1 $2 $5 冲突 —— 要 撤 旧 的 就 说「$1 不 $2 $5」）",
+                      aw, is_neg ? rshow : rw, bw, NULL,
+                      conflict->name ? conflict->name : "?");
+            ai->n_rel_learned++;
+            ai->n_learned++;
+            ai->n_conflict_shown++;
+            cot_push(ai, COT_LEARN, 1, 80,
+                     "新旧冲突：新事实记下了，旧值还在（显式说不属于才会撤）", resp0);
+            ai->n_cot++;
         } else {
             {
                 /* §6.545 这一处否定词已经并进 rshow（`不 喜欢` 是一个词），所以槽位不同 */
@@ -6755,8 +6790,16 @@ static inline int agent_rewrite_where(const char *in, char *out, size_t cap);
  * ⇒ 凡走数据行/裸短回话/重复请求的答复，「再说一遍」「没听懂」都复述不出来（§6.401 只补了两条）。
  * 这里收成一个出口：记原文（空串和"……"不记）+ 轮次自增，返回长度。*/
 static inline size_t agent_say(AI *ai, char *out) {
-    if (ai && out && out[0] && strcmp(out, "……") != 0)
-        snprintf(ai->last_reply, sizeof ai->last_reply, "%s", out);
+    if (ai && out && out[0] && strcmp(out, "……") != 0) {
+        /* §6.585 有界拷贝（截断是**有意**的：last_reply 只是一句"刚才说了什么"的备忘）。
+         * 以前用 `snprintf(..., "%s", out)`：调用方的缓冲区一大（探针里 1024 字节），
+         * GCC 就会报 `-Wformat-truncation` —— 探针门用 `-Werror`，于是整包红。
+         * 改成显式截断：语义一样，警告也没了。 */
+        size_t n = strlen(out);
+        if (n >= sizeof ai->last_reply) n = sizeof ai->last_reply - 1;
+        memcpy(ai->last_reply, out, n);
+        ai->last_reply[n] = 0;
+    }
     if (ai) ai->turns++;
     return strlen(out ? out : "");
 }
