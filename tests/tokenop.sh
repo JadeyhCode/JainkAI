@@ -1334,9 +1334,34 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.596 `::locative on|off`：地点块学习开关（`::learn` 总览里那条命令必须真的存在）
+LC3="$WORK/lc3"; rm -rf "$LC3"; mkdir -p "$LC3"
+cp "$ROOT/model.bin" "$LC3/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LC3/" 2>/dev/null || true
+( cd "$LC3" && { printf '::notepad off\n::char off\n'; printf '::locative\n::locative off\n::locative\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '[地点块学习（A V 在 B ⇒ A 在 B）= 开（默认）]' "$LC3/out.txt" \
+    && grep -qaF '[地点块学习（A V 在 B ⇒ A 在 B）= 关]' "$LC3/out.txt" \
+    && ok "「::locative on|off」能读能改（::learn 总览里承诺的命令真的存在）" \
+    || bad "locative-开关" "$(grep -a '地点块' "$LC3/out.txt" | tail -2 | tr '\n' ' ')"
+
+# §6.596 `::learn`（不带参数）= 学习总览：六个开关 + 这一会话学到的（计数随教随涨）
+LD2="$WORK/ld2"; rm -rf "$LD2"; mkdir -p "$LD2"
+cp "$ROOT/model.bin" "$LD2/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LD2/" 2>/dev/null || true
+( cd "$LD2" && { printf '::notepad off\n::char off\n'; printf '::learn\n麒麟 属于 神兽\n::learn\n::learn 猫 是 动物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '[学习设置]' "$LD2/out.txt" && grep -qaF '::askconflict on|off' "$LD2/out.txt" \
+    && ok "「::learn」（不带参数）打出学习总览（六开关 + 去哪改）" \
+    || bad "learn-总览" "$(grep -a '学习设置' "$LD2/out.txt" | head -1)"
+grep -qaF '关系事实 1 条' "$LD2/out.txt" && grep -qaF '教学留痕 1 个' "$LD2/out.txt" \
+    && ok "「::learn」的计数**随教随涨**（关系事实 1 条 / 教学留痕 1 个）" \
+    || bad "learn-计数" "$(grep -aE '关系事实|教学留痕' "$LD2/out.txt" | tail -2 | tr '\n' ' ')"
+grep -qaF '[学了一句]' "$LD2/out.txt" \
+    && ok "带参数的老行为仍在（「::learn <文本>」⇒ [学了一句]）" \
+    || bad "learn-带参数" "$(grep -a '学了一句' "$LD2/out.txt" | head -1)"
+
 # §6.595 `::src` 也要认教学留痕（诊断命令和自然语言回答同一份判据）
 ( cd "$PV2" 2>/dev/null && { printf '::notepad off\n::char off\n麒麟 属于 神兽\n::src 麒麟 属于 神兽\n'; } | \
-    "$WORK/aip" --model ""$ROOT/model.bin"" > src1.txt 2>&1 ) || true
+    "$WORK/aip" --model "$ROOT/model.bin" > src1.txt 2>&1 ) || true
 grep -qaF '**教学留痕：有**' "$PV2/src1.txt" \
     && ok "`::src A R B` 认得出「教学留痕」（和 `你 怎么 知道` 同一份判据）" \
     || bad "src-留痕" "$(grep -a '来源账\|教学' "$PV2/src1.txt" | head -2 | tr '\n' ' ')"

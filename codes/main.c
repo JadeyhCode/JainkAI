@@ -563,6 +563,7 @@ typedef enum {
     CMD_ASKBACK,            /* §6.168/§6.172 追问回话（默认关） */
     CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
     CMD_ASKCONFLICT,        /* §6.594 学到冲突时问不问"要改吗"（默认问） */
+    CMD_LOCATIVE,           /* §6.596 地点学习（A V 在 B ⇒ A 在 B）开关 */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -725,6 +726,9 @@ static const CmdDef CMDS[] = {
       "学到跟已有**独占值**冲突的事实时，问不问「要 我 改 掉 旧 的 吗」（默认问，§6.586）。\n"
       "关掉之后冲突照样**说清**（不静默），只是不挂「待确认」、不追问；\n"
       "撤旧值仍可说「X 不 R Y」（显式、可追溯）。`AIP_ASKCONFLICT=0` 也能关", CMD_ASKCONFLICT },
+    { "locative", "on|off", CARG_OPT, "基本",
+      "地点块学习（默认开，§6.218）：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）。\n"
+      "`AIP_LOCATIVE=0` 也能关", CMD_LOCATIVE },
     { "askback", "on|off|clear", CARG_OPT, "基本",
       "追问回话（默认关，§6.168/§6.172）：它说「没把握（只能猜/拿不准）」之后，\n"
       "你回一句「会/不 会/对/不 对」就当教学写进图；\n"
@@ -820,8 +824,10 @@ static const CmdDef CMDS[] = {
     { "ascii", NULL, 1, "基本",
       "把 ASCII 代码词法接进代码通道（默认关；AIP_ASCII=1）：开着时 `::code` 的痕里多一行\n"
       "「ASCII 逐字保留 ✓/✗」（写出去的字节词法层有没有改过一个）。关着时输出逐字节同今天", CMD_ASCII },
-    { "learn", NULL, 2, "基本",
-      "按共现学一句普通文本", CMD_LEARN },
+    { "learn", "[文本]", CARG_OPT, "基本",
+      "不带参数：**学习总览**（§6.596）—— 六个学习开关的当前值 + 这一会话学了几条关系事实、\n"
+      "改口几次 / 冲突提示几次 / 教学留痕几个，并给出改开关的命令。\n"
+      "带参数：按共现学一句普通文本（老行为）", CMD_LEARN },
     { "teach", "<主语> <关系词> <宾语>", CARG_REQ, "基本",
       "**教它一条关系事实**（互动学习的显式入口）：`::teach 麒麟 属于 神兽`。\n"
       "和「直接说一句 `A R B`」的区别：那条路要求**每个词都已在词表里**（新词会被切开、学不到）；\n"
@@ -4418,7 +4424,37 @@ int main(int argc, char **argv) {
             case CMD_LEARN: {
                 const char *src = (cmd[5] == ' ') ? cmd + 6 : NULL;
                 while (src && *src == ' ') src++;
-                if (src && *src) { ai_learn_text(a->brain, src); printf("[学了一句]\n"); }
+                if (!src || !*src) {
+                    /* §6.596 不带参数 = **学习总览**（六个开关 + 这一会话学到的）；
+                     * 带参数 = 原来的"按共现学一句普通文本"。 */
+                    AI *b = a->brain;
+                    size_t marks = 0;
+                    for (size_t i = 0; i < b->pool->count; ++i) {
+                        const Token *t = b->pool->tokens[i];
+                        /* ⚠ 前缀长度别写死：`[教:` 是 5 字节（`[` 1 + `教` 3 + `:` 1）。
+                         * 写成 9 会把整段名字都比一遍 ⇒ 永远数出 0（实测栽过）。 */
+                        if (t && t->name &&
+                            !strncmp(t->name, MICRO_TEACH_TOKEN_PREFIX,
+                                     strlen(MICRO_TEACH_TOKEN_PREFIX))) marks++;
+                    }
+                    printf("[学习设置]\n");
+                    printf("  自然说法里的新词（造词）   = %s   ::natcoin on|off\n", b->nat_coin ? "开" : "关");
+                    printf("  自然说法归一（定义句）     = %s   ::relnat on|off\n", b->rel_nat ? "开" : "关");
+                    printf("  地点学习（A V 在 B）       = %s   ::locative on|off\n", b->locative ? "开" : "关");
+                    printf("  追问回话（没把握时回一句） = %s   ::askback on|off\n", b->askback ? "开" : "关");
+                    printf("  冲突时追问「要改吗」       = %s   ::askconflict on|off\n",
+                           b->ask_conflict ? "开" : "关");
+                    printf("  改口语义（后说的替先说的） = %s   ::revise on|off\n",
+                           AIP_LD(g_obs_revise) ? "开" : "关");
+                    printf("[这一会话学到的]\n");
+                    printf("  关系事实 %zu 条（其中改口 %zu 次、冲突提示 %zu 次）\n",
+                           b->n_rel_learned, b->n_revised, b->n_conflict_shown);
+                    printf("  教学留痕 %zu 个（`[教:…]`，随图存盘 ⇒ 出处能跨会话认）\n", marks);
+                    printf("  问「我刚才教了你什么」可以列出来；`::src <A> <关系> <B>` 看单条出处\n");
+                    continue;
+                }
+                ai_learn_text(a->brain, src);
+                printf("[学了一句]\n");
                 continue;
             }
             case CMD_TEACH: {
@@ -4493,6 +4529,20 @@ int main(int argc, char **argv) {
                 printf("[冲突时追问「要 我 改 掉 旧 的 吗」= %s]\n", a->brain->ask_conflict ? "开（默认）" : "关");
                 printf("  关掉之后：冲突照样**说清**（不静默），只是不挂待确认、不追问；\n");
                 printf("  撤旧值仍可说「X 不 R Y」（显式、可追溯）。\n");
+                continue;
+            }
+            case CMD_LOCATIVE: {
+                /* §6.596 地点块学习开关（和 `::natcoin`/`::askconflict` 同一个形状）*/
+                const char *arg = cmd;
+                while (*arg && *arg != ' ') arg++;
+                while (*arg == ' ') arg++;
+                if (*arg) {
+                    if (strcmp(arg, "on") == 0) a->brain->locative = 1;
+                    else if (strcmp(arg, "off") == 0) a->brain->locative = 0;
+                    else { printf("[用法] ::locative on|off\n"); continue; }
+                }
+                printf("[地点块学习（A V 在 B ⇒ A 在 B）= %s]\n", a->brain->locative ? "开（默认）" : "关");
+                printf("  关掉之后 `我 住 在 北京` 不会被学成 `我 在 北京`（整句走普通流水线）。\n");
                 continue;
             }
             case CMD_QUIT: {
