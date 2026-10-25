@@ -135,6 +135,39 @@ static void *cold_worker(void *arg) {
     return NULL;
 }
 
+/* ---- §6.604 **并发学习**：4 个线程各自建脑 + 各自**教**两条事实 + 各自回读 ----
+ * 这条打的是"§6.585 之后新增的学习设施"：教学留痕 `[教:…]`（走受审通道 + 当场 drain）、
+ * 修改账、冲突检测（`rel_excl_witness`）、`natcoin` 造词。它们都是**每脑一份**的状态，
+ * 但会碰进程级共享的东西（patterns 表 / 关系表 / 词池分配器），所以要 TSan 看一遍。
+ * 判据：
+ *   ① 每个线程自己教的那条**回读为对**（学得进）；
+ *   ② 线程 t 的脑里**查不到**别的线程教的那条（没串脑）；
+ *   ③ 每条问句都有答复（没崩）。 */
+#define TEACH_N 2
+static char g_teach_out[NT][TEACH_N][OUT_CAP];
+static char g_teach_cross[NT][OUT_CAP];
+static const char *g_teach_model;
+static void *teach_worker(void *arg) {
+    long t = (long)arg;
+    Agent *a = agent_with_model(g_teach_model);
+    if (!a) { g_teach_out[t][0][0] = 0; return NULL; }
+    for (int i = 0; i < TEACH_N; ++i) {
+        char teach[128], ask[128];
+        snprintf(teach, sizeof teach, "麒麟%ldx%d 属于 神兽%ldx%d", t, i, t, i);
+        agent_step(a, teach, g_teach_out[t][i], sizeof g_teach_out[t][i]);
+        snprintf(ask, sizeof ask, "麒麟%ldx%d 属于 神兽%ldx%d 吗", t, i, t, i);
+        agent_step(a, ask, g_teach_out[t][i], sizeof g_teach_out[t][i]);
+    }
+    {   /* 串脑检查：问**别的线程**教的那条（应该是"不知道"）*/
+        long u = (t + 1) % NT;
+        char ask[128];
+        snprintf(ask, sizeof ask, "麒麟%ldx0 属于 神兽%ldx0 吗", u, u);
+        agent_step(a, ask, g_teach_cross[t], sizeof g_teach_cross[t]);
+    }
+    agent_free(a);
+    return NULL;
+}
+
 static void *free_worker(void *arg) {
     ai_free((AI *)arg);
     return NULL;
@@ -159,6 +192,28 @@ int main(int argc, char **argv) {
         (void)out;
         ok(answered, "④ 一边问答一边翻配置开关：每条问题都有答复（没崩、没读到半个状态）");
         for (int t = 0; t < NT; ++t) agent_free(w[t]);
+        printf("\n通过 %d / 失败 %d\n", passes, fails);
+        return fails ? 1 : 0;
+    }
+
+    /* ---- 并发学习模式（`concprobe <模型> --teach`）：各教各的、各回读各的 ---- */
+    if (argc > 2 && strcmp(argv[2], "--teach") == 0) {
+        g_teach_model = model;
+        pthread_t th[NT];
+        for (long t = 0; t < NT; ++t) pthread_create(&th[t], NULL, teach_worker, (void *)t);
+        for (int t = 0; t < NT; ++t) pthread_join(th[t], NULL);
+        int nonempty = 1, learned = 1, isolated = 1;
+        for (int t = 0; t < NT; ++t) {
+            for (int i = 0; i < TEACH_N; ++i) {
+                if (!g_teach_out[t][i][0]) nonempty = 0;
+                if (!strstr(g_teach_out[t][i], "对 ，")) learned = 0;
+            }
+            if (!g_teach_cross[t][0]) nonempty = 0;
+            if (strstr(g_teach_cross[t], "对 ，")) isolated = 0;
+        }
+        ok(nonempty, "① 并发学习：每个线程都问出了话（没崩）");
+        ok(learned, "② 并发学习：每个脑**回读自己教的那条**都是「对」");
+        ok(isolated, "③ 并发学习：**查不到别的脑教的事**（没串脑）");
         printf("\n通过 %d / 失败 %d\n", passes, fails);
         return fails ? 1 : 0;
     }

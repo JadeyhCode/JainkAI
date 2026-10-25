@@ -46,4 +46,20 @@ if ! grep -q "通过 .* / 失败 0" run.log; then
     echo "FAIL: 探针没跑完（见 $WORK/run.log）"; tail -15 run.log; exit 1
 fi
 tail -2 run.log
-echo "PASS conc_tsan（0 处数据竞争；并行结果与串行逐字节一致）"
+
+# §6.604 **并发学习**：4 个线程各教各的（教学留痕 / 修改账 / 冲突检测 / 造词都会碰共享结构）
+$PREFIX env TSAN_OPTIONS="halt_on_error=0" ./conc_tsan "$MODEL" --teach > run_teach.log 2>&1 || true
+if grep -q "unexpected memory mapping" run_teach.log; then
+    echo "SKIP conc_tsan --teach（TSan 起不来：unexpected memory mapping）"
+else
+    if grep -q "WARNING: ThreadSanitizer" run_teach.log; then
+        echo "FAIL: 并发学习有数据竞争（$(grep -c 'WARNING: ThreadSanitizer' run_teach.log) 处）"
+        grep -E "Location is|SUMMARY: ThreadSanitizer" run_teach.log | head -12
+        exit 1
+    fi
+    if ! grep -q "通过 .* / 失败 0" run_teach.log; then
+        echo "FAIL: 并发学习探针没跑完（见 $WORK/run_teach.log）"; tail -15 run_teach.log; exit 1
+    fi
+    tail -2 run_teach.log
+fi
+echo "PASS conc_tsan（0 处数据竞争；并行结果与串行逐字节一致；并发学习不串脑）"
