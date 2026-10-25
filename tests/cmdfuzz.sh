@@ -37,51 +37,96 @@ i=1
 while [ "$i" -le "$SEEDS" ]; do
     rm -f "$W"/*.bin "$W"/*.parts 2>/dev/null
     cp "$MODEL" "$W/m.bin"
-    # 命令池：**语法全部正确**（用法错误的命令只会打印帮助，等于白跑一步）
-    awk -v s="$i" -v n="$STEPS" '
+    # 命令池：**从 `::help` 自动抽**（新增命令不会再漏）+ 一批"带参数"的手工形态。
+    # 黑名单：会结束会话 / 训练语料 / 碰外部世界的几条，随机会话里不该出现。
+    POOL="$W/pool.txt"
+    if [ ! -f "$POOL" ]; then
+        "$AIP" --model m.bin 2>/dev/null <<'HELPEOF' | sed -n 's/^  ::\([A-Za-z0-9_-]*\).*/::\1/p' \
+            | grep -vxE '::(quit|train|batch|act|gen)' > "$POOL"
+::help
+::quit
+HELPEOF
+        cat >> "$POOL" <<'CURATED'
+::brain new
+::brain list
+::brain use 1
+::brain save 1 b1.bin
+::brain drop 1
+::brain fork
+::src 猫 属于 动物
+::rel 猫
+::rel 麒麟
+::askconflict off
+::askconflict on
+::natcoin on
+::natcoin off
+::locative on
+::revise off
+::revise on
+::op 加前提 猫 动物
+::op 回收临时
+::op 中间插词 鸟 飞
+::op 建过程 清洗
+::teach 麒麟 属于 神兽
+::teach 月亮 喵 鱼
+::save m.bin
+::load m.bin
+猫 属于 动物 吗
+麒麟 属于 神兽 吗
+::parts save p.parts
+::parts attach p.parts
+::parts detach
+::lex int main(void){return 0;}
+::revcheck
+CURATED
+        wc -l < "$POOL" | sed 's/^/  [池] 命令形态 /;s/$/ 条/'
+    fi
+    awk -v s="$i" -v n="$STEPS" -v pool="$POOL" '
     BEGIN{
         srand(s);
-        c[0]="::brain new";          c[1]="::brain list";      c[2]="::brain use 1";
-        c[3]="::stats";              c[4]="::mods";            c[5]="::learn";
-        c[6]="::src 猫 属于 动物";   c[7]="::rel 猫";          c[8]="::rel 麒麟";
-        c[9]="::askconflict off";    c[10]="::askconflict on";
-        c[11]="::natcoin on";        c[12]="::natcoin off";
-        c[13]="::op 加前提 猫 动物"; c[14]="::op 回收临时";    c[15]="::op 中间插词 鸟 飞";
-        c[16]="::teach 麒麟 属于 神兽"; c[17]="::teach 月亮 喵 鱼";
-        c[18]="::save m.bin";        c[19]="::load m.bin";
-        c[20]="::brain save 1 b1.bin"; c[21]="::brain drop 1";
-        c[22]="猫 属于 动物 吗";     c[23]="麒麟 属于 神兽 吗";
-        c[24]="::parts save p.parts"; c[25]="::parts attach p.parts";
-        c[26]="::parts detach";      c[27]="::gc";
-        c[28]="::lex int main(void){return 0;}";
-        c[29]="::brain fork";
-        c[30]="::revcheck";
-        # 前几步固定：保证多脑那条路一定被走到（随机池里 5/31 的概率不够硬）
+        k = 0;
+        while ((getline line < pool) > 0) if (length(line) > 0) c[k++] = line;
+        if (k == 0) { print "::revcheck"; exit 1; }
+        # 前几步固定：保证多脑那条路一定被走到（纯随机不够硬）
         printf "::notepad off\n::char off\n";
         printf "::brain new\n::brain use 0\n::brain save 1 b1.bin\n::brain use 1\n";
         printf "::brain drop 0\n::brain use 0\n";
-        for (k = 0; k < n; k++) printf "%s\n", c[int(rand()*31)];
+        for (j = 0; j < n; j++) printf "%s\n", c[int(rand()*k)];
         printf "::revcheck\n";
+        # 末尾再存一次盘：下一步用第二个进程读回来 —— 随机命令序列跑完的图也要读得回
+        printf "::save m.bin\n";
     }' > "$W/s.txt"
     ( cd "$W" && "$AIP" --model m.bin < s.txt > out.txt 2>&1 )
     rc=$?
     why=""
     [ "$rc" -eq 0 ] || why="退出码 $rc"
-    grep -qE "段错误|Segmentation|Assertion|Aborted|core dumped" "$W/out.txt" && why="崩溃字样"
-    grep -q "命令表里有" "$W/out.txt" && why="命令表与实现漂移"
-    grep -q "反查表缺 0 条" "$W/out.txt" || [ -n "$why" ] || why="最后 ::revcheck 没说缺 0 条"
+    grep -qaE "段错误|Segmentation|Assertion|Aborted|core dumped" "$W/out.txt" && why="崩溃字样"
+    grep -qa "命令表里有" "$W/out.txt" && why="命令表与实现漂移"
+    grep -qa "反查表缺 0 条" "$W/out.txt" || [ -n "$why" ] || why="最后 ::revcheck 没说缺 0 条"
     [ -s "$W/out.txt" ] || why="没有任何输出"
-    grep -q "多脑" "$W/out.txt" || [ -n "$why" ] || why="多脑那条路没跑到"
+    grep -qa "多脑" "$W/out.txt" || [ -n "$why" ] || why="多脑那条路没跑到"
+    # **存读往返**：同一段随机操作跑完的图，用第二个进程读回来验一遍（§6.598 那类问题的现场）
+    if [ -z "$why" ]; then
+        printf '::notepad off\n::char off\n::revcheck\n猫 属于 动物 吗\n' > "$W/s2.txt"
+        ( cd "$W" && "$AIP" --model m.bin < s2.txt > out2.txt 2>&1 )
+        rc2=$?
+        [ "$rc2" -eq 0 ] || why="读回进程退出码 $rc2"
+        grep -qa "反查表缺 0 条" "$W/out2.txt" || [ -n "$why" ] || why="读回之后反查表不自洽"
+        grep -qa "AI > " "$W/out2.txt" || [ -n "$why" ] || why="读回之后问不出一句话"
+        grep -qaE "段错误|Segmentation|Assertion" "$W/out2.txt" && why="读回进程崩溃字样"
+    fi
     if [ -n "$why" ]; then
         echo "  [FAIL] 种子 $i（$why）"
-        tail -6 "$W/out.txt" | sed 's/^/        /'
+        tail -4 "$W/out.txt" | sed 's/^/        /'
+        [ -f "$W/out2.txt" ] && tail -2 "$W/out2.txt" | sed 's/^/        /'
         fail=$((fail+1))
     else
         pass=$((pass+1))
     fi
     i=$((i+1))
 done
-rm -rf "$W"
+[ -n "${AIP_CMDFUZZ_KEEP:-}" ] || rm -rf "$W"
+[ -n "${AIP_CMDFUZZ_KEEP:-}" ] && echo "  [保留] $W"
 echo "命令面随机会话：通过 $pass / 失败 $fail（种子 × 步数 = $SEEDS × $STEPS）"
 [ "$fail" -eq 0 ] && echo "PASS cmdfuzz（命令面随机会话：切脑/存读/局部加载/op 组合没有把状态搞坏）" \
                   || echo "FAIL cmdfuzz（$fail 个种子红了）"
