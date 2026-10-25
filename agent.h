@@ -3737,10 +3737,65 @@ static inline int agent_attr_teach_raw(AI *ai, const char *input, char *out, siz
         size_t l = strlen(w[2]);
         while (l && (w[2][l - 1] == ',' || w[2][l - 1] == '.')) w[2][--l] = 0;
     }
+    /* §6.623 **属性最小通路**：记成 `X --[属性]--> Y`（Y = 程度词后面的形容词）。
+     * 以前这里只回"学不进"；现在真学 —— 但**仍然不是数值**（不知道多少度）。 */
+    {
+        Token *A = pool_token_intern(ai->pool, w[0]);
+        Token *Y = pool_token_intern(ai->pool, w[2]);
+        uint8_t arid = rel_id_of(ai, "属性", 1);
+        if (A && Y && A != Y && arid) {
+            if (ai_write_rel(ai, A, Y, arid, 0, AI_WSRC_RELATION) == 0) {
+                agent_teach_mark(ai, A, arid, Y, 0);
+                ai->n_rel_learned++;
+                const char *t = ai_say_tpl("学习.属性");
+                const char *const a[2] = { w[0], w[2] };
+                der_filln(out, cap, t ? t : "记下 了 ： $1 很 $2（属性）", a, 2);
+                return 1;
+            }
+        }
+    }
     const char *t = ai_say_tpl("学习.属性学不进");
     const char *const a[2] = { w[0], w[2] };
     der_filln(out, cap, t ? t : "「$1 很 $2」这 种 属性 我 现在 学 不 进 —— 我 只 认 A 关系 B", a, 2);
     return 1;
+}
+
+/* §6.623 **属性问句**：`X 很 冷 吗` —— 教过 `X --[属性]--> 冷` 就答对，没教过就照实说。
+ * 只认"程度词 + 形容词"这一个形状（`南极 很 冷 吗` / `南极 挺 冷 吗`）；别的一律返回 0（不抢别的路）。 */
+static inline int agent_attr_question(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0 || n < 4) return 0;
+    const char *tail = words[n - 1];
+    if (!tail || (strcmp(tail, "吗") != 0 && strcmp(tail, "呢") != 0)) return 0;
+    static const char *deg[] = { "很", "挺", "太", "非常", "特别", "真", "好", NULL };
+    size_t di = n;   /* 程度词位置 */
+    for (size_t i = 1; i + 2 < n; ++i) {
+        for (size_t k = 0; deg[k]; ++k) if (!strcmp(words[i], deg[k])) { di = i; break; }
+        if (di != n) break;
+    }
+    if (di == n || di + 2 != n - 1) return 0;      /* 程度词后面必须正好一个形容词，再一个「吗/呢」 */
+    char al[32]; size_t al_n = 0;
+    for (size_t i = 0; i < di; ++i) {
+        size_t wl = strlen(words[i]);
+        if (al_n + wl + 1 >= sizeof al) return 0;
+        memcpy(al + al_n, words[i], wl); al_n += wl;
+    }
+    al[al_n] = 0;
+    const char *yl = words[di + 1];
+    if (!al[0] || !yl || !yl[0]) return 0;
+    uint8_t arid = rel_id_of(ai, "属性", 0);
+    Token *A = pool_find(ai->pool, al), *Y = pool_find(ai->pool, yl);
+    if (arid && A && Y && rel_direct(A, arid, Y)) {
+        const char *t = ai_say_tpl("关系.属性对");
+        const char *const a[2] = { al, yl };
+        der_filln(out, cap, t ? t : "对 ， $1 很 $2", a, 2);
+        return 1;
+    }
+    {
+        const char *t = ai_say_tpl("不知道.属性");
+        const char *const a[2] = { al, yl };
+        der_filln(out, cap, t ? t : "我 图 里 没 记 「$1 很 $2」（不 编）", a, 2);
+        return 1;
+    }
 }
 
 /* §6.616 **「X 很 Y」是属性，不是关系**：项目里还没有属性（形容词）学习通路 ——
@@ -8337,6 +8392,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         int wh = 0;
         resp = agent_why_question(ai, words, n, &rc, &wh);
         if (resp) conf = rc;
+    }
+    /* §6.623 属性问句（`南极 很 冷 吗`）：教过就答对，没教过照实说 —— 放在"为什么不问/
+     * 忘掉"之后、学习派发之前，谁也别抢谁的。 */
+    if (!resp) {
+        char ab[512];
+        if (agent_attr_question(ai, lw, ln, ab, sizeof ab)) {
+            resp = (char *)malloc(strlen(ab) + 1);
+            if (resp) memcpy(resp, ab, strlen(ab) + 1);
+            conf = 0.7f;
+        }
     }
     if (!resp) {
         float rc = 0.5f;
