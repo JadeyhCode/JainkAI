@@ -3452,8 +3452,11 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * 学成「猫 -[头]-> 鹰怕光」并回一句自信的"对"。
      * 这里**在解析之前**就退出（不能放到解析之后：`rel_parse(allow_new=1)` 会把「头」登记成
      * 动态谓语，既污染关系表，又让后面的 natcoin 因为它"是个关系词"而拒绝）。
-     * 判据：开头连续 ≥3 个单字 + 下一个词是**已知核心关系词** ⇒ 交给 natcoin 重拼。
-     * 反例不受影响：`猫 喵 鱼`（3 个单字但没有"后面的核心关系词"）、`鲸鱼 会 游泳`（只有 2 个单字）。 */
+     * 判据：**核心关系词前面有 ≥2 个单字实词** ⇒ 交给 natcoin 重拼。
+     * （§6.588 从"≥3 个单字"放宽到"≥2"：`企鹅 怕 热` 这种**两个字**的新词主语同样会被切碎，
+     *   `rel_parse` 会把 `鹅` 当动态谓语、把 `怕热` 拼成宾语 —— 学成「企 -[鹅]-> 怕热」。）
+     * 反例不受影响：`猫 喵 鱼`（没有核心关系词）、`猫 很 会 飞`（`很` 是虚词，不算"单字实词"）、
+     * `我 的 名字 是 小明`（`的` 是虚词）、`鲸鱼 会 游泳`（核心关系词前面只有 1 个单字… 这条走关系层）。 */
     {
         size_t ci = 0;
         int has_core = 0;
@@ -3461,7 +3464,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
             uint8_t cid = rel_id_of(ai, words[z], 0);
             if (cid && cid < REL_DYN_BASE) { ci = z; has_core = 1; break; }
         }
-        if (has_core && ci >= 3) {
+        if (has_core && ci >= 2) {
             int all_single = 1;
             for (size_t z = 0; z < ci; ++z)
                 if (!rel_one_cjk(words[z])) { all_single = 0; break; }

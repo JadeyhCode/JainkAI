@@ -270,6 +270,9 @@ struct Token {
      * 只进内存、不存盘（读盘/训练后第一次 GC 会重建）。放在这里是因为
      * `sizeof(Token)` 不写进存档（model_io 逐字段写），加字段不动格式。 */
     uint32_t    in_degree;
+    /* §6.588 **被"知识边"指着的次数**（§6.588：GC 不许因为"很久没提"就把知识删掉）。
+     * 和 `in_degree` 一样只进内存、`ai_gc` 开头一次 O(E) 重建。 */
+    uint32_t    rel_in_degree;
     Token      *parent;
     uint8_t     is_category, is_garbage;
     uint64_t    birth_tick, last_touch_tick;
@@ -1217,6 +1220,19 @@ static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     t->count++;
     return 0;
 }
+/* §6.588 这条边是不是**知识**（关系/否定/动态谓语位）—— 它和"共现"的维护规则不同：
+ * 共现可以淡、可以忘；知识是用户教的（或语料里断言的），GC 不许删。 */
+static inline int edge_is_knowledge(const AssocEntry *e) {
+    return e && (e->rel || e->nrel || e->dyn);
+}
+/* 这个词有没有"知识"出边（GC 用它判断能不能把词标成垃圾）*/
+static inline int token_has_knowledge_out(const Token *t) {
+    if (!t) return 0;
+    for (size_t i = 0; i < t->count; ++i)
+        if (edge_is_knowledge(&token_assocs_ro(t)[i])) return 1;
+    return 0;
+}
+
 /* 「t —main→ 这条边在不在」—— v10 起边上没有语境，所以只看 main。
  * （同 main 的两条边只可能是**动作槽不同**，那种用 token_find_assoc_action。） */
 static inline int token_add_assoc_unique(Token *t, Token *main) {

@@ -4504,12 +4504,17 @@ static inline int ai_gc_has_valence(const AI *ai, const Token *t) {
  * 漏一处就是**静默**的入度偏差（决策会变、还不报错）。 */
 static inline void ai_gc_rebuild_indegree(TokenPool *p) {
     if (!p) return;
-    for (size_t i = 0; i < p->count; ++i) if (p->tokens[i]) p->tokens[i]->in_degree = 0;
+    for (size_t i = 0; i < p->count; ++i)
+        if (p->tokens[i]) { p->tokens[i]->in_degree = 0; p->tokens[i]->rel_in_degree = 0; }
     for (size_t i = 0; i < p->count; ++i) {
         Token *from = p->tokens[i];
         if (!from || from->is_garbage) continue;
-        for (size_t j = 0; j < from->count; ++j)
-            if (token_assocs(from)[j].main) token_assocs(from)[j].main->in_degree++;
+        for (size_t j = 0; j < from->count; ++j) {
+            AssocEntry *e = &token_assocs(from)[j];
+            if (!e->main) continue;
+            e->main->in_degree++;
+            if (edge_is_knowledge(e)) e->main->rel_in_degree++;   /* §6.588 */
+        }
     }
 }
 
@@ -4572,6 +4577,10 @@ static inline void ai_gc(AI *ai) {
         Token *t = p->tokens[i];
         if (t->is_garbage || t->mem_state >= del_state) continue;
         if (ai_gc_protected(ai, t)) continue;
+        /* §6.588 **知识节点不许被"淡忘"掉**：它自己是某条关系的主语，或者被某条关系指着
+         * （`麒麟 属于 神兽` 里的 神兽）。以前的 GC 只看 age/recency/hits ⇒ 用户教的事实
+         * 在长会话里会被当成"不常用的共现"删掉（实测：60 轮 GC 之后 10 条教过的事实掉到 7 条）。 */
+        if (t->rel_in_degree > 0 || token_has_knowledge_out(t)) continue;
         uint64_t age = now - t->birth_tick, rec = now - t->last_touch_tick;
         int val = ai_gc_has_valence(ai, t);
         size_t ind = (t->mem_state != MEM_ACTIVE) ? ai_gc_indegree(p, t) : 0;
@@ -4586,6 +4595,7 @@ static inline void ai_gc(AI *ai) {
             AssocEntry *e = &token_assocs(t)[j];
             ai->n_scan_edges++;
             if (e->mem_state >= del_state) continue;
+            if (edge_is_knowledge(e)) continue;   /* §6.588 知识边不参与"淡忘"晋级 */
             uint64_t age = now - e->birth_tick, rec = now - e->last_touch_tick;
             int val = (e->main == ai->good || e->main == ai->bad);
             float keep = ai_gc_keep_prob(ai, age, rec, e->hits, val, 0);

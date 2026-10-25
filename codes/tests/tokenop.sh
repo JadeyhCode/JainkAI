@@ -1318,6 +1318,15 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.588 两个字的新词主语同样会被切碎（企/鹅），也要重拼（以前学成「企 -[鹅]-> 怕热」）
+( cd "$TK" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '企鹅 怕 热\n企鹅 怕 热 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 企鹅 怕 热' "$TK/out2.txt" \
+    && ok "两个字的切碎主语也重拼（企鹅，不是 企 -[鹅]-> 怕热）" \
+    || bad "两字重拼" "$(grep -a 'AI >' "$TK/out2.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '对 ， 企鹅 -[怕]-> 热' "$TK/out2.txt" \
+    && ok "两字重拼之后问得出来" \
+    || bad "两字重拼-回读" "$(grep -a '企鹅' "$TK/out2.txt" | tail -1)"
 
 # §6.585 新旧知识冲突：教互不包含的独占事实 ⇒ **冲突可见**（不静默删知识）+ 显式「不」才撤
 LC="$WORK/lc"; rm -rf "$LC"; mkdir -p "$LC"
