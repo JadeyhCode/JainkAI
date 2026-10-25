@@ -268,6 +268,10 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
 static int g_pattern_overflow;   /* §6.447 有桶超限时为 1（selfcheck 据此报警）*/
+/* §6.589 这一轮是「不 对 ， <陈述>」式的**更正**：学习路径遇到冲突就**直接撤旧值**，
+ * 不再追问"要 我 改 掉 旧 的 吗"（用户已经说了"不对"）。每轮在 agent_step 开头清零。 */
+static AIP_TLS int g_input_corrected = 0;
+
 static AIP_TLS char g_pre_rhet[288];     /* §6.448 剥掉反问标记、补 `吗` 之前的文本（复查答复行用）*/
 /* §6.361 命中计数（探针用；正常路径一次自增） */
 static AIP_TLS unsigned long g_shape_hit[AIP_SHAPE_MAX];
@@ -3387,8 +3391,80 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
     return r;
 }
 
+/* §6.589 `w` 里有没有标点（**按字符**比，不按字节 —— 见下面 `agent_learn_relation` 里的教训）。 */
+static inline int aip_has_punct(const char *w) {
+    if (!w || !w[0]) return 0;
+    static const char *p[] = { "，", "。", "；", "、", "！", "？", "：", "…", NULL };
+    for (size_t i = 0; p[i]; ++i) if (strstr(w, p[i])) return 1;
+    for (const char *q = w; *q; ++q)
+        if (*q == ',' || *q == '.' || *q == ';' || *q == '!' || *q == '?' || *q == ':') return 1;
+    return 0;
+}
+
+/* §6.589 把 `A --rid--> old` 的**关系位**清掉（共现留着、推论/猜测不动）。
+ * 一处实现：§6.586 的"回「对」"和 §6.589 的"不对，X"共用。返回 1 = 真的清了。 */
+static inline int agent_retract_clear(Token *A, uint8_t rid, Token *old) {
+    if (!A || !old || rid == 0 || rid >= REL_DYN_BASE) return 0;
+    uint16_t bit = REL_BIT(rid);
+    int hit = 0;
+    for (size_t i = 0; i < A->count; ++i) {
+        AssocEntry *e = &token_assocs(A)[i];
+        if (e->main != old || !(e->rel & bit)) continue;
+        if (e->role == ASSOC_ROLE_DERIVED || edge_is_guess(e)) continue;
+        e->rel &= (uint16_t)~bit;
+        hit = 1;
+    }
+    if (hit) A->edges_dirty = 1;
+    return hit;
+}
+
 /* §6.586 前向声明：学习路径里要"挂上待确认改口"，实现在下面（追问回话那一带）。 */
 static inline void agent_retract_arm(AI *ai, Token *a, Token *old, uint8_t rid);
+
+/* §6.589 **所有学习路径共用的"学完处理冲突"**：
+ *   · 这一轮是「不对，X」的更正 ⇒ 直接撤旧值、回「改 过来 了」（返回 1，调用方直接返回 resp）；
+ *   · 否则挂上待确认、在答复后面追一句"还记着旧值，要改吗"（返回 0）。
+ * 以前这段只在 `agent_learn_relation` 里，而新词句子（`麒麟 属于 神兽`）走的是 natcoin ⇒
+ * 冲突**看不见**（实测「不对，猫 属于 猫科」两条都留着）。 */
+static inline int agent_conflict_after(AI *ai, Token *A, uint8_t rid, Token *B, Token *conflict,
+                                      char *resp, size_t cap, const char *aw, const char *rw) {
+    if (!conflict || !A || !conflict || conflict == B) return 0;
+    if (g_input_corrected && agent_retract_clear(A, rid, conflict)) {
+        ai_modlog_note_retract(ai, A, conflict, rid, AI_WSRC_RELATION);
+        ai->n_revised++;
+        if (!micro_of(ai)->safe.mod_off) {
+            ModIntent in;
+            memset(&in, 0, sizeof in);
+            in.type = MOD_ADD_TOKEN;
+            in.target = A;
+            agent_revise_name(in.name, sizeof in.name, aw ? aw : "", 0,
+                              rel_name_of(ai, rid), conflict->name ? conflict->name : "");
+            snprintf(in.source, sizeof in.source, "来源:更正");
+            (void)mod_propose(&micro_of(ai)->queue, &in);
+        }
+        const char *t = ai_say_tpl("改口.已撤");
+        der_fill5(resp, cap, t ? t : "改 过来 了 ： 旧 的 $1 $2 $3 撤 掉 了",
+                  aw ? aw : "?", rw ? rw : "?", conflict->name ? conflict->name : "?", NULL, NULL);
+        return 1;
+    }
+    /* 非更正：说清冲突 + 挂待确认 */
+    {
+        const char *ct = ai_say_tpl("改口.还冲突");
+        const char *const ca[3] = { aw ? aw : "?", rw ? rw : "?",
+                                    conflict->name ? conflict->name : "?" };
+        size_t cl = strlen(resp);
+        if (cl < cap) {
+            char tmp[224];
+            der_filln(tmp, sizeof tmp,
+                      ct ? ct : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）",
+                      ca, 3);
+            snprintf(resp + cl, cap - cl, "%s", tmp);
+        }
+        agent_retract_arm(ai, A, conflict, rid);
+        ai->n_conflict_shown++;
+    }
+    return 0;
+}
 
 static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                                         float *out_conf) {
@@ -3492,6 +3568,10 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * 并列（都成立）与选择（二选一）是**两种语义**，混着学会答错。选择句一律不学。 */
     if (strstr(bw, "或")) return NULL;
     if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
+    /* §6.589 名字/谓语里不许夹标点：`错了 ， 猫 …` 曾被学成「，猫 属于 猫科」。
+     * ⚠ **不能用 `strpbrk` 配多字节字符集**：它按**字节**比，中文字符的某个字节（如「猫」的 0x8C）
+     * 会撞上「，」的字节 ⇒ 正常句子被无辜拒掉（实测 `猫 属于 动物` 直接掉到造词路）。 */
+    if (aip_has_punct(aw) || aip_has_punct(bw) || aip_has_punct(rw)) return NULL;
     Token *A = pool_token_intern(ai->pool, aw);
     Token *B = pool_token_intern(ai->pool, bw);
     if (!A || !B || A == B) return NULL;
@@ -3603,9 +3683,8 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                       conflict->name ? conflict->name : "?");
             ai->n_rel_learned++;
             ai->n_learned++;
-            ai->n_conflict_shown++;
-            /* §6.586 挂上"待确认改口"：下一轮用户回「对」就撤旧的（回「不」就两条都留）*/
-            agent_retract_arm(ai, A, conflict, rid);
+            /* §6.589 冲突处理收进一处（更正 ⇒ 直接撤；否则挂待确认 + 说清）*/
+            (void)agent_conflict_after(ai, A, rid, B, conflict, resp0, sizeof resp0, aw, rw);
             cot_push(ai, COT_LEARN, 1, 80,
                      "新旧冲突：新事实记下了，旧值还在（问一句要不要撤）", resp0);
             ai->n_cot++;
@@ -3633,8 +3712,19 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
  * 为什么允许"整词 + 单字"混排：实测 `鲸鱼 属于 哺乳动物` 分词成 `[哺][乳][动物]`、
  * `大学生 属于 人` 分词成 `[大][学生]` —— 都只差这一条。两整词（`学校`+`学习`）仍然拒，
  * 那正是会拼出垃圾节点的形状。 */
+/* §6.589 标点不是名字的一部分：`错了 ， 猫 属于 猫科` 里那个「，」曾被拼成「，猫」。
+ * 一处判据，natcoin 的每一侧都用它。 */
+static inline int aip_punct_only(const char *w) {
+    if (!w || !w[0]) return 0;
+    static const char *p[] = { "，", ",", "。", ".", "；", ";", "、", "！", "!", "？", "?",
+                               "：", ":", "…", "（", "）", "(", ")", NULL };
+    for (size_t i = 0; p[i]; ++i) if (!strcmp(w, p[i])) return 1;
+    return 0;
+}
+
 static inline int agent_nat_side_ok(AI *ai, char *const *words, size_t from, size_t cnt) {
     if (!ai || cnt < 1 || cnt > 4) return 0;   /* §6.273：4 字词（`电子产品`）也要教得进 */
+    for (size_t i = 0; i < cnt; ++i) if (aip_punct_only(words[from + i])) return 0;
     size_t whole = 0;
     for (size_t i = 0; i < cnt; ++i) {
         const char *w = words[from + i];
@@ -3812,16 +3902,23 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     Token *ta = pool_token_intern(ai->pool, A);
     Token *tb = pool_token_intern(ai->pool, B);
     if (!ta || !tb || ta == tb) return NULL;
+    /* §6.589 新词句子也会和已有独占值冲突（`麒麟 属于 神兽` 之后再 `麒麟 属于 动物`）——
+     * 以前这段只管写，冲突完全看不见。写之前先找见证，写完再处理。 */
+    Token *conflict = NULL;
+    if (!neg && rel_is_excl(ai, rid)) conflict = rel_excl_witness(ai, ta, rid, tb, 0);
     if (ai_write_rel(ai, ta, tb, rid, neg, AI_WSRC_RELATION) != 0) return NULL;
     ai->n_rel_learned++;
     ai->n_learned++;
     aip_note_fact(ai, ta->name, words[ri], tb->name);
-    char resp0[192];
+    char resp0[512];
     {
         const char *t = ai_say_tpl("学习.新词");
         der_fill5(resp0, sizeof resp0, t ? t : "记下 了 ： $1 $2$3 $4（新词当场造）",
                   ta->name, neg_sep ? "不 " : "", words[ri], tb->name, NULL);
     }
+    /* §6.589 冲突处理（更正 ⇒ 直接撤；否则说清 + 挂待确认）*/
+    (void)agent_conflict_after(ai, ta, rid, tb, conflict, resp0, sizeof resp0,
+                               ta->name, words[ri]);
     cot_push(ai, COT_LEARN, 1, 80, "自然说法里含新词：当场造词 + 学一条核心关系", resp0);
     ai->n_cot++;
     if (out_conf) *out_conf = 0.7f;
@@ -6588,15 +6685,7 @@ static inline int agent_retract_reply(AI *ai, const char *input, char *out, size
         return 1;
     }
     /* 撤：只清关系位（和"改口"完全同一条语义），留 `[修正:…]` 标记，账里记一条删关系 */
-    uint16_t bit = REL_BIT(rid);
-    int hit = 0;
-    for (size_t i = 0; i < A->count; ++i) {
-        AssocEntry *e = &token_assocs(A)[i];
-        if (e->main != old || !(e->rel & bit)) continue;
-        if (e->role == ASSOC_ROLE_DERIVED || edge_is_guess(e)) continue;
-        e->rel &= (uint16_t)~bit;
-        hit = 1;
-    }
+    int hit = agent_retract_clear(A, rid, old);
     if (!hit) {
         const char *t = ai_say_tpl("改口.撤不动");
         snprintf(out, cap, "%s", t ? t : "那 条 已 经 不 在 了 —— 不 用 撤");
@@ -7084,6 +7173,39 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 用栈上的缓冲拼，不动 `input`（历史记录仍记用户原话）。 */
     char decl_in[256];
     const char *input_eff = input;
+    g_input_corrected = 0;
+    /* §6.589 用户最自然的更正说法：「不 对 ， 猫 属于 猫科」/「错了，…」。
+     * 以前整句进流水线：首句「不 对」只有 2 个词，`agent_learn_multi` 见短句直接 return NULL
+     * （宁可整句不学）⇒ 后面那句白说（实测回「这个我 不 太 懂」，知识也没进图）。
+     * 这里**只剥掉更正记号**、留下后面的陈述句照常学；记号本身的语义由"后说的观测盖过先说的"承担。
+     * 只在**后面还有内容**时剥（`不 对` 单独一句仍走原来的"改口"路）。 */
+    if (input_eff) {
+        static const char *corr_pre[] = {
+            "不 对 ，", "不对，", "不 对", "不对",
+            "错 了 ，", "错了，", "错 了", "错了",
+            "不 是 ，", "不是，", "不 是", "不是", NULL };
+        for (size_t k = 0; corr_pre[k]; ++k) {
+            size_t pl = strlen(corr_pre[k]);
+            if (strncmp(input_eff, corr_pre[k], pl) != 0) continue;
+            const char *rest = input_eff + pl;
+            /* 跳过空白和标点（标点是多字节，只能按字符串比）*/
+            for (;;) {
+                while (*rest == ' ' || *rest == '\t') rest++;
+                if (!strncmp(rest, "，", 3) || !strncmp(rest, "。", 3) ||
+                    !strncmp(rest, "、", 3) || !strncmp(rest, "；", 3) ||
+                    *rest == ',' || *rest == '.') { rest += (*rest == ',' || *rest == '.') ? 1 : 3; continue; }
+                break;
+            }
+            /* 后面得是**一句陈述**（至少一个汉字），不是「吗/呢/吧」这种追问尾巴 */
+            if (strlen(rest) >= 3 && strncmp(rest, "吗", 3) && strncmp(rest, "呢", 3) &&
+                strncmp(rest, "吧", 3)) {
+                snprintf(decl_in, sizeof decl_in, "%s", rest);
+                input_eff = decl_in;
+                g_input_corrected = 1;
+            }
+            break;
+        }
+    }
     {   /* §6.305/§6.307 同义词 + 词缀归一（数据表）：`猫咪` ⇒ `猫`、`小鲸鱼` ⇒ `鲸鱼`。
      * 跑**最多 3 遍直到不再变化**：`小猫咪` 第一遍变成「猫咪」（前缀剥掉 小），
      * 第二遍才被同义词表收成「猫」——只跑一遍会卡在半成品上。 */

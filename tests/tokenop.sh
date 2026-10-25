@@ -1318,6 +1318,24 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.589 用户最自然的更正说法：「不 对 ， 猫 属于 猫科」⇒ 学新的、撤旧的（不再"听不懂"）
+CF="$WORK/cf"; rm -rf "$CF"; mkdir -p "$CF"
+cp "$ROOT/model.bin" "$CF/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$CF/" 2>/dev/null || true
+( cd "$CF" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '狗 属于 动物\n不 对 ，狗 属于 犬科\n狗 属于 动物 吗\n狗 属于 犬科 吗\n::mods\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '改 过来 了 ： 旧 的 狗 属于 动物 撤 掉 了' "$CF/out.txt" \
+    && ok "「不 对 ，X」：学 X 并撤掉被否认的旧值（说清撤的是哪条）" \
+    || bad "更正-撤旧" "$(grep -a 'AI >' "$CF/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '不 对 ， 狗 -[不 属于·独占]-> 动物' "$CF/out.txt" \
+    && ok "更正之后旧值答「不 对」" \
+    || bad "更正-旧值" "$(grep -a '动物' "$CF/out.txt" | tail -1)"
+grep -qaF '对 ， 狗 -[属于]-> 犬科' "$CF/out.txt" \
+    && ok "更正之后新值答「对」" \
+    || bad "更正-新值" "$(grep -a '犬科' "$CF/out.txt" | tail -1)"
+grep -qa '删关系 .*狗 属于 动物' "$CF/out.txt" \
+    && ok "账里看得见「删关系 狗 属于 动物」（更正可追溯）" \
+    || bad "更正-账" "$(grep -aE '删关系|加关系' "$CF/out.txt" | tr '\n' ' ')"
+
 # §6.588 两个字的新词主语同样会被切碎（企/鹅），也要重拼（以前学成「企 -[鹅]-> 怕热」）
 ( cd "$TK" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '企鹅 怕 热\n企鹅 怕 热 吗\n'; } | \
     "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true

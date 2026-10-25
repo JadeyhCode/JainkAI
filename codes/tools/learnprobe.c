@@ -181,6 +181,37 @@ int main(int argc, char **argv) {
         g_ag->brain = NULL;
     }
 
+    /* ---------- D. 更正句：「不 对 ，猫 属于 猫科」/「错了，…」 ---------- */
+    {
+        AI *ai = ai_new();
+        g_ag->brain = ai;
+        say(ai, "猫 属于 动物");
+        const char *r = say(ai, "不 对 ，猫 属于 猫科");
+        ok(strstr(r, "改 过来 了") != NULL && strstr(r, "动物") != NULL,
+           "D 「不 对 ，X」⇒ 学 X 并**撤掉**被否认的旧值，说清撤的是哪条");
+        ok(knows(ai, "猫", "属于", "猫科", 0) && !knows(ai, "猫", "属于", "动物", 0),
+           "D 更正之后：新的真、旧的假");
+        ok(!agent_retract_pending(ai), "D 更正模式不留待确认（已经撤了）");
+
+        /* 不带逗号、带「错 了」前缀 */
+        say(ai, "狗 属于 动物");
+        say(ai, "不 对 狗 属于 犬科");
+        ok(knows(ai, "狗", "属于", "犬科", 0) && !knows(ai, "狗", "属于", "动物", 0),
+           "D 「不 对 X」（无逗号）也认得出是更正");
+        const char *r3 = say(ai, "错 了 ，猫 属于 猫科");
+        ok(strstr(r3, "我 知道") != NULL || strstr(r3, "改 过来 了") != NULL,
+           "D 「错 了 ，…」不炸（重复教同一条 ⇒ 回「我 知道」）");
+
+        /* 不是更正句的说法不能被剥：`不是 什么` 仍按问句走 */
+        const char *r4 = say(ai, "猫 属于 什么");
+        ok(strstr(r4, "我 记 的 是") != NULL || strstr(r4, "动物") != NULL ||
+           strstr(r4, "猫科") != NULL,
+           "D 「猫 属于 什么」照旧答（前缀剥离不误伤疑问句）");
+        ok(ai_check_ok(ai), "D 全程不变式干净");
+        ai_free(ai);
+        g_ag->brain = NULL;
+    }
+
     free(g_ag);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;
