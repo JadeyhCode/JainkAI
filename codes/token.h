@@ -410,6 +410,47 @@ static inline void token_assocs_set_disk(Token *t) {
     t->cap = 0;                                          /* 想追加会先 resolve（见 add_assoc_ex） */
 }
 
+/* §6.584 **清掉"死的自环边"**：老版本留下的 a→a 边（出厂图 18 条）。
+ * 判据（和 `aicheck.h` 的"空自环"同一套）：两端同一个词、没有角色/关系/动作/命中/时刻。
+ * 为什么要清而不是留着：查询 `A R A`（用户真会这么问）会让某条答复/强化路径
+ * 把这它当普通边 touch/置位，于是"死数据"开始有 hits 甚至关系位 —— 自检就是在随机会话里
+ * 抓到"自环边（带语义）"的。清掉之后"图里没有自环"可以当**硬不变式**来验。
+ * 返回清掉几条。只对**在内存里**的边表动（磁盘上的段不动）。 */
+static inline int token_edge_is_dead_self(const Token *t, const AssocEntry *e) {
+    return t && e && e->main == t && !e->action && e->role == ASSOC_ROLE_NONE &&
+           e->rel == 0 && e->nrel == 0 && e->dyn == 0 && e->hits == 0 && e->n_tset == 0;
+}
+
+static inline size_t pool_drop_dead_self_loops(TokenPool *p) {
+    if (!p) return 0;
+    size_t dropped = 0;
+    for (size_t i = 0; i < p->count; ++i) {
+        Token *t = p->tokens[i];
+        if (!t || t->count == 0 || !token_assocs_resident(t)) continue;
+        size_t w = 0;
+        for (size_t k = 0; k < t->count; ++k) {
+            AssocEntry *e = &token_assocs(t)[k];
+            if (token_edge_is_dead_self(t, e)) { dropped++; continue; }
+            if (w != k) token_assocs(t)[w] = *e;
+            w++;
+        }
+        if (w != t->count) { t->count = w; t->edges_dirty = 1; }
+    }
+    return dropped;
+}
+
+/* 边在磁盘上吗 / 边数组是"真内存"吗 —— 存储层之外**不许**直接看标签（§6.565 的收口）。 */
+static inline int token_assocs_on_disk(const Token *t) {
+    return t && aip_ptr_tag(t->assocs) == AIP_PTR_DISK;
+}
+static inline int token_assocs_in_ram(const Token *t) {
+    return t && aip_ptr_tag(t->assocs) == AIP_PTR_RAM;
+}
+/* DISK 哨兵必须是"strip 之后为 0"（不能带着一个假地址）—— 存储层自检用 */
+static inline int token_assocs_disk_sentinel_ok(const Token *t) {
+    return t && aip_ptr_tag(t->assocs) == AIP_PTR_DISK && aip_ptr_strip(t->assocs) == NULL;
+}
+
 /* 与访问器成对：边数也从这里读，避免"数组换了、count 还在别处读" */
 static inline size_t token_assoc_count(const Token *t) { return t ? t->count : 0; }
 
@@ -1137,6 +1178,11 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
 
 static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     if (!t) return -1;
+    /* §6.584 **自环边在这里就挡住**：这是所有"建边"的唯一原语（共现/关系/猜测/
+     * 受审沉淀都走它）。自环没有任何语义，而它会污染老数据里那条"空自环"
+     * （实测：`水 有 水 吗` 走"猜"的路径，把空自环变成带 rel/role/action 的自环）。
+     * 挡在这里 = 调用方不用各记一遍；返回 -1 与"没连上"的约定一致。 */
+    if (main == t) return -1;
     token_assocs_resolve(t);   /* §6.566 边在磁盘上时先读回来，再谈扩容 */
     t->edges_dirty = 1;        /* §6.573 改过 ⇒ 进 delta */
     if (t->count == t->cap) {
@@ -1302,6 +1348,9 @@ static AIP_TLS int g_obs_revised = 0;
  * 一条关系边也可能同时带着回复角色。 */
 static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bump) {
     if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
+    /* §6.584 **自环不写**：`A 属于 A` 没有任何语义，而它会把老数据里那条"空自环"
+     * 变成"带语义的自环"（实测：随机教事实时 `鸟 属于 鸟` 就踩到了）。
+     * 这条护栏放在**写入原语**里，而不是只靠上层调用方记得判。 */
     if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
@@ -1350,7 +1399,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
 /* 给 a→b 打上**否定**的核心关系（`猫 不 会 飞`） */
 static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bump) {
     if (a) a->edges_dirty = 1;   /* §6.573 关系边改过 ⇒ 进 delta */
-    if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;
+    if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;   /* §6.584 自环不写 */
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
     for (size_t i = 0; i < a->count; ++i) {
@@ -1398,8 +1447,10 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
         if (e->main != b || !edge_is_plain(e)) continue;
         if (e->dyn == dyn_id) return 0;
         e->dyn = dyn_id;
-        if (a->owner) pool_rev_add(a->owner, b, a->id,
-                                   (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);   /* §6.214 动态 */
+        /* §6.584 幂等：同一条动态事实重复写不再追加反查条目（去重）*/
+        if (a->owner && !pool_rev_has(a->owner, b, a->id,
+                                      (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0))
+            pool_rev_add(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);
 
         if (bump) e->hits += bump;
         e->mem_state = MEM_ACTIVE;
@@ -1408,8 +1459,8 @@ static inline int token_tag_dyn(Token *a, Token *b, uint8_t dyn_id, uint32_t bum
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->dyn = dyn_id;
-    if (a->owner) pool_rev_add(a->owner, b, a->id,
-                               (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);
+    if (a->owner && !pool_rev_has(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0))
+        pool_rev_add(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), 0);
     e->hits = bump;
     return 0;
 }
@@ -1421,15 +1472,18 @@ static inline int token_tag_dyn_neg(Token *a, Token *b, uint8_t dyn_id, int neg,
     if (rc != 0) return rc;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &token_assocs(a)[i];
-        if (e->main != b || e->dyn != dyn_id) continue;
-        int fresh_neg = neg && !(e->nrel & (uint16_t)REL_NEG_DYN_BIT);
+        /* §6.584 过滤条件必须和 `token_tag_dyn` **一模一样**（多查 `edge_is_plain`）：
+         * 以前这里不查 plain，可能抓到"另一条同 main 的因果/猜测边"把否定旗子打上去，
+         * 而 `token_tag_dyn` 追加的是另一条边 ⇒ 反查表出现"有 neg=0、没 neg=1"的窟窿
+         * （随机问答里自检报「反查表缺（动态 喵）：鸟 -> 鱼」）。 */
+        if (e->main != b || !edge_is_plain(e) || e->dyn != dyn_id) continue;
         if (neg) e->nrel |= (uint16_t)REL_NEG_DYN_BIT;
         else     e->nrel &= (uint16_t)~REL_NEG_DYN_BIT;
-        /* §6.224 **否定的动态关系也要进反查表**：`token_tag_dyn` 追加的是 neg=0 那一条，
-         * 这里把"否定"置上之后必须再追加一条 neg=1 —— 否则 `谁 不 <谓语> B` 反查不到
-         * （`::revcheck` 实测报「缺（动态 喵）：猫 -> 鱼」）。*/
-        if (fresh_neg && a->owner)
-            pool_rev_add(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), 1);
+        /* §6.224 **否定的动态关系也要进反查表**；§6.584 改成"缺了才补"（幂等）：
+         * 靠 `fresh_neg` 的话，旗子已经在（比如从段文件读回来）就永远补不上。 */
+        if (a->owner && !pool_rev_has(a->owner, b, a->id,
+                                      (uint32_t)(REL_DYN_BASE + dyn_id - 1), neg ? 1 : 0))
+            pool_rev_add(a->owner, b, a->id, (uint32_t)(REL_DYN_BASE + dyn_id - 1), neg ? 1 : 0);
         return 0;
     }
     return -1;

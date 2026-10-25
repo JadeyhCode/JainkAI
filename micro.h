@@ -1855,6 +1855,8 @@ static inline int micro_apply_one(AI *ai, const ModIntent *m, char *note, size_t
         return created ? 1 : 0;
     }
     case MOD_TAG_DERIVED: {
+        /* §6.584 自环不沉淀（受审通道也不能绕过这条）*/
+        if (!m->target || !m->main || m->target == m->main) return -1;
         /* 沉淀：先保证边在，再按极性置位，最后把 role 标成「推出来的」。
          * 顺序要紧：token_tag_rel/nrel 会把缓存标记清掉（那是「观测压过缓存」
          * 的不变式），所以**标记必须最后打**。 */

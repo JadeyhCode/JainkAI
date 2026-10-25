@@ -1658,7 +1658,17 @@ int main(int argc, char **argv) {
                     else printf("[分段保存] %d 个有边的词 ⇒ %s（之后可以只读一部分）\n", n, parch);
                 } else if (!strncmp(sub, "attach", 6)) {
                     /* §6.573 `::parts attach <base> [delta]`：先 base，再挂 delta 覆盖层 */
-                    if (pt) { aip_parts_close(pt); a->parts = NULL; }
+                    if (pt) {
+                        /* §6.584 换上下文之前**先把还挂在磁盘上的边读回内存**：
+                         * 以前直接 free，池里留着一堆 DISK 标签 + 指向已释放上下文的钩子 ⇒
+                         * 下一句问答就是 use-after-free（`::parts detach` 之后 attach 一个坏文件
+                         * 就走到这条路上）。读不回来的会如实报数。 */
+                        AIPartsClose cr = aip_parts_close(pt);
+                        a->parts = NULL;
+                        if (cr.resolved || cr.lost)
+                            printf("[分段加载] 换上下文之前读回 %zu 个词的边%s\n", cr.resolved,
+                                   cr.lost ? "（有词读不回来，边已丢）" : "");
+                    }
                     pt = aip_parts_open(parch);
                     if (!pt) { printf("[分段加载] 打不开索引：%s\n", parch); }
                     else {
@@ -4473,6 +4483,14 @@ int main(int argc, char **argv) {
      * 注意 `a` 可能只是其中一个（当前那个），别重复 free。 */
     for (size_t i = 0; i < g_nbrains; ++i) {
         if (g_brains[i]) { agent_free(g_brains[i]); g_brains[i] = NULL; }
+    }
+    /* §6.584 退出前把每个还挂着的 parts 上下文关掉（内部会先把边读回来），别把
+     * "池里一堆 DISK 标签 + 已释放上下文"留给 `ai_free`/后续工具。 */
+    for (size_t i = 0; i < g_nbrains; ++i) {
+        if (!g_brains[i] || !g_brains[i]->parts) continue;
+        AIPartsClose cr = aip_parts_close((AIParts *)g_brains[i]->parts);
+        g_brains[i]->parts = NULL;
+        (void)cr;                       /* 退出了就不喊了；数字留给需要时打印 */
     }
     if (!g_nbrains) agent_free(a);
     return 0;

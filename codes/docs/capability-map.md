@@ -93,6 +93,17 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z187. 不变式尺子 + 随机会话：抓到 5 个真 bug（§6.584）
+- `aicheck.h`：六类不变式（池/身份、边数组三形态与端点、名字可查回、反查表完整、账 id、parts 状态），
+  `aip_rev_audit` 与 `::revcheck` 共用一份实现；`tools/bughunt.c`：固定种子随机会话（教/问/否定/
+  动态谓语/parts/流水/GC/emb/存读），每步验、失败时 dump 边表。
+- 修掉：`parts` 读回不重建反查表（静默漏词）；动态否定反查"半条"（过滤条件不一致 + `fresh_neg`
+  永不补）；18 条死自环边被 `A R A` 激活（读盘清掉 + 写入原语挡 + touch 不自环）；
+  `aip_parts_close` 悬空 DISK 标签（先读回、读不回来强制清空并计数）；`frame.h` 降级答复泄漏。
+- 判据：15 种子 × 600~800 步 ASan+UBSan(`-fno-sanitize-recover=all`) 全过、新套件 `bughunt`、
+  整包 **55/55**、`probematrix` 28 行 diff 为空、`asan_check`(90) 干净。
+- 边界：只验结构不验语义；随机模板没覆盖 `::op`/代码区/多脑切换；反查自检跳过"边在磁盘上"的词。
+
 ## 4z186. 跨进程落盘：唯一临时名 + 原子替换（§6.583）
 - `saveio.h`（`aip_tmp_name` / `aip_sync_close` / `aip_commit_rename`）；
   `ai_save_file` 改用唯一临时名（原来固定 `path.tmp`）；`parts.h` 两个写入口合并成 `aip_parts_write` +

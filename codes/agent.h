@@ -2015,6 +2015,7 @@ static inline char *agent_open_relation(AI *ai, char *const *words, size_t n, fl
 static inline void agent_guess_remember(AI *ai, Token *A, uint8_t rid, Token *B,
                                        const Token *sib) {
     if (!ai || !ai->rel_remember || !A || !B || rid == 0 || rid >= REL_DYN_BASE) return;
+    if (A == B) return;                             /* §6.584 自环不是猜测 */
     if (!sib || !sib->name) return;
     if (rel_direct(A, rid, B)) return;              /* 观测/知识里已经有了：不必记，也绝不动它 */
     if (rel_direct_guess(A, rid, B, 0)) return;      /* 记过了：幂等 */

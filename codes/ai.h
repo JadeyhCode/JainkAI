@@ -5596,6 +5596,7 @@ static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
 
 static inline int ai_write_rel_raw(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
     (void)s;
+    if (!a || !b || a == b) return -1;   /* §6.584 自环不是事实（含动态谓语）*/
     Micro *mk = micro_of(ai);
     if (ai->route_writes && mk && !mk->safe.mod_off) {
         ModIntent m;

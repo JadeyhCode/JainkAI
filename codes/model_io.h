@@ -1103,6 +1103,12 @@ static inline AI *ai_load_file(const char *path) {
             }
         }
     }
+    /* §6.584 老数据里的"死的自环边"（a→a、无角色/关系/命中）**读盘时清掉**：
+     * 留着的话，用户问 `A R A` 会让强化/答复路径把它 touch 成"带语义的自环"，
+     * 之后不变式就抓不干净了。清完"图里没有自环"是硬不变式（`aicheck.h`）。
+     * 放在 `ai_embed_build` **之前**：那些死边 hits=0，本来就不进 emb，顺序只为让语义清楚。 */
+    { size_t dead = pool_drop_dead_self_loops(ai->pool);
+      if (dead && getenv("AIP_PATDBG")) fprintf(stderr, "[load] 清掉死的自环边 %zu 条\n", dead); }
     ai_embed_build(ai);       /* 分布式表示（PPMI 随机索引）也现算，不进快照 */
     ai_slots_build(ai);       /* 同位槽类同理 */
     ai_idf_rebuild(ai);       /* IDF 从整句库现算，不进快照 */

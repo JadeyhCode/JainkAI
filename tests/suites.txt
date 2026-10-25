@@ -89,6 +89,8 @@ partprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_partprobe tools/partprobe.c -l
 xbrain|gcc -std=c11 -O2 -Wall -Wextra -o build_xbrain tools/xbrain.c -lm && ./build_xbrain > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.582 并发：4 线程各一个脑并行问答，结果**逐字节等于串行**；共享层多线程读/重建/并发释放
 conc|gcc -std=c11 -O2 -Wall -Wextra -o build_concprobe tools/concprobe.c -lm -pthread && ./build_concprobe model.bin > ctest.log 2>&1; rc=$?; tail -7 ctest.log; [ "$rc" -eq 0 ]
+# §6.584 不变式找 bug：固定种子随机会话（教/问/否定/动态谓语/parts/流水/GC/存读），每一步验图的不变式
+bughunt|gcc -std=c11 -O2 -Wall -Wextra -o build_bughunt tools/bughunt.c -lm && ./build_bughunt model.bin 20261025 300 > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.583 跨进程并发写同一份文件：唯一临时名 + 原子替换（旧实现会失败/写坏；本套抓得到）
 concfiles|sh tests/concfiles.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.582 并发看护（TSan）：数据竞争必须 0（约 50s；机器 ASLR 让 TSan 起不来时显式 SKIP）

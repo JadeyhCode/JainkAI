@@ -1304,6 +1304,15 @@ grep -q '覆盖 1' "$BR/out.txt" \
 grep -q '冲突未写' "$BR/out.txt" && grep -q '强行覆盖' "$BR/out.txt" \
     && ok "两种落法都进了本脑的账（冲突未写 / 强行覆盖）" \
     || bad "冲突-账" "$(grep -E '冲突未写|强行覆盖' "$BR/out.txt" | tr '\n' ' ')"
+# §6.584 反查表在"边搬去磁盘再读回来"之后必须重建：`::revcheck` 必须报"缺 0 条"
+RV="$WORK/revb"; rm -rf "$RV"; mkdir -p "$RV"
+cp "$ROOT/model.bin" "$RV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RV/" 2>/dev/null || true
+( cd "$RV" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::parts save p.parts\n::parts attach p.parts\n::parts detach\n猫 属于 动物 吗\n::revcheck\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '反查表缺 0 条' "$RV/out.txt" \
+    && ok "边搬去磁盘再读回来之后，反查表**重建了**（`::revcheck` 缺 0 条）" \
+    || bad "revcheck-读回" "$(grep 'revcheck' "$RV/out.txt" | tail -1)"
+
 # §6.581 池级共享：`::brain fork [N]` 从第 N 个脑分一个**共享底层**的脑（emb 共享、边不共享）
 FK="$WORK/fork"; rm -rf "$FK"; mkdir -p "$FK"
 cp "$ROOT/model.bin" "$FK/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$FK/" 2>/dev/null || true

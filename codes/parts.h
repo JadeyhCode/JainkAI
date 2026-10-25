@@ -200,10 +200,52 @@ static inline AIParts *aip_parts_open(const char *path) {
     return pt;
 }
 
-static inline void aip_parts_close(AIParts *pt) {
-    if (!pt) return;
+/* 关闭上下文。§6.584 **先把还挂在磁盘上的边读回内存**，再 free ——
+ * 否则 `t->assocs` 里留着带 DISK 标签的哨兵、`pool->part_load` 还指着这块要被释放的
+ * `AIParts`：下一个问答就会 use-after-free（或者更糟：读的是别人的文件）。
+ * 实测路径（`::parts detach` 之后再 `::parts attach 不存在的文件`）：main.c 会先
+ * `aip_parts_close` 旧上下文、打开失败就什么都不挂 —— 池里却还有一堆"边在磁盘上"的词。
+ * 返回"读回来多少个词 / 读不回来（整段丢了）多少个词"，调用方可以据此喊一声。 */
+typedef struct { size_t resolved, lost; } AIPartsClose;
+
+/* 前向：`aip_parts_close` 要"把还挂在磁盘上的边读回来"，实现在下面。 */
+static inline void aip_parts_load_token(void *ctx, Token *t);
+
+static inline AIPartsClose aip_parts_close(AIParts *pt) {
+    AIPartsClose r = { 0, 0 };
+    if (!pt) return r;
+    if (pt->pool) {
+        TokenPool *p = pt->pool;
+        for (size_t i = 0; i < p->count; ++i) {
+            Token *t = p->tokens[i];
+            if (!t || t->count == 0) continue;
+            if (!token_assocs_on_disk(t)) continue;
+            uint32_t before = (uint32_t)t->count;
+            aip_parts_load_token(pt, t);          /* 读回来（没有段就变成空表）*/
+            if ((uint32_t)t->count == before) r.resolved++;
+            else r.lost++;
+            /* §6.584 **绝不留"带 DISK 标签却没有上下文"的词**：读不回来（文件被删/读失败）时
+             * `load_token` 会提前 return，标签还在 —— 之后任何一次读边都是"NULL 数组 + count>0"，
+             * 那是未定义行为（自检在随机会话里就是这么炸的）。这里兜底清成空表。 */
+            if (token_assocs_on_disk(t)) {
+                token_assocs_set_ram(t, NULL, 0);
+                r.lost++;
+            }
+        }
+        p->parts = NULL;
+        p->part_load = NULL;
+        p->part_touch = NULL;
+    }
+    if (pt->overlay) {                            /* 覆盖层是独立的上下文，单独放 */
+        AIParts *ov = pt->overlay;
+        pt->overlay = NULL;
+        if (ov->f) fclose(ov->f);
+        free(ov->off); free(ov->cnt); free(ov->flags); free(ov->last_seq);
+        free(ov->loaded_cnt); free(ov);
+    }
     if (pt->f) fclose(pt->f);
     free(pt->off); free(pt->cnt); free(pt->flags); free(pt->last_seq); free(pt->loaded_cnt); free(pt);
+    return r;
 }
 
 /* ---------------- 读：把**这一段**读回来，挂到词上 ---------------- */
@@ -238,6 +280,27 @@ static inline void aip_parts_load_token(void *ctx, Token *t) {
             as[k].n_tset = pe.n_tset; as[k].mem_state = pe.mem_state;
             as[k].role = pe.role; as[k].topic = pe.topic;
             as[k].pattern = pe.pattern; as[k].dyn = pe.dyn;
+        }
+        /* §6.584 **反查表要跟着重建**：`rev_*` 不进存档，而 `detach` 只是把边搬去磁盘、
+         * 表本身也不会重建 —— 于是"读回来"之后这些边在反查里**查不到**（`谁 属于 X` 会漏词）。
+         * 自检抓到过一次（`反查表缺（动态 喵）：鸟 -> 鱼`）。用 `pool_rev_has` 去重，
+         * 免得 detach/attach 来回几轮把表撑爆。 */
+        for (uint32_t k = 0; k < cnt; ++k) {
+            Token *dst = as[k].main;
+            if (!dst || !t->owner) continue;
+            for (uint8_t r = 1; r < REL_DYN_BASE; ++r) {
+                uint16_t bit = REL_BIT(r);
+                if ((as[k].rel & bit) && !pool_rev_has(t->owner, dst, t->id, r, 0))
+                    pool_rev_add(t->owner, dst, t->id, r, 0);
+                if ((as[k].nrel & bit) && !pool_rev_has(t->owner, dst, t->id, r, 1))
+                    pool_rev_add(t->owner, dst, t->id, r, 1);
+            }
+            if (as[k].dyn) {
+                uint32_t drid = (uint32_t)(REL_DYN_BASE + as[k].dyn - 1);
+                int dneg = edge_dyn_neg(&as[k]) ? 1 : 0;
+                if (!pool_rev_has(t->owner, dst, t->id, drid, dneg))
+                    pool_rev_add(t->owner, dst, t->id, drid, dneg);
+            }
         }
         pt->n_bytes += (size_t)cnt * sizeof(AIPartEdge);
     }

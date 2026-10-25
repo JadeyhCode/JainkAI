@@ -1068,7 +1068,10 @@ static inline char *fr_generate(AI *ai, FrameSet *fs, Token *const *words, size_
     char *fall_out = NULL;
     char *r = fr_generate_one(ai, fs, words, n, &ur, NULL, &fall_out, tr);
     if (ur) ai->n_relay++;
-    if (r) return r;
+    /* §6.584 修一个**真泄漏**（LSan 在随机会话里抓到，1 次/300 轮）：
+     * 前面的帧可能已经渲染出一句"降级答复"存进 `fall_out`，后面的帧又接住了骨架 ⇒
+     * 这里 `return r` 就把 `fall_out` 丢在堆上。三条返回路径都要先放掉它。 */
+    if (r) { free(fall_out); return r; }
     if (ai->seg_off) {
         if (fall_out) { ai->n_frames++; ai->n_hedge++; }
         return fall_out;                 /* 不换切分了，但降级答复还是要用 */
@@ -1090,7 +1093,7 @@ static inline char *fr_generate(AI *ai, FrameSet *fs, Token *const *words, size_
         ur = 0;
         r = fr_generate_one(ai, fs, v, k, &ur, org, &fall_out, tr);
         if (ur) ai->n_relay++;
-        if (r) { ai->n_split++; return r; }
+        if (r) { free(fall_out); ai->n_split++; return r; }
     }
 
     /* ③ 合并：相邻 2~4 个词拼成一个**池子里已有的**词。
@@ -1119,7 +1122,7 @@ static inline char *fr_generate(AI *ai, FrameSet *fs, Token *const *words, size_
             ur = 0;
             r = fr_generate_one(ai, fs, v, k, &ur, org, &fall_out, tr);
             if (ur) ai->n_relay++;
-            if (r) { ai->n_merge++; return r; }
+            if (r) { free(fall_out); ai->n_merge++; return r; }
         }
     }
     /* 真骨架一个都没接住，才轮到降级答复。 */
