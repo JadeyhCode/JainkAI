@@ -148,12 +148,16 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
      * 存它等于把草稿写成知识。跳过它**以及指向它的边**（不然装载时会指向不存在的 id）。
      * 名字前缀是唯一判据 —— 这条路**不需要为它动存档格式**（v10 里连语境字段都没了，判断更简单）。
      * 没有临时符号节点时，下面每个过滤都恒真 ⇒ 输出逐字节不变（roundtrip 钉着这一点）。 */
+    /* §6.598 **临时符号节点也写一条记录**（否则 id 出现缺口 ⇒ 读盘那侧 `t->id != id`
+     * 硬校验当场判损坏、整份存档**静默读不回来**；实测 `::op 加前提` 之后存盘就无法再载入）。
+     * 它们落盘时强制标垃圾、边一条不写 ⇒ 草稿纸不会复活成知识；**头里的 n_tok 必须
+     * 包含它们**（和下面那段写记录的循环逐条对齐），否则读盘会错位。 */
     size_t saved_tokens = 0;
     uint32_t total_assocs = 0;
     for (size_t i = 0; i < p->count; ++i) {
         const Token *t = p->tokens[i];
-        if (token_is_temp(t)) continue;
         saved_tokens++;
+        if (token_is_temp(t)) continue;
         for (size_t j = 0; j < t->count; ++j)
             if (!mio_edge_saved(&token_assocs_ro(t)[j])) continue;
             else total_assocs++;
@@ -170,9 +174,17 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     /* ---- 符号节点段 ---- */
     for (size_t i = 0; i < p->count; ++i) {
         const Token *t = p->tokens[i];
-        if (token_is_temp(t)) continue;
+        /* §6.598 **临时符号节点也要占一个 id 空位**（别再 `continue` 跳过）。
+         * 以前跳过它们 ⇒ 文件里的 id 出现缺口 ⇒ 读盘那侧有 `t->id != id` 的硬校验，
+         * 整份存档**静默读不回来**。实测：`::op 加前提 猫 动物` 造出一个被引用的
+         * `[临:前提]` 之后存盘，`ai_load_file` 直接返回 NULL（`bughunt` 的随机 `::op`
+         * 动作把它照出来的）。现在：名字照写、**一条边都不写**、落盘时强制标垃圾
+         * （草稿纸复活也不会变成知识；id 连续 ⇒ 存档可读）。 */
+        const int is_temp = token_is_temp(t);
         uint32_t n_saved_edges = 0;
-        for (size_t j = 0; j < t->count; ++j) if (mio_edge_saved(&token_assocs_ro(t)[j])) n_saved_edges++;
+        if (!is_temp)
+            for (size_t j = 0; j < t->count; ++j)
+                if (mio_edge_saved(&token_assocs_ro(t)[j])) n_saved_edges++;
         uint32_t nlen = t->name ? (uint32_t)strlen(t->name) : 0;
         mw_u32(&w, t->id);
         mw_str(&w, t->name ? t->name : "", nlen);
@@ -182,13 +194,13 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
         mw_u32(&w, t->next_in_time ? t->next_in_time->id : TOKEN_ID_NONE);
         mw_u32(&w, t->perspective_of ? t->perspective_of->id : TOKEN_ID_NONE);
         mw_u8 (&w, t->is_category);
-        mw_u8 (&w, t->is_garbage);
+        mw_u8 (&w, is_temp ? 1 : t->is_garbage);   /* §6.598 临时节点落盘即"垃圾" */
         mw_u8 (&w, t->mem_state);
         mw_u64(&w, t->birth_tick);
         mw_u64(&w, t->last_touch_tick);
         mw_u32(&w, n_saved_edges);
 
-        for (size_t j = 0; j < t->count; ++j) {
+        for (size_t j = 0; j < t->count && !is_temp; ++j) {
             const AssocEntry *e = &token_assocs_ro(t)[j];
             if (!mio_edge_saved(e)) continue;
             /* v10：语境那两段（n_subs + 裸 id / n_not + 裸 id）不再写。 */
@@ -1158,11 +1170,13 @@ static inline AI *ai_load_file(const char *path) {
     return ai;
 
 fail_ai:
+    if (getenv("AIP_LOADDBG")) fprintf(stderr, "[load] fail_ai @%d pos=%zu len=%zu\n", __LINE__, r.pos, r.len);
     free(buf);
     ai_free(ai);        /* ai->pool 此时已是 np（或仍是新建的池），只释放一次 */
     np = NULL;
     return NULL;
 fail:
+    if (getenv("AIP_LOADDBG")) fprintf(stderr, "[load] fail @%d pos=%zu len=%zu\n", __LINE__, r.pos, r.len);
     free(buf);
     if (np) pool_free(np);
     ai_free(ai);

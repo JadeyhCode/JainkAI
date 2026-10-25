@@ -1334,6 +1334,23 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.598 **`::op` 之后存盘还能读回来**（临时符号节点 [临:…] 不能让存档不可读）
+OS="$WORK/os"; rm -rf "$OS"; mkdir -p "$OS"
+cp "$ROOT/model.bin" "$OS/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$OS/" 2>/dev/null || true
+( cd "$OS" && { printf '::notepad off\n::char off\n'; printf '::op 加前提 猫 动物\n::op 中间插词 鸟 飞\n::save m.bin\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '已保存' "$OS/out1.txt" \
+    && ok "「::op 加前提 / 中间插词」之后能存盘" \
+    || bad "op-存盘" "$(tail -2 "$OS/out1.txt" | tr '\n' ' ')"
+( cd "$OS" && { printf '::notepad off\n::char off\n'; printf '猫 属于 动物 吗\n::revcheck\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '对 ， 猫 -[属于]-> 动物' "$OS/out2.txt" \
+    && ok "**存过 op 改动之后仍然读得回来**（以前静默读不回：id 缺口 + 边计数不一致）" \
+    || bad "op-回读" "$(tail -3 "$OS/out2.txt" | tr '\n' ' ')"
+grep -qaF '反查表缺 0 条' "$OS/out2.txt" \
+    && ok "读回来之后反查表自洽（::revcheck 缺 0 条）" \
+    || bad "op-反查表" "$(grep -a revcheck "$OS/out2.txt" | head -1)"
+
 # §6.597 教学留痕**上限**：只保最近 N 条（AIP_TEACHMARK_MAX 可调小），最老的软删
 TM="$WORK/tm"; rm -rf "$TM"; mkdir -p "$TM"
 cp "$ROOT/model.bin" "$TM/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TM/" 2>/dev/null || true

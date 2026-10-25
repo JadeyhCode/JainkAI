@@ -184,6 +184,43 @@ int main(int argc, char **argv) {
                     printf("  ✗ 第 %d 步没有答复：「%s」\n", t, sent);
                     no_answer = 1;
                 }
+            } else if (act < 74) {
+                /* §6.598 **符号节点行为（`::op` 原语）**：阶段② 之前完全没随机打到这里。
+                 * 只挑**不需要外部世界**的几条（不碰执行/动作），参数从词表里随机取。 */
+                static const char *OPS[][3] = {
+                    { "加前提",   "猫",      "动物"  },
+                    { "加反前提", "狗",      "动物"  },
+                    { "中间插词", "鸟",      "飞"    },
+                    { "建过程",   "洗",      NULL    },
+                    { "加步骤",   "洗",      "烧水"  },
+                    { "加条件",   "洗",      "水开"  },   /* 加条件 需要 3 个参数 ⇒ 下面补 */
+                    { "回收临时", NULL,      NULL    },
+                };
+                const char *nm = OPS[rnd(sizeof OPS / sizeof OPS[0])][0];
+                char a1[32], a2[32], a3[32];
+                char *args[3];
+                size_t na = 0;
+                if (!strcmp(nm, "建过程")) {
+                    snprintf(a1, sizeof a1, "过程%u", rnd(9));
+                    args[na++] = a1;
+                } else if (!strcmp(nm, "加步骤") || !strcmp(nm, "加条件")) {
+                    snprintf(a1, sizeof a1, "过程%u", rnd(9));
+                    snprintf(a2, sizeof a2, "动作%u", rnd(9));
+                    args[na++] = a1; args[na++] = a2;
+                    if (!strcmp(nm, "加条件")) { snprintf(a3, sizeof a3, "条件%u", rnd(9)); args[na++] = a3; }
+                } else if (!strcmp(nm, "回收临时")) {
+                    /* 0 参数 */
+                } else {
+                    const char *x = SUBJ[rnd((unsigned)NSUBJ)];
+                    const char *y = OBJ[rnd((unsigned)NOBJ)];
+                    snprintf(a1, sizeof a1, "%s", x);
+                    snprintf(a2, sizeof a2, "%s", y);
+                    args[na++] = a1; args[na++] = a2;
+                }
+                char note[128] = {0};
+                int got = token_op_run(ai, nm, args, na, note, sizeof note);
+                if (trace) fprintf(stderr, "[op] %s rc=%d note=%.60s\n", nm, got, note);
+                if (got < -1) { printf("  ✗ 第 %d 步 op「%s」返回 %d\n", t, nm, got); bad_step = 1; }
             } else if (act < 78) {
                 /* 元认知/维护类操作 */
                 switch (rnd(3)) {
