@@ -4490,6 +4490,56 @@ static inline int agent_history_kind(const char *input) {
     return 0;
 }
 
+/* §6.593 **「我刚才教了你什么」**：从本会话的修改账里把"学到的关系事实"列出来。
+ * 账只进内存（§6.564），所以这是"这次会话里教过什么"，不是永久档案。 */
+static inline char *agent_taught_review(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !input || !out || cap == 0) return NULL;
+    char j[80];
+    size_t jl = 0;
+    for (const char *q = input; *q && jl + 1 < sizeof j; ++q) {
+        if (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') continue;
+        j[jl++] = *q;
+    }
+    j[jl] = 0;
+    int asks = (strstr(j, "教了") && (strstr(j, "什么") || strstr(j, "啥"))) ||
+               (strstr(j, "教过") && (strstr(j, "什么") || strstr(j, "啥"))) ||
+               (strstr(j, "教会") && (strstr(j, "什么") || strstr(j, "啥")));
+    if (!asks) return NULL;
+    if (strstr(j, "怎么教") || strstr(j, "教我怎么")) return NULL;   /* "怎么教"是在问我方法 */
+    size_t cnt = ai_modlog_count(ai);
+    char list[240];
+    size_t off = 0, shown = 0, total = 0;
+    list[0] = 0;
+    for (size_t i = 0; i < cnt; ++i) {
+        const AIModEntry *e = ai_modlog_at(ai, i);
+        if (!e || e->rid == 0) continue;
+        if (e->kind != AIMOD_REL && e->kind != AIMOD_REL_COPY && e->kind != AIMOD_REL_OVERRIDE)
+            continue;
+        total++;
+        if (shown >= 4 || off + 40 >= sizeof list) continue;
+        Token *A = pool_token_by_id(ai->pool, e->a_id);
+        Token *B = pool_token_by_id(ai->pool, e->b_id);
+        if (!A || !B || !A->name || !B->name) continue;
+        off += (size_t)snprintf(list + off, sizeof list - off, "%s%s %s%s %s",
+                                shown ? " ／ " : "", A->name,
+                                e->neg ? "不 " : "", rel_name_of(ai, e->rid), B->name);
+        shown++;
+    }
+    if (total == 0) {
+        const char *t = ai_say_tpl("回顾.没教");
+        snprintf(out, cap, "%s", t ? t : "你 还 没 教 过 我 什么");
+        return out;
+    }
+    {
+        char many[32];
+        snprintf(many, sizeof many, "%zu", total);
+        const char *t = ai_say_tpl("回顾.教了");
+        const char *const a[2] = { many, list };
+        der_filln(out, cap, t ? t : "你 刚 才 教 了 $1 条 ： $2", a, 2);
+    }
+    return out;
+}
+
 static inline void agent_history_record(AI *ai, const char *input) {
     if (!ai || !input || !input[0]) return;
     size_t slot = ai->hist_head % 6;
@@ -7324,6 +7374,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
         agent_ask_drop(ai);
     }
+    /* §6.593 「我刚才教了你什么」：从本会话的修改账里答 */
+    if (!empty_turn && agent_taught_review(ai, input, out, out_cap)) return agent_say(ai, out);
     /* §6.217 「刚才聊了什么 / 我刚才说了什么」：从最近几轮**用户原话**里答（不用生成）*/
     {
         int hk = agent_history_kind(input);

@@ -557,8 +557,10 @@ grep -q 'AI > 对' "$WORK/o45" \
     || bad "图化等价" "$(grep -m3 'AI >\|外壳\|加载失败' "$WORK/o45")"
 ( cd "$ROOT" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n::rel analogy solver off\n'; printf '::quit\n'; } | \
     AIP_SHELLMIRROR=1 AIP_PATDBG=1 "$WORK/aip" --model model.bin > "$WORK/o46" 2>&1 ) || true
-grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q '→ 图上 55 条边' "$WORK/o46" \
-    && ok "镜像日志：[lead] 55 条 → 图上 55 条边（机制真的跑了；§6.530 代码表搬进来 +10）" \
+# 条数是**数据决定的**（每加一行 `[lead]` 就变）⇒ 从 patterns.txt 现数，别再写死
+LEAD_LINES=$(grep -c '^\[lead\]' "$ROOT/patterns.txt" 2>/dev/null || echo 0)
+grep -q '外壳镜像（AIP_SHELLMIRROR）' "$WORK/o46" && grep -q "→ 图上 ${LEAD_LINES} 条边" "$WORK/o46" \
+    && ok "镜像日志：[lead] ${LEAD_LINES} 条 → 图上 ${LEAD_LINES} 条边（条数从数据现数，不写死）" \
     || bad "镜像日志" "$(grep -m2 '外壳\|lead=' "$WORK/o46")"
 # §6.520 `::load` 之后**要重新镜像**（否则换脑子就把外壳全丢了 —— 套件里大量用 `::load`）
 # ⚠ 在仓库根跑：WORK 目录没有 patterns.txt（没有 `[lead]` 就没东西可镜像）
@@ -1318,6 +1320,29 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.593 教学意图前缀（`我教你`/`记一下`/`请记住`）+ 「我刚才教了你什么」
+TL="$WORK/tl"; rm -rf "$TL"; mkdir -p "$TL"
+cp "$ROOT/model.bin" "$TL/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TL/" 2>/dev/null || true
+( cd "$TL" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '我 教 你 麒麟 属于 神兽\n麒麟 属于 神兽 吗\n记 一下 麒麟 会 飞\n麒麟 会 飞 吗\n请 记住 麒麟 有 角\n麒麟 有 角 吗\n记个过程 泡茶\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 麒麟 属于 神兽' "$TL/out.txt" \
+    && ok "「我 教 你 X 属于 Y」⇒ 剥掉教学意图、当事实学（以前整句听不懂）" \
+    || bad "我教你" "$(grep -a 'AI >' "$TL/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '记下 了 ： 麒麟 会 飞' "$TL/out.txt" \
+    && ok "「记 一下 X 会 Y」⇒ 学成事实（不再被当成"记个过程"）" \
+    || bad "记一下" "$(grep -a '过程' "$TL/out.txt" | head -1)"
+grep -qaF '过程 「 泡茶 」 记下 了' "$TL/out.txt" \
+    && ok "「记个过程 泡茶」照旧建过程（教学意图剥离**不误伤**过程入口）" \
+    || bad "过程入口" "$(grep -a '泡茶' "$TL/out.txt" | head -1)"
+( cd "$TL" && { printf '::notepad off\n::char off\n我刚才教了你什么\n我 教 你 麒麟 属于 神兽\n记 一下 麒麟 会 飞\n我刚才教了你什么\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '你 还 没 教 过 我 什么' "$TL/out2.txt" \
+    && ok "「我刚才教了你什么」（还没教）⇒ 直说没教过" \
+    || bad "回顾-空" "$(grep -a '教' "$TL/out2.txt" | head -1)"
+grep -qa '你 刚 才 教 了 2 条' "$TL/out2.txt" && grep -qa '麒麟 属于 神兽' "$TL/out2.txt" \
+    && ok "「我刚才教了你什么」⇒ 从本会话的账里列出教过的事实" \
+    || bad "回顾-有" "$(grep -a '教 了' "$TL/out2.txt" | tail -1)"
+
 # §6.592 数量事实：`X 有 三 个 角` ⇒ 学得进；`X 有 角 吗` ⇒ 对；`X 有 几 个 角` ⇒ 答数目
 QN="$WORK/qn"; rm -rf "$QN"; mkdir -p "$QN"
 cp "$ROOT/model.bin" "$QN/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$QN/" 2>/dev/null || true
@@ -1512,7 +1537,7 @@ grep -q '关掉 #1' "$DP/out.txt" \
 grep -q '#[12] 是当前那个，先用 ::brain use 切走' "$DP/out.txt" \
     && ok "**当前那个不许关**（明确拒绝，不静默）" \
     || bad "brain-drop当前" "$(grep '是当前' "$DP/out.txt" | head -1)"
-n_list=$(grep -c '#0  1469 词' "$DP/out.txt" || true)
+n_list=$(grep -c '#0  1474 词' "$DP/out.txt" || true)   # §6.593 加了 5 行 [lead] ⇒ 外壳词数 1469→1474
 [ "${n_list:-0}" -ge 1 ] && grep -q '\* #1  32 词' "$DP/out.txt" \
     && ok "**关掉后列表少了一个、且槽位被新脑复用**（* #1 32 词）" \
     || bad "brain-drop-复用" "$(grep -E '^\s+[* ]#|\* #' "$DP/out.txt" | tail -3 | tr '\n' ' ')"
