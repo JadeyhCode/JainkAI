@@ -15,6 +15,7 @@
 
 #include <stdlib.h>
 #include "ptrtag.h"
+#include "share.h"      /* §6.581 池级共享：emb 这类"不带指针的大块"引用计数共享 */
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
@@ -937,7 +938,8 @@ static inline void pool_free(TokenPool *p) {
         if (p->meaning_free && t->meaning) p->meaning_free(t->meaning);
         /* §6.566 边数组可能在磁盘上（指针带 AIP_PTR_DISK 标签）：带标签的指针**不能 free** */
         if (aip_ptr_tag(t->assocs) == AIP_PTR_RAM) free(t->assocs);
-        free(t->emb);
+        /* §6.581 `emb` 可能和别的池**共享**（引用计数）⇒ 不能直接 free，要还回去 */
+        aip_buf_release(t->emb);
         free((void *)t->name); free(t);
     }
     free(p->tokens);
@@ -957,6 +959,40 @@ static inline void pool_free(TokenPool *p) {
     free(p->perspective_root);
     free(p);
 }
+/* §6.581 **池级共享**：把 `dst` 的 emb 换成 `src` 的那一份（引用计数 +1），
+ * 前提是"两个池是**同一个图**"——顺序、名字、个数都一致（`::brain fork` 就是这种情况）。
+ *
+ * 为什么先验名字：emb 是按词算的向量，**错位共享比不共享危险得多**（内存好看、答案悄悄变错）。
+ * 所以这里宁可拒绝（返回 0，调用方照旧各持一份），也不做"部分共享"。
+ * 共享之后两边仍然是**各自可写**的：写 emb 的地方会走 `aip_buf_own` 先复制（见 ai.h）。 */
+static inline size_t pool_share_emb(TokenPool *dst, const TokenPool *src) {
+    if (!dst || !src || dst == src) return 0;
+    if (dst->count != src->count || dst->count == 0) return 0;
+    for (size_t i = 0; i < dst->count; ++i) {
+        const Token *a = dst->tokens[i], *b = src->tokens[i];
+        if (!a || !b) return 0;
+        if (a->id != b->id) return 0;
+        /* 名字两边都有就必须相等；**两边都没有**（无名临时节点，存读时按位置复原）
+         * 也算对得上 —— 实测出厂图里有这种节点（第 1202 个），一开始要求"必须有名"
+         * 于是共享整体被拒（报了"共享 0 个词"）。 */
+        if (a->name || b->name) {
+            if (!a->name || !b->name) return 0;
+            if (strcmp(a->name, b->name) != 0) return 0;   /* 错位就整体放弃 */
+        }
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < dst->count; ++i) {
+        Token *a = dst->tokens[i];
+        Token *b = src->tokens[i];
+        if (!a->emb || !b->emb) continue;
+        if (a->emb == b->emb) { n++; continue; }       /* 已经共享过 */
+        aip_buf_release(a->emb);                       /* 丢掉自己那份（可能是私有的）*/
+        a->emb = (int8_t *)aip_buf_share(b->emb);
+        n++;
+    }
+    return n;
+}
+
 static inline Token *pool_token(TokenPool *p, const char *name, void *meaning) {
     if (!p) return NULL;
     if (p->n_buckets == 0 && pool_rehash(p, TOKEN_HASH_INIT) != 0) return NULL;

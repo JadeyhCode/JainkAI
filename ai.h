@@ -3116,6 +3116,7 @@ static inline void ai_embed_build(AI *ai) {
         for (size_t i = 0; i < n; ++i) {
             Token *t = p->tokens[i];
             if (!t->emb) continue;
+            { void *own = aip_buf_own(t->emb, EMB_DIM); if (!own) continue; t->emb = (int8_t *)own; }
             int32_t *a = acc + i * EMB_DIM;
             int32_t mx = 0;
             for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }
@@ -3199,6 +3200,9 @@ static inline void ai_embed_build(AI *ai) {
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
         if (!t->emb) continue;
+        /* §6.581 写前复制：emb 可能是**和别的脑共享**的（`pool_share_emb`）⇒ 写之前先要一份自己的。
+         * 不复制就会把兄弟脑的向量一起改掉（内存看着没问题，答案悄悄变）。 */
+        { void *own = aip_buf_own(t->emb, EMB_DIM); if (!own) continue; t->emb = (int8_t *)own; }
         int32_t *a = acc + i * EMB_DIM;
         int32_t mx = 0;
         for (size_t d = 0; d < EMB_DIM; ++d) { int32_t q2 = a[d] < 0 ? -a[d] : a[d]; if (q2 > mx) mx = q2; }

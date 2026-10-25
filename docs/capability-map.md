@@ -93,6 +93,17 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z184. 池级共享：emb 引用计数共享 + 写前复制（§6.581）
+- `share.h`（`aip_buf_share/own/release/refs`，静态线性表 8192 块，表满即拒绝共享）、
+  `token.h` `pool_share_emb`（先验同一张图：个数/顺序/id/名字）、`pool_free` 改成 `aip_buf_release`、
+  `ai.h` `ai_embed_build` 两处写循环加 `aip_buf_own`（写前复制）、`::brain fork [N]`。
+- 实测（model.bin，1199 词）：每脑 emb **1227776 字节**；三脑省 **2455552 字节**；fork 代价 **+0.16s**；
+  写前复制之后源脑向量逐字节不变；先释放源脑另一个脑照样能答；图不一样时拒绝共享（返回 0）。
+- 判据：新套件 `poolshare` **18 项**、tokenop **320 项**、整包 **51/51**、`probematrix` diff 为空、asan(90) 干净；
+  探针本身在 ASan/UBSan/LSan 下跑过。
+- 边界（结构性的）：**边数组不能共享**（`AssocEntry.main/action` 是 `Token*`，跨池要重写；真共享需"边存 id"重构）；
+  任何 `ai_embed_build` 会写前复制 ⇒ 共享解除；fork 走快照，**不带**账/parts 挂载/假设层；单线程、静态表。
+
 ## 4z183. 跨脑知识语义：照抄 + 本地优先 + 冲突可见（§6.580）
 - `xbrain.h`：`xb_journal_save` / `xb_journal_replay(模式)` / `xb_pair_state` / `xb_excl_other`；
   `::parts replay <流水> [force|check]`。

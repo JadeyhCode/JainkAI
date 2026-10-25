@@ -87,6 +87,8 @@ assocaudit|sh tests/assocaudit.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ 
 partprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_partprobe tools/partprobe.c -lm && ./build_partprobe > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.580 跨脑知识语义：照抄（确定性迁移）/ 本地优先 + 冲突可见 / force 覆盖 vs 并列
 xbrain|gcc -std=c11 -O2 -Wall -Wextra -o build_xbrain tools/xbrain.c -lm && ./build_xbrain > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.581 池级共享：emb 引用计数共享 + 写前复制（边存 Token* ⇒ 边数组不能共享，探针里也量了"省多少"）
+poolshare|gcc -std=c11 -O2 -Wall -Wextra -o build_poolshare tools/poolshare.c -lm && ./build_poolshare model.bin > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.567 真实图上量局部加载（4 万条边：问 50 词读回多少段/字节）
 partbench|gcc -std=c11 -O2 -Wall -Wextra -o build_partbench tools/partbench.c -lm && ./build_partbench model.bin > ctest.log 2>&1; rc=$?; tail -10 ctest.log; [ "$rc" -eq 0 ]
 # 反糟粕自测（C 级）：一次巧合不是规律 / 反事实真削弱 / 不虚构 / 不自我印证 / 不空想造事实 / 不从众 / 不泛化（本机实测 3.2s）

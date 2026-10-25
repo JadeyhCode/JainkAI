@@ -1304,6 +1304,21 @@ grep -q '覆盖 1' "$BR/out.txt" \
 grep -q '冲突未写' "$BR/out.txt" && grep -q '强行覆盖' "$BR/out.txt" \
     && ok "两种落法都进了本脑的账（冲突未写 / 强行覆盖）" \
     || bad "冲突-账" "$(grep -E '冲突未写|强行覆盖' "$BR/out.txt" | tr '\n' ' ')"
+# §6.581 池级共享：`::brain fork [N]` 从第 N 个脑分一个**共享底层**的脑（emb 共享、边不共享）
+FK="$WORK/fork"; rm -rf "$FK"; mkdir -p "$FK"
+cp "$ROOT/model.bin" "$FK/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$FK/" 2>/dev/null || true
+( cd "$FK" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain fork 0\n::brain list\n猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -q '共享了 [1-9][0-9]* 个词的 emb' "$FK/out.txt" \
+    && ok "fork 报出**共享了多少个词**的 emb（不是"看起来共享了"）" \
+    || bad "fork-共享" "$(grep '多脑' "$FK/out.txt" | head -2 | tr '\n' ' ')"
+grep -q '边\*\*不共享\*\*' "$FK/out.txt" \
+    && ok "fork 明确说清"边不共享"（边里存 Token*）" \
+    || bad "fork-说明" "$(grep '不共享' "$FK/out.txt" | head -1)"
+grep -q '2 个' "$FK/out.txt" && grep -q '对 ， 猫' "$FK/out.txt" \
+    && ok "分出来的脑照样答得对（共享底层不影响知识）" \
+    || bad "fork-问答" "$(grep -E '多脑|AI >' "$FK/out.txt" | tail -3 | tr '\n' ' ')"
+
 # §6.576 `::parts verify` 自检：内存 vs 段文件对不对得上（改写之后必须报 stale，写完 delta 必须归零）
 VR="$WORK/vr"; rm -rf "$VR"; mkdir -p "$VR"
 cp "$ROOT/session.bin" "$VR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$VR/" 2>/dev/null || true

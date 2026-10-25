@@ -27,6 +27,14 @@ static Agent *g_brains[AI_MAX_BRAINS];
 static size_t g_nbrains;
 static size_t g_curbrain;
 
+/* §6.571/§6.581 在表里找一个位置：**优先填空槽**，都没有且没满就往后排。
+ * 返回 -1 = 满了。`new` 和 `fork` 共用这一处（以前 `new` 里内联了一份）。 */
+static int brain_alloc_slot(void) {
+    for (size_t i = 0; i < g_nbrains; ++i) if (!g_brains[i]) return (int)i;
+    if (g_nbrains >= AI_MAX_BRAINS) return -1;
+    return (int)g_nbrains++;
+}
+
 #define DEFAULT_MODEL "model.bin"
 
 /* 内存态指纹：把整张图滚成一个 FNV 哈希，用来验证 model.bin 存取是否无损。
@@ -1770,9 +1778,9 @@ int main(int argc, char **argv) {
                 const char *arg = NULL;
                 if (sp2) { *sp2 = 0; arg = sp2 + 1; while (*arg == ' ') arg++; }
                 if (!strncmp(sb, "new", 3) && sb[3] == 0) {
-                    size_t slot = (size_t)-1;
-                    for (size_t i = 0; i < g_nbrains; ++i) if (!g_brains[i]) { slot = i; break; }
-                    if (slot == (size_t)-1 && g_nbrains >= AI_MAX_BRAINS) {
+                    int sloti = brain_alloc_slot();
+                    size_t slot = sloti < 0 ? (size_t)-1 : (size_t)sloti;
+                    if (sloti < 0) {
                         printf("[多脑] 最多同时 %d 个（现在 %zu 个）\n", AI_MAX_BRAINS, g_nbrains);
                     } else {
                         Agent *nb = agent_new(stdin_perceive, stdout_act, NULL);
@@ -1792,12 +1800,47 @@ int main(int argc, char **argv) {
                                     printf("[多脑] 从 %s 读了一份\n", arg);
                                 }
                             }
-                            if (slot == (size_t)-1) slot = g_nbrains++;   /* 没洞就往后排 */
                             g_brains[slot] = nb;
                             a = nb;
                             g_curbrain = slot;
                             printf("[多脑] 开了第 %zu 个（当前就是它）：%zu 个词 / %zu 条改动\n",
                                    g_nbrains, nb->brain->pool->count, ai_modlog_count(nb->brain));
+                        }
+                    }
+                } else if (!strncmp(sb, "fork", 4) && sb[4] == 0) {
+                    /* §6.581 **池级共享**：从第 N 个脑（默认当前）分出一个共享底层的脑。
+                     * 共享什么、为什么只能共享这些（边数组存 `Token*` 所以不能共享），见 share.h 文件头。 */
+                    size_t pi = g_curbrain;
+                    if (arg && *arg) pi = (size_t)strtoul(arg, NULL, 10);
+                    if (pi >= g_nbrains || !g_brains[pi]) printf("[多脑] 没有 #%zu\n", pi);
+                    else {
+                        int sloti = brain_alloc_slot();
+                        if (sloti < 0) printf("[多脑] 最多同时 %d 个（现在 %zu 个）\n", AI_MAX_BRAINS, g_nbrains);
+                        else {
+                            AI *parent = g_brains[pi]->brain;
+                            size_t bytes = ai_save_file(parent, ".aip_fork_tmp.bin");
+                            AI *m2 = bytes ? ai_load_file(".aip_fork_tmp.bin") : NULL;
+                            remove(".aip_fork_tmp.bin");
+                            if (!m2) printf("[多脑] 分不出来（临时快照写/读失败）\n");
+                            else {
+                                Agent *nb = agent_new(stdin_perceive, stdout_act, NULL);
+                                if (!nb) { ai_free(m2); printf("[多脑] 建不出来（内存不够？）\n"); }
+                                else {
+                                    ai_free(nb->brain);
+                                    nb->brain = m2;
+                                    nb->brain->rel_verify_hook = aip_rel_verify;
+                                    aip_shell_mirror_lead(nb->brain);
+                                    size_t shared = pool_share_emb(nb->brain->pool, parent->pool);
+                                    g_brains[sloti] = nb;
+                                    a = nb;
+                                    g_curbrain = (size_t)sloti;
+                                    printf("[多脑] 从 #%zu 分出 #%d：共享了 %zu 个词的 emb（省 %zu 字节）\n",
+                                           pi, sloti, shared, aip_buf_shared_bytes(EMB_DIM));
+                                    if (!shared)
+                                        printf("       （没共享成：两个图对不上或共享表满 —— 各自一份，不影响正确性）\n");
+                                    printf("       （边**不共享**：边里存的是 Token*，跨池要重写 —— 见 share.h）\n");
+                                }
+                            }
                         }
                     }
                 } else if (!strncmp(sb, "list", 4) && sb[4] == 0) {
@@ -1936,8 +1979,9 @@ int main(int argc, char **argv) {
                         }
                     }
                 } else {
-                    printf("[用法] ::brain new [模型]|list|use N|mods N|diff A B\n");
+                    printf("[用法] ::brain new [模型]|fork [N]|list|use N|mods N|diff A B|save|drop\n");
                     printf("  new [模型] 再开一个脑（当前切到它；给了模型文件就从盘上读一份）\n");
+                    printf("  fork [N] 从第 N 个脑（默认当前）分一个**共享底层**的脑：emb 共享，边不共享\n");
                     printf("  list     列出现在有几个、各多少词/多少条改动\n");
                     printf("  use N    切到第 N 个\n");
                     printf("  mods N   看第 N 个脑自己的改动账\n");
