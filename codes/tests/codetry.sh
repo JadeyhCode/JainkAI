@@ -22,6 +22,12 @@ sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra -Wped
 cp "$MODEL" model.base
 for f in patterns.txt frames.txt relations.txt; do [ -f "$ROOT/$f" ] && cp "$ROOT/$f" .; done
 
+# §6.622 依赖本机有 gcc/cc：没有就**显式 SKIP**（不假装通过，也不红）
+if ! command -v gcc >/dev/null 2>&1; then
+    echo "SKIP codetry（本机没有 gcc —— 这条闭环要真编译才能验）"
+    exit 0
+fi
+
 pass=0; fail=0
 ok()  { echo "  [OK]   $1"; pass=$((pass+1)); }
 bad() { echo "  [FAIL] $1"; echo "         证据: $2"; fail=$((fail+1)); }
@@ -36,6 +42,19 @@ int main(void) { printf("hi\n"); return 0; }
 EOF
 cat > _t/work/bad.c <<'EOF'
 int main(void) { int x = ; return 0; }
+EOF
+# §6.622 修法表还有两条：补分号 / 补声明 —— 真机各跑一次（以前只有假错误串单测）
+cat > _t/work/semi.c <<'EOF'
+int main(void) {
+  int x = 1
+  return x;
+}
+EOF
+cat > _t/work/undecl.c <<'EOF'
+int main(void) {
+  x = 1;
+  return x;
+}
 EOF
 
 run() { cp model.base m.bin; { printf '::notepad off\n::char off\n::act on\n'; printf '%b' "$1"; } | ./aip --model m.bin > "$2" 2>&1 || true; }
@@ -66,6 +85,24 @@ grep -qa 'bad.c：编译 1 次' c3 && grep -qav '最终 rc=0' c3 \
 grep -qa '没有已知的机械修法\|补不进去' c3 \
     && ok "如实说「没有已知的机械修法 / 补不进去」（降级版不猜）" \
     || bad "bad.c-说明" "$(grep -a '改了什么' c3 | head -1)"
+
+echo "== ⑤ 补分号（修法表①）：真机上真的补上、再编过 =="
+run '::code try semi.c\n::code\n' c5
+grep -qa 'semi.c：编译 2 次，首次 rc=1 → 最终 rc=0' c5 \
+    && ok "semi.c：缺分号 ⇒ 编译 2 次、rc 1→0（在上一行末尾补了一个分号）" \
+    || bad "semi.c-补分号" "$(grep -a '写代码闭环' c5 | head -1)"
+grep -qa '按规则在\*\*上一行\*\*末尾补了' c5 \
+    && ok "说清是「在上一行末尾补」，不是含糊地说「改了什么」" \
+    || bad "semi.c-说明" "$(grep -a '改了什么' c5 | head -1)"
+
+echo "== ⑥ 补声明（修法表③）：gcc 的弯引号也认得出 =="
+run '::code try undecl.c\n::code\n' c6
+grep -qa 'undecl.c：编译 2 次，首次 rc=1 → 最终 rc=0' c6 \
+    && ok "undecl.c：未声明的名字 ⇒ 补声明后编过（gcc 报的是弯引号）" \
+    || bad "undecl.c-补声明" "$(grep -a '写代码闭环' c6 | head -1)"
+grep -qa '按规则补了声明' c6 \
+    && ok "说清「类型只能猜 int」（机械降级的代价照实说）" \
+    || bad "undecl.c-说明" "$(grep -a '改了什么' c6 | head -1)"
 
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \

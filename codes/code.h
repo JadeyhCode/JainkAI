@@ -47,7 +47,10 @@ static const CodeFixRule CODE_FIXES[] = {
       "gcc 说这一行缺 `;` → 在它指的**上一行末尾**补一个（它报的是缺分号之后的第一处）" },
     { "implicit declaration", "补 #include",
       "用了没声明的函数 → 按函数名补对应的头（printf/puts→stdio.h；str*/mem*→string.h；malloc/free/exit→stdlib.h）" },
-    { "' undeclared",         "补声明",
+    /* §6.622 **这条规则在 gcc 上以前是死的**：表里写的是 `"' undeclared"`（clang 的 ASCII 引号），
+     * 而 gcc 报的是 `‘x’ undeclared`（UTF-8 弯引号）⇒ 永远匹配不上，规则 ③ 形同不存在。
+     * 现在只要求出现 `undeclared`（规则 ② 的 `implicit declaration` 排在前面，函数那类仍走 ②）。 */
+    { "undeclared",           "补声明",
       "用了没声明的**名字**（不是函数）→ 在出错行前补一句 `int <名字>;`（类型只能猜 int，"
       "错了它会再来一轮 —— 这就是「机械降级」的代价，照实说）" },
     { NULL, NULL, NULL }
@@ -122,6 +125,9 @@ static inline int code_fix_include(char *src, size_t cap, const char *hdr) {
 }
 
 /* **按错误文本选修法**（抽成一处：这样能用假错误串直接单测，不用真跑 gcc） */
+/* §6.622 抠引号里的名字（两种引号：ASCII `'x'` / gcc 的 `‘x’`）。 */
+static inline const char *code_quote_at(const char *p);
+
 static inline const CodeFixRule *code_rule_for(const char *err) {
     if (!err || !err[0]) return NULL;
     /* 规则 0（补分号）要**真的在说分号**，而且不能是"文件到头了"那种 ——
@@ -130,19 +136,48 @@ static inline const CodeFixRule *code_rule_for(const char *err) {
      * 现在收进这个 helper：**一处放**，另一处只调它（也就能用假错误串直接单测）。 */
     if (strstr(err, "expected") && strstr(err, ";") && !strstr(err, "end of input"))
         return &CODE_FIXES[0];
-    for (size_t i = 1; i < CODE_FIX_N; ++i)
-        if (strstr(err, CODE_FIXES[i].err)) return &CODE_FIXES[i];
+    for (size_t i = 1; i < CODE_FIX_N; ++i) {
+        if (!strstr(err, CODE_FIXES[i].err)) continue;
+        /* §6.622 规则 ③（补声明）**只对合法的 ASCII 标识符**成立：
+         * `return 不存在的东西;` 报 `‘不存在的东西’ undeclared` —— 给它补一句
+         * `int 不存在的东西;` 不是"机械修法"，是瞎猜（而且 gcc 真会收下 Unicode 标识符）。
+         * 认不出合法名字就当"没有已知修法"，照实说停手。 */
+        if (strcmp(CODE_FIXES[i].fix, "补声明") == 0) {
+            const char *q = code_quote_at(err);
+            const char *n = q ? q + (q[0] == '\'' ? 1 : 3) : NULL;
+            const char *e = n ? code_quote_at(n) : NULL;   /* ⚠ 必须停在**闭合引号**，不能扫到串尾 */
+            int ascii_ok = (n && e && e > n);
+            for (const char *t = n; ascii_ok && t && t < e; ++t)
+                if (!((*t >= 'A' && *t <= 'Z') || (*t >= 'a' && *t <= 'z') ||
+                      (*t >= '0' && *t <= '9') || *t == '_')) { ascii_ok = 0; break; }
+            if (!ascii_ok) return NULL;
+        }
+        return &CODE_FIXES[i];
+    }
     return NULL;
 }
 
 /* 补声明：在 line 前插一句 `int <name>;`（名字从 `'X' undeclared` 里抠）。
  * 类型只能猜 int —— 猜错就靠下一轮编译错误再修（这就是降级版的代价，不装懂）。 */
+/* §6.622 **引号有两种**：clang 用 ASCII `'name'`，gcc 用 UTF-8 弯引号 `‘name’`。
+ * 只认 ASCII 的话，gcc 上的「补声明」永远抠不出名字（实测 `x = 1;` ⇒ 认得出结论但名字抠不出来）。*/
+static inline const char *code_quote_at(const char *p) {
+    if (!p) return NULL;
+    for (; *p; ++p) {
+        if (*p == '\'') return p;
+        if ((unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80 &&
+            ((unsigned char)p[2] == 0x98 || (unsigned char)p[2] == 0x99)) return p;
+    }
+    return NULL;
+}
+static inline size_t code_quote_len(const char *q) { return (q && *q == '\'') ? 1u : 3u; }
+
 static inline int code_fix_declare(char *src, size_t cap, const char *err, int line) {
     if (!src || !err) return -1;
-    const char *q = strchr(err, '\'');
+    const char *q = code_quote_at(err);
     if (!q) return -1;
-    q++;
-    const char *e = strchr(q, '\'');
+    q += code_quote_len(q);
+    const char *e = code_quote_at(q);
     if (!e || e <= q) return -1;
     char name[64];
     size_t k = 0;
