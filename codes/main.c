@@ -1554,6 +1554,60 @@ static void brain_parts_release(Agent *a) {
     }
 }
 
+/* §6.603 **裁决建议**：一条独占矛盾该怎么撤？（只建议，不下手）
+ * 证据顺序（越靠前越硬）：
+ *   ① 只有一条是**用户教的**（图上有 `[教:…]` 留痕）⇒ 撤另一条（"你教的那条更可信"）；
+ *   ② 否则比**写入序号 `seq`**：后说的算（§6.585 的老规矩）；
+ *   ③ 否则比**命中数**：差 2 倍以上才说话（"证据更少"）；
+ *   ④ 都对不上就说"看不出该撤哪条"（不硬编一个理由）。
+ * 返回要撤的那个 Token（NULL = 不表态），`why` 里写理由。 */
+static Token *contradict_verdict(AI *b, const AipExclConflict *r, char *why, size_t cap) {
+    if (why && cap) why[0] = 0;
+    if (!b || !r) return NULL;
+    Token *A = pool_token_by_id(b->pool, r->a_id);
+    Token *B1 = pool_token_by_id(b->pool, r->b1_id);
+    Token *B2 = pool_token_by_id(b->pool, r->b2_id);
+    if (!A || !B1 || !B2) return NULL;
+    const AssocEntry *e1 = NULL, *e2 = NULL;
+    uint16_t bit = REL_BIT(r->rid);
+    for (size_t i = 0; i < A->count; ++i) {
+        const AssocEntry *e = &token_assocs_ro(A)[i];
+        if (!(e->rel & bit)) continue;
+        if (e->main == B1 && !e1) e1 = e;
+        if (e->main == B2 && !e2) e2 = e;
+    }
+    if (!e1 || !e2) return NULL;
+    /* ① 教学留痕：名字和 `agent_teach_name` 同一份规则 */
+    char mk[160];
+    int t1, t2;
+    agent_teach_name(mk, sizeof mk, A->name ? A->name : "", 0, rel_name_of(b, r->rid),
+                     B1->name ? B1->name : "");
+    { Token *m = pool_find(b->pool, mk); t1 = (m && !m->is_garbage); }
+    agent_teach_name(mk, sizeof mk, A->name ? A->name : "", 0, rel_name_of(b, r->rid),
+                     B2->name ? B2->name : "");
+    { Token *m = pool_find(b->pool, mk); t2 = (m && !m->is_garbage); }
+    if (t1 != t2) {
+        snprintf(why, cap, "你教的那条更可信（%s 有教学留痕）", t1 ? B1->name : B2->name);
+        return t1 ? B2 : B1;
+    }
+    /* ② 写入序号：后说的算 */
+    if (e1->seq != e2->seq) {
+        snprintf(why, cap, "后说的算（写入序号 %u / %u，撤序号小的那条）", e1->seq, e2->seq);
+        return (e1->seq < e2->seq) ? B1 : B2;
+    }
+    /* ③ 命中数：差 2 倍以上才说话 */
+    {
+        uint32_t h1 = e1->hits, h2 = e2->hits;
+        uint32_t hi = h1 > h2 ? h1 : h2, lo = h1 > h2 ? h2 : h1;
+        if (lo == 0 || hi >= lo * 2) {
+            snprintf(why, cap, "证据更少（命中 %u vs %u）", h1, h2);
+            return (h1 < h2) ? B1 : B2;
+        }
+    }
+    snprintf(why, cap, "看不出该撤哪条（教学留痕/写入序号/命中都相当）");
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -4461,12 +4515,29 @@ int main(int argc, char **argv) {
             case CMD_CONTRADICT: {
                 /* §6.602 **全局矛盾清单**（以前只有 `::rel <A>` 一个词能看到 ⚠）*/
                 char first[512];
-                size_t n = aip_check_excl_conflicts(a->brain, first, sizeof first, 8);
+                AipExclConflict recs[8];
+                memset(recs, 0, sizeof recs);
+                /* 一次扫描：既要条数，也要前 8 条的结构化记录（§6.603 的裁决建议要用）*/
+                size_t n = aip_check_excl_conflicts_rec(a->brain, first, sizeof first, 8, recs, 8);
                 if (n == 0) printf("[独占矛盾] 0 条 —— 图上没有「同时属于两个互不包含的类」的词\n");
                 else {
                     printf("[独占矛盾] %zu 条%s\n", n, n > 8 ? "（只列前 8 条）" : "");
-                    printf("  %s\n", first);
-                    printf("  要裁决：说「不对」走追问式改口，或显式说「X 不 R Y」（只撤关系位，共现留着）\n");
+                    /* §6.603 逐条给**裁决建议**（只建议，不下手）*/
+                    for (size_t i = 0; i < 8 && i < n; ++i) {
+                        if (!recs[i].a_id) break;
+                        Token *A = pool_token_by_id(a->brain->pool, recs[i].a_id);
+                        Token *B1 = pool_token_by_id(a->brain->pool, recs[i].b1_id);
+                        Token *B2 = pool_token_by_id(a->brain->pool, recs[i].b2_id);
+                        if (!A || !B1 || !B2) continue;
+                        char why[160];
+                        Token *drop = contradict_verdict(a->brain, &recs[i], why, sizeof why);
+                        printf("  %s %s %s ／ %s\n", A->name, rel_name_of(a->brain, recs[i].rid),
+                               B1->name, B2->name);
+                        if (drop) printf("      → 建议撤「%s」：%s\n", drop->name, why);
+                        else      printf("      → %s\n", why);
+                    }
+                    if (n > 8) printf("  （还有 %zu 条没列）\n", n - 8);
+                    printf("  裁决方式：说「不对」走追问式改口，或显式说「X 不 R Y」（只撤关系位，共现留着）\n");
                 }
                 continue;
             }

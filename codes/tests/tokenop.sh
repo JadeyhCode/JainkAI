@@ -1353,6 +1353,18 @@ grep -qaF '[独占矛盾] 0 条' "$CT/out3.txt" && ! grep -qaF '犬科 ／ 动�
     && ok "**包含关系不算矛盾**（犬科 ⊂ 动物：「::contradict」不把它列成互不包含）" \
     || bad "contradict-包含" "$(grep -a '独占矛盾\|犬科' "$CT/out3.txt" | tail -2 | tr '\n' ' ')"
 
+# §6.603 `::contradict` 的**裁决建议**（只建议不下手）：教学留痕 > 写入序号 > 命中数
+( cd "$CT" && { printf '::notepad off\n::char off\n::askconflict off\n'; printf '::teach 猫 属于 植物\n::contradict\n'; } | \
+    "$WORK/aip" --model m.bin > out4.txt 2>&1 ) || true
+grep -qaF '建议撤「动物」：你教的那条更可信' "$CT/out4.txt" \
+    && ok "裁决建议：**你教的那条更可信**（语料里有 猫 属于 动物，你教了 猫 属于 植物 ⇒ 建议撤动物）" \
+    || bad "verdict-教" "$(grep -a '建议撤\|／' "$CT/out4.txt" | head -2 | tr '\n' ' ')"
+( cd "$CT" && { printf '::notepad off\n::char off\n::askconflict off\n'; printf '::teach 狗 属于 动物\n::teach 狗 属于 植物\n::contradict\n'; } | \
+    "$WORK/aip" --model m.bin > out5.txt 2>&1 ) || true
+grep -qaF '后说的算（写入序号' "$CT/out5.txt" \
+    && ok "裁决建议：**后说的算**（两条都是你教的 ⇒ 按写入序号挑旧的那条撤）" \
+    || bad "verdict-序号" "$(grep -a '建议撤\|／' "$CT/out5.txt" | head -2 | tr '\n' ' ')"
+
 # §6.600 parts 上下文绑定在**某个池**上：换脑/加载模型之前必须先 close（否则 use-after-free）
 PL="$WORK/pl"; rm -rf "$PL"; mkdir -p "$PL"
 cp "$ROOT/model.bin" "$PL/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PL/" 2>/dev/null || true

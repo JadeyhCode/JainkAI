@@ -1311,8 +1311,16 @@ static inline int aip_excl_contained(AI *ai, const Token *x, const Token *y) {
     if (rel_solve_go(ai, x, REL_IS_A, y, 0, &pf, 0, NULL, 0) && pf.status > 0) return 1;
     return 0;
 }
-/* 返回矛盾条数；`first`/`cap` 里放前 `max_want` 条的可读描述。 */
-static inline size_t aip_check_excl_conflicts(AI *ai, char *first, size_t cap, size_t max_want) {
+/* §6.603 一条矛盾的**结构化记录**（给"裁决建议"用：谁跟谁、哪条关系）*/
+typedef struct {
+    uint32_t a_id, b1_id, b2_id;
+    uint8_t  rid;
+} AipExclConflict;
+
+/* 返回矛盾条数；`first`/`cap` 里放前 `max_want` 条的可读描述；
+ * `recs`/`rec_cap` 里追加前若干条的结构化记录（可为 NULL/0）。 */
+static inline size_t aip_check_excl_conflicts_rec(AI *ai, char *first, size_t cap, size_t max_want,
+                                                  AipExclConflict *recs, size_t rec_cap) {
     if (first && cap) first[0] = 0;
     if (!ai || !ai->pool) return 0;
     size_t n = 0;
@@ -1333,6 +1341,12 @@ static inline size_t aip_check_excl_conflicts(AI *ai, char *first, size_t cap, s
                 if (aip_excl_contained(ai, e1->main, e2->main)) continue;
                 if (aip_excl_contained(ai, e2->main, e1->main)) continue;
                 n++;
+                if (recs && n <= rec_cap) {
+                    recs[n - 1].a_id = A->id;
+                    recs[n - 1].b1_id = e1->main->id;
+                    recs[n - 1].b2_id = e2->main->id;
+                    recs[n - 1].rid = rid;
+                }
                 if (n <= max_want && first && cap) {
                     size_t off = strlen(first);
                     if (off + 8 < cap)
@@ -1345,6 +1359,11 @@ static inline size_t aip_check_excl_conflicts(AI *ai, char *first, size_t cap, s
         }
     }
     return n;
+}
+
+/* 兼容入口：只要计数 + 一句可读描述（不要结构化记录）*/
+static inline size_t aip_check_excl_conflicts(AI *ai, char *first, size_t cap, size_t max_want) {
+    return aip_check_excl_conflicts_rec(ai, first, cap, max_want, NULL, 0);
 }
 
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
