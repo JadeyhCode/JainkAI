@@ -1304,6 +1304,21 @@ grep -q '覆盖 1' "$BR/out.txt" \
 grep -q '冲突未写' "$BR/out.txt" && grep -q '强行覆盖' "$BR/out.txt" \
     && ok "两种落法都进了本脑的账（冲突未写 / 强行覆盖）" \
     || bad "冲突-账" "$(grep -E '冲突未写|强行覆盖' "$BR/out.txt" | tr '\n' ' ')"
+# §6.587 分词切歪的整句：**3+ 个单字开头 + 后面才是核心关系词** ⇒ 交给造词路径重拼
+TK="$WORK/tk"; rm -rf "$TK"; mkdir -p "$TK"
+cp "$ROOT/model.bin" "$TK/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TK/" 2>/dev/null || true
+( cd "$TK" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '猫头鹰 怕 光\n猫头鹰 怕 光 吗\n猫 喵 鱼\n猫 喵 鱼 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 猫头鹰 怕 光' "$TK/out.txt" \
+    && ok "切碎的新词主语会**重拼成一个词**再学（猫头鹰，不是 猫 -[头]-> 鹰怕光）" \
+    || bad "整词重拼" "$(grep -a 'AI >' "$TK/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
+    && ok "重拼之后**问得出来**（学得成 → 用得上）" \
+    || bad "整词重拼-回读" "$(grep -a '猫头鹰' "$TK/out.txt" | tail -1)"
+grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
+    && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
+    || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+
 # §6.585 新旧知识冲突：教互不包含的独占事实 ⇒ **冲突可见**（不静默删知识）+ 显式「不」才撤
 LC="$WORK/lc"; rm -rf "$LC"; mkdir -p "$LC"
 cp "$ROOT/model.bin" "$LC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LC/" 2>/dev/null || true
