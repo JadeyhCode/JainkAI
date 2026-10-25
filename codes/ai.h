@@ -1045,6 +1045,11 @@ typedef struct {
     uint32_t mnt_hits[3];
     /* §6.255 指代消解：句首「它/它们/这个/那个」⇒ 换成上一轮的主语 */
     char     last_subject[40];
+    /* §6.582 上一轮**学到**的（主语/关系/宾语）—— `$A/$W/$O` 会话变量的来源。
+     * 原来这三个在 agent.h 里是**全局**的：两个脑在同一线程里轮流用也会串味，
+     * 多线程更是直接竞争（TSan 报 g_lf_a/g_lf_r/g_lf_b）。搬进 AI 之后线程与脑都各有一份。
+     * 只进内存，不进存档（和 last_subject 一样是"会话内"的东西）。 */
+    char     lf_a[40], lf_r[40], lf_b[40];
     /* §6.253 抽象分片：睡眠的"抽象那一步"摊到多轮（每轮扫一段 i） */
     size_t   abs_i;
     size_t   abs_made;
@@ -1266,7 +1271,8 @@ typedef struct {
  * 用法就是一对：`uint64_t t = ai_seg_mark(ai);` 开头，每个段尾 `ai_seg_lap(ai, 段, &t);`。
  * 环境变量只读一次（和别处的开关同一个口径：第一次调用缓存下来）。 */
 static inline int ai_seg_on(void) {
-    static int cached = -1;
+    /* §6.582 只读环境变量的缓存 ⇒ 线程局部（每线程自己读一次 getenv，值一样）*/
+    static AIP_TLS int cached = -1;
     if (cached < 0) { const char *e = getenv("AIP_SEGTIME"); cached = (e && *e == '1') ? 1 : 0; }
     return cached;
 }
@@ -1937,7 +1943,10 @@ static inline AI *ai_new(void) {
 /* §6.191 `frames_free` 在 frame_io.h（本文件之后才包含）⇒ 这里留一个函数指针，
  * main/tools 在包含完 frame_io.h 之后把它指向真正的实现（见 frame_io.h 末尾）。
  * 不直接 #include 是为了保持"ai.h 不依赖 frame 层"这条包含顺序。 */
-static void (*ai_frames_free)(AI *ai) = NULL;
+/* §6.582 这个钩子是**所有线程共用**的（`frames_load` 每次读盘都会挂一遍，值恒等）；
+ * 用原子指针：并发建脑时不再有"写一半被别人读"的竞争。 */
+typedef void (*AiFramesFreeFn)(AI *ai);
+AIP_ATOMIC_PTR(AiFramesFreeFn, ai_frames_free, NULL);
 
 static inline void ai_free(AI *ai) {
     if (!ai) return;
@@ -1960,7 +1969,7 @@ static inline void ai_free(AI *ai) {
     /* §6.191 **帧库也要还**：`frames_load` 每次 calloc 一整个 `FrameSet`（出厂 frames.txt
      * ≈ 900 KB），以前 `ai_free` 只 free 了 AI 自己 ⇒ 每 `::load` 一次泄 900 KB。
      * 这个函数在 frame_io.h（ai.h 之后才被包含）⇒ 这里用**前向声明**的那份（见文件上方）。 */
-    if (ai_frames_free) ai_frames_free(ai);
+    { AiFramesFreeFn ff = AIP_LD(ai_frames_free); if (ff) ff(ai); }
     for (size_t i = 0; i < ai->dynrel_n; ++i) free(ai->dynrel_name[i]);
     free(ai->micro);        /* 微内核状态；内建补丁用静态壳，没有别的分配 */
     free(ai->think);        /* 思维循环状态（议程/未解问题/痕迹） */
@@ -3379,7 +3388,9 @@ typedef struct {
     uint64_t     bg64;                /* §6.210 查询侧字符 bigram 布隆位（64 bit）*/
     uint64_t     cbits[AI_CB_WORDS];  /* §6.136 查询侧 256 位字符集位图（切一次、几千次复用）*/
 } AiCharQueryMemo;
-static AiCharQueryMemo g_charq;
+/* §6.582 **每次问答的字符 bigram 备忘**：原来是一个全局结构 ⇒ 两个线程同时问
+ * 会互相把"上一次的字符表"覆盖掉（TSan 实测 13 处竞争）。线程局部，单线程行为不变。 */
+static AIP_TLS AiCharQueryMemo g_charq;
 
 /* 就绪之后：ca/la_/na/sig 是这次查询的字符切分 */
 static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an) {
@@ -3417,7 +3428,7 @@ static inline int ai_char_query_prep(uint64_t serial, Token *const *a, size_t an
 
 /* `AIP_CHARBG=0` 把字符这一项整条关掉（只做性能标定，不改默认行为）。 */
 static inline int ai_charbg_on(void) {
-    static int on = -1;
+    static AIP_TLS int on = -1;
     if (on < 0) { const char *e = getenv("AIP_CHARBG"); on = (e && *e == '0') ? 0 : 1; }
     return on;
 }
@@ -3500,12 +3511,15 @@ static inline const uint64_t *ai_pair_cb_bits(AI *ai, size_t i);   /* §6.210 �
  * 实测（出厂模型 6701 条）：一对要查 `an + bn` ≈ 9.6 次 idf（其中 `bn` 次是给 `wb` 的，
  * 而 `wb` **从来没被用过** —— 见下面 `ai_sent_score_cov_ex` 里的注释）。
  * 键 = 池序号 + 查询词指针序列 + idf 表（长度/指针都比，idf 重建就作废）。 */
-static float        g_qidf[64];
-static const Token *g_qidf_tok[64];
-static size_t       g_qidf_n;
-static float        g_qidf_wa;
-static size_t       g_qidf_idf_n;
-static const float *g_qidf_idf;
+/* §6.582 打分用的临时表（每次问答重填）⇒ 线程局部。**尤其是 `g_qidf_tok`**
+ * —— 它存的是 `Token*`，全局时会把"我池里的词"泄给别的线程（TSan 报的那处
+ * "heap block ... 另一个线程在 pool_token 里 memcpy 名字"就是它）。 */
+static AIP_TLS float        g_qidf[64];
+static AIP_TLS const Token *g_qidf_tok[64];
+static AIP_TLS size_t       g_qidf_n;
+static AIP_TLS float        g_qidf_wa;
+static AIP_TLS size_t       g_qidf_idf_n;
+static AIP_TLS const float *g_qidf_idf;
 
 static inline void ai_qidf_prep(const AI *ai, Token *const *a, size_t an) {
     if (!ai || !a || an == 0 || an > 64) { g_qidf_n = 0; return; }

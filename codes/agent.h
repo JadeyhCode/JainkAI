@@ -268,16 +268,19 @@ static inline int aip_strip_tail(const char *in, char *out, size_t cap) {
 static char g_shape_l[AIP_SHAPE_MAX][96], g_shape_r[AIP_SHAPE_MAX][96];
 static size_t g_shape_n;
 static int g_pattern_overflow;   /* §6.447 有桶超限时为 1（selfcheck 据此报警）*/
-static char g_pre_rhet[288];     /* §6.448 剥掉反问标记、补 `吗` 之前的文本（复查答复行用）*/
+static AIP_TLS char g_pre_rhet[288];     /* §6.448 剥掉反问标记、补 `吗` 之前的文本（复查答复行用）*/
 /* §6.361 命中计数（探针用；正常路径一次自增） */
-static unsigned long g_shape_hit[AIP_SHAPE_MAX];
+static AIP_TLS unsigned long g_shape_hit[AIP_SHAPE_MAX];
 /* §6.294 **上一轮学到的那条事实**（供数据行做"反过来呢"这类镜像改写）。 */
-static char g_lf_a[40], g_lf_r[40], g_lf_b[40];
-static inline void aip_note_fact(const char *a, const char *r, const char *b) {
-    if (!a || !r || !b) return;
-    snprintf(g_lf_a, sizeof g_lf_a, "%s", a);
-    snprintf(g_lf_r, sizeof g_lf_r, "%s", r);
-    snprintf(g_lf_b, sizeof g_lf_b, "%s", b);
+/* §6.582 上一轮学到的主语/关系/宾语（`$A/$W/$O` 会话变量的来源）——
+ * 原来是**全局**的，所以「两个脑在同一线程里轮流用」也会串味。这一轮搬进 `AI`
+ * （`ai->lf_a/lf_r/lf_b`）：线程与脑都各有一份。 */
+static inline void aip_note_fact(AI *ai, const char *a, const char *r, const char *b) {
+    if (!ai) return;
+    /* §6.582 存在 `AI` 上（不是全局）：多脑/多线程各记各的 */
+    if (a) snprintf(ai->lf_a, sizeof ai->lf_a, "%s", a);
+    if (r) snprintf(ai->lf_r, sizeof ai->lf_r, "%s", r);
+    if (b) snprintf(ai->lf_b, sizeof ai->lf_b, "%s", b);
 }
 
 /* 返回 1 = 命中并写出了新句子 */
@@ -331,9 +334,9 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
     sess[0] = ai->last_subject[0] ? ai->last_subject : NULL;
     sess[1] = ai->last_q_b[0] ? ai->last_q_b : NULL;
     sess[2] = ai->last_q_rid ? rel_name_of(ai, ai->last_q_rid) : NULL;
-    sess[3] = g_lf_a[0] ? g_lf_a : NULL;      /* $A = 上一轮学到的主语 */
-    sess[4] = g_lf_r[0] ? g_lf_r : NULL;      /* $W = 上一轮学到的关系 */
-    sess[5] = g_lf_b[0] ? g_lf_b : NULL;      /* $O = 上一轮学到的宾语 */
+    sess[3] = ai->lf_a[0] ? ai->lf_a : NULL;      /* $A = 上一轮学到的主语 */
+    sess[4] = ai->lf_r[0] ? ai->lf_r : NULL;      /* $W = 上一轮学到的关系 */
+    sess[5] = ai->lf_b[0] ? ai->lf_b : NULL;      /* $O = 上一轮学到的宾语 */
     char lastbuf[32];
     /* §6.478 这里的 12 是**写死的**：`ww[]` 已经放到 AIP_SHAPE_TOK(16)，但只填前 12 个，
      * 14 token 的句子会让 ww[12..13] 保持 NULL ⇒ 后面 strlen(NULL) 段错误。改成跟着宏走。*/
@@ -354,9 +357,8 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
     for (size_t r = 0; r < g_shape_n; ++r) {
         char lbuf[176];
         snprintf(lbuf, sizeof lbuf, "%.175s", g_shape_l[r]);
-        char *lt[AIP_SHAPE_TOK]; size_t nl = 0;
-        for (char *tok = strtok(lbuf, " "); tok && nl < AIP_SHAPE_TOK; tok = strtok(NULL, " "))
-            lt[nl++] = tok;
+        char *lt[AIP_SHAPE_TOK];
+        size_t nl = aip_split_sp(lbuf, lt, AIP_SHAPE_TOK);
         const char *wwx[12];
         const char **wwu = ww;
         if (nl != nn) {
@@ -402,7 +404,10 @@ static inline int aip_shape_rewrite(AI *ai, const char *input, char *out, size_t
         snprintf(rbuf, sizeof rbuf, "%.95s", g_shape_r[r]);
         size_t o = 0;
         int bad = 0;
-        for (char *tok = strtok(rbuf, " "); tok; tok = strtok(NULL, " ")) {
+        char *rtok[64];
+        size_t nrt = aip_split_sp(rbuf, rtok, 64);
+        for (size_t ti = 0; ti < nrt; ++ti) {
+            const char *tok = rtok[ti];
             const char *val = tok;
             if (tok[0] == '$' && (tok[1] == 'S' || tok[1] == 'P' || tok[1] == 'R' ||
                                   tok[1] == 'A' || tok[1] == 'W' || tok[1] == 'O')) {
@@ -445,14 +450,15 @@ static unsigned char g_lead_q[AIP_PAT_MAX];
 static size_t g_lead_n, g_slot_n, g_confuse_n;
 /* §6.513 B5 **外壳的真相在图上**：`词 —[外壳]→ [外壳:标记]` 这样的边。
  * 这里只做一张**缓存**（词名表），池子词数一变就重建 —— 加新外壳 = 建一条边（受审通道），不改代码。 */
-static AipPat g_shell[AIP_PAT_MAX];
-static unsigned char g_shell_q[AIP_PAT_MAX];   /* §6.515：这条外壳是不是**问句框架**（剥完补问号） */
-static size_t g_shell_n;
-static size_t g_shell_poolcnt = (size_t)-1;
+/* §6.582 每个池的壳缓存 + 计数器：问答时会被重建 ⇒ 线程局部（单线程行为不变） */
+static AIP_TLS AipPat g_shell[AIP_PAT_MAX];
+static AIP_TLS unsigned char g_shell_q[AIP_PAT_MAX];   /* §6.515：这条外壳是不是**问句框架**（剥完补问号） */
+static AIP_TLS size_t g_shell_n;
+static AIP_TLS size_t g_shell_poolcnt = (size_t)-1;
 static inline void aip_shell_refresh(const AI *ai) {
     if (!ai || !ai->pool) return;
     /* §6.521 两个判据：池子词数变了 **或** `标外壳` 动过（版本号）。后者管"标记已有词"的情况。 */
-    static size_t epoch_seen = (size_t)-1;
+    static AIP_TLS size_t epoch_seen = (size_t)-1;
     if (ai->pool->count == g_shell_poolcnt && g_shell_epoch == epoch_seen) return;
     g_shell_poolcnt = ai->pool->count;
     epoch_seen = g_shell_epoch;
@@ -503,7 +509,10 @@ static inline void aip_shell_refresh(const AI *ai) {
 static char g_reply_kw[AIP_REPLY_MAX][512];
 static char g_reply_txt[AIP_REPLY_MAX][1024];  /* §6.285/§6.287 长答复（能力清单）曾被 384 静默丢掉 */
 static size_t g_reply_n;
-static int    g_pat_loaded;                 /* 0 = 还没试过；1 = 试过了（失败也置 1） */
+/* §6.582 `g_pat_loaded` 是"表已经装好"的旗子，**跨线程可见** ⇒ 原子。
+ * `g_pat_tried` 是"试过一次了"（失败也不重试），只在锁里读写，不需要原子。 */
+AIP_ATOMIC_INT(g_pat_loaded, 0);
+static int    g_pat_tried;
 
 /* §6.371 **加载自检**：文件里有多少行、实际进表多少行，对不上就喊。
  * 为什么要有：`[reply]` 的关键词串 128 字节上限、以及各种"太长/超上限"的 continue，
@@ -701,9 +710,18 @@ static inline void aip_shell_mirror_lead(AI *ai) {
                 g_lead_n, made);
 }
 
-static inline void aip_patterns_load(AI *ai) {
-    if (g_pat_loaded) return;
-    g_pat_loaded = 1;
+/* §6.582 **懒加载要能并发**：`patterns.txt` 那几桶是进程级共享表，第一次问答时才会读。
+ * 以前 `g_pat_loaded` 是"进门就置 1"的裸标志 ⇒ 两个线程同时冷启动会一个在读文件、
+ * 另一个已经把半空的表当加载完了。现在：
+ *   · 一把自旋锁把"读文件 + 填表"整段关住（临界区长，但一辈子只走一次）；
+ *   · `g_pat_loading` 是**线程局部**的重入闸：加载过程中万一递归回来（数据里的 case），
+ *     直接返回（和原来"置 1 后重进就返回"的行为一致），不会自锁死。 */
+AIP_LOCK_DECL(g_pat_lk);
+static AIP_TLS int g_pat_loading;
+
+static inline void aip_patterns_body(AI *ai) {
+    if (g_pat_tried) return;
+    g_pat_tried = 1;
     /* §6.306 **数据消融开关**：`AIP_NODATA=1` 时不读 patterns.txt（所有桶为空）；
      * §6.333 `AIP_NODATA=<桶名>`（lead/slot/confuse/reply/shape/syn/affix）只关掉**那一桶**，
      * 用来量"每个族各贡献多少"——不是运行开关。 */
@@ -834,9 +852,8 @@ if (!ai) continue;              /* dump 工具传 NULL：不生成变体（要�
             {
                 char buf[sizeof g_shape_l[0]];
                 snprintf(buf, sizeof buf, "%s", g_shape_l[g_shape_n - 1]);
-                char *toks[12]; size_t nt = 0;
-                for (char *tk = strtok(buf, " "); tk && nt < 12; tk = strtok(NULL, " "))
-                    toks[nt++] = tk;
+                char *toks[12];
+                size_t nt = aip_split_sp(buf, toks, 12);
                 for (size_t j = 0; j < nt && g_shape_n < AIP_SHAPE_MAX; ++j) {
                     if (toks[j][0] == '$') continue;
                     size_t L = strlen(toks[j]);
@@ -1315,6 +1332,19 @@ static inline void aip_patterns_report(void) {
             g_lead_n, g_slot_n, g_confuse_n, g_reply_n);
 }
 
+
+static inline void aip_patterns_load(AI *ai) {
+    if (AIP_LD(g_pat_loaded)) return;
+    if (g_pat_loading) return;                 /* 本线程正在装：递归进来直接走（同旧语义）*/
+    g_pat_loading = 1;
+    aip_lock(&g_pat_lk);
+    aip_patterns_body(ai);
+    /* **装完才立旗**（这是并发下最关键的一步）：旗子先立、表后填的话，
+     * 另一个线程会看到"已加载"然后读到半空的表（TSan 在 g_alias_* 上抓到过）。 */
+    AIP_ST(g_pat_loaded, 1);
+    aip_unlock(&g_pat_lk);
+    g_pat_loading = 0;
+}
 /* 前缀命中：返回匹配长度（0 = 没中）。 */
 /* §6.374 **最长匹配**：`请问一下` 必须先于 `请问` 命中。
  * 第一版按数组顺序取第一个匹配 ⇒ `请问一下猫会飞` 被 `请问` 抢先剥成「一下猫会飞」，
@@ -1387,14 +1417,14 @@ static inline int aip_kw_line_match(const char *line, const char *b);
 /* [reply] 桶：关键词行命中就回后面那句话（行语法见 aip_kw_line_match）。 */
 /* §6.357 **行使用计数**（只给探针工具用）：哪条 `[reply]` 真的命中过。
  * 用途：找出"从没被任何测例命中"的行（冗余/过拟合嫌疑）。运行时零开销（一次自增）。 */
-static unsigned long g_reply_hit[AIP_REPLY_MAX];
+static AIP_TLS unsigned long g_reply_hit[AIP_REPLY_MAX];
 
 /* §6.420 **答复来源标签**：给每次 `agent_step` 的最终答复标一个**代码路径**。
  * 为什么需要：§6.419 试过按答复文本猜来源，一条正则就让"边界声明"从 31% 跳到 58% —— 不可靠。
  * 只有路径自己知道答案是从哪来的（reply 桶 / 自我路由 / 裸回话 / 关系层 / 生成兜底）。*/
 enum { AI_SRC_OTHER = 0, AI_SRC_REPLY, AI_SRC_SELF, AI_SRC_BARE, AI_SRC_RELATION,
        AI_SRC_FALLBACK, AI_SRC_FRAME, AI_SRC_RETRIEVAL, AI_SRC_NOTE };
-static int g_last_src = AI_SRC_OTHER;
+static AIP_TLS int g_last_src = AI_SRC_OTHER;
 static const char *const g_src_names[] = { "other", "reply", "self", "bare", "relation",
                                            "fallback", "frame", "retrieval", "note" };
 static inline const char *ai_src_name(int s) {
@@ -2603,10 +2633,10 @@ static inline int agent_rewrite_ellipsis(const AI *ai, const char *in, char *out
     char fb_b[40];
     fb_b[0] = 0;
     if (!rid_eff || !b_eff[0]) {
-        if (!g_lf_r[0] || !g_lf_b[0]) return 0;
-        rid_eff = rel_id_of((AI *)ai, g_lf_r, 0);
+        if (!ai->lf_r[0] || !ai->lf_b[0]) return 0;
+        rid_eff = rel_id_of((AI *)ai, ai->lf_r, 0);
         if (!rid_eff) return 0;
-        snprintf(fb_b, sizeof fb_b, "%s", g_lf_b);
+        snprintf(fb_b, sizeof fb_b, "%s", ai->lf_b);
         b_eff = fb_b;
         neg_eff = 0;
     }
@@ -2979,8 +3009,8 @@ static inline char *agent_conj_both(AI *ai, char *const *w0, size_t n0, int *out
         if (B) wb = (ai_write_rel(ai, B, C, rid, 0, AI_WSRC_RELATION) == 0);
         if (!wa && !wb) return NULL;
         ai->n_rel_learned++;
-        if (wa) aip_note_fact(aw, rw, cw);
-        else    aip_note_fact(bw, rw, cw);
+        if (wa) aip_note_fact(ai, aw, rw, cw);
+        else    aip_note_fact(ai, bw, rw, cw);
         if (wa && wb) {
             const char *t = ai_say_tpl("学习.并列");   /* §6.546 */
             der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 和 $2 都 $3 $4", aw, bw, rw, cw, NULL);
@@ -3315,7 +3345,7 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
         }
         if (!learned) return NULL;
         ai->n_rel_learned++;
-        aip_note_fact(aw, words[1], items[0]);
+        aip_note_fact(ai, aw, words[1], items[0]);
         if (skipped) {
             const char *t = ai_say_tpl("学习.半知");   /* §6.546 */
             der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 $2 $3（$4 我 还 不 认识）",
@@ -3717,7 +3747,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     if (ai_write_rel(ai, ta, tb, rid, neg, AI_WSRC_RELATION) != 0) return NULL;
     ai->n_rel_learned++;
     ai->n_learned++;
-    aip_note_fact(ta->name, words[ri], tb->name);
+    aip_note_fact(ai, ta->name, words[ri], tb->name);
     char resp0[192];
     {
         const char *t = ai_say_tpl("学习.新词");
@@ -7090,7 +7120,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
          * 放在这里（所有路径之前、一处）比在每个学习/答复路径里分别记可靠 ——
          * 实测「猫属于动物」走的是"我知道"那条答复路径，学习路径根本没跑。 */
         if (rp && !q2 && rid2 && aw2 && bw2) {
-            aip_note_fact(aw2, rw2 ? rw2 : "属于", bw2);
+            aip_note_fact(ai, aw2, rw2 ? rw2 : "属于", bw2);
             /* §6.304 **陈述句也更新"上一句语境"**：否则「猫属于动物 / 狗属于动物 /
              * 鲸鱼属于哺乳动物 / 那鲸鱼呢」会用**很久以前**的问句（狗属于动物）补全，
              * 补成「鲸鱼 属于 动物」——实测就是这么错的。最近的这一轮说了什么，就用什么。 */

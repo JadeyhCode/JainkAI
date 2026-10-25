@@ -915,10 +915,20 @@ static inline void pool_hash_insert(TokenPool *p, Token *t) {
 /* ============================ 池 ============================ */
 
 static inline TokenPool *pool_new(void) {
+    /* §6.582 池序号是**跨线程共享**的自增计数（`::brain fork` 可能在别的线程建脑）
+     * ⇒ 用原子自增；单线程下和以前完全一样（1,2,3…）。 */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    static _Atomic uint64_t g_pool_serial = 0;
+#else
     static uint64_t g_pool_serial = 0;
+#endif
     TokenPool *p = (TokenPool *)calloc(1, sizeof(TokenPool));
     if (!p) return NULL;
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    p->serial = atomic_fetch_add_explicit(&g_pool_serial, 1u, memory_order_relaxed) + 1u;
+#else
     p->serial = ++g_pool_serial;
+#endif
     p->perspective_root = (PerspectiveNode *)calloc(1, sizeof(PerspectiveNode));
     if (!p->perspective_root) { free(p); return NULL; }
     p->perspective_root->who = NULL;
@@ -1280,8 +1290,10 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
  * `g_obs_revised` 是「刚刚那次 tag 是不是改了口」的一次性标志：
  * 调用方（agent_learn_relation）落完观测立刻读它，据此换一句确认话。
  * 和 g_rel_ignore_derived 一样是模块级约定 —— 单线程、单次调用即读即清。 */
-static int g_obs_revise  = 1;   /* 默认开 */
-static int g_obs_revised = 0;   /* 这一次 tag 改口了吗（tag 入口先清 0） */
+static int g_obs_revise  = 1;   /* 默认开（配置：只在开线程前改）*/
+/* §6.582 每轮问答的**一次性标志**（tag 里置、学习那条路立刻读）⇒ 线程局部。
+ * 单线程语义不变；多线程不再互相把"改口了吗"读成别人的。 */
+static AIP_TLS int g_obs_revised = 0;
 
 /* 给 a→b 打上语义关系（边不存在就先建）。
  * 和 token_tag_full 分开，是因为「出处角色」和「语义关系」是两件事：
@@ -1741,6 +1753,23 @@ static inline void emb_randvec(uint32_t id, int8_t *out) {
      * 4.4 万边 ≈ 170 ms）。改成**查表按字节写**：256 种字节 → 8 个 ±1，
      * 每个 64 位字 memcpy 8 次。取值与逐位写法**完全一样**（同一个 z、同一个位序）。 */
     static int8_t tab[256][8];
+    /* §6.582 这张表是**一次初始化、之后只读**的：多线程同时首次调用会竞争
+     * （TSan 在冷启动那条路上抓到 `tab_ready`）。用 原子标志 + 锁 做 once：
+     * 初始化好之后快路径只有一次 acquire 读，不加锁。 */
+#if AIP_HAS_ATOMICS
+    static _Atomic int tab_ready = 0;
+    if (!atomic_load_explicit(&tab_ready, memory_order_acquire)) {
+        static AipLock tab_lk = AIP_LOCK_INIT(f);
+        aip_lock(&tab_lk);
+        if (!atomic_load_explicit(&tab_ready, memory_order_relaxed)) {
+            for (int v = 0; v < 256; ++v)
+                for (int b = 0; b < 8; ++b)
+                    tab[v][b] = (int8_t)(((v >> b) & 1) ? 1 : -1);
+            atomic_store_explicit(&tab_ready, 1, memory_order_release);
+        }
+        aip_unlock(&tab_lk);
+    }
+#else
     static int tab_ready = 0;
     if (!tab_ready) {
         for (int v = 0; v < 256; ++v)
@@ -1748,6 +1777,7 @@ static inline void emb_randvec(uint32_t id, int8_t *out) {
                 tab[v][b] = (int8_t)(((v >> b) & 1) ? 1 : -1);
         tab_ready = 1;
     }
+#endif
     uint64_t x = 0x9E3779B97F4A7C15ULL ^ ((uint64_t)id * 0xBF58476D1CE4E5B9ULL);
     for (size_t i = 0; i < EMB_DIM; i += 64) {
         x += 0x9E3779B97F4A7C15ULL;

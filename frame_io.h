@@ -13,7 +13,7 @@ static inline void frames_free(AI *ai);   /* 前置：下面 frames_load 里要�
 static inline size_t frames_load(AI *ai, const char *path) {
     /* §6.191 挂上释放钩子：`ai_free()` 在 ai.h 里（比这个文件早），它通过函数指针
      * 调这里的 `frames_free` —— 否则每 `::load` 一次就泄一整个 FrameSet（≈900 KB）。 */
-    ai_frames_free = frames_free;
+    AIP_ST(ai_frames_free, frames_free);   /* §6.582 原子写（并发建脑时不再竞争）*/
     if (!ai || !path) return 0;
     FrameSet *fs = (FrameSet *)ai->frames;
     if (!fs) {

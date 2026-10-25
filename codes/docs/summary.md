@@ -110,6 +110,7 @@ A 里 21 条"诚实未知"，换成 3 种问法再问：13 条能答，但来源
 | **多智能体第一刀**（§6.564）| ✅ 地基（A 共存 / B 各记各的账 / C 指针标签）| 新套件 `multiagent` 32 项全过；整包 **46/46**；`probematrix` 28 行 diff 为空 |
 | **C 腿第 1 步：边数组收口**（§6.565）| ✅（171 处搬运，零行为变化）| 新套件 `assocaudit`；整包 **47/47**；`probematrix` 28 行 diff 为空；已走访问器 184 处 |
 | **C 腿第 2 步：边放磁盘、按需读回**（§6.566）| ✅ 跑通（只卸边）| 新套件 `partprobe` 24 项；整包 **48/48**；`probematrix` 28 行 diff 为空；`n_loads < 卸下词数` |
+| **并发：TLS + 原子共享层 + TSan 零竞争**（§6.582）| ✅ 进程内（跨进程文件锁还没做）| 并行答案逐字节==串行；**加速 2.82–2.95x**；TSan 0 竞争；新增 `conc`/`conc_tsan` 两套；整包 **53/53**；`probematrix` diff 为空 |
 | **池级共享：emb 引用计数 + 写前复制**（§6.581）| ✅ 能共享的那块（边仍各一份）| 1199 词×1024B=每脑 1227776B；三脑省 2455552B；fork +0.16s；`::brain fork`；新套件 `poolshare` 18 项；tokenop 320；整包 **51/51**；`probematrix` diff 为空 |
 | **跨脑知识语义：照抄+本地优先+冲突可见**（§6.580）| ✅（`force` 覆盖 / `check` 干跑；独占冲突并列不撤回）| 新套件 `xbrain` 48 项；tokenop 317 项；整包 **50/50**；顺手修"旧 replay 字段错位⇒空转"的老 bug；`probematrix` 28 行 diff 为空 |
 | **目标对账（四子句）**（§6.579）| ✅ 实现+证据齐；5 条局限已列 | 49/49、selfcheck、asan(90)、patcount、bucketload、assocaudit 全 PASS；`probematrix` 28 行 diff 为空 |

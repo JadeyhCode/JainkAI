@@ -93,6 +93,16 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z185. 并发：线程局部暂存 + 原子共享层 + TSan 零竞争（§6.582）
+- `conc.h`（`AIP_TLS` / `AipLock` 自旋锁 / `AIP_ATOMIC_*` / `aip_split_sp`），**不链 pthread**，默认构建命令行不变。
+- 88 个文件级 `static` 分四类（数据表共享 / 每次调用的暂存 TLS / 共享结构原子锁 / CLI 级不动）；
+  `g_lf_*` 迁入 `AI`；`strtok`→`aip_split_sp`（3 处）；懒加载"装完才立旗"+锁；`emb_randvec` 查表 once。
+- 判据：并发探针 `concprobe` **9 项 + 冷启动 2 项**（并行答案逐字节等于串行；**加速 2.82–2.95x**；
+  共享层并发读/重建/并发释放后表归零）；`tests/conc_tsan.sh` **0 竞争**；整包 **53/53**；
+  `probematrix` diff 为空；asan(90) 干净。
+- 边界：数据表仍是进程级只读契约；配置开关在开线程后改会竞争；单脑仍一次一句；
+  **跨进程没有文件锁**（下一步）；TSan 只在 Linux x86-64/gcc11 验过。
+
 ## 4z184. 池级共享：emb 引用计数共享 + 写前复制（§6.581）
 - `share.h`（`aip_buf_share/own/release/refs`，静态线性表 8192 块，表满即拒绝共享）、
   `token.h` `pool_share_emb`（先验同一张图：个数/顺序/id/名字）、`pool_free` 改成 `aip_buf_release`、

@@ -1354,21 +1354,32 @@ struct ThinkMech {
 };
 
 static ThinkMech g_think_mech[THINK_MECH_MAX];
-static size_t    g_think_mech_n = 0;
+/* §6.582 机制表是**进程级共享**（一次注册、四处读）：长度用原子；注册与初始化各一把锁。 */
+AIP_ATOMIC_SIZE(g_think_mech_n, 0);
+AIP_LOCK_DECL(g_think_mech_lk);
+AIP_LOCK_DECL(g_think_mech_init_lk);
+AIP_ATOMIC_INT(g_think_mech_inited, 0);
 
 static inline const ThinkMech *think_mech_by_index(size_t i) {
-    return i < g_think_mech_n ? &g_think_mech[i] : NULL;
+    return i < AIP_LD(g_think_mech_n) ? &g_think_mech[i] : NULL;
 }
-static inline size_t think_mech_count(void) { return g_think_mech_n; }
+static inline size_t think_mech_count(void) { return AIP_LD(g_think_mech_n); }
 
 /* 注册一条机制。同名不重复注册（幂等）。返回下标，-1 失败。 */
 static inline int think_mech_register(const ThinkMech *m) {
     if (!m || !m->name || !m->process) return -1;
-    for (size_t i = 0; i < g_think_mech_n; ++i)
-        if (strcmp(g_think_mech[i].name, m->name) == 0) return (int)i;
-    if (g_think_mech_n >= THINK_MECH_MAX) return -1;
-    g_think_mech[g_think_mech_n] = *m;
-    return (int)g_think_mech_n++;
+    aip_lock(&g_think_mech_lk);
+    int ret = -1;
+    size_t n = AIP_LD(g_think_mech_n);
+    for (size_t i = 0; i < n; ++i)
+        if (strcmp(g_think_mech[i].name, m->name) == 0) { ret = (int)i; goto out; }
+    if (n >= THINK_MECH_MAX) goto out;
+    g_think_mech[n] = *m;
+    AIP_ST(g_think_mech_n, n + 1);
+    ret = (int)n;
+out:
+    aip_unlock(&g_think_mech_lk);
+    return ret;
 }
 
 /* ---- 机制①：换问法 ----
@@ -1442,7 +1453,7 @@ static inline int think_mech_thr_expand(AI *ai, Think *t, const ThinkGoal *g) {
         if (!cands[i] || cands[i] == g->a || cands[i] == g->b) continue;
         /* 找到本机制在注册表里的下标（扩压出来的目标要带着它去调度） */
         int idx = -1;
-        for (size_t k = 0; k < g_think_mech_n; ++k)
+        for (size_t k = 0; k < AIP_LD(g_think_mech_n); ++k)
             if (strcmp(g_think_mech[k].name, "经由中间词") == 0) { idx = (int)k; break; }
         if (idx < 0) break;
         if (!think_goal_push_mech(t, idx, TG_THROUGH, g->a, g->b, g->rid, 0, g->depth + 1))
@@ -1531,7 +1542,13 @@ static inline void think_mech_builtin(void) {
         (void)think_mech_register(&builtin[i]);
 }
 static inline void think_mech_init(void) {
-    if (g_think_mech_n == 0) think_mech_builtin();
+    if (AIP_LD(g_think_mech_inited)) return;      /* 快速路径：原子读，不加锁 */
+    aip_lock(&g_think_mech_init_lk);
+    if (!AIP_LD(g_think_mech_inited)) {
+        think_mech_builtin();                     /* 里面每条 register 各自上锁 */
+        AIP_ST(g_think_mech_inited, 1);
+    }
+    aip_unlock(&g_think_mech_init_lk);
 }
 
 /* 分解：够不着就拆子目标压回议程 —— 这是「循环」而不是「并列试四种」。
@@ -2236,15 +2253,18 @@ static inline void think_open_done(Think *t, ThinkOpen *o) {
 #endif
 
 /* -1 = 还没定过；0 = 关（默认）；1 = 开。环境变量与 `::selfgoal on` 都写这一个。 */
-static int g_think_selfgoal = -1;
+/* §6.582 这是个**开关**（CLI 的 `::selfgoal on` 会改它，工作线程要看见）⇒ 原子 int。 */
+AIP_ATOMIC_INT(g_think_selfgoal, -1);
 static inline int think_selfgoal_on(void) {
-    if (g_think_selfgoal < 0) {
+    int v = AIP_LD(g_think_selfgoal);
+    if (v < 0) {
         const char *e = getenv("AIP_SELFGOAL");
-        g_think_selfgoal = (e && *e == '1') ? 1 : 0;
+        v = (e && *e == '1') ? 1 : 0;
+        AIP_ST(g_think_selfgoal, v);
     }
-    return g_think_selfgoal;
+    return v;
 }
-static inline void think_set_selfgoal(int on) { g_think_selfgoal = on ? 1 : 0; }
+static inline void think_set_selfgoal(int on) { AIP_ST(g_think_selfgoal, on ? 1 : 0); }
 
 static inline size_t think_selfgoal(AI *ai) {
     Think *t = think_of(ai);

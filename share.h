@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "conc.h"      /* §6.582 自旋锁：共享表必须锁（多线程并发释放会双释放）*/
 
 /* 最多同时共享多少块。出厂图 1469 词 ⇒ 全共享也只有 1469 块；8192 够 5 个脑。
  * 满了就返回"没共享成"，调用方照旧各持一份（正确性不受影响）。 */
@@ -41,6 +42,11 @@ typedef struct {
 
 static AipBufRef g_bufref[AIP_BUF_MAX];
 static size_t    g_bufref_n = 0;
+/* §6.582 这张表是**跨线程共享的可变结构**（`::brain fork` 出来的脑可能在不同线程里
+ * 读/写前复制/释放）。没有锁的时候 TSan 报 `g_bufref`/`g_bufref_n` 竞争，
+ * 而且真的会双释放：两个线程都看到"计数=2"，各自以为"对方是唯一所有者"。
+ * 临界区只有几次内存读写 ⇒ 自旋锁合适。 */
+AIP_LOCK_DECL(g_bufref_lk);
 
 /* 线性查找。块数最多几千、操作只在"共享 / 写前复制 / 释放"时发生（不是热路径），
  * 所以刻意不用哈希：少一张表就少一类 bug（碰撞、扩容、墓碑）。 */
@@ -62,39 +68,52 @@ static inline void aip_buf_drop(AipBufRef *e) {
 
 /* 现在有几个人指着（不在表里 = 1，即"私有"；p 为 NULL 也给 1，调用方自己判空） */
 static inline uint32_t aip_buf_refs(const void *p) {
+    aip_lock(&g_bufref_lk);
     AipBufRef *e = aip_buf_slot((void *)p);
-    return e ? e->n : 1u;
+    uint32_t n = e ? e->n : 1u;
+    aip_unlock(&g_bufref_lk);
+    return n;
 }
 
 /* 共享一块：返回同一个指针（方便写 `t->x = aip_buf_share(t->x)`）。
  * 表满 / p 为空 ⇒ 原样返回（调用方**不会**因此变错，只是没省到内存）。 */
 static inline void *aip_buf_share(void *p) {
     if (!p) return NULL;
+    aip_lock(&g_bufref_lk);
     AipBufRef *e = aip_buf_slot(p);
-    if (e) { e->n++; return p; }
-    if (g_bufref_n >= AIP_BUF_MAX) return p;
+    if (e) { e->n++; aip_unlock(&g_bufref_lk); return p; }
+    if (g_bufref_n >= AIP_BUF_MAX) { aip_unlock(&g_bufref_lk); return p; }
     g_bufref[g_bufref_n].p = p;
     g_bufref[g_bufref_n].n = 2;      /* 我 + 原来那个人 */
     g_bufref_n++;
+    aip_unlock(&g_bufref_lk);
     return p;
 }
 
 /* 放手：计数归零才 free。**没在表里 = 私有 ⇒ 直接 free**（所有权的两态很干净）。 */
 static inline void aip_buf_release(void *p) {
     if (!p) return;
+    aip_lock(&g_bufref_lk);
     AipBufRef *e = aip_buf_slot(p);
-    if (!e) { free(p); return; }
-    if (e->n > 2) { e->n--; return; }
+    if (!e) { aip_unlock(&g_bufref_lk); free(p); return; }
+    if (e->n > 2) { e->n--; aip_unlock(&g_bufref_lk); return; }
     /* 只剩两个人里的一个放手 ⇒ 另一个变成唯一所有者（退出表，之后由它 release 时 free）*/
     aip_buf_drop(e);
+    aip_unlock(&g_bufref_lk);
 }
 
 /* 要写了：是共享的就先复制一份自己的；返回**可以写**的指针（可能是新的）。
  * `bytes` 是这块的字节数（emb = EMB_DIM）。分配失败返回 NULL（调用方必须判）。 */
 static inline void *aip_buf_own(void *p, size_t bytes) {
     if (!p) return NULL;
-    AipBufRef *e = aip_buf_slot(p);
-    if (!e) return p;                 /* 私有：直接写 */
+    /* 只问"在不在表里"，**不把表里的指针带到锁外**（解锁之后它可能被搬移/删除）。
+     * 安全性：只要还有人指着这块，它就不会被 free —— 表里最后两个人里走一个时
+     * 只是"退出表"（另一个变成唯一所有者），所以这里 `memcpy` 期间那块内存一定还有效。 */
+    int shared;
+    aip_lock(&g_bufref_lk);
+    shared = aip_buf_slot(p) != NULL;
+    aip_unlock(&g_bufref_lk);
+    if (!shared) return p;            /* 私有：直接写 */
     void *q = malloc(bytes);
     if (!q) return p;                 /* 分配不出来就**放弃写前复制**（宁可共享着写，也别丢数据）*/
     memcpy(q, p, bytes);
@@ -103,10 +122,17 @@ static inline void *aip_buf_own(void *p, size_t bytes) {
 }
 
 /* 诊断：现在共享了多少块 / 一共多少字节（每块 bytes_per 由调用方给）*/
-static inline size_t aip_buf_shared_count(void) { return g_bufref_n; }
+static inline size_t aip_buf_shared_count(void) {
+    aip_lock(&g_bufref_lk);
+    size_t n = g_bufref_n;
+    aip_unlock(&g_bufref_lk);
+    return n;
+}
 static inline size_t aip_buf_shared_bytes(size_t bytes_per) {
+    aip_lock(&g_bufref_lk);
     size_t b = 0;
     for (size_t i = 0; i < g_bufref_n; ++i) b += bytes_per * (size_t)(g_bufref[i].n - 1u);
+    aip_unlock(&g_bufref_lk);
     return b;                         /* 只算"省下来的那份"（n-1 份）*/
 }
 
