@@ -88,7 +88,8 @@ partprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_partprobe tools/partprobe.c -l
 # §6.580 跨脑知识语义：照抄（确定性迁移）/ 本地优先 + 冲突可见 / force 覆盖 vs 并列
 xbrain|gcc -std=c11 -O2 -Wall -Wextra -o build_xbrain tools/xbrain.c -lm && ./build_xbrain > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.582 并发：4 线程各一个脑并行问答，结果**逐字节等于串行**；共享层多线程读/重建/并发释放
-conc|gcc -std=c11 -O2 -Wall -Wextra -o build_concprobe tools/concprobe.c -lm -pthread && ./build_concprobe model.bin > ctest.log 2>&1 && ./build_concprobe model.bin --teach >> ctest.log 2>&1; rc=$?; tail -7 ctest.log; [ "$rc" -eq 0 ]
+# §6.625 失败时**打全日志**（以前只 tail -7，红的时候看不到是哪一项 —— 第 46 轮就吃了这个亏）
+conc|gcc -std=c11 -O2 -Wall -Wextra -o build_concprobe tools/concprobe.c -lm -pthread && ./build_concprobe model.bin > ctest.log 2>&1 && ./build_concprobe model.bin --teach >> ctest.log 2>&1; rc=$?; if [ "$rc" -eq 0 ]; then tail -7 ctest.log; else cat ctest.log; fi; [ "$rc" -eq 0 ]
 # §6.588 「教了就忘」回归：教 10 条 → 60 轮维护（巩固/衰减/GC）→ 一条不少、都问得出来、存读还在
 durable|gcc -std=c11 -O2 -Wall -Wextra -o build_durableprobe tools/durableprobe.c -lm && ./build_durableprobe model.bin > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.585 交互学习可用性：教新词/嵌套不误撤/互不包含撤旧并说清/极性改口/存读还在

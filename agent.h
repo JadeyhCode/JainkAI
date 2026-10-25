@@ -3819,10 +3819,9 @@ static inline int agent_attr_teach(AI *ai, char *const *words, size_t n, char *o
                                  "他们", "她们", "它们", "自己", NULL };
     for (size_t i = 0; pro[i]; ++i) if (!strcmp(words[0], pro[i])) return 0;
     if (!agent_subj_ok(words[0])) return 0;
-    const char *t = ai_say_tpl("学习.属性学不进");
-    const char *const a[2] = { words[0], words[2] };
-    der_filln(out, cap, t ? t : "「$1 很 $2」这 种 属性 我 现在 学 不 进 —— 我 只 认 A 关系 B", a, 2);
-    return 1;
+    /* §6.623 学不进就**不抢**（返回 0）——把话留给聊天/生成那条路。
+     * 以前这里直接回「属性我学不进」，结果 `今天 很 热` 这种**普通聊天**也被这句顶掉（实测）。 */
+    return 0;
 }
 
 /* §6.605 **标点不该参与"A R B"的切分**（用户打字本来就带标点）：
