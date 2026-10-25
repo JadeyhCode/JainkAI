@@ -999,6 +999,8 @@ static inline int rel_cw_ok(const AI *ai, const Token *a) {
     return 0;
 }
 
+static inline int token_has_attr_quantity(const Token *A, const Token *B);   /* §6.592 */
+
 static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token *b,
                                int want_neg, Proof *pf, int depth,
                                const Token **seen, size_t n_seen) {
@@ -1016,10 +1018,23 @@ static inline int rel_solve_go(AI *ai, const Token *a, uint8_t rid, const Token 
          * 假设也不算 —— 假设不是知识） */
         d_pos = rel_direct_review(a, rid, b, 0);
         d_neg = rel_direct_review(a, rid, b, 1);
+        /* §6.592 复核（"缓存要跟着前提走"用的就是这条路）也要认数量宾语 ——
+         * 否则下面那条 `rel_solve_ignoring_caches` 会把数量规则判成"没依据"而把 d_pos 打回 0
+         * （实测：问数目答得出、问"有没有"却回"我不太确定"）。 */
+        if (rid == REL_HAS && !d_pos && token_has_attr_quantity(a, b)) d_pos = 1;
     } else {
         d_pos = rel_direct_as(a, rid, b, &kn_pos) || rel_direct_h(ai, a, rid, b, &hy_pos);
         d_neg = rel_direct_neg_as(a, rid, b, &kn_neg) ||
                 rel_direct_neg_h(ai, a, rid, b, &hy_neg);
+    }
+    /* §6.592 **数量宾语蕴含属性**：`A 有 四个轮子` ⇒「A 有 轮子」为真（只对 REL_HAS）。
+     * 放在求解器的"直接事实"这一层 ⇒ 答复路径和推理走同一个判据，
+     * 不会出现"问数目答得出、问有没有却说不知道"的分裂。 */
+    if (rid == REL_HAS && !d_pos && token_has_attr_quantity(a, b)) {
+        /* 这是**蕴含**（一条真事实 + 数量宾语），不是"缓存" ⇒ 别把 `kn_pos` 立起来：
+         * 立起来会被当成 DER_KNOWN 去"独立重推"，而那条边在图里并不存在 ⇒ 判成缺口。
+         * 让验证器按 DER_FACT + 同一判据（`derive.h` 里那条）复核。 */
+        d_pos = 1;
     }
     /* **缓存要跟着前提走**：一条推出来沉淀的边，只有在「把它排除在外还推得出来」
      * 的时候才算数。前提被推翻 / 被撤 / 自己也是缓存而它的依据没了 ——
@@ -1483,11 +1498,62 @@ static inline int rel_is_classifier(const char *w) {
     return 0;
 }
 
+/* §6.592 **数量宾语里的常见度量词**（`三 条 腿` / `五 头 牛`）：和 §6.164 剥量词用的
+ * `rel_is_classifier` 分开 —— 那条判据只认"一种/个/只/种/样"，改它会动到既有形状判定。
+ * 这里只用于"宾语是 数词+量词+名词"的**放行**判断。 */
+static inline int rel_is_measure_extra(const char *w) {
+    if (!w) return 0;
+    static const char *const m[] = { "条", "头", "匹", "张", "件", "台", "把", "根", "片",
+                                     "块", "双", "对", "群", "些", "斤", "米", "岁", "次",
+                                     "天", "年", "月", "日", "度", "元", "名", "位", "步",
+                                     "层", "间", "本", "支", "枝", "颗", "粒", "滴", "杯",
+                                     "碗", "盘", "句", "声", "遍", "趟", "场", "份", "套",
+                                     NULL };
+    for (size_t i = 0; m[i]; ++i) if (!strcmp(w, m[i])) return 1;
+    return 0;
+}
+
 /* §6.164 **数词**（`一 只 猫` 里的 `一`）—— 和量词一起剥。只收最常见的几个。 */
 static inline int rel_is_numeral(const char *w) {
     if (!w) return 0;
     return !strcmp(w, "一") || !strcmp(w, "两") || !strcmp(w, "二") ||
            !strcmp(w, "三") || !strcmp(w, "几") || !strcmp(w, "半");
+}
+
+/* §6.592 **数量宾语蕴含属性**：`A 有 三个角` 存的宾语是「三个角」⇒「A 有 角」也为真。
+ * 判据：宾语名以 B 结尾，前缀是 **数词 + 量词**（`三个`/`四条`）。
+ * ⚠ 量词必须在表里：`猫 有一身毛` 的「身」不算量词 ⇒ 不会推出「猫 有 毛」
+ *   （试过"只看数词开头"，把"猫 有 毛 是缓存"那个推理沉淀套件的前提打破了）。 */
+static inline int token_has_attr_quantity(const Token *A, const Token *B) {
+    if (!A || !B || !B->name || !B->name[0]) return 0;
+    size_t bl = strlen(B->name);
+    uint16_t bit = REL_BIT(REL_HAS);
+    for (size_t i = 0; i < A->count; ++i) {
+        const AssocEntry *e = &token_assocs_ro(A)[i];
+        if (!(e->rel & bit) || !e->main || !e->main->name) continue;
+        /* §6.592 只认**观测到的**数量边：推论沉淀出来的（DERIVED）/记忆猜测不算依据 ——
+         * 否则复核模式（`rel_solve_ignoring_caches`）会拿"缓存自己"证明"缓存还有依据"，
+         * 于是该撤的缓存撤不掉（推理沉淀套件当场红）。 */
+        if (e->role == ASSOC_ROLE_DERIVED || edge_is_guess(e)) continue;
+        const char *o = e->main->name;
+        if (!strcmp(o, B->name)) return 1;
+        size_t ol = strlen(o);
+        if (ol <= bl || strcmp(o + ol - bl, B->name) != 0) continue;
+        size_t num = 0;
+        while (num + 3 <= ol - bl) {
+            char ch[4] = { o[num], o[num + 1], o[num + 2], 0 };
+            if (!rel_is_numeral(ch)) break;
+            num += 3;
+        }
+        if (num == 0 || ol - bl == num) continue;
+        char mea[16] = {0};
+        size_t ml = ol - bl - num;
+        if (ml >= sizeof mea) continue;
+        memcpy(mea, o + num, ml);
+        if (!rel_is_classifier(mea) && !rel_is_measure_extra(mea)) continue;
+        return 1;
+    }
+    return 0;
 }
 
 /* §6.164 **`是/属于 + [数词] 量词 + 宾语`**：返回宾语真正的起点（没剥就返回 ri+1）。

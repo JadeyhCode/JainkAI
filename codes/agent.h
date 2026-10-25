@@ -3985,13 +3985,24 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
      * —— 顺带挡住「我住 属于 城市」（住 是动态关系）。
      * 单侧只有 1 个词时不用查（形状一 already 保证它是实词或池里的词）。 */
     if (nb > 1) {
+        /* §6.592 **数量宾语**（`有 三 个 角`）：量词「个」在虚词表里，以前整句被拒 ⇒
+         * 用户教数量事实学不进（实测「麒麟 有 三 个 角」掉到检索答复）。这里放行
+         * "数词开头 + 量词/名词"这种形状；末词仍不许是虚词。 */
+        int quantity = nb >= 2 && nb <= 4 && rel_is_numeral(words[ri + 1]) &&
+                       !fr_is_func(words[ri + nb]);
         for (size_t i = 0; i < nb; ++i) {
             const char *w = words[ri + 1 + i];
-            if (fr_is_func(w)) return NULL;
+            if (!quantity && fr_is_func(w)) return NULL;
+            if (quantity && fr_is_func(w) && !rel_is_classifier(w) && !rel_is_numeral(w) &&
+                !rel_is_measure_extra(w)) return NULL;
             if (rel_id_of(ai, w, 0)) return NULL;
             /* §6.274 形状必须是"干净复合词"：**前面全是单字，末词单字或池里多字词**。
              * 中间夹一个多字词就是分句（`狗 每天 叫`），不是名字。 */
-            if (i + 1 < nb && !rel_one_cjk(w)) return NULL;
+            /* §6.592 `个` 这种量词对 `rel_one_cjk` 来说算虚词（它要求"单字实词"）——
+             * 数量宾语里必须放行，否则 `有三 个 角` 在这道"干净复合词"检查上又被拒。 */
+            if (i + 1 < nb && !rel_one_cjk(w) &&
+                !(quantity && (rel_is_classifier(w) || rel_is_numeral(w) ||
+                               rel_is_measure_extra(w)))) return NULL;
         }
         if (!rel_one_cjk(words[ri + nb]) && !pool_find(ai->pool, words[ri + nb])) return NULL;
     }
@@ -6414,12 +6425,52 @@ static inline int dialog_trigger_try_others(AI *ai, char *const *words, size_t n
 static inline int agent_has_attr(AI *ai, Token *A, Token *B) {
     (void)ai;
     if (!A || !B) return 0;
+    if (token_has_attr_quantity(A, B)) return 1;   /* §6.592 数量宾语也算"有" */
     if (rel_direct(A, REL_HAS, B)) return 1;
     uint16_t is_a = REL_BIT(REL_IS_A);
     for (size_t i = 0; i < A->count; ++i) {
         AssocEntry *e = &token_assocs(A)[i];
         if (!(e->rel & is_a) || !e->main) continue;
         if (rel_direct(e->main, REL_HAS, B)) return 1;
+    }
+    return 0;
+}
+
+/* §6.592 `A 有 几 条 B`：图里存的可能是**数词+量词+名词**合成的一个宾语（`四条腿`），
+ * 而不是裸名词。这里在 `有` 边上找这种宾语并返回它（`q` 是问句里的量词，可为空）。
+ * 返回 1 = 找到，`out_phrase` 里是"数 量 名"这种**带空格**的可读形式。 */
+static inline int agent_quantity_lookup(AI *ai, Token *A, const char *q, const char *nm,
+                                        char *out_phrase, size_t cap) {
+    if (!ai || !A || !nm || !nm[0] || !out_phrase || cap == 0) return 0;
+    size_t nml = strlen(nm);
+    uint16_t bit = REL_BIT(REL_HAS);
+    for (size_t i = 0; i < A->count; ++i) {
+        const AssocEntry *e = &token_assocs_ro(A)[i];
+        if (!(e->rel & bit) || !e->main || !e->main->name) continue;
+        const char *o = e->main->name;
+        size_t ol = strlen(o);
+        if (ol <= nml) continue;
+        if (strcmp(o + ol - nml, nm) != 0) continue;
+        size_t pl = ol - nml;                     /* 前缀 = 数词 + 量词 */
+        size_t num_len = 0;
+        while (num_len + 3 <= pl) {
+            char ch[4] = { o[num_len], o[num_len + 1], o[num_len + 2], 0 };
+            if (!rel_is_numeral(ch)) break;
+            num_len += 3;
+        }
+        if (num_len == 0) continue;               /* 没有数词 ⇒ 不是数量宾语 */
+        const char *measure = o + num_len;
+        size_t ml = pl - num_len;
+        /* 量词不强求一致：用户问"有几只角"、图里存的是"三个角" —— 数目还是那个数目。
+         * 回答里照图里的量词说（"图 里 记 的 是 ： 麒麟 有 三 个 角"，不篡改）。 */
+        (void)q;
+        char num[24] = {0}, mea[24] = {0};
+        if (num_len >= sizeof num || ml >= sizeof mea) continue;
+        memcpy(num, o, num_len);
+        if (ml) memcpy(mea, measure, ml);
+        if (ml) snprintf(out_phrase, cap, "%s %s %s", num, mea, nm);
+        else    snprintf(out_phrase, cap, "%s %s", num, nm);
+        return 1;
     }
     return 0;
 }
@@ -6453,6 +6504,16 @@ static inline int agent_quantity_compare_note(AI *ai, char *const *words, size_t
                 nm = words[i + 3];
             }
             Token *B = pool_find(ai->pool, nm);
+            /* §6.592 先找"数词+量词+名词"的宾语（`四条腿`）：找到了就直接答数目 */
+            if (AA) {
+                char phrase[64];
+                if (agent_quantity_lookup(ai, AA, has_q ? q : "", nm, phrase, sizeof phrase)) {
+                    const char *t = ai_say_tpl("数目.已知");
+                    const char *const a2[2] = { subj, phrase };
+                    der_filln(out, cap, t ? t : "图 里 记 的 是 ： $1 有 $2", a2, 2);
+                    return 1;
+                }
+            }
             int has = (AA && B) ? agent_has_attr(ai, AA, B) : 0;
             char how[48];
             if (has_q) snprintf(how, sizeof how, "几 %s %s", q, nm);
@@ -7859,9 +7920,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (!resp) resp = agent_multi_subj(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
     }
+    if (getenv("AIP_NATDBG2")) {
+        fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
+        for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
+    }
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_relation(ai, words, n, &rc);
+        if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] relation=%s\n", resp ? "有" : "空");
         if (resp) conf = rc;
     }
     /* §6.218 地点块：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）*/

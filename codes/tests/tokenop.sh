@@ -1318,6 +1318,24 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.592 数量事实：`X 有 三 个 角` ⇒ 学得进；`X 有 角 吗` ⇒ 对；`X 有 几 个 角` ⇒ 答数目
+QN="$WORK/qn"; rm -rf "$QN"; mkdir -p "$QN"
+cp "$ROOT/model.bin" "$QN/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$QN/" 2>/dev/null || true
+( cd "$QN" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '麒麟 有 三 个 角\n麒麟 有 角 吗\n麒麟 有 几 个 角\n麒麟 有 几 只 角\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 麒麟 有 三个角' "$QN/out.txt" \
+    && ok "数量事实学得进（`麒麟 有 三 个 角`；以前被检索抢答成闲聊）" \
+    || bad "数量-学" "$(grep -a 'AI >' "$QN/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '对 ， 麒麟 -[有]-> 角' "$QN/out.txt" \
+    && ok "数量蕴含属性：`麒麟 有 角 吗` ⇒ 对（不是"不太确定"）" \
+    || bad "数量-蕴含" "$(grep -a '角' "$QN/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '图 里 记 的 是 ： 麒麟 有 三 个 角' "$QN/out.txt" \
+    && ok "问数目 ⇒ 答出图里记的那个数目（`图 里 记 的 是 ： 麒麟 有 三 个 角`）" \
+    || bad "数量-数目" "$(grep -a '图 里 记 的 是' "$QN/out.txt" | head -1)"
+grep -qaF '图 里 记 的 是 ： 麒麟 有 三 个 角' "$QN/out.txt" && [ "$(grep -c '图 里 记 的 是' "$QN/out.txt")" -ge 2 ] \
+    && ok "量词不一致（问\"几只\"、记\"三个\"）也答得出（照图里的量词说）" \
+    || bad "数量-量词" "$(grep -a '只 角' "$QN/out.txt" | head -1)"
+
 # §6.591 定义句/全称句的说法归一（`所有…都` / `是 一种` / `是…的一种`）
 DF="$WORK/df"; rm -rf "$DF"; mkdir -p "$DF"
 cp "$ROOT/model.bin" "$DF/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$DF/" 2>/dev/null || true

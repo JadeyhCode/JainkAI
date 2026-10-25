@@ -182,6 +182,11 @@ static inline int der_verify(AI *ai, Derivation *d) {
             /* 独立复查：这条边**真的**在图里，极性也对 */
             int ok = s->neg ? rel_direct_neg(s->subj, s->rid, s->obj)
                             : rel_direct(s->subj, s->rid, s->obj);
+            /* §6.592 **数量宾语蕴含属性**：`A 有 三个角` 在图里是一条边「A 有 三个角」，
+             * 而问的是「A 有 角」⇒ 独立复查这里也要认这条蕴含，否则结论被当"链有缺口"拒掉
+             * （实测：问数目答得出、问有没有却说"我不太确定"）。 */
+            if (!ok && !s->neg && s->rid == REL_HAS && token_has_attr_quantity(s->subj, s->obj))
+                ok = 1;
             s->verified = ok;
             if (!ok) {
                 s->kind = DER_GAP;
