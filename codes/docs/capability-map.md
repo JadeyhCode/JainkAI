@@ -93,6 +93,17 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z203. 阶段②补覆盖三：命令面随机会话（§6.600）
+- 新套件 `tests/cmdfuzz.sh`：固定种子 LCG 生成命令脚本（前几步固定"多脑开场"），整段喂一个进程；
+  判据：退出码 0 / 无崩溃字样 / 无"命令表里有…但没有实现" / 最后 `::revcheck` 缺 0 条 / 多脑路真跑到。
+- 抓到**崩溃级** bug：`::parts save`（挂上下文）→ `::load`（换脑）→ `::parts attach` ⇒ **SEGV**
+  （`Agent.parts` 绑在旧池上，`::load` 先 `ai_free` 了那个池）。gdb 栈：`aip_parts_close` ← `main.c:1677`。
+- 修：`brain_parts_release(Agent*)`（先 close 读回边 + 清池上三个钩子），接在 `::load`/`::brain use`/
+  `::brain drop`；退出顺序改成"先关分段再释放脑"（原来反了，也是 UAF）。
+- 判据：`cmdfuzz` 12×60、20×40 全绿（修前种子 12 崩）；整包 **58/58**（新增一套）；
+  `tokenop` **374 项**（+2）；`asan_check`(92) 干净；`probematrix` diff 为空。
+- 边界：`Agent.parts` 只有一份（换脑即解挂）；`cmdfuzz` 命令池是手写白名单，新命令要人加。
+
 ## 4z202. 阶段②补覆盖二：代码区 + 多脑三模式（§6.599）
 - 代码区进随机模板，但**只碰纯内存**：`lex_roundtrip`（随机拼"源码"）、`code_fix_semicolon`、
   `code_observe`（`[代码:rc]` 受审标记）、`lex_scan`+`lex_canon` 边界。**不跑编译器**（不碰外部世界）。

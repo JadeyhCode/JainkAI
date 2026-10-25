@@ -1527,6 +1527,28 @@ static int aip_rel_verify(const Token *a, const Token *b, uint8_t rid, int neg) 
     return neg ? rel_direct_neg((Token *)a, rid, (Token *)b) : rel_direct((Token *)a, rid, (Token *)b);
 }
 
+/* §6.600 **parts 上下文的生命周期**：`Agent.parts` 指向的上下文绑定在**某个池**上。
+ * 只要池子被换掉/释放（`::load`、`::brain use/drop`、退出），旧上下文里 `pt->pool` 就是**悬垂**
+ * 指针 —— 之后任何一次 `::parts attach` 走到 `aip_parts_close(pt)` 就是 use-after-free（实测 SEGV）。
+ * 所以换脑之前统一走这一个口：先 close（它会把还挂在磁盘上的边读回来），再清池上的钩子。 */
+static void brain_parts_release(Agent *a) {
+    if (!a) return;
+    AI *b = a->brain;
+    if (a->parts) {
+        AIPartsClose cr = aip_parts_close((AIParts *)a->parts);
+        a->parts = NULL;
+        if (cr.resolved || cr.lost)
+            printf("[分段加载] 换脑之前读回 %zu 个词的边%s\n", cr.resolved,
+                   cr.lost ? "（有词读不回来，边已丢）" : "");
+    }
+    if (b && b->pool) {
+        /* 池上的三个钩子也清掉：它们指向的上下文可能已经被 close 掉了 */
+        if (b->pool->parts) b->pool->parts = NULL;
+        if (b->pool->part_load) b->pool->part_load = NULL;
+        if (b->pool->part_touch) b->pool->part_touch = NULL;
+    }
+}
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -1877,7 +1899,11 @@ int main(int argc, char **argv) {
                     size_t k = arg ? (size_t)strtoul(arg, NULL, 10) : (size_t)-1;
                     if (k >= g_nbrains || !g_brains[k]) printf("[多脑] 说「::brain use N」，N 在 0..%zu 之间\n",
                                                g_nbrains ? g_nbrains - 1 : 0);
-                    else { a = g_brains[k]; g_curbrain = k; printf("[多脑] 切到 #%zu\n", k); }
+                    else {
+                        brain_parts_release(a);   /* §6.600 切脑：先解挂分段（上下文绑定在旧池上）*/
+                        a = g_brains[k]; g_curbrain = k;
+                        printf("[多脑] 切到 #%zu\n", k);
+                    }
                 } else if (!strncmp(sb, "diff", 4) && sb[4] == 0) {
                     /* §6.572 `::brain diff A B`：**两本账各自改了什么**（按"图里的事实"比） */
                     size_t ia = (size_t)-1, ib = (size_t)-1;
@@ -1948,6 +1974,11 @@ int main(int argc, char **argv) {
                     if (k >= g_nbrains || !g_brains[k]) printf("[多脑] 没有 #%zu\n", k);
                     else if (k == g_curbrain) printf("[多脑] #%zu 是当前那个，先用 ::brain use 切走\n", k);
                     else {
+                        /* §6.600 那个脑可能自己挂着 parts 上下文：先 close（读回边）再 free 池 */
+                        if (g_brains[k]->parts) {
+                            (void)aip_parts_close((AIParts *)g_brains[k]->parts);
+                            g_brains[k]->parts = NULL;
+                        }
                         agent_free(g_brains[k]);
                         g_brains[k] = NULL;
                         printf("[多脑] 关掉 #%zu（内存还回去了）\n", k);
@@ -2639,6 +2670,7 @@ int main(int argc, char **argv) {
                 if (!*path) path = model_path;
                 AI *m = ai_load_file(path);
                 if (m) {
+                    brain_parts_release(a);   /* §6.600 旧脑的 parts 上下文先关掉（否则悬垂） */
                     ai_free(a->brain);
                     a->brain = m;
                     m->rel_verify_hook = aip_rel_verify;   /* §6.248 */
@@ -4573,16 +4605,17 @@ int main(int argc, char **argv) {
     ai_stats(a->brain);
     /* §6.571 退出时把**所有**脑都放掉（`::brain new` 开的不算"漏" —— 那是真占着内存的）。
      * 注意 `a` 可能只是其中一个（当前那个），别重复 free。 */
+    /* §6.600 **顺序要紧**：先把每个脑的 parts 上下文关掉（`aip_parts_close` 要读池子里的词），
+     * 再释放脑。以前反过来 —— 关的时候池子已经 free 了，那是 use-after-free。 */
+    for (size_t i = 0; i < g_nbrains; ++i) {
+        if (!g_brains[i]) continue;
+        if (g_brains[i]->parts) {
+            (void)aip_parts_close((AIParts *)g_brains[i]->parts);
+            g_brains[i]->parts = NULL;
+        }
+    }
     for (size_t i = 0; i < g_nbrains; ++i) {
         if (g_brains[i]) { agent_free(g_brains[i]); g_brains[i] = NULL; }
-    }
-    /* §6.584 退出前把每个还挂着的 parts 上下文关掉（内部会先把边读回来），别把
-     * "池里一堆 DISK 标签 + 已释放上下文"留给 `ai_free`/后续工具。 */
-    for (size_t i = 0; i < g_nbrains; ++i) {
-        if (!g_brains[i] || !g_brains[i]->parts) continue;
-        AIPartsClose cr = aip_parts_close((AIParts *)g_brains[i]->parts);
-        g_brains[i]->parts = NULL;
-        (void)cr;                       /* 退出了就不喊了；数字留给需要时打印 */
     }
     if (!g_nbrains) agent_free(a);
     return 0;

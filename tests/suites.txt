@@ -97,6 +97,8 @@ learnprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_learnprobe tools/learnprobe.c
 # §6.599 随机动作集已扩到 `::op` 原语 / 代码区（词法往返、修法表、观测标记）/ 多脑三模式
 # ＋"第二个脑存盘再切回"。三个种子跑完都过才算过（只跑一个种子容易漏掉某条新分支）。
 bughunt|gcc -std=c11 -O2 -Wall -Wextra -o build_bughunt tools/bughunt.c -lm && { ./build_bughunt model.bin 20261025 300 > ctest.log 2>&1 && ./build_bughunt model.bin 1234 300 >> ctest.log 2>&1 && ./build_bughunt model.bin 777 300 >> ctest.log 2>&1; }; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.600 命令面随机会话：切脑 / 存读 / 局部加载 / op 组合（固定种子，跑完必须 revcheck 缺 0 条）
+cmdfuzz|sh tests/cmdfuzz.sh 6 40 > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.583 跨进程并发写同一份文件：唯一临时名 + 原子替换（旧实现会失败/写坏；本套抓得到）
 concfiles|sh tests/concfiles.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.582 并发看护（TSan）：数据竞争必须 0（约 50s；机器 ASLR 让 TSan 起不来时显式 SKIP）

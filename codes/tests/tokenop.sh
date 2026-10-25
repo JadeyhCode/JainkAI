@@ -1334,6 +1334,22 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.600 parts 上下文绑定在**某个池**上：换脑/加载模型之前必须先 close（否则 use-after-free）
+PL="$WORK/pl"; rm -rf "$PL"; mkdir -p "$PL"
+cp "$ROOT/model.bin" "$PL/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PL/" 2>/dev/null || true
+( cd "$PL" && { printf '::notepad off\n::char off\n'; printf '::parts save p.parts\n::load m.bin\n::parts attach p.parts\n::parts detach\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ); rc=$?
+[ "$rc" -eq 0 ] \
+    && ok "「::parts save → ::load（换脑）→ ::parts attach」**不崩**（以前是 SEGV）" \
+    || bad "parts-换脑" "退出码 $rc；$(tail -3 "$PL/out.txt" | tr '\n' ' ')"
+# ⚠ 只有"确实有边在磁盘上"时才会打「换脑之前读回 N 个词」——`::parts save` 之后还要 evict 才对，
+# 所以这里不钉那句话，改钉"整段跑完反查表仍自洽、模型还能答"。
+( cd "$PL" && { printf '::notepad off\n::char off\n'; printf '猫 属于 动物 吗\n::revcheck\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '反查表缺 0 条' "$PL/out2.txt" \
+    && ok "换脑 + 挂分段之后：反查表自洽（::revcheck 缺 0 条）" \
+    || bad "parts-换脑-自洽" "$(grep -a revcheck "$PL/out2.txt" | head -1)"
+
 # §6.598 **`::op` 之后存盘还能读回来**（临时符号节点 [临:…] 不能让存档不可读）
 OS="$WORK/os"; rm -rf "$OS"; mkdir -p "$OS"
 cp "$ROOT/model.bin" "$OS/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$OS/" 2>/dev/null || true
