@@ -1326,6 +1326,23 @@ grep -qa '加关系' "$LC/out.txt" \
     && ok "账里看得见「加关系」（每次学都记账）" \
     || bad "冲突-账" "$(grep -E '加关系|删关系' "$LC/out.txt" | tr '\n' ' ')"
 
+# §6.586 追问式改口（CLI）：学冲突事实 → 回「对」⇒ 撤旧值；回「不」⇒ 两条都留
+RF="$WORK/rf"; rm -rf "$RF"; mkdir -p "$RF"
+cp "$ROOT/model.bin" "$RF/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RF/" 2>/dev/null || true
+( cd "$RF" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '狗 属于 植物\n对\n狗 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '改 过来 了 ： 旧 的 狗 属于 动物 撤 掉 了' "$RF/out.txt" \
+    && ok "追问式改口：回「对」⇒ 撤掉旧值并说清" \
+    || bad "追问改口-对" "$(grep -a 'AI >' "$RF/out.txt" | tail -2 | tr '\n' ' ')"
+grep -qaF '不 对 ， 狗 -[不 属于·独占]-> 动物' "$RF/out.txt" \
+    && ok "追问式改口：撤完之后旧值答「不 对」" \
+    || bad "追问改口-回读" "$(grep -a '动物' "$RF/out.txt" | tail -1)"
+( cd "$RF" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '猫 属于 植物\n不\n猫 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '两 条 都 留 着' "$RF/out2.txt" \
+    && ok "追问式改口：回「不」⇒ 明说两条都留着" \
+    || bad "追问改口-不" "$(grep -a 'AI >' "$RF/out2.txt" | tail -2 | tr '\n' ' ')"
+
 # §6.584 反查表在"边搬去磁盘再读回来"之后必须重建：`::revcheck` 必须报"缺 0 条"
 RV="$WORK/revb"; rm -rf "$RV"; mkdir -p "$RV"
 cp "$ROOT/model.bin" "$RV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RV/" 2>/dev/null || true

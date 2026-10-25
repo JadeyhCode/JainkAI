@@ -67,7 +67,8 @@ int main(int argc, char **argv) {
 
         const char *r = say(ai, "猫 属于 植物");
         ok(strstr(r, "冲突") != NULL, "A 互不包含的新值：回复**说清冲突**（不会静默）");
-        ok(strstr(r, "要 撤") != NULL, "A 回复里给出撤法（「猫 不 属于 动物」）");
+        ok(strstr(r, "改 掉 旧 的 吗") != NULL || strstr(r, "要 撤") != NULL,
+           "A 回复里**问了一句**要不要改（否则用户不知道还能撤）");
         ok(knows(ai, "猫", "属于", "植物", 0) && knows(ai, "猫", "属于", "动物", 0),
            "A 学到的与旧的**都在**（不静默删知识 —— §6.199 的老判定）");
         ok(ai->n_conflict_shown >= 1, "A 冲突计数记上了（n_conflict_shown>=1）");
@@ -135,6 +136,48 @@ int main(int argc, char **argv) {
 
         ok(ai_check_ok(ai), "B 整个会话之后不变式干净");
         ai_free(ai);
+        g_ag->brain = NULL;
+    }
+
+    /* ---------- C. 追问式改口：问一句「要改吗」，回「对」就撤、回「不」就留着 ---------- */
+    {
+        AI *ai = ai_new();
+        g_ag->brain = ai;
+        say(ai, "狗 属于 动物");
+        const char *r = say(ai, "狗 属于 植物");
+        ok(strstr(r, "要 我 改 掉 旧 的 吗") != NULL,
+           "C 学到冲突时**问了一句**「要 我 改 掉 旧 的 吗」（不是只报错）");
+        ok(agent_retract_pending(ai), "C 待确认状态挂上了（下一轮短回话会被接住）");
+        const char *r2 = say(ai, "对");
+        ok(strstr(r2, "改 过来 了") != NULL && strstr(r2, "动物") != NULL,
+           "C 回「对」⇒ 撤掉旧值，并说清撤的是哪条");
+        ok(!knows(ai, "狗", "属于", "动物", 0) && knows(ai, "狗", "属于", "植物", 0),
+           "C 撤之后：旧值假、新值真");
+        ok(!agent_retract_pending(ai), "C 用过的待确认状态清掉了");
+
+        /* 回「不」：两条都留着 */
+        AI *b = ai_new();
+        g_ag->brain = b;
+        say(b, "猫 属于 动物");
+        say(b, "猫 属于 植物");
+        const char *r3 = say(b, "不");
+        ok(strstr(r3, "两 条 都 留") != NULL, "C 回「不」⇒ 明说两条都留着");
+        ok(knows(b, "猫", "属于", "动物", 0) && knows(b, "猫", "属于", "植物", 0),
+           "C 回「不」之后两条都还在");
+
+        /* 说别的：不当作回答，待确认状态作废，且**不改知识** */
+        AI *c = ai_new();
+        g_ag->brain = c;
+        say(c, "鸟 属于 动物");
+        say(c, "鸟 属于 植物");
+        const char *r4 = say(c, "今天 天气 怎么样");
+        ok(strstr(r4, "两 条 都 留") == NULL && strstr(r4, "改 过来 了") == NULL,
+           "C 说别的：不把别的话当成「回答」");
+        ok(!agent_retract_pending(c), "C 说别的之后待确认状态作废");
+        ok(knows(c, "鸟", "属于", "动物", 0) && knows(c, "鸟", "属于", "植物", 0),
+           "C 说别的之后两条都还在（没偷偷改知识）");
+        ok(ai_check_ok(c), "C 全程不变式干净");
+        ai_free(ai); ai_free(b); ai_free(c);
         g_ag->brain = NULL;
     }
 

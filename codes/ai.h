@@ -859,6 +859,11 @@ typedef struct {
     /* §6.585 学过的新事实**与已有独占值冲突**的次数（冲突不静默：回复里会说"跟以前记的哪条冲突"）。
      * 只进内存，给 `::stats`/探针看。 */
     size_t n_conflict_shown;
+    /* §6.586 **追问式改口**的待确认状态（只进内存；和 §6.168 的追问回话一个性质）：
+     * 刚学了一条冲突事实、问了"要 改 掉 旧 的 吗"，下一轮用户回「对」就撤旧值。
+     * 存 id 不存指针（池可能扩容/搬动），`ask_retract_old == 0` 表示没有待确认的。 */
+    uint32_t ask_retract_a, ask_retract_old;
+    uint8_t  ask_retract_rid;
     size_t n_rel_yes;               /* 靠关系推理答「是」的次数 */
     size_t n_rel_no;                /* 靠关系推理答「不是」的次数 */
     size_t n_rel_deep;              /* 其中需要多跳推导（不是直接边）的次数 */

@@ -4450,9 +4450,11 @@ int main(int argc, char **argv) {
                 printf("[教 会 了] %s %s%s %s\n", ta->name, neg ? "不 " : "",
                        rel_name_of(a->brain, rid), tb->name);
                 if (conflict) {
-                    /* §6.585 冲突**不静默**：说清跟哪条冲突 + 怎么撤（撤 = 显式说不属于）*/
+                    /* §6.585 冲突**不静默**：说清跟哪条冲突 + 怎么撤（撤 = 显式说不属于）；
+                     * §6.586 同时挂上"待确认改口"（下一轮回「对」也能撤）。 */
                     a->brain->n_conflict_shown++;
-                    printf("            跟 以前 记 的「%s %s %s」冲突（两 条 都 在；要 撤 旧 的 就 说「::teach %s 不 %s %s」）\n",
+                    agent_retract_arm(a->brain, ta, conflict, rid);
+                    printf("            跟 以前 记 的「%s %s %s」冲突（两 条 都 在；回「对」= 撤旧 的，或 ::teach %s 不 %s %s）\n",
                            ta->name, rel_name_of(a->brain, rid),
                            conflict->name ? conflict->name : "?", ta->name,
                            rel_name_of(a->brain, rid), conflict->name ? conflict->name : "?");

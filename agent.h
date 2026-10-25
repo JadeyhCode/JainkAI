@@ -3387,6 +3387,9 @@ static inline char *agent_conj_obj(AI *ai, char *const *w0, size_t n0, int *out_
     return r;
 }
 
+/* §6.586 前向声明：学习路径里要"挂上待确认改口"，实现在下面（追问回话那一带）。 */
+static inline void agent_retract_arm(AI *ai, Token *a, Token *old, uint8_t rid);
+
 static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                                         float *out_conf) {
     if (!ai || ai->rel_off || !words || n < 3 || n > 6) return NULL;
@@ -3471,7 +3474,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
 
     /* 动态关系（清单外的谓语）：**否定也支持了**（§6.80：否定旗子在 `nrel` 第 15 位）——
      * 以前这里 `if (is_neg) return NULL`，于是「猫 不 喵 狗」整句掉降级答复。 */
-    char resp0[192];
+    char resp0[512];   /* §6.586 追加"另外还有一条冲突"之后 192 会截断 UTF-8 */
     if (rid >= REL_DYN_BASE) {          /* 边界是 REL_DYN_BASE：核心关系现在有 9 个 */
         /* §6.226 **谓语或宾语是虚词 ⇒ 这不是一条关系**。实测垃圾学习：
          * `我 忘 了` ⇒ 我 --[忘]--> 了；`举 个 例子` ⇒ 举 --[个]--> 例子；
@@ -3543,12 +3546,15 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                 const char *const ca[3] = { aw, rw, conflict->name ? conflict->name : "?" };
                 size_t cl = strlen(resp0);
                 if (cl < sizeof resp0) {
-                    const char *piece = ct ? ct : "（另外 我 这 儿 还 记 着 $1 $2 $3）";
+                    const char *piece = ct ? ct
+                        : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）";
                     char tmp[192];
                     der_filln(tmp, sizeof tmp, piece, ca, 3);
                     snprintf(resp0 + cl, sizeof resp0 - cl, "%s", tmp);
                 }
                 ai->n_conflict_shown++;
+                /* §6.586 极性改口的同一句里"另一条冲突的旧值" ⇒ 一起挂上待确认改口 */
+                agent_retract_arm(ai, A, conflict, rid);
             }
             /* **修正的记忆 / 来源监控**：留一个 [修正:…] 标记节点（连回主语），
              * 这样「这件事被改口过」**记得住**，而旧观测不会冒充知识复活。
@@ -3574,8 +3580,10 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
             ai->n_rel_learned++;
             ai->n_learned++;
             ai->n_conflict_shown++;
+            /* §6.586 挂上"待确认改口"：下一轮用户回「对」就撤旧的（回「不」就两条都留）*/
+            agent_retract_arm(ai, A, conflict, rid);
             cot_push(ai, COT_LEARN, 1, 80,
-                     "新旧冲突：新事实记下了，旧值还在（显式说不属于才会撤）", resp0);
+                     "新旧冲突：新事实记下了，旧值还在（问一句要不要撤）", resp0);
             ai->n_cot++;
         } else {
             {
@@ -6490,6 +6498,106 @@ static inline int ai_dirty_apply(AI *ai, char *out, size_t cap, size_t *kind_out
  *   - 极性相乘：问「不 R」答「对」⇒ 记成 `不 R`；问「不 R」答「不」⇒ 记成 `R`；
  *   - 写入走 `ai_write_rel`（统一通道，::safe 里能看理由），并记 `n_rel_learned`。
  */
+/* ============================ §6.586 追问式改口 ============================
+ *
+ * 上一轮学了一条与已有独占值冲突的事实，回复里问了「要 我 改 掉 旧 的 吗？（说「对」就改）」；
+ * 这一轮用户只回一个短判词 —— 这里接住它：
+ *   · 「对/是/好/行/改/要/嗯」 ⇒ 撤掉旧值（走和"改口"同一条语义：只清关系位、留 `[修正:…]`）；
+ *   · 「不/别/不用/算了/不 用/不 要」 ⇒ 不撤，回一句"那就两条都留着"（并说明怎么手动撤）；
+ *   · 别的短话 ⇒ 当作"不谈了"，清掉待确认状态，**不学任何东西**，交回主流水线。
+ * 纪律：只认**一到三个词**的短回话；多余一个字就不是"回答我"，宁可当没说。
+ * 状态只在内存（和 §6.168 的追问一样）：存盘再开就没了，不会替你偷偷改知识。
+ */
+static inline int agent_retract_pending(AI *ai) {
+    return ai && ai->ask_retract_old != 0;
+}
+
+static inline void agent_retract_arm(AI *ai, Token *a, Token *old, uint8_t rid) {
+    if (!ai) return;
+    if (!a || !old || rid == 0) { ai->ask_retract_a = ai->ask_retract_old = 0; ai->ask_retract_rid = 0; return; }
+    ai->ask_retract_a = a->id;
+    ai->ask_retract_old = old->id;
+    ai->ask_retract_rid = rid;
+}
+
+static inline void agent_retract_disarm(AI *ai) {
+    if (!ai) return;
+    ai->ask_retract_a = ai->ask_retract_old = 0;
+    ai->ask_retract_rid = 0;
+}
+
+static inline int agent_retract_reply(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !out || cap == 0) return 0;
+    if (!agent_retract_pending(ai)) return 0;
+    if (!input) return 0;
+    size_t n = 0;
+    char **w = ai_tokenize(ai, input, &n);
+    if (!w) return 0;
+    char j[48];
+    size_t jo = 0;
+    for (size_t i = 0; i < n && jo + 1 < sizeof j; ++i) {
+        const char *t = w[i] ? w[i] : "";
+        if (!strcmp(t, "的") || !strcmp(t, "了") || !strcmp(t, "啊") ||
+            !strcmp(t, "呀") || !strcmp(t, "吧") || !strcmp(t, "呢")) continue;
+        jo += (size_t)snprintf(j + jo, sizeof j - jo, "%s%s", jo ? " " : "", t);
+    }
+    ai_free_words(w, n);
+    if (n == 0 || n > 3 || !j[0]) { agent_retract_disarm(ai); return 0; }
+    int yes = 0, no = 0;
+    static const char *ry[] = { "对", "是", "嗯", "好", "行", "改", "要", "对 的", "是 的",
+                                "好 的", "嗯 嗯", "嗯嗯", "改 吧", "可以", NULL };
+    static const char *rn[] = { "不", "别", "不 用", "不用", "算了", "不 要", "不要", "不 对",
+                                "不对", "不 是", "不是", "没", "错", NULL };
+    for (size_t i = 0; ry[i]; ++i) if (!strcmp(j, ry[i])) { yes = 1; break; }
+    for (size_t i = 0; rn[i]; ++i) if (!strcmp(j, rn[i])) { no = 1; break; }
+    if (!yes && !no) { agent_retract_disarm(ai); return 0; }   /* 不是回答我：当没说 */
+    Token *A = pool_token_by_id(ai->pool, ai->ask_retract_a);
+    Token *old = pool_token_by_id(ai->pool, ai->ask_retract_old);
+    uint8_t rid = ai->ask_retract_rid;
+    agent_retract_disarm(ai);
+    if (!A || !old || !rid) return 0;
+    if (no) {
+        const char *t = ai_say_tpl("改口.不撤");
+        der_fill5(out, cap, t ? t : "那 就 两 条 都 留 着 ； 要 撤 旧 的 就 说「$1 不 $2 $3」",
+                  A->name ? A->name : "?", rel_name_of(ai, rid), old->name ? old->name : "?",
+                  NULL, NULL);
+        return 1;
+    }
+    /* 撤：只清关系位（和"改口"完全同一条语义），留 `[修正:…]` 标记，账里记一条删关系 */
+    uint16_t bit = REL_BIT(rid);
+    int hit = 0;
+    for (size_t i = 0; i < A->count; ++i) {
+        AssocEntry *e = &token_assocs(A)[i];
+        if (e->main != old || !(e->rel & bit)) continue;
+        if (e->role == ASSOC_ROLE_DERIVED || edge_is_guess(e)) continue;
+        e->rel &= (uint16_t)~bit;
+        hit = 1;
+    }
+    if (!hit) {
+        const char *t = ai_say_tpl("改口.撤不动");
+        snprintf(out, cap, "%s", t ? t : "那 条 已 经 不 在 了 —— 不 用 撤");
+        return 1;
+    }
+    A->edges_dirty = 1;
+    ai->n_revised++;
+    ai_modlog_note_retract(ai, A, old, rid, AI_WSRC_RELATION);
+    if (!micro_of(ai)->safe.mod_off) {           /* 改口标记（和 §6.168 那套一样，可追溯）*/
+        ModIntent in;
+        memset(&in, 0, sizeof in);
+        in.type = MOD_ADD_TOKEN;
+        in.target = A;
+        agent_revise_name(in.name, sizeof in.name, A->name ? A->name : "", 0,
+                          rel_name_of(ai, rid), old->name ? old->name : "");
+        snprintf(in.source, sizeof in.source, "来源:确认改口");
+        (void)mod_propose(&micro_of(ai)->queue, &in);
+    }
+    const char *t = ai_say_tpl("改口.已撤");
+    der_fill5(out, cap, t ? t : "改 过来 了 ： 旧 的 $1 $2 $3 撤 掉 了",
+              A->name ? A->name : "?", rel_name_of(ai, rid), old->name ? old->name : "?",
+              NULL, NULL);
+    return 1;
+}
+
 static inline int agent_askback_reply(AI *ai, const char *input, char *out, size_t cap) {
     if (!ai || !ai->ask_pending || !input || !out || cap == 0) return 0;
     if (!ai->ask_a[0] || !ai->ask_b[0] || ai->ask_rid == 0) return 0;
@@ -6851,6 +6959,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!empty_turn && input && input[0] != ':' &&
         !agent_history_kind(input) && !agent_repeat_request(input))
         agent_history_record(ai, input);
+    /* §6.586 待确认的"要改掉旧的吗"优先（它只在我们刚问过的时候存在）*/
+    if (agent_retract_pending(ai) && !empty_turn) {
+        if (agent_retract_reply(ai, input, out, out_cap)) return agent_say(ai, out);
+    }
     if (ai->ask_pending && !empty_turn) {
         if (ai->askback) {
             /* kind 1 = 我没把握（回一句就教）；kind 2 = 我给了确定答案（回「不对」就改口） */
