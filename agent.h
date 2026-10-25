@@ -366,6 +366,10 @@ static inline void aip_note_fact(AI *ai, const char *a, const char *r, const cha
     if (!ai) return;
     /* §6.582 存在 `AI` 上（不是全局）：多脑/多线程各记各的 */
     if (a) snprintf(ai->lf_a, sizeof ai->lf_a, "%s", a);
+    /* §6.624 指代要用**拼好的主语**：`小明 喜欢 游泳` 分词是 小/明，学成功后才成 `小明` ——
+     * 以前 last_subject 记的是分词首词（`小`），下一句「他 喜欢 什么」就指到「小」上。 */
+    if (a && a[0] && strlen(a) < sizeof ai->last_subject)
+        snprintf(ai->last_subject, sizeof ai->last_subject, "%s", a);
     if (r) snprintf(ai->lf_r, sizeof ai->lf_r, "%s", r);
     if (b) snprintf(ai->lf_b, sizeof ai->lf_b, "%s", b);
 }
@@ -7970,6 +7974,35 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             }
         }
     }
+    {   /* §6.624 **`他/她` 在问句里指回上一句主语**（最小指代）。
+         * 为什么不放进 `[pron] 省略指代`（数据）：陈述句里的"他"**可能是新人物**
+         * （`他 是 我 的 表弟`），替换过去会学出错事实。所以只在**问句**里换：
+         * 判据是 `aip_questionish()`（问号/吗呢/什么谁哪几…）——这也是用户最常需要的那种
+         * （`小明 喜欢 游泳` → `他 喜欢 什么` → 该去查小明）。 */
+        const char *q0 = input_eff;
+        while (q0 && (*q0 == ' ' || *q0 == '\t')) q0++;
+        /* ⚠ **视角句不换**：`他 觉得 X` / `他 以为 X` / `他 说 X` 里的"他"是**别人**，
+         * 换掉就把"别人的看法"变成"上一句主语的看法"（belief 套件当场红）。
+         * 判据按句子里的视角标记词走，不按代词本身。 */
+        int perspective = 0;
+        {
+            static const char *pv[] = { "觉得", "认为", "以为", "说", "看来", "眼里", NULL };
+            for (size_t i = 0; pv[i] && !perspective; ++i)
+                if (strstr(input_eff ? input_eff : "", pv[i])) perspective = 1;
+        }
+        if (!perspective && q0 && ai->last_subject[0] &&
+            (!strncmp(q0, "他 ", 3) || !strncmp(q0, "她 ", 3) ||
+             !strncmp(q0, "他", 3) || !strncmp(q0, "她", 3)) &&
+            aip_questionish(input_eff) && q0[3] != 0) {
+            const char *rest = q0 + 3;          /* 「他」是 3 字节 */
+            if (*rest == ' ' || *rest == '\t') rest++;
+            if (*rest) {
+                snprintf(decl_in, sizeof decl_in, "%s%s%s", ai->last_subject,
+                         (input_eff && input_eff[0] ? " " : ""), rest);
+                input_eff = decl_in;
+            }
+        }
+    }
     {   /* §6.263 「教你 / 告诉你 / 教我」这种**引导语**先剥掉（不做这步，后面的学习链
          * 拿到的是 `教/你/…`，要么出词串要么学不进）。只在句首、且剥完还有内容时才剥。 */
         const char *q = input_eff;
@@ -9011,7 +9044,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                                       NULL};
         int skip = 0;
         for (size_t i = 0; skip0[i]; ++i) if (!strcmp(words[0], skip0[i])) { skip = 1; break; }
-        if (!skip && pool_find(ai->pool, words[0]) && strlen(words[0]) < sizeof ai->last_subject)
+        /* §6.624 别把学习时记下的**完整主语**覆盖回分词碎片：
+         * 现在 last_subject 是 `小明`、words[0] 是 `小` ⇒ 前缀关系，就不覆盖。 */
+        if (!skip && pool_find(ai->pool, words[0]) && strlen(words[0]) < sizeof ai->last_subject &&
+            strncmp(ai->last_subject, words[0], strlen(words[0])) != 0)
             snprintf(ai->last_subject, sizeof ai->last_subject, "%s", words[0]);
     }
     free(resp);
