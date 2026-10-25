@@ -31,6 +31,7 @@
  * 只 include 它是编译不过的 —— 这是有意的：它属于"应用层"，不是图的基础层。 */
 #include "token.h"
 #include "ptrtag.h"
+#include "saveio.h"     /* §6.583 唯一临时名 + 落盘 + 原子替换 */
 
 #define AIP_PARTS_MAGIC   0x53545250u   /* 'PRTS' */
 #define AIP_PARTS_VERSION 2u   /* v2：索引的空闲字节用来存 flags（bit0 = has_causal） */
@@ -66,20 +67,25 @@ typedef struct AIParts_tag {
 
 /* ---------------- 写：把每个词的边写成一个段 ---------------- */
 
-static inline int aip_parts_save(AI *ai, const char *path) {
-    if (!ai || !ai->pool || !path) return -1;
-    FILE *f = fopen(path, "wb");
+/* 写段的**唯一一份实现**（以前 save 和 delta 各抄了一遍，两边容易改歪）。
+ * `dirty_only=1` = 只写自己改过的词（delta 口径）。
+ * 写到的 `tmp` 由调用方给（**唯一临时名**，见 `saveio.h`）；这里只负责内容。 */
+static inline int aip_parts_write(AI *ai, const char *tmp, int dirty_only) {
+    if (!ai || !ai->pool || !tmp) return -1;
+    FILE *f = fopen(tmp, "wb");
     if (!f) return -1;
     TokenPool *p = ai->pool;
-    /* 头：magic / version / 词数 / 有边的词数 */
+    /* 头：magic / version / 词数 / 入选词数 */
     uint32_t head[4] = { AIP_PARTS_MAGIC, AIP_PARTS_VERSION, (uint32_t)p->count, 0u };
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
-        if (t && t->count > 0) head[3]++;
+        if (!t || t->count == 0) continue;
+        if (dirty_only && !t->edges_dirty) continue;
+        head[3]++;
     }
     if (fwrite(head, sizeof head, 1, f) != 1) { fclose(f); return -1; }
 
-    /* 索引先占位（每条 16 字节：id / off / cnt / 保留），写完段再回填 */
+    /* 索引先占位（每条 AIP_PART_IDX_LEN 字节），写完段再回填 */
     uint64_t index_off = (uint64_t)ftell(f);
     uint8_t zero[AIP_PART_IDX_LEN] = {0};
     for (uint32_t i = 0; i < head[3]; ++i)
@@ -89,6 +95,7 @@ static inline int aip_parts_save(AI *ai, const char *path) {
     for (size_t i = 0; i < p->count; ++i) {
         Token *t = p->tokens[i];
         if (!t || t->count == 0) continue;
+        if (dirty_only && !t->edges_dirty) continue;
         /* ⚠ 保存前也要解析标签：被 detach 过的图，边在段文件里 —— 先读回来再写 */
         token_assocs_resolve(t);
         uint32_t cnt = (uint32_t)t->count;
@@ -120,62 +127,36 @@ static inline int aip_parts_save(AI *ai, const char *path) {
         if (fseek(f, save, SEEK_SET) != 0) { fclose(f); return -1; }
         n_written++;
     }
-    fclose(f);
+    if (aip_sync_close(f) != 0) return -1;      /* fflush + fsync + fclose */
     return (int)n_written;
 }
 
-/* ---------------- 写 delta：只写"这个脑改过"的段（§6.573） ---------------- */
+/* 写一个段文件（整池 / 只写 delta）。两个都走"唯一临时名 + 原子替换"：
+ * 读的人永远看到"旧的完整"或"新的完整"，不会读到写了一半的段索引。 */
+static inline int aip_parts_save(AI *ai, const char *path) {
+    if (!ai || !ai->pool || !path) return -1;
+    char tmp[1024];
+    if (aip_tmp_name(path, tmp, sizeof tmp) != 0) return -1;
+    int n = aip_parts_write(ai, tmp, 0);
+    if (n < 0) { remove(tmp); return -1; }
+    if (aip_commit_rename(tmp, path) != 0) { remove(tmp); return -1; }
+    return n;
+}
 
 static inline int aip_parts_save_delta(AI *ai, const char *path) {
     if (!ai || !ai->pool || !path) return -1;
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
-    TokenPool *p = ai->pool;
-    uint32_t head[4] = { AIP_PARTS_MAGIC, AIP_PARTS_VERSION, (uint32_t)p->count, 0u };
-    for (size_t i = 0; i < p->count; ++i) {
-        Token *t = p->tokens[i];
-        if (t && t->count > 0 && t->edges_dirty) head[3]++;
+    char tmp[1024];
+    if (aip_tmp_name(path, tmp, sizeof tmp) != 0) return -1;
+    int n = aip_parts_write(ai, tmp, 1);
+    if (n < 0) { remove(tmp); return -1; }
+    if (aip_commit_rename(tmp, path) != 0) { remove(tmp); return -1; }
+    /* §6.583 脏标记**等文件落地之后**才清：以前先在循环里清，rename 失败就等于
+     * "脏的算干净了"（下一次 delta 会漏掉那些段）。 */
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (t && t->count > 0 && t->edges_dirty) t->edges_dirty = 0;
     }
-    if (fwrite(head, sizeof head, 1, f) != 1) { fclose(f); return -1; }
-    uint64_t index_off = (uint64_t)ftell(f);
-    uint8_t zero[AIP_PART_IDX_LEN] = {0};
-    for (uint32_t i = 0; i < head[3]; ++i)
-        if (fwrite(zero, sizeof zero, 1, f) != 1) { fclose(f); return -1; }
-    uint32_t n_written = 0;
-    for (size_t i = 0; i < p->count; ++i) {
-        Token *t = p->tokens[i];
-        if (!t || t->count == 0 || !t->edges_dirty) continue;
-        token_assocs_resolve(t);
-        uint32_t cnt = (uint32_t)t->count;
-        uint64_t seg_off = (uint64_t)ftell(f);
-        const AssocEntry *as = token_assocs_ro(t);
-        for (uint32_t k = 0; k < cnt; ++k) {
-            AIPartEdge pe;
-            memset(&pe, 0, sizeof pe);
-            pe.b_id = as[k].main ? as[k].main->id : 0u;
-            pe.a_id = as[k].action ? as[k].action->id : 0u;
-            pe.hits = as[k].hits; pe.seq = as[k].seq;
-            pe.birth = as[k].birth_tick; pe.last = as[k].last_touch_tick;
-            memcpy(pe.tset, as[k].tset, sizeof pe.tset);
-            pe.rel = as[k].rel; pe.nrel = as[k].nrel;
-            pe.n_tset = as[k].n_tset; pe.mem_state = as[k].mem_state;
-            pe.role = as[k].role; pe.topic = as[k].topic;
-            pe.pattern = as[k].pattern; pe.dyn = as[k].dyn;
-            if (fwrite(&pe, sizeof pe, 1, f) != 1) { fclose(f); return -1; }
-        }
-        long save = ftell(f);
-        if (fseek(f, (long)(index_off + (uint64_t)n_written * AIP_PART_IDX_LEN), SEEK_SET) != 0) { fclose(f); return -1; }
-        uint32_t id = t->id;
-        uint16_t flags = (uint16_t)(t->has_causal ? 1u : 0u), pad2 = 0;
-        if (fwrite(&id, 4, 1, f) != 1 || fwrite(&seg_off, 8, 1, f) != 1 ||
-            fwrite(&cnt, 4, 1, f) != 1 || fwrite(&flags, 2, 1, f) != 1 ||
-            fwrite(&pad2, 2, 1, f) != 1) { fclose(f); return -1; }
-        if (fseek(f, save, SEEK_SET) != 0) { fclose(f); return -1; }
-        t->edges_dirty = 0;            /* 已经落进 delta ⇒ 干净了 */
-        n_written++;
-    }
-    fclose(f);
-    return (int)n_written;
+    return n;
 }
 
 /* ---------------- 打开：只读**索引**（不读任何一段） ---------------- */

@@ -20314,3 +20314,53 @@ CLI 仍然单线程（REPL 就是一个人一条线），这条也明说，不�
 - **单脑仍一次一句**：并行来自多脑；没有工作窃取/线程池。
 - **跨进程没有文件锁**：两个进程同时写同一份 `*.parts`/`model.bin` 会坏（下一步）。
 - TSan 只在 Linux x86-64 + gcc 11.4 上跑过；MSVC 的 `_Thread_local` 需要换成 `__declspec(thread)`。
+
+## §6.583 并发（续）：**跨进程**写同一份文件 + 配置开关原子化
+
+阶段①剩下的一半：§6.582 修的是"同一进程里多线程"，但两个 `aip` 进程同时
+`::save m.bin` / `::parts save p.parts` / `::parts journal j.txt` 照样会互相踩。
+
+### 一、抓到的真 bug：固定临时名会在并发下把文件写坏/丢
+
+`ai_save_file` 早先就已经是"写临时文件 → fsync → rename"（那次是为了防"写一半崩掉把记忆清零"），**可临时名是固定的 `path.tmp`**：
+两个进程同时存同一路径 = 同时写**同一个** `model.bin.tmp`（各自持文件偏移、互相截断/覆盖），
+而且先完成的那个 rename 走之后，另一个的 `rename` 会 `ENOENT` ⇒ **保存直接失败**。
+`parts.h` 的两个写入口更彻底：直接 `fopen(path,"wb")` 写目标（连原子替换都没有）。
+
+**实测（这一轮新加的 `tests/concfiles.sh`，4 个写进程 × 6 次保存 + 4 个读进程 × 6 次问答）：**
+
+| 二进制 | 24 次并发保存里失败 | 结果 |
+|---|---|---|
+| 改之前（`5241de1` 编出来的 `build_aip`）| **13 次** | 套件红：`① 写进程保存次数不够` |
+| 这一轮 | **0 次** | 套件绿：文件不坏、读得到、无残留临时文件 |
+
+### 二、改法
+
+| 件 | 位置 | 说明 |
+|---|---|---|
+| `saveio.h`（新）| 新文件 | `aip_tmp_name`（`<path>.tmp.<pid>.<序号>`，pid 区分进程、序号区分同进程内多次）、`aip_sync_close`（fflush+fsync+fclose）、`aip_commit_rename`（原子替换，失败不动目标） |
+| `ai_save_file` | `model_io.h` | 用唯一临时名（顺手把 `bad` 分支的 `fclose` 漏写补上） |
+| `aip_parts_save` / `aip_parts_save_delta` | `parts.h` | **合并成一份实现** `aip_parts_write(ai,tmp,dirty_only)` + 两个薄壳（临时名/rename）；**脏标记改成"rename 成功之后才清"**（以前在循环里清，写失败就等于"脏的算干净了"） |
+| `xb_journal_save` | `xbrain.h` | 同样走唯一临时名 + 原子替换 |
+| 配置开关原子化 | `token.h` / `rel.h` / `main.c` | `g_obs_revise`、`g_rel_chain` 改 `AIP_ATOMIC_INT`（`::revise`/`::rel chain` 改它们、问答线程在读）；`g_rel_ignore_derived` 改 `AIP_TLS`，并**顺手修一个真 bug**：它以前出口写死 `0`，嵌套复核会把外层的 `1` 抹掉 ⇒ 改成 save/restore |
+
+### 三、证据
+
+- `tests/concfiles.sh` **全过**（4 写 + 4 读并发；段文件版同样 4 写 + 4 attach）：
+  **0 次保存失败 / 0 个残留临时文件 / 读完还能答对**。同一套打旧二进制 ⇒ **13/24 失败**（见上表）。
+- `tools/concprobe.c` 加**配置翻转模式**（`--flip`）：4 个问答线程 + 1 个控制线程翻
+  `rel_chain_set` / `g_obs_revise` 各 200 次 ⇒ 每条问题都有答复；TSan 下 **0 竞争**
+  （普通模式、冷启动模式、翻转模式三种都手工跑过 TSan）。
+- 整包 **54/54**（新增 `concfiles` 一套；`conc` 一套现在覆盖三种模式）；`probematrix` **28 行 diff 为空**；
+  `asan_check`(90 命令) 干净。
+
+### 四、边界（照实说）
+
+1. **没有文件锁**：并发写同一路径的语义是"**最后一个 rename 的人赢**"，不是"合并/排序"。
+   需要"读到别人的结果再写"的场景（比如两个进程一起学同一份会话图）仍然不安全 —— 那要 `flock` + 版本号，没做。
+2. 临时文件在**同一目录**（跨目录 rename 不是原子的）；进程被 `SIGKILL` 会留下 `*.tmp.<pid>.<n>`
+   （无害，但会占地方；没有清理器）。
+3. 只改了"模型 / 段文件 / 流水"三类；`action.h`/`code.h` 里写生成代码文件的那两处仍是直写
+   （那是 `::act`/`::code` 的输出，不是记忆，风险等级不同，照实记在这里）。
+4. `rename` 覆盖已存在文件在 Windows 上会失败（`MoveFileEx` 才原子）；项目只在 Linux 上验过。
+5. 配置开关只做了三个：其余"一写多读"的开关如果哪个跑到了问答热路径上，得按同一套办法再收。

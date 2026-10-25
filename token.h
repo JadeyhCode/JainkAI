@@ -1290,7 +1290,9 @@ static inline int token_tag_full(Token *a, Token *b, uint8_t role,
  * `g_obs_revised` 是「刚刚那次 tag 是不是改了口」的一次性标志：
  * 调用方（agent_learn_relation）落完观测立刻读它，据此换一句确认话。
  * 和 g_rel_ignore_derived 一样是模块级约定 —— 单线程、单次调用即读即清。 */
-static int g_obs_revise  = 1;   /* 默认开（配置：只在开线程前改）*/
+/* §6.583 **配置开关也要原子**：`::revise off` 是主线程/控制线程写的，而问答线程在读。
+ * 以前它是普通 int ⇒ 运行中改就是一处数据竞争（TSan 曾报在 `token_tag_rel`）。 */
+AIP_ATOMIC_INT(g_obs_revise, 1);
 /* §6.582 每轮问答的**一次性标志**（tag 里置、学习那条路立刻读）⇒ 线程局部。
  * 单线程语义不变；多线程不再互相把"改口了吗"读成别人的。 */
 static AIP_TLS int g_obs_revised = 0;
@@ -1327,7 +1329,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
         }
         /* 改口：把**同一条边上对立极性**的旧观测改掉（见上面那段注释）。
          * 缓存那一半上面已经清过了，所以走到这里还留着的对立位一定是观测。 */
-        if (g_obs_revise && (e->nrel & bit)) { e->nrel &= (uint16_t)~bit; g_obs_revised = 1; }
+        if (AIP_LD(g_obs_revise) && (e->nrel & bit)) { e->nrel &= (uint16_t)~bit; g_obs_revised = 1; }
         /* **幂等**：这一位已经置过就不再加权（关系可以叠加，同一位不能重复加）。
          * 否则存盘再读会重复装一遍 relations.txt，hits 翻倍 → emb 跟着变。 */
         if (e->rel & bit) return 0;
@@ -1366,7 +1368,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
             e->role = ASSOC_ROLE_NONE;
         }
         /* 改口：把同一条边上对立极性的旧观测改掉（理由见 token_tag_rel） */
-        if (g_obs_revise && (e->rel & bit)) { e->rel &= (uint16_t)~bit; g_obs_revised = 1; }
+        if (AIP_LD(g_obs_revise) && (e->rel & bit)) { e->rel &= (uint16_t)~bit; g_obs_revised = 1; }
         if (e->nrel & bit) return 0;
         e->nrel |= bit;
         if (a->owner) pool_rev_add(a->owner, b, a->id, rel_id, 1);   /* §6.214 否定 */

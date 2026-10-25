@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include "saveio.h"      /* §6.583 唯一临时名 + 落盘 + 原子替换 */
 #include <errno.h>
 /* §6.124 **自足性**：本文件用了 `fsync`（POSIX，声明在 unistd.h），但一直没包含它 ——
  * 只在"包含链里恰好有 action.h"的 TU（main.c 那条）里编得过。
@@ -423,18 +424,21 @@ static inline size_t ai_save_file(const AI *ai, const char *path) {
     /* **原子写**（借 §6.88 那条经验）：先写同目录的临时文件 → fsync 落盘 → rename 原子替换。
      * 为什么非改不可：原来直接 `fopen(path,"wb")` 写目标 —— 中途崩/满盘/断电，
      * 模型文件就**截断**了，而模型就是它的全部记忆（写坏 = 记忆清零，比丢一次快照严重得多）。
-     * rename 在同一个文件系统上是原子的：要么旧文件完好，要么新文件完整，没有中间态。 */
+     * rename 在同一个文件系统上是原子的：要么旧文件完好，要么新文件完整，没有中间态。
+     *
+     * §6.583 **临时名必须唯一**：以前是固定的 `path.tmp` ⇒ 两个进程同时存同一路径时，
+     * 它们写的是**同一个**临时文件（互相截断/覆盖），rename 出来是一份混着两边的坏文件。
+     * 现在带 `pid + 序号`（`saveio.h`），并发写同一路径的语义变成"最后 rename 的人赢"。 */
     char tmp[1024];
-    if (snprintf(tmp, sizeof tmp, "%s.tmp", path) >= (int)sizeof tmp) { free(buf); return 0; }
+    if (aip_tmp_name(path, tmp, sizeof tmp) != 0) { free(buf); return 0; }
     FILE *f = fopen(tmp, "wb");
     if (!f) { free(buf); return 0; }
     size_t wrote = fwrite(buf, 1, sz, f);
     int bad = (wrote != sz);
-    if (!bad && fflush(f) != 0) bad = 1;
-    if (!bad && fsync(fileno(f)) != 0) bad = 1;      /* 先落盘再替换：断电也不会留下半个新文件 */
-    if (fclose(f) != 0) bad = 1;
+    if (!bad && aip_sync_close(f) != 0) bad = 1;   /* fflush + fsync + fclose（先落盘再替换）*/
+    else if (bad) fclose(f);
     if (bad) { remove(tmp); free(buf); return 0; }
-    if (rename(tmp, path) != 0) { remove(tmp); free(buf); return 0; }
+    if (aip_commit_rename(tmp, path) != 0) { remove(tmp); free(buf); return 0; }
     free(buf);
     return sz;
 }

@@ -3236,8 +3236,8 @@ int main(int argc, char **argv) {
                 const char *arg = (cmd[6] == ' ') ? cmd + 7 : NULL;
                 while (arg && *arg == ' ') arg++;
                 if (arg && *arg) {
-                    if (strcmp(arg, "on") == 0) g_obs_revise = 1;
-                    else if (strcmp(arg, "off") == 0) g_obs_revise = 0;
+                    if (strcmp(arg, "on") == 0) AIP_ST(g_obs_revise, 1);
+                    else if (strcmp(arg, "off") == 0) AIP_ST(g_obs_revise, 0);
                     else { printf("[用法] ::revise on|off\n"); continue; }
                 }
                 printf("[改口语义 = %s]（后说的观测替掉同一条边上先说的对立极性）\n",

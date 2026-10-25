@@ -93,6 +93,18 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z186. 跨进程落盘：唯一临时名 + 原子替换（§6.583）
+- `saveio.h`（`aip_tmp_name` / `aip_sync_close` / `aip_commit_rename`）；
+  `ai_save_file` 改用唯一临时名（原来固定 `path.tmp`）；`parts.h` 两个写入口合并成 `aip_parts_write` +
+  两个薄壳，delta 的脏标记改成**rename 成功之后**才清；`xb_journal_save` 同样原子。
+- 配置开关原子化：`g_obs_revise` / `g_rel_chain`（`AIP_ATOMIC_INT`）、`g_rel_ignore_derived`（`AIP_TLS`
+  + save/restore —— 顺手修"嵌套复核把外层 1 抹掉"的老 bug）。
+- 实测：`tests/concfiles.sh`（4 写 × 6 次保存 + 4 读 × 6 次问答）新实现 **0 失败**、
+  旧实现 **13/24 失败**；`concprobe --flip`（4 问答线程 + 1 翻配置线程）TSan **0 竞争**；
+  整包 **54/54**、`probematrix` diff 为空、asan(90) 干净。
+- 边界：**没有文件锁**（并发写是"最后一个赢"，读-改-写不安全）；`SIGKILL` 会留 `*.tmp.*`；
+  `action.h`/`code.h` 的生成代码仍直写；Windows 的 rename 语义没适配。
+
 ## 4z185. 并发：线程局部暂存 + 原子共享层 + TSan 零竞争（§6.582）
 - `conc.h`（`AIP_TLS` / `AipLock` 自旋锁 / `AIP_ATOMIC_*` / `aip_split_sp`），**不链 pthread**，默认构建命令行不变。
 - 88 个文件级 `static` 分四类（数据表共享 / 每次调用的暂存 TLS / 共享结构原子锁 / CLI 级不动）；

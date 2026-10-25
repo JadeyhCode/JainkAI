@@ -87,6 +87,19 @@ static Agent *agent_with_model(const char *model) {
     return a;
 }
 
+/* 控制线程：跑问答的时候**翻配置开关**（`::rel chain`、`::revise` 就是改这两个）。
+ * 判据不是"答案不变"（改了配置答案本来就该变），而是**不崩 + 每条都有答复 + TSan 0 竞争**。 */
+static void *flip_worker(void *arg) {
+    (void)arg;
+    for (int k = 0; k < 200; ++k) {
+        rel_chain_set(k & 1);
+        AIP_ST(g_obs_revise, (k & 2) ? 1 : 0);
+    }
+    rel_chain_set(0);
+    AIP_ST(g_obs_revise, 1);
+    return NULL;
+}
+
 /* 只读 emb 的线程：反复算同一个词的向量和（用来和"重建线程"对撞）*/
 static void *emb_reader(void *arg) {
     AI *ai = (AI *)arg;
@@ -129,6 +142,26 @@ static void *free_worker(void *arg) {
 
 int main(int argc, char **argv) {
     const char *model = argc > 1 ? argv[1] : "model.bin";
+
+    /* ---- 配置翻转模式（`--flip`）：问答线程在跑，控制线程在翻配置开关 ---- */
+    if (argc > 2 && strcmp(argv[2], "--flip") == 0) {
+        Agent *w[NT];
+        for (int t = 0; t < NT; ++t) { w[t] = agent_with_model(model); g_ai[t] = w[t]; }
+        char out[NT][NQ][OUT_CAP];
+        memset(out, 0, sizeof out);
+        pthread_t th[NT], ctl;
+        for (long t = 0; t < NT; ++t) pthread_create(&th[t], NULL, ask_worker, (void *)t);
+        pthread_create(&ctl, NULL, flip_worker, NULL);
+        for (int t = 0; t < NT; ++t) pthread_join(th[t], NULL);
+        pthread_join(ctl, NULL);
+        int answered = 1;
+        for (int t = 0; t < NT; ++t) for (int q = 0; q < NQ; ++q) if (!g_par[t][q][0]) answered = 0;
+        (void)out;
+        ok(answered, "④ 一边问答一边翻配置开关：每条问题都有答复（没崩、没读到半个状态）");
+        for (int t = 0; t < NT; ++t) agent_free(w[t]);
+        printf("\n通过 %d / 失败 %d\n", passes, fails);
+        return fails ? 1 : 0;
+    }
 
     /* ---- 冷启动模式（`concprobe <模型> --cold`）：先跑这个，别先热场 ---- */
     if (argc > 2 && strcmp(argv[2], "--cold") == 0) {

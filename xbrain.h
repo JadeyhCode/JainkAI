@@ -51,6 +51,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include "saveio.h"     /* §6.583 唯一临时名 + 落盘 + 原子替换 */
 
 /* 一次照抄的账。顺序就是输出顺序（新增 / 已知 / 冲突 / 覆盖 / 坏行 / 新建词）。 */
 typedef struct {
@@ -128,7 +129,10 @@ static inline void xb_note_line(XbResult *res, const char *fmt, ...) {
  * 不记共现边：那是"听到的"，不是"知识"；也不记 `[` 开头的内部节点。 */
 static inline int xb_journal_save(AI *ai, const char *path) {
     if (!ai || !ai->pool || !path) return -1;
-    FILE *f = fopen(path, "wb");
+    /* §6.583 流水也走"唯一临时名 + 原子替换"：两个脑同时写同一份流水不会写出半截文件。 */
+    char jtmp[1024];
+    if (aip_tmp_name(path, jtmp, sizeof jtmp) != 0) return -1;
+    FILE *f = fopen(jtmp, "wb");
     if (!f) return -1;
     int n = 0;
     for (size_t i = 0; i < ai->pool->count; ++i) {
@@ -158,7 +162,8 @@ static inline int xb_journal_save(AI *ai, const char *path) {
             }
         }
     }
-    fclose(f);
+    if (aip_sync_close(f) != 0) { remove(jtmp); return -1; }
+    if (aip_commit_rename(jtmp, path) != 0) { remove(jtmp); return -1; }
     return n;
 }
 

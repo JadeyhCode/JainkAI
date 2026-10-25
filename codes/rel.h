@@ -499,7 +499,9 @@ static inline void rel_excl_build(AI *ai) {
  * 用全局开关而不是给每个递归调用加参数：求解器有一串递归（传递/继承/对称/逆），
  * 加参数要改十几处调用点，而这个模式只在单线程、非嵌套复核时用得上
  * （和 ai.h 的 g_walk_trace 是同一类东西）。 */
-static int g_rel_ignore_derived = 0;
+/* §6.583 这是**调用期**的模式（进复核函数置 1、出来还原）⇒ 线程局部；
+ * 并且改成 save/restore（以前出口写死 0：嵌套复核时会把外层的 1 抹掉）。 */
+static AIP_TLS int g_rel_ignore_derived = 0;
 /* §6.125 「**允许把记忆里的猜测当输入**」的趟（默认 0 = 不许）。
  * 只在两处打开：① 答复层"先按记忆解一遍"；② 验证器复核含记忆步的链时**独立重推**。
  * 复核模式（g_rel_ignore_derived=1）下它一律无效 —— 猜测永远不算"干净依据"。 */
@@ -512,15 +514,18 @@ static AIP_TLS int g_rel_guess_visible = 0;
 static AIP_TLS int g_rel_guess_hops = 0;
 /* §6.131 **记忆链**（默认关，`AIP_RELCHAIN=1`）：允不允许把"记忆里的猜测"当**中间跳**。
  * 关着时只有终点那一跳能是猜测（= §6.125 的行为，逐字节不变）。 */
-static int g_rel_chain = -1;              /* -1 = 还没读过环境变量 */
+/* §6.583 配置开关（`::rel chain on|off` 会改，工作线程要看见）⇒ 原子 int。 */
+AIP_ATOMIC_INT(g_rel_chain, -1);          /* -1 = 还没读过环境变量 */
 static inline int rel_chain_on(void) {
-    if (g_rel_chain < 0) {
+    int v = AIP_LD(g_rel_chain);
+    if (v < 0) {
         const char *e = getenv("AIP_RELCHAIN");
-        g_rel_chain = (e && *e == '1') ? 1 : 0;
+        v = (e && *e == '1') ? 1 : 0;
+        AIP_ST(g_rel_chain, v);
     }
-    return g_rel_chain;
+    return v;
 }
-static inline void rel_chain_set(int on) { g_rel_chain = on ? 1 : 0; }
+static inline void rel_chain_set(int on) { AIP_ST(g_rel_chain, on ? 1 : 0); }
 
 /* 「把缓存排除在外再推一遍」——定义在下面（rel_solve 之后），这里先声明：
  * ① R0 要拿它当实时闸；② 候选枚举（rel_next_cands）也要用它，
@@ -1287,11 +1292,12 @@ static inline int rel_solve_ignoring_caches(AI *ai, const Token *a, uint8_t rid,
                                             const Token *b, int want_neg) {
     if (!ai || !a || !b || rid == 0) return 0;
     Proof pf;
+    int save_ig = g_rel_ignore_derived;    /* §6.583 嵌套复核：出来要还原成"进来时"的值 */
     g_rel_ignore_derived = 1;
     int save_hops = g_rel_guess_hops;      /* 复核用掉的不算外层的账（§6.131） */
     rel_solve(ai, a, rid, b, want_neg, &pf);
     g_rel_guess_hops = save_hops;
-    g_rel_ignore_derived = 0;
+    g_rel_ignore_derived = save_ig;
     return pf.status != 0;
 }
 
