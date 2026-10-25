@@ -1318,6 +1318,24 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.590 「你 怎么 知道」：出处（教的是教、语料是语料、推的是推、没有就说没有）
+PV="$WORK/pv"; rm -rf "$PV"; mkdir -p "$PV"
+cp "$ROOT/model.bin" "$PV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PV/" 2>/dev/null || true
+( cd "$PV" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '麒麟 属于 神兽\n你 怎么 知道 麒麟 属于 神兽\n你 怎么 知道 猫 属于 动物\n你 怎么 知道 麒麟 属于 植物\n神兽 属于 动物\n你 怎么 知道 麒麟 属于 动物\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '这 条 是 你 教 我 的' "$PV/out.txt" \
+    && ok "「你 怎么 知道 X」：教过的 ⇒ 说「这 条 是 你 教 我 的」" \
+    || bad "出处-教的" "$(grep -a '教 我' "$PV/out.txt" | head -1)"
+grep -qaF '语料 里 学 到 的' "$PV/out.txt" \
+    && ok "没教过但图上有 ⇒ 说「是 语料 里 学 到 的」" \
+    || bad "出处-语料" "$(grep -a '语料' "$PV/out.txt" | head -1)"
+grep -qaF '我 图 里 没 有 这 条' "$PV/out.txt" \
+    && ok "图里没有 ⇒ 老实说「没 有 这 条 —— 我 不 知道」" \
+    || bad "出处-没有" "$(grep -a '我 图 里' "$PV/out.txt" | head -1)"
+grep -qaF '推 出来 的 ： 麒麟 属于 神兽 ； 神兽 属于 动物' "$PV/out.txt" \
+    && ok "推得出来 ⇒ 给一条链「推 出来 的 ： …」（不带 `?` 和自环）" \
+    || bad "出处-链" "$(grep -a '推 出来' "$PV/out.txt" | head -1)"
+
 # §6.589 用户最自然的更正说法：「不 对 ， 猫 属于 猫科」⇒ 学新的、撤旧的（不再"听不懂"）
 CF="$WORK/cf"; rm -rf "$CF"; mkdir -p "$CF"
 cp "$ROOT/model.bin" "$CF/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$CF/" 2>/dev/null || true

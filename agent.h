@@ -2535,6 +2535,117 @@ static inline char *agent_why_other(AI *ai, char *const *words, size_t n,
     return rr;
 }
 
+/* ============================ §6.590 「你 怎么 知道」：出处 ============================
+ *
+ * 学习和信任是一件事的两面：用户教完一条事实，最自然的追问就是「你 怎么 知道」。
+ * 以前这类句子会掉到降级答复/词串。这里回答**这条知识是哪来的**，四类：
+ *   ① 你 教 我 的（本会话的修改账里有这条：第几条 + 来源）—— 账只进内存、有界（256 条）；
+ *   ② 语料 里 学 到 的（图上有这条边，但账里没有 ⇒ 不是我这次学的）；
+ *   ③ 推 出来 的（求解器给出一条链，最多 3 跳）；
+ *   ④ 我 不 知道（图里没有）。
+ * 措辞进数据（`出处.*`）。只认"问出处"的几种说法，别的句子原样交回流水线。
+ */
+static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float *out_conf) {
+    if (!ai || !words || n < 4) return NULL;
+    size_t skip = 0;
+    if (n >= 4 && !strcmp(words[0], "你") &&
+        (!strcmp(words[1], "怎么") || !strcmp(words[1], "为什么") || !strcmp(words[1], "凭什么")) &&
+        (!strcmp(words[2], "知道") || !strcmp(words[2], "晓得") || !strcmp(words[2], "说")))
+        skip = 3;
+    else if (n >= 4 && !strcmp(words[0], "谁") && !strcmp(words[1], "说") && !strcmp(words[2], "的"))
+        skip = 3;
+    else if (n >= 4 && !strcmp(words[0], "你") && !strcmp(words[1], "从") &&
+             (!strcmp(words[2], "哪儿") || !strcmp(words[2], "哪里")) &&
+             (!strcmp(words[3], "知道") || !strcmp(words[3], "晓得")))
+        skip = 4;
+    if (!skip || skip >= n) return NULL;
+    /* 尾巴上的 吗/呢/？ 去掉（"你 怎么 知道 猫 属于 动物 吗" 也是问出处）*/
+    while (n > skip + 2 && (!strcmp(words[n - 1], "吗") || !strcmp(words[n - 1], "呢") ||
+                            !strcmp(words[n - 1], "？") || !strcmp(words[n - 1], "?"))) n--;
+    if (n < skip + 3) return NULL;
+    char jb[64];
+    const char *aw = NULL, *bw = NULL, *rw = NULL;
+    uint8_t rid = 0;
+    int neg = 0, q = 0;
+    if (!rel_parse(ai, words + skip, n - skip, jb, sizeof jb, &aw, &rid, &neg, &bw, &q, &rw, 0))
+        return NULL;
+    if (!aw || !bw || !rid) return NULL;
+    Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw);
+    char resp[256];
+    /* ① 本会话的账（最新在前） */
+    if (A && B) {
+        size_t cnt = ai_modlog_count(ai);
+        for (size_t i = 0; i < cnt; ++i) {
+            const AIModEntry *e = ai_modlog_at(ai, i);
+            if (!e || e->rid != rid || e->a_id != A->id || e->b_id != B->id) continue;
+            if (e->kind == AIMOD_REL_DEL || e->kind == AIMOD_ASSOC_DEL) continue;
+            const char *t = ai_say_tpl("出处.你教的");
+            const char *sn = ai_write_src_name((AiWriteSrc)e->src);
+            der_fill3(resp, sizeof resp, t ? t : "这 条 是 你 教 我 的（账 第 $1 条 ， 来源 ： $2）",
+                      jb, sn, NULL);
+            /* 槽位 1 是关系词文本（$1 = "属于" 这类，读起来自然），槽位 2 是来源 */
+            if (out_conf) *out_conf = 0.8f;
+            g_last_src = AI_SRC_RELATION;
+            char *r = (char *)malloc(strlen(resp) + 1);
+            if (r) memcpy(r, resp, strlen(resp) + 1);
+            return r;
+        }
+    }
+    /* ② 图上有这条边（但不是这次学的） */
+    if (A && B && (neg ? rel_direct_neg(A, rid, B) : rel_direct(A, rid, B))) {
+        const char *t = ai_say_tpl("出处.语料");
+        snprintf(resp, sizeof resp, "%s",
+                 t ? t : "这 条 不 是 你 教 的 —— 是 语料 里 学 到 的（图 上 有 这 条 边）");
+        if (out_conf) *out_conf = 0.7f;
+        g_last_src = AI_SRC_RELATION;
+        char *r = (char *)malloc(strlen(resp) + 1);
+        if (r) memcpy(r, resp, strlen(resp) + 1);
+        return r;
+    }
+    /* ③ 推得出来（给一条链，最多 3 跳） */
+    if (A && B) {
+        Proof pf;
+        memset(&pf, 0, sizeof pf);
+        if (rel_solve_go(ai, A, rid, B, neg, &pf, 0, NULL, 0) && pf.status == (neg ? -1 : 1) &&
+            pf.n > 0) {
+            /* 链的形态：step[0] 是起点（rel=0），之后每一跳 `step[i-1] --rel--> step[i]`。
+             * 以前把起点当成"一跳"打印 ⇒ 出现「麒麟 ? 神兽」和尾巴「动物 属于 动物」。 */
+            char chain[192];
+            size_t off = 0;
+            chain[0] = 0;
+            size_t hops = 0;
+            for (size_t i = 1; i < pf.n && hops < 3 && off + 8 < sizeof chain; ++i, ++hops) {
+                const char *from = pf.step[i - 1].tok && pf.step[i - 1].tok->name
+                                       ? pf.step[i - 1].tok->name : "?";
+                const char *to = pf.step[i].tok && pf.step[i].tok->name
+                                     ? pf.step[i].tok->name : "?";
+                const char *rn = pf.step[i].rel ? rel_name_of(ai, pf.step[i].rel) : "?";
+                off += (size_t)snprintf(chain + off, sizeof chain - off, "%s%s %s%s %s",
+                                        hops ? " ； " : "", from,
+                                        pf.step[i].neg ? "不 " : "", rn, to);
+            }
+            if (!chain[0]) snprintf(chain, sizeof chain, "%s", jb);
+            const char *t = ai_say_tpl("出处.推的");
+            der_fill3(resp, sizeof resp, t ? t : "推 出来 的 ： $1", chain, NULL, NULL);
+            if (out_conf) *out_conf = 0.6f;
+            g_last_src = AI_SRC_RELATION;
+            char *r = (char *)malloc(strlen(resp) + 1);
+            if (r) memcpy(r, resp, strlen(resp) + 1);
+            return r;
+        }
+    }
+    /* ④ 不知道 */
+    {
+        const char *t = ai_say_tpl("出处.没有");
+        snprintf(resp, sizeof resp, "%s", t ? t : "我 图 里 没 有 这 条 —— 我 不 知道");
+        if (out_conf) *out_conf = 0.5f;
+        g_last_src = AI_SRC_FALLBACK;
+        char *r = (char *)malloc(strlen(resp) + 1);
+        if (r) memcpy(r, resp, strlen(resp) + 1);
+        return r;
+    }
+}
+
 static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
                                        float *out_conf, int *handled) {
     if (handled) *handled = 0;
@@ -3674,13 +3785,14 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                 (void)mod_propose(&micro_of(ai)->queue, &in);
             }
         } else if (conflict) {
-            /* §6.585 新旧冲突：新的记下了，但**旧的那条也还在** —— 说出来 + 给撤法。
-             * 措辞进数据（`[say] 学习.冲突`），五槽位：$1 主语 $2 关系 $3 新宾语 $4 旧宾语。 */
-            const char *t = ai_say_tpl("学习.冲突");
-            der_fill5(resp0, sizeof resp0,
-                      t ? t : "记下 了 ： $1 $2 $3（跟 以前 记 的 $1 $2 $5 冲突 —— 要 撤 旧 的 就 说「$1 不 $2 $5」）",
-                      aw, is_neg ? rshow : rw, bw, NULL,
-                      conflict->name ? conflict->name : "?");
+            /* §6.585 新旧冲突：新的记下了，但**旧的那条也还在**。
+             * 措辞只走一处（`agent_conflict_after` 追加 `改口.还冲突`）——
+             * §6.589 之前这里已经用 `学习.冲突` 说了一遍、外面又追加一遍 ⇒ 同一段话说两次（实测）。 */
+            {
+                const char *t = ai_say_tpl("学习.事实分隔");
+                der_fill5(resp0, sizeof resp0, t ? t : "记下 了 ： $1 $2 $3",
+                          aw, is_neg ? rshow : rw, bw, NULL, NULL);
+            }
             ai->n_rel_learned++;
             ai->n_learned++;
             /* §6.589 冲突处理收进一处（更正 ⇒ 直接撤；否则挂待确认 + 说清）*/
@@ -7638,6 +7750,11 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_belief(ai, words, n, &rc);
+        if (resp) conf = rc;
+    }
+    if (!resp) {
+        float rc = 0.5f;
+        resp = agent_provenance(ai, words, n, &rc);
         if (resp) conf = rc;
     }
     if (!resp) {

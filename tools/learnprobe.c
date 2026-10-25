@@ -212,6 +212,27 @@ int main(int argc, char **argv) {
         g_ag->brain = NULL;
     }
 
+    /* ---------- E. 「你 怎么 知道」：出处（教的是教、语料是语料、推的是推、没有就说没有） ---------- */
+    {
+        AI *ai = ai_new();
+        g_ag->brain = ai;
+        say(ai, "麒麟 属于 神兽");
+        const char *r = say(ai, "你 怎么 知道 麒麟 属于 神兽");
+        ok(strstr(r, "你 教 我 的") != NULL, "E 教过的 ⇒ 「这 条 是 你 教 我 的」");
+        const char *r2 = say(ai, "你 怎么 知道 麒麟 属于 动物");
+        ok(strstr(r2, "我 不 知道") != NULL || strstr(r2, "没 有 这 条") != NULL,
+           "E 没教过、也推不出来 ⇒ 老实说不知道");
+        say(ai, "神兽 属于 动物");
+        const char *r3 = say(ai, "你 怎么 知道 麒麟 属于 动物");
+        ok(strstr(r3, "推 出来 的") != NULL && strstr(r3, "神兽") != NULL,
+           "E 推得出来的 ⇒ 「推 出来 的 ： 链」");
+        const char *r4 = say(ai, "谁 说 的 恐龙 属于 鸟");
+        ok(r4[0] != 0, "E 「谁 说 的 …」也有答复（不炸）");
+        ok(ai_check_ok(ai), "E 全程不变式干净");
+        ai_free(ai);
+        g_ag->brain = NULL;
+    }
+
     free(g_ag);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;
