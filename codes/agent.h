@@ -3951,6 +3951,23 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
      * `这个 --[东西]--> 多少钱`（谓语是「东西」），图里就多了一条垃圾边。 */
     if (ai_token_has_question_word(aw) || ai_token_has_question_word(bw)) return NULL;
     if (!agent_subj_ok(aw)) return NULL;      /* §6.229 主语不能是别的虚词（很/了/的…）*/
+    /* §6.620 **主语被拼成"词池里没有的多字词"** ⇒ 这不是"关系句"，是**分词切歪**：
+     * `小明 叫 小明` 切成 小/明/叫/小/明，`rel_parse` 把主语拼成 `小明`（池里没这个词）、
+     * 还挑了个动态谓语 ⇒ 学成「小 --[明]--> 叫小明」（实测）。这里**直接退出**，
+     * 让后面的 natcoin（它专门负责"多字新主语 + 造词"）去处理。
+     * 判据只看"主比比首词长"且"池里没有" —— 不碰单字主语与已登记词。 */
+    /* §6.620 **"池里没有的多字宾语" + "池里没有的主语" ⇒ 这是**分词切歪**，不是关系句**：
+     * `小 明 叫 小明` 被拼成「小 --[明]--> 叫小明」（实测）；`小明 叫 小明` 学成
+     * 「记下 了 ： 小 明 叫小明」。这种情况**直接退出**，交给 natcoin（它专门合并多字主语 + 造词）。
+     * 只在这种"两边都不认识"的组合上退出：`猫 属于 哺乳动物`（主语认识）、
+     * `我 有 三 个 角`（数量宾语）都**不受影响**。 */
+    /* 排错口（env 门控）：看关系层把这句话切成了什么。定位"学出怪主语"时用它。 */
+    if (getenv("AIP_RELDBG"))
+        fprintf(stderr, "[rel] n=%zu aw=%s rid=%u rw=%s bw=%s pool_aw=%d pool_bw=%d\n",
+                n, aw, rid, rw ? rw : "?", bw,
+                pool_find(ai->pool, aw) ? 1 : 0, pool_find(ai->pool, bw) ? 1 : 0);
+    if (rid >= REL_DYN_BASE &&
+        strlen(bw) > strlen(words[n - 1]) && !pool_find(ai->pool, bw)) return NULL;
     /* §6.431 **传话动词不能被拼成主语**：`我说猫属于动物` 学成
      * 「我说猫 --[属于]--> 动物」，图上就多一个不存在的实体（`::rel 我说猫` 能查到）。
      * 主语里含 说/认为/觉得/以为/问 一律不学；这类句子归"转述"，不是事实。*/
