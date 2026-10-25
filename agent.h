@@ -2313,7 +2313,9 @@ static inline int agent_obj_ok(const char *w) {
  * 学 `A 在 B`（`在` 是核心关系 REL_AT），动词/多出来的词**如实说没记**。
  * 守卫：疑问词/否定/多词主语/地点后缀（上/里/下/中/外/前/后/旁边）一律不接。 */
 static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, float *out_conf) {
-    if (!ai || ai->rel_off || !ai->locative || !words || n < 4 || n > 6) return NULL;
+    /* §6.614 上界从 6 放宽到 10：主语/地名都可能是**没见过的多字词**（`灵狐兽 住 在 冰原`
+     * 分词后 7 个词，6 的上界直接把它挡在门外）。下界仍是 4（`A V 在 B` 最少四段）。 */
+    if (!ai || ai->rel_off || !ai->locative || !words || n < 4 || n > 10) return NULL;
     if (ai_has_question_word(words, n)) return NULL;
     for (size_t i = 0; i < n; ++i) {
         if (!words[i]) return NULL;
@@ -2366,8 +2368,21 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     if (strstr(bl, "地方") || strstr(bl, "某") || strstr(bl, "一个") || strstr(bl, "哪里"))
         return NULL;
     if (fr_is_func(bl)) return NULL;
-    if (!agent_subj_ok(words[0])) return NULL;     /* §6.229 `了 在 家里` 不该学 */
-    Token *A = pool_token_intern(ai->pool, words[0]);
+    /* §6.614 **主语可能是"没见过的多字词"**：`灵狐兽 住 在 冰原` 里 `灵狐兽` 会被分词成
+     * 灵/狐/兽 三个单字（造词发生在关系那条路上，地点这条路没有）⇒ 以前 `words[0]` 只取到
+     * 「灵」、而且整句 7 个词超过 `n<=6` 直接不学。现在把 `在` 前面 **除谓词以外的词全拼起来**
+     * 当主语（`灵狐兽`），谓词取紧邻 `在` 的那个词（`住`）。 */
+    char al[32]; size_t al_n = 0;
+    size_t subj_end = (at >= 2) ? at - 1 : 1;   /* 主语 = `在` 前面**除谓词外**的词 */
+    for (size_t i = 0; i < subj_end; ++i) {
+        size_t wl = strlen(words[i]);
+        if (al_n + wl + 1 >= sizeof al) return NULL;
+        memcpy(al + al_n, words[i], wl); al_n += wl;
+    }
+    al[al_n] = 0;
+    if (al_n == 0 || al_n > 12) return NULL;
+    if (!agent_subj_ok(al)) return NULL;           /* §6.229 `了 在 家里` 不该学 */
+    Token *A = pool_token_intern(ai->pool, al);
     Token *B = pool_token_intern(ai->pool, bl);
     if (!A || !B || A == B) return NULL;
     /* §6.218 **地点是独占的**（`::stats` 的测量：在=独占 单24/多0）⇒ 新地点**替掉**旧地点：
@@ -2394,29 +2409,30 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
     /* 把"没记"的那部分如实说出来（A、`在`、地点之外还有词就说） */
     char dropped[64]; size_t dl = 0; dropped[0] = 0;
     for (size_t i = 0; i < n; ++i) {
-        if (i == 0 || i == at) continue;
+        /* 主语那一段（0..subj_end-1）已经拼进 A 了，`在` 那一格也不算"没记" */
+        if (i < subj_end || i == at) continue;
         if (i >= at + 1 && i < b_end) continue;      /* 地点那一段不算"没记" */
         size_t wl = strlen(words[i]);
         if (dl + wl + 2 >= sizeof dropped) break;
         if (dl) dropped[dl++] = ' ';
         memcpy(dropped + dl, words[i], wl); dl += wl; dropped[dl] = 0;
     }
-    char buf[224];
+    char buf[320];
     if (retracted && old_place[0])
         /* §6.551 ⚠ 这一支实测**零命中**（blind4/blind5/holdout/pert/genprobe 共约 1000 句），
          * 保留但**不可达**（与 `学习.在`/`推理.猜` 同类）。没有搬它。 */
         snprintf(buf, sizeof buf, "记下 了 ： %s 在 %s（先前 记 的 %s 在 %s 撤 掉 了 ——"
-                 " 一个人 不 会 同时 在 两 个 地方）%s", words[0], bl, words[0], old_place,
+                 " 一个人 不 会 同时 在 两 个 地方）%.40s", al, bl, al, old_place,
                  dropped[0] ? "；动词 那 半 句 我 没 记 关系" : "");
     else if (dropped[0]) {
         /* §6.551 半句式（实测在 blind4/pert 里各命中 4/2 次 ⇒ 可达）：三槽位 主语/地点/没记的那半句 */
         const char *t = ai_say_tpl("学习.在半");
-        const char *const a[3] = { words[0], bl, dropped };
+        const char *const a[3] = { al, bl, dropped };
         der_filln(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2（「$3」这 半 句 我 没 记 关系）", a, 3);
     }
     else {
         const char *t = ai_say_tpl("学习.在");   /* §6.546 */
-        der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2", words[0], bl, NULL, NULL, NULL);
+        der_fill5(buf, sizeof buf, t ? t : "记下 了 ： $1 在 $2", al, bl, NULL, NULL, NULL);
     }
     if (out_conf) *out_conf = 0.7f;
     char *r = (char *)malloc(strlen(buf) + 1);
@@ -8132,6 +8148,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         }
         if (resp) conf = rc;
     }
+    /* §6.605/§6.614 **学一句之前先把标点从词里去掉**：`麒麟，属于 神兽` / `我 教 你 ， 企鹅 住 在 南极`
+     * 都是人话。以前只有 relation/newwords 两条路去标点，**地点那条没去** ⇒
+     * `我 教 你 ， 企鹅 住 在 南极` 学成了「**，** 在 南极」（主语是逗号！实测在 `::learn` 里能看到）。
+     * 现在统一在派发前算一次 `lw/ln`，所有学习路径共用；`agent_learn_multi` 仍吃**原词**
+     * （它要靠逗号分句）。答复/问句路径不受影响。 */
+    char npb[24][64]; char *npw[24];
+    size_t npm = aip_words_nopunct(words, n, npb, npw, 24);
+    char *const *lw = (npm >= 3) ? npw : words;
+    size_t ln = (npm >= 3) ? npm : n;
     /* 「他 以为 X」= **他告诉我的看法**，存在他名下（持久，存盘）；
      * 必须排在 agent_learn_relation 前面 —— 否则它会被当成「我」的知识学进图里。 */
     if (!resp) {
@@ -8163,6 +8188,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (!resp) {
         float rc = 0.5f;
         int cq = 0;
+        /* ⚠ 并列/选择/多主语这三条**必须吃原词**：它们靠顿号/逗号切并列项
+         * （`我 喜欢 猫、狗`）—— 去标点会把「猫、狗」粘成「猫狗」（实测 3 条套件红）。 */
         resp = agent_conj_both(ai, words, n, &cq, &rc);
         if (resp) conf = rc;
         if (!resp) resp = agent_conj_obj(ai, words, n, &cq, &rc);
@@ -8176,41 +8203,23 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
     }
-    /* §6.605 学一句之前先把标点从词里去掉：`麒麟，属于 神兽` 和 `我 教 你 ， 麒麟 属于 神兽`
-     * 都是人话（以前这两种说法整句掉兜底）。答复/问句路径不受影响。 */
-    {
-        char npb[24][64]; char *npw[24];
-        size_t npm = aip_words_nopunct(words, n, npb, npw, 24);
-        if (!resp && npm >= 3) {
-            float rc = 0.5f;
-            resp = agent_learn_relation(ai, npw, npm, &rc);
-            if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] relation(nopunct)=%s\n", resp ? "有" : "空");
-            if (resp) conf = rc;
-        }
-        if (!resp && npm >= 3) {
-            float rc = 0.5f;
-            resp = agent_learn_new_words(ai, npw, npm, &rc);
-            if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] newwords(nopunct)=%s\n", resp ? "有" : "空");
-            if (resp) conf = rc;
-        }
-    }
     if (!resp) {
         float rc = 0.5f;
-        resp = agent_learn_relation(ai, words, n, &rc);
+        resp = agent_learn_relation(ai, lw, ln, &rc);
         if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] relation=%s\n", resp ? "有" : "空");
         if (resp) conf = rc;
     }
     /* §6.218 地点块：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）*/
     if (!resp) {
         float rc = 0.5f;
-        resp = agent_learn_locative(ai, words, n, &rc);
+        resp = agent_learn_locative(ai, lw, ln, &rc);
         if (resp) conf = rc;
     }
     /* §6.173 含**新词**的自然说法（默认关）：关系词是已知核心关系、主语/宾语是没见过的
      * 单字词（或池里已有的整词）⇒ 当场造词 + 学一条。放着不吃就整句掉降级答复（实测）。 */
     if (!resp) {
         float rc = 0.5f;
-        resp = agent_learn_new_words(ai, words, n, &rc);
+        resp = agent_learn_new_words(ai, lw, ln, &rc);
         if (resp) conf = rc;
     }
     /* 「他 觉得 <问题>」→ 站到他的立场（只留归他的假设层），
