@@ -93,6 +93,18 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z183. 跨脑知识语义：照抄 + 本地优先 + 冲突可见（§6.580）
+- `xbrain.h`：`xb_journal_save` / `xb_journal_replay(模式)` / `xb_pair_state` / `xb_excl_other`；
+  `::parts replay <流水> [force|check]`。
+- 三条规则：照抄（确定性迁移，按**谓词名**不按 id）；**本地优先**（同对词相反极性 / 独占关系已有别的值 ⇒ 默认不写、
+  记账、上屏）；`force` 时极性冲突**真覆盖**、独占冲突**并列不撤回**（`属于` 有嵌套）。
+- 账：来源 `AI_WSRC_REPLAY`（外来）+ `AIMOD_REL_COPY/CONFLICT/OVERRIDE`；`ai_modlog_note_raw` 允许宾语本地还没词（b_id=0）。
+- 顺手修两个真 bug：旧 replay 的 **tab 偏移错位**（`rn=s1+1`）⇒ 一直在"照着改"却空转、还无条件计成功；
+  先 intern 再判冲突 ⇒ 冲突没写却留空词（改"先查后建"）。
+- 判据：新套件 `xbrain` **48 项**、tokenop **317 项**、整包 **50/50**、`probematrix` 28 行 diff 为空、selfcheck/asan(90) 全 PASS。
+- 边界：只搬关系事实（共现/经历不搬）；intern 出来的词只有名字；冲突判定是单跳；`force` 的独占冲突是**并列**（之后可能被 R6 答"不 对"）；
+  引擎的 `rel_direct` 对**动态**谓语不区分极性（老毛病，本轮未改）；**池级共享未做**。
+
 ## 4z182. 换出改真 LRU + 三处老隐患暴露（§6.575）
 - `parts.h`：`last_seq/use_seq` + 每轮挑**最久没用**的干净段；`token.h`：`part_touch` 钩子（读边时记"用"）。
 - `partprobe` ⑤ 加三条：热点换出后仍在内存 / 热点再问仍对 / 被换出的那条再问仍对且又读一次。

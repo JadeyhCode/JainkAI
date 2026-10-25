@@ -12,6 +12,7 @@
 #include "lex.h"          /* ASCII 代码词法（线 A ③；`::lex` / `::ascii`） */
 #include "model_io.h"
 #include "parts.h"      /* §6.569 局部加载：::parts 命令 */
+#include "xbrain.h"     /* §6.580 跨脑知识语义：照抄 / 冲突可见 / force */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -628,66 +629,11 @@ typedef struct {
     CmdId       id;
 } CmdDef;
 
-/* §6.574 词级流水的两个动作。**为什么放在 main.c 而不用 parts.h**：
- * replay 要走**和学习完全同一条路**（独占关系的撤回、新词登记、答复组织），
- * 那条路在 `agent_step` 里；在 parts.h 里重写一份就等于造了第二条"学习路径"，
- * 两条路迟早不一致（这项目在别处已经吃过这个亏）。所以 replay 就是"照着流水说一遍话"。 */
-static int cmd_journal_save(Agent *a, const char *path) {
-    if (!a || !a->brain || !path) return -1;
-    FILE *f = fopen(path, "wb");
-    if (!f) return -1;
-    AI *ai = a->brain;
-    int n = 0;
-    for (size_t i = 0; i < ai->pool->count; ++i) {
-        Token *t = ai->pool->tokens[i];
-        if (!t || !t->name || t->name[0] == '[' || t->count == 0) continue;
-        if (!t->edges_dirty) continue;             /* 只记**自己改过的**词 */
-        for (size_t k = 0; k < t->count; ++k) {
-            const AssocEntry *e = &token_assocs_ro(t)[k];
-            if (!e->main || !e->main->name || e->main->name[0] == '[') continue;
-            if (!e->rel && !e->nrel) continue;     /* 只装关系边（共现是"听到的"）*/
-            for (uint8_t r = 1; r <= REL_NEED; ++r) {
-                const char *rn = rel_name_of(ai, r);
-                if (!rn) continue;
-                if (e->rel & REL_BIT(r))  { fprintf(f, "R\t%s\t%s\t%s\t1\n", t->name, rn, e->main->name); n++; }
-                if (e->nrel & REL_BIT(r)) { fprintf(f, "R\t%s\t%s\t%s\t0\n", t->name, rn, e->main->name); n++; }
-            }
-        }
-    }
-    fclose(f);
-    return n;
-}
-
-static int cmd_journal_replay(Agent *a, const char *path, int *out_skipped) {
-    if (out_skipped) *out_skipped = 0;
-    if (!a || !a->brain || !path) return -1;
-    FILE *f = fopen(path, "rb");
-    if (!f) return -1;
-    char line[1024], out[512];
-    int applied = 0, skipped = 0;
-    while (fgets(line, sizeof line, f)) {
-        size_t L = strlen(line);
-        while (L && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = 0;
-        if (L < 4 || line[0] != 'R' || line[1] != '\t') continue;
-        char *s1 = strchr(line, '\t'); if (!s1) continue;
-        char *s2 = strchr(s1 + 1, '\t'); if (!s2) continue;
-        char *s3 = strchr(s2 + 1, '\t'); if (!s3) continue;
-        *s1 = 0; *s2 = 0; *s3 = 0;
-        const char *an = line + 2, *rn = s1 + 1, *bn = s2 + 1;
-        int pol = atoi(s3 + 1);
-        /* 照着"说一遍"：走的就是学习那条路（独占撤回/新词登记都在里面） */
-        char a40[96], r40[64], b40[96], sent[768];   /* 有界：流水行最长 1KB */
-        snprintf(a40, sizeof a40, "%.95s", an);
-        snprintf(r40, sizeof r40, "%.63s", rn);
-        snprintf(b40, sizeof b40, "%.95s", bn);
-        snprintf(sent, sizeof sent, "%s %s%s %s", a40, pol ? "" : "不 ", r40, b40);
-        agent_step(a, sent, out, sizeof out);
-        applied++;
-    }
-    fclose(f);
-    if (out_skipped) *out_skipped = skipped;
-    return applied;
-}
+/* §6.580 词级流水的两个动作搬进了 `xbrain.h`（跨脑语义单独一个头文件）：
+ *   · 存：只记**自己改过**的词（`edges_dirty`）的关系边，按名字写；
+ *   · 照抄：确定性迁移 + 本地优先 + 冲突可见（详见 xbrain.h 文件头）。
+ * 放在头文件里而不是 main.c，是为了**探针能测到同一份代码**
+ * （`tools/xbrain.c`），不用造第二条搬运路径。 */
 
 static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
@@ -1725,17 +1671,39 @@ int main(int argc, char **argv) {
                         printf("[卸下] %zu 个词的边已离开内存（再问会按需读回）\n", n);
                     }
                 } else if (!strncmp(sub, "journal", 7)) {
-                    /* §6.574 **词级改动流水**：只记自己改过的词的关系边，按**名字**写。
+                    /* §6.574/§6.580 **词级改动流水**：只记自己改过的词的关系边，按**名字**写。
                      * 跨池可用（另一具脑子照着改一遍就能有同样的知识）—— 这是"每个智能体
                      * 只维护自己的修改"真正能带走的那一份。 */
-                    int n = cmd_journal_save(a, parch);
+                    int n = xb_journal_save(a->brain, parch);
                     if (n < 0) printf("[流水] 写不进去：%s\n", parch);
-                    else printf("[流水] %d 条关系改动 ⇒ %s（按名字记，别的脑能照着改）\n", n, parch);
+                    else printf("[流水] %d 条关系改动 ⇒ %s（按名字记，别的脑能照着抄）\n", n, parch);
                 } else if (!strncmp(sub, "replay", 6)) {
-                    int sk = 0;
-                    int r = cmd_journal_replay(a, parch, &sk);
+                    /* §6.580 **照抄**（默认本地优先 + 冲突可见）：
+                     *   `::parts replay <流水> [force|check]`
+                     * force = 明知冲突还是写；check = 只查不写（干跑）。 */
+                    XbMode mode = XB_MODE_LOCAL_WINS;
+                    if (!strncmp(ovl, "force", 5)) mode = XB_MODE_FORCE;
+                    else if (!strncmp(ovl, "check", 5)) mode = XB_MODE_CHECK;
+                    else if (ovl[0]) printf("[流水] 认不出 `%s`（只认 force / check）\n", ovl);
+                    XbResult xr;
+                    int r = xb_journal_replay(a->brain, parch, mode, &xr);
                     if (r < 0) printf("[流水] 打不开：%s\n", parch);
-                    else printf("[流水] 照着改了 %d 条（跳过 %d 条：认不出的关系/词）\n", r, sk);
+                    else if (mode == XB_MODE_CHECK)
+                        printf("[流水] 只查没写：会新增 %zu 条（已知 %zu / 冲突 %zu / 坏行 %zu / 要新建词 %zu 个）\n",
+                               xr.r.added, xr.r.known, xr.r.conflicts, xr.r.bad, xr.r.newwords);
+                    else
+                        printf("[流水] 照抄 %d 条（新增 %zu / 已知 %zu / 冲突跳过 %zu / 覆盖 %zu / 坏行 %zu / 新建词 %zu）\n",
+                               r, xr.r.added, xr.r.known, xr.r.conflicts, xr.r.overridden,
+                               xr.r.bad, xr.r.newwords);
+                    if (xr.n_lines) {
+                        if (mode == XB_MODE_FORCE)
+                            printf("  ⚠ %zu 条与本地冲突，按 force 写了（并列的没有撤回旧值）：\n", xr.n_lines);
+                        else if (mode == XB_MODE_CHECK)
+                            printf("  ⚠ 会冲突 %zu 条（干跑，什么都没写）：\n", xr.n_lines);
+                        else
+                            printf("  ⚠ 冲突 %zu 条，本地优先**没写**（要硬写加 force）：\n", xr.n_lines);
+                        for (size_t li = 0; li < xr.n_lines; ++li) printf("    %s\n", xr.lines[li]);
+                    }
                 } else if (!strncmp(sub, "overlay", 7)) {
                     if (!pt) printf("[覆盖层] 先 attach base 再挂 delta\n");
                     else if (aip_parts_set_overlay(pt, parch) == 0)
@@ -1777,12 +1745,17 @@ int main(int argc, char **argv) {
                         printf("[换出] 换出 %zu 段 / 跳过 %zu 段（脏的或磁盘上没有的不换）\n", ev, skip);
                     }
                 } else {
-                    printf("[用法] ::parts save|attach|detach|stats|evict [路径|保留段数]\n");
+                    printf("[用法] ::parts save|attach|delta|overlay|detach|stats|verify|evict|journal|replay\n");
                     printf("  save   [路径]   把每个有边的词写成一个段（默认 model.parts）\n");
-                    printf("  attach [路径]   只读索引、装上按需读回的钩子\n");
+                    printf("  attach [路径] [delta]  只读索引、装上按需读回的钩子（可顺带挂覆盖层）\n");
+                    printf("  delta  [路径]   只把**自己改过**的段写出来（base 不动）\n");
+                    printf("  overlay [路径]  挂一个 delta 覆盖层（自己改过的段优先）\n");
                     printf("  detach          把边交还给磁盘（内存里不再留）\n");
                     printf("  stats           读回段数/字节、内存驻留段数、换出次数\n");
+                    printf("  verify          自检：内存 vs 段文件对不对得上（stale 必须是 0）\n");
                     printf("  evict N         换出到只剩 N 段（只换干净的）\n");
+                    printf("  journal [路径]  把**自己改过**的关系事实按名字写成流水\n");
+                    printf("  replay  [路径] [force|check]  照抄流水（默认本地优先：冲突不写，只报）\n");
                 }
                 continue;
             }
@@ -1953,11 +1926,10 @@ int main(int argc, char **argv) {
                             const AIModEntry *e = ai_modlog_at(b, i);
                             if (!e) continue;
                             Token *ta = pool_token_by_id(b->pool, e->a_id);
-                            Token *tb = pool_token_by_id(b->pool, e->b_id);
+                            /* b_id == 0 = 写这条账时宾语在本地还没这个词（§6.580 冲突未写）*/
+                            Token *tb = e->b_id ? pool_token_by_id(b->pool, e->b_id) : NULL;
                             printf("  #%u %s  %s %s%s %s\n", e->seq,
-                                   e->kind == AIMOD_REL ? "加关系" :
-                                   (e->kind == AIMOD_ASSOC ? "加共现" :
-                                   (e->kind == AIMOD_REL_DEL ? "删关系" : "删共现")),
+                                   ai_modlog_kind_name(e->kind),
                                    ta && ta->name ? ta->name : "?", e->neg ? "不 " : "",
                                    e->rid ? (rel_name_of(b, e->rid) ? rel_name_of(b, e->rid) : "?") : "",
                                    tb && tb->name ? tb->name : "?");
@@ -1983,13 +1955,14 @@ int main(int argc, char **argv) {
                     const AIModEntry *e = ai_modlog_at(a->brain, i);
                     if (!e) continue;
                     Token *ta = pool_token_by_id(a->brain->pool, e->a_id);
-                    Token *tb = pool_token_by_id(a->brain->pool, e->b_id);
-                    const char *kind = e->kind == AIMOD_REL ? "加关系"
-                                     : (e->kind == AIMOD_ASSOC ? "加共现"
-                                     : (e->kind == AIMOD_REL_DEL ? "删关系" : "删共现"));
+                    Token *tb = e->b_id ? pool_token_by_id(a->brain->pool, e->b_id) : NULL;
+                    const char *kind = ai_modlog_kind_name(e->kind);
                     const char *anam = ta && ta->name ? ta->name : "?";
                     const char *bnam = tb && tb->name ? tb->name : "?";
-                    if (e->kind == AIMOD_REL || e->kind == AIMOD_REL_DEL) {
+                    /* §6.580 关系类动作 = 加关系/删关系/照抄/冲突未写/强行覆盖（都是三元组） */
+                    if (e->kind == AIMOD_REL || e->kind == AIMOD_REL_DEL ||
+                        e->kind == AIMOD_REL_COPY || e->kind == AIMOD_REL_CONFLICT ||
+                        e->kind == AIMOD_REL_OVERRIDE) {
                         const char *rn = e->rid ? rel_name_of(a->brain, e->rid) : NULL;
                         printf("  #%u %s  %s %s%s %s  [%s]\n", e->seq, kind, anam,
                                e->neg ? "不 " : "", rn ? rn : "?", bnam,

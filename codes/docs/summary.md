@@ -110,12 +110,13 @@ A 里 21 条"诚实未知"，换成 3 种问法再问：13 条能答，但来源
 | **多智能体第一刀**（§6.564）| ✅ 地基（A 共存 / B 各记各的账 / C 指针标签）| 新套件 `multiagent` 32 项全过；整包 **46/46**；`probematrix` 28 行 diff 为空 |
 | **C 腿第 1 步：边数组收口**（§6.565）| ✅（171 处搬运，零行为变化）| 新套件 `assocaudit`；整包 **47/47**；`probematrix` 28 行 diff 为空；已走访问器 184 处 |
 | **C 腿第 2 步：边放磁盘、按需读回**（§6.566）| ✅ 跑通（只卸边）| 新套件 `partprobe` 24 项；整包 **48/48**；`probematrix` 28 行 diff 为空；`n_loads < 卸下词数` |
+| **跨脑知识语义：照抄+本地优先+冲突可见**（§6.580）| ✅（`force` 覆盖 / `check` 干跑；独占冲突并列不撤回）| 新套件 `xbrain` 48 项；tokenop 317 项；整包 **50/50**；顺手修"旧 replay 字段错位⇒空转"的老 bug；`probematrix` 28 行 diff 为空 |
 | **目标对账（四子句）**（§6.579）| ✅ 实现+证据齐；5 条局限已列 | 49/49、selfcheck、asan(90)、patcount、bucketload、assocaudit 全 PASS；`probematrix` 28 行 diff 为空 |
 | **`brain drop N` + 槽位复用**（§6.578）| ✅ | 当前脑拒绝关闭；new 填空槽；tokenop 311 项；整包 49/49 |
 | **多脑各自落盘 `brain save N`**（§6.577）| ✅ | 存指定脑并读回它自己的知识；tokenop 308 项；整包 49/49；`probematrix` diff 为空 |
 | **`::parts verify` 自检 + delta 自动覆盖层**（§6.576）| ✅ | stale 能检出、写完归零；tokenop 305 项；整包 49/49；`probematrix` diff 为空 |
 | **换出改真 LRU**（§6.575）| ✅ | 热点换出后仍在内存；整包 49/49；`probematrix` diff 为空；顺带修两处编译隐患 |
-| **词级流水 journal/replay**（§6.574）| 部分（replay=再学一遍）| 流水 3 条（非全 base）；tokenop 303 项；整包 49/49；`probematrix` diff 为空 |
+| **词级流水 journal/replay**（§6.574）| ✅（replay 语义在 §6.580 改成"照抄 + 冲突可见"）| 流水 3 条（非全 base）；tokenop 303→**317** 项；整包 49/49；`probematrix` diff 为空 |
 | **共享 base + 自己的 delta**（§6.573）| ✅ 边级（新词不带）| base 2852260B vs delta 430824B（15%），base 不变；tokenop 301 项；整包 49/49 |
 | **多脑：new 带模型 + diff**（§6.572）| ✅ | 两本账差得清（1 vs 317）；自比 0/0；tokenop 298 项；整包 49/49；`probematrix` diff 为空 |
 | **多智能体上命令面 `::brain`**（§6.571）| ✅（上限 4 脑，各持整份图）| 两个脑互不串台、各记各的账；tokenop 295 项；整包 49/49；`probematrix` diff 为空 |

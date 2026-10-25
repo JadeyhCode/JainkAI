@@ -448,6 +448,10 @@ typedef enum {
     AI_WSRC_SLEEP,          /* 睡眠巩固 */
     AI_WSRC_DECAY,          /* 衰减 / 巩固 */
     AI_WSRC_MICRO,          /* 微内核：受审通过的意图落地 */
+    /* §6.580 **外来**：另一个智能体搬过来的事实（`::parts replay` 的照抄路径）。
+     * 单列一个来源，是为了 `::mods` 里能一眼看出"这条不是我学的，是别的脑带过来的"，
+     * 也让"本地学 / 外来带"两类写入的条数各自可数。 */
+    AI_WSRC_REPLAY,
     AI_WSRC_N
 } AiWriteSrc;
 
@@ -460,6 +464,7 @@ static inline const char *ai_write_src_name(AiWriteSrc s) {
     case AI_WSRC_SLEEP:    return "睡眠";
     case AI_WSRC_DECAY:    return "衰减";
     case AI_WSRC_MICRO:    return "受审";
+    case AI_WSRC_REPLAY:   return "外来";
     default:               return "?";
     }
 }
@@ -485,7 +490,28 @@ typedef struct {
     uint8_t  kind;          /* AIMOD_REL / AIMOD_ASSOC */
 } AIModEntry;
 
-typedef enum { AIMOD_REL = 1, AIMOD_ASSOC = 2, AIMOD_REL_DEL = 3, AIMOD_ASSOC_DEL = 4 } AIModKind;
+typedef enum {
+    AIMOD_REL = 1, AIMOD_ASSOC = 2, AIMOD_REL_DEL = 3, AIMOD_ASSOC_DEL = 4,
+    /* §6.580 跨脑知识语义（`xbrain.h`）：外来事实分三种落法。
+     * 记账要把"带过来了"和"被本地知识挡住了"分开 —— 否则一致性问题不可见。 */
+    AIMOD_REL_COPY = 5,       /* 照抄进来（本地原来没有） */
+    AIMOD_REL_CONFLICT = 6,   /* 与本地知识冲突 ⇒ **没写**（只记账，事后可查） */
+    AIMOD_REL_OVERRIDE = 7    /* `force`：明知冲突还是写了（覆盖/并列） */
+} AIModKind;
+
+/* 账里那一条是"什么动作"（`::mods` / `::brain mods` 共用，只此一处） */
+static inline const char *ai_modlog_kind_name(unsigned kind) {
+    switch (kind) {
+    case AIMOD_REL:          return "加关系";
+    case AIMOD_ASSOC:        return "加共现";
+    case AIMOD_REL_DEL:      return "删关系";
+    case AIMOD_ASSOC_DEL:    return "删共现";
+    case AIMOD_REL_COPY:     return "照抄";
+    case AIMOD_REL_CONFLICT: return "冲突未写";
+    case AIMOD_REL_OVERRIDE: return "强行覆盖";
+    default:                 return "?";
+    }
+}
 
 typedef struct {
     AIModEntry ent[AI_MODLOG_MAX];
@@ -824,6 +850,11 @@ typedef struct {
     size_t n_relay;                 /* 其中「中转词容错」生效的次数 */
     size_t n_hedge;                 /* 其中「降级答复」兜住的次数 */
     size_t n_rel_learned;           /* 对话里现场学到的关系事实条数 */
+    /* §6.580 跨脑照抄的账（`::parts replay`）：新增/已知/冲突跳过/强行覆盖/坏行/新建词。
+     * 分开计的理由：一次搬运的结论必须是"我带了 N 条，其中 M 条被本地知识挡住"，
+     * 而不是一个笼统的"成功 N 条"。 */
+    size_t n_xcopy_added, n_xcopy_known, n_xcopy_conflict, n_xcopy_override,
+           n_xcopy_bad, n_xcopy_newwords;
     size_t n_revised;               /* 其中「改口」的次数：后说的观测替掉了先说的对立极性 */
     size_t n_rel_yes;               /* 靠关系推理答「是」的次数 */
     size_t n_rel_no;                /* 靠关系推理答「不是」的次数 */
@@ -5407,20 +5438,28 @@ static inline void ai_stats(const AI *ai) {
  * 放在最后包含：它要用完整的 AI 结构，也要用上面这些函数
  * （ai_tokenize / ai_focus_push / ai_free_words）。 */
 /* §6.564 记一笔"我改了什么"。有界环形：满了覆盖最旧的一条（`n` 继续涨，能看出溢出）。 */
-static inline void ai_modlog_note(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
-                                  AiWriteSrc s, AIModKind kind) {
-    if (!ai || !a || !b) return;
+/* 记一条账（只给 id）。§6.580：**冲突但没写**的那种账，宾语可能在本脑里还没有词
+ * （判定冲突时我们刻意不建词）⇒ 这里允许 `b_id == 0`，`::mods` 显示成 "?"。
+ * 有 id 这一层，账就不依赖"两端都是本池里活着的词"。 */
+static inline void ai_modlog_note_raw(AI *ai, uint32_t a_id, uint32_t b_id, uint8_t rid, int neg,
+                                      AiWriteSrc s, AIModKind kind) {
+    if (!ai || !a_id) return;
     AIModLog *L = &ai->modlog;
     AIModEntry *e = &L->ent[L->head];
     L->head = (L->head + 1u) % AI_MODLOG_MAX;
     L->n++;
-    e->a_id = a->id;
-    e->b_id = b->id;
+    e->a_id = a_id;
+    e->b_id = b_id;
     e->seq  = (uint32_t)L->n;
     e->rid  = rid;
     e->neg  = (uint8_t)(neg ? 1 : 0);
     e->src  = (uint8_t)((unsigned)s < AI_WSRC_N ? (unsigned)s : 0u);
     e->kind = (uint8_t)kind;
+}
+static inline void ai_modlog_note(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
+                                  AiWriteSrc s, AIModKind kind) {
+    if (!ai || !a || !b) return;
+    ai_modlog_note_raw(ai, a->id, b->id, rid, neg, s, kind);
 }
 static inline size_t ai_modlog_count(const AI *ai) { return ai ? ai->modlog.n : 0; }
 /* 第 i 条（0 = 最新）。越界返回 NULL。 */
@@ -5510,20 +5549,31 @@ static inline int ai_write_assoc(AI *ai, Token *a, Token *b, AiWriteSrc s) {
  * 谁来审查、什么时候落地 —— 所以这是一次**可测量**的开关，不是改行为。 */
 static inline int ai_write_rel_raw(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s);
 
-static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
+static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s);
+
+/* §6.580 同一条写入通道，但**账里记成哪种动作**由调用方定。
+ * 为什么要这个参数：照抄/覆盖和"现场学"写的是**同一张图**（必须同一个通道，
+ * 否则又会有第二条写入路径偷偷绕过受审），但账上必须能分开 —— 用户要能看见
+ * "这 3 条是外来带进来的""这 1 条明知冲突还是写了"。 */
+static inline int ai_write_rel_k(AI *ai, Token *a, Token *b, uint8_t rid, int neg,
+                                 AiWriteSrc s, unsigned kind) {
     if (!ai || !a || !b || rid == 0) return -1;
     ai_write_count(ai, s);
     int rc = ai_write_rel_raw(ai, a, b, rid, neg, s);
     /* §6.248 **写后读回校验**（可选，`::verifywrites on` / `AIP_VERIFYWRITES=1`，默认关）：
      * 声称写成功就立刻用读路径查一遍。这是"报了没学进去"那类错的**机制**兜底
      * （人工清单只能保证这一版）。默认关的理由：每次学习多一次查图，且生产路径不需要。 */
-    if (rc == 0) ai_modlog_note(ai, a, b, rid, neg, s, AIMOD_REL);   /* §6.564 */
+    if (rc == 0) ai_modlog_note(ai, a, b, rid, neg, s, (AIModKind)kind);   /* §6.564 */
     if (rc == 0 && ai->verify_writes && ai->rel_verify_hook) {
         /* 读路径在 rel.h（ai.h 之后才 include）⇒ 走**函数指针**，由 main.c 装上 */
         if (!ai->rel_verify_hook(a, b, rid, neg)) ai->n_verify_miss++;
         ai->n_verify_ok++;
     }
     return rc;
+}
+
+static inline int ai_write_rel(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {
+    return ai_write_rel_k(ai, a, b, rid, neg, s, AIMOD_REL);
 }
 
 static inline int ai_write_rel_raw(AI *ai, Token *a, Token *b, uint8_t rid, int neg, AiWriteSrc s) {

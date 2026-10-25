@@ -1270,15 +1270,40 @@ grep -q '覆盖层\] 挂上' "$DL/out.txt" && grep -q '对 ， 猫 -\[属于\]->
 # §6.574 词级流水：只记**自己改过的**（不是把 base 抄一遍）+ replay 走学习同一条路
 JR="$WORK/jr"; rm -rf "$JR"; mkdir -p "$JR"
 cp "$ROOT/session.bin" "$JR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$JR/" 2>/dev/null || true
-( cd "$JR" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new base.bin\n::brain use 1\n小龙 属于 神兽\n::parts journal j.txt\n';     printf '::brain use 0\n::parts replay j.txt\n'; } | \
+( cd "$JR" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new base.bin\n::brain use 1\n小龙 属于 神兽\n::parts journal j.txt\n';     printf '::brain use 0\n::parts replay j.txt\n小龙 属于 神兽 吗\n'; } | \
     "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
 jl=$(wc -l < "$JR/j.txt" 2>/dev/null || echo 0)
 [ "${jl:-0}" -ge 1 ] && [ "${jl:-0}" -le 10 ] \
     && ok "流水**只记自己改过的**（$jl 条，不是几百条 base 事实）" \
     || bad "流水-条数" "jl=$jl"
-grep -q '照着改了 [0-9]* 条' "$JR/out.txt" \
-    && ok "replay 真的走了（按流水条数）" \
+grep -q '照抄 [0-9]* 条' "$JR/out.txt" \
+    && ok "replay 真的走了（照抄口径）" \
     || bad "流水-replay" "$(grep '流水' "$JR/out.txt" | head -2 | tr '\n' ' ')"
+# §6.580 老 bug 的看守：旧的 replay 字段错位 ⇒ 报了"照着改了 N 条"却一条没写。
+# 现在**必须问得出**（这一条比"数了 N 行"强：它检查知识真的到了目标脑）。
+grep -q '对 ，' "$JR/out.txt" \
+    && ok "照抄之后**目标脑真的知道了**（不是只数了行数）" \
+    || bad "照抄-落地" "$(grep -E 'AI >|不 对' "$JR/out.txt" | tail -2 | tr '\n' ' ')"
+# §6.580 冲突可见 + 干跑 + force：两个空脑，一个说动物、一个说植物（属于 是独占关系）
+BR="$WORK/xbr"; rm -rf "$BR"; mkdir -p "$BR"
+cp "$ROOT/session.bin" "$BR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$BR/" 2>/dev/null || true
+( cd "$BR" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '::brain new\n::brain use 1\n猫 属于 动物\n::brain new\n::brain use 2\n猫 属于 植物\n::brain use 1\n::parts journal j2.txt\n';     printf '::brain use 2\n::parts replay j2.txt\n猫 属于 动物 吗\n::parts replay j2.txt check\n::parts replay j2.txt force\n猫 属于 动物 吗\n::mods\n'; } | \
+    "$WORK/aip" --model base.bin > out.txt 2>&1 ) || true
+grep -q '冲突跳过 1' "$BR/out.txt" \
+    && ok "冲突**默认不写**（本地优先：冲突跳过 1）" \
+    || bad "冲突-默认" "$(grep '照抄' "$BR/out.txt" | head -1)"
+grep -q '冲突 1 条，本地优先' "$BR/out.txt" \
+    && ok "冲突上了屏（人看得到是哪条）" \
+    || bad "冲突-上屏" "$(grep '⚠' "$BR/out.txt" | head -1)"
+grep -q '只查没写' "$BR/out.txt" \
+    && ok "干跑（check）在：只报会发生什么" \
+    || bad "冲突-check" "$(grep '流水' "$BR/out.txt" | sed -n 2p)"
+grep -q '覆盖 1' "$BR/out.txt" \
+    && ok "force 明知冲突还是写（覆盖 1）" \
+    || bad "冲突-force" "$(grep '照抄' "$BR/out.txt" | tail -1)"
+grep -q '冲突未写' "$BR/out.txt" && grep -q '强行覆盖' "$BR/out.txt" \
+    && ok "两种落法都进了本脑的账（冲突未写 / 强行覆盖）" \
+    || bad "冲突-账" "$(grep -E '冲突未写|强行覆盖' "$BR/out.txt" | tr '\n' ' ')"
 # §6.576 `::parts verify` 自检：内存 vs 段文件对不对得上（改写之后必须报 stale，写完 delta 必须归零）
 VR="$WORK/vr"; rm -rf "$VR"; mkdir -p "$VR"
 cp "$ROOT/session.bin" "$VR/base.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$VR/" 2>/dev/null || true
