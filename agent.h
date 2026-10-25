@@ -2791,46 +2791,61 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
     uint8_t rid = 0;
     int neg = 0, q = 0;
     if (!rel_parse(ai, rest, rn, jb, sizeof jb, &aw, &rid, &neg, &bw, &q, &rw, 0)) {
-        /* §6.615 **「为什么 A 在 B」**：`rel_parse` 不认这种四段式（A 住 在 B）⇒ 以前整句
-         * 掉兜底（实测「为什么 企鹅 住 在 南极」⇒「这个我 不 太 懂」）。这里单独接"地点"那种：
-         * 只记了「A 在 B」，**原因没有地方存** —— 就照实说，别装懂、也别装不会。 */
-        size_t at = rn;
-        for (size_t i = 1; i + 1 < rn; ++i) if (!strcmp(rest[i], "在")) { at = i; break; }
-        if (at == rn || at + 1 >= rn) return NULL;
-        char al[32]; size_t al_n = 0;
-        for (size_t i = 0; i < (at >= 2 ? at - 1 : 1); ++i) {
-            size_t wl = strlen(rest[i]);
-            if (al_n + wl + 1 >= sizeof al) return NULL;
-            memcpy(al + al_n, rest[i], wl); al_n += wl;
-        }
-        al[al_n] = 0;
-        char bl[40]; size_t bl_n = 0;
-        for (size_t i = at + 1; i < rn; ++i) {
-            if (!strcmp(rest[i], "吗") || !strcmp(rest[i], "呢")) continue;
-            size_t wl = strlen(rest[i]);
-            if (bl_n + wl + 1 >= sizeof bl) return NULL;
-            memcpy(bl + bl_n, rest[i], wl); bl_n += wl;
-        }
-        bl[bl_n] = 0;
-        if (!al_n || !bl_n) return NULL;
-        Token *pa = pool_find(ai->pool, al), *pb = pool_find(ai->pool, bl);
-        if (pa && pb && rel_direct(pa, REL_AT, pb)) {
-            const char *t = ai_say_tpl("推理.没记原因");
-            const char *const a2[2] = { al, bl };
-            char wbuf[640];
-            der_filln(wbuf, sizeof wbuf, t ? t : "我 只 记 了 $1 在 $2（地点）—— 没 记 原因", a2, 2);
-            if (out_conf) *out_conf = 0.6f;
-            if (handled) *handled = 1;
-            char *rr = (char *)malloc(strlen(wbuf) + 1);
-            if (rr) memcpy(rr, wbuf, strlen(wbuf) + 1);
-            return rr;
-        }
-        /* 连"这件事"都没记 ⇒ 也照实说（比"这个我 不 太 懂"更像人话）*/
+        /* §6.615 **「为什么 A 在 B」**：`rel_parse` 不认四段式（A 住 在 B）。先试"地点"读法；
+         * 认不出来就走 §6.621 的"原样念回去 + 没依据"（以前这里直接 `return NULL` ⇒ 掉兜底）。 */
         {
-            const char *t = ai_say_tpl("推理.没记原因.无");
+            size_t at = rn;
+            for (size_t i = 1; i + 1 < rn; ++i) if (!strcmp(rest[i], "在")) { at = i; break; }
+            if (at != rn && at + 1 < rn) {
+                char al[32]; size_t al_n = 0;
+                for (size_t i = 0; i < (at >= 2 ? at - 1 : 1); ++i) {
+                    size_t wl = strlen(rest[i]);
+                    if (al_n + wl + 1 >= sizeof al) { al_n = 0; break; }
+                    memcpy(al + al_n, rest[i], wl); al_n += wl;
+                }
+                al[al_n] = 0;
+                char bl[40]; size_t bl_n = 0;
+                for (size_t i = at + 1; i < rn; ++i) {
+                    if (!strcmp(rest[i], "吗") || !strcmp(rest[i], "呢")) continue;
+                    size_t wl = strlen(rest[i]);
+                    if (bl_n + wl + 1 >= sizeof bl) { bl_n = 0; break; }
+                    memcpy(bl + bl_n, rest[i], wl); bl_n += wl;
+                }
+                bl[bl_n] = 0;
+                Token *pa = (al_n && bl_n) ? pool_find(ai->pool, al) : NULL;
+                Token *pb = (al_n && bl_n) ? pool_find(ai->pool, bl) : NULL;
+                if (pa && pb && rel_direct(pa, REL_AT, pb)) {
+                    const char *t = ai_say_tpl("推理.没记原因");
+                    const char *const a2[2] = { al, bl };
+                    char wbuf[640];
+                    der_filln(wbuf, sizeof wbuf, t ? t : "我 只 记 了 $1 在 $2（地点）—— 没 记 原因", a2, 2);
+                    if (out_conf) *out_conf = 0.6f;
+                    if (handled) *handled = 1;
+                    char *rr = (char *)malloc(strlen(wbuf) + 1);
+                    if (rr) memcpy(rr, wbuf, strlen(wbuf) + 1);
+                    return rr;
+                }
+            }
+        }
+        /* §6.621 认得出"为什么 X"但认不出三段式（X 里有不认识的词 / 谓语不在清单）：
+         * 把 X **原样念回去** + 照实说没依据 —— 比"这个我 不 太 懂"信息量大得多。
+         * 实测动机：`为什么 企鹅 会 游泳`、`企鹅 为什么 会 游泳` 都掉兜底。 */
+        {
+            char rest_txt[64]; size_t rn2 = 0;
+            for (size_t i = 0; i < rn && rn2 + 4 < sizeof rest_txt; ++i) {
+                if (i) rest_txt[rn2++] = ' ';
+                size_t wl = strlen(rest[i]);
+                if (rn2 + wl >= sizeof rest_txt) break;
+                memcpy(rest_txt + rn2, rest[i], wl); rn2 += wl;
+            }
+            rest_txt[rn2] = 0;
+            const char *t = ai_say_tpl("推理.没记原因.无依据");
             char wbuf[640];
-            snprintf(wbuf, sizeof wbuf, "%s",
-                     t ? t : "我 不 知道 为什么 —— 图 里 连 这 件 事 都 没 记，更 没 记 原因。");
+            const char *const a1[1] = { rest_txt[0] ? rest_txt : "这 件 事" };
+            if (t) der_filln(wbuf, sizeof wbuf, t, a1, 1);
+            else snprintf(wbuf, sizeof wbuf,
+                          "我 不 知道 为什么 %s —— 图 里 没 记 过 这 条 依据，也 没 记 原因。",
+                          rest_txt[0] ? rest_txt : "这 件 事");
             if (out_conf) *out_conf = 0.5f;
             if (handled) *handled = 1;
             char *rr = (char *)malloc(strlen(wbuf) + 1);
