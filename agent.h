@@ -53,6 +53,8 @@ static inline void agent_teach_name(char *dst, size_t cap, const char *a, int ne
     think_utf8_clip(dst, cap, full);
 }
 
+static inline size_t ai_teach_evict(AI *ai);   /* §6.597 定义在下面（教学留痕上限） */
+
 /* §6.595 **「你教我的」要能跨会话认**：用户教会一条关系事实时留一个 `[教:…]` 标记节点
  * （走受审通道、当场过安全点）。它随图存盘 ⇒ 重开之后 `你 怎么 知道` 仍答得出"你教我的"。
  * 只给**学习路径**用（语料/推论不标）。`mod_off` 时不留（跟 `[修正:…]` 同一个规矩）。 */
@@ -68,6 +70,61 @@ static inline void agent_teach_mark(AI *ai, Token *A, uint8_t rid, Token *B, int
     (void)mod_propose(&micro_of(ai)->queue, &in);
     /* 当场落地：下一句「你 怎么 知道」就要查得到（和 §6.172d 的 `[修正:]` 同一理由）*/
     (void)micro_drain_queue(ai);
+    (void)ai_teach_evict(ai);   /* §6.597 上限：超了就把最老的留痕软删 */
+}
+
+/* §6.597 教学留痕的**上限与淘汰**：每条教过的事实一个 `[教:…]` 标记 ⇒ 教几千条就长几千个节点。
+ * 策略：只保最近 `AI_TEACH_MARK_MAX` 条，**最老的软删**（标垃圾 + 清边表，和 MOD_REMOVE_TOKEN
+ * 同一个做法：不搬池子里的指针）。被淘汰的留痕查不到 ⇒ 出处会退化成"语料里学的"（写在审计里）。
+ * 硬上限 4096，环境变量 `AIP_TEACHMARK_MAX` 可调小（A/B / 套件用）。 */
+#define AI_TEACH_MARK_MAX 256
+static inline size_t ai_teach_mark_max(void) {
+    const char *e = getenv("AIP_TEACHMARK_MAX");
+    if (e && e[0]) {
+        long v = strtol(e, NULL, 10);
+        if (v > 0 && v <= 4096) return (size_t)v;
+    }
+    return AI_TEACH_MARK_MAX;
+}
+static inline int ai_is_teach_mark(const Token *t) {
+    return t && t->name && !t->is_garbage &&
+           !strncmp(t->name, MICRO_TEACH_TOKEN_PREFIX, strlen(MICRO_TEACH_TOKEN_PREFIX));
+}
+/* 数一遍"还活着"的留痕（`::learn` 和淘汰共用）*/
+static inline size_t ai_teach_marks_live(AI *ai) {
+    size_t n = 0;
+    if (!ai || !ai->pool) return 0;
+    for (size_t i = 0; i < ai->pool->count; ++i)
+        if (ai_is_teach_mark(ai->pool->tokens[i])) n++;
+    return n;
+}
+/* 软删一条留痕（标垃圾 + 清边表；指向它的那条边交给 GC 的那趟清理，查询侧只查活着的）*/
+static inline void ai_teach_mark_evict(Token *t) {
+    if (!t) return;
+    t->is_garbage = 1;
+    t->count = 0;
+}
+/* 超过上限就淘汰最老的若干条。返回淘汰了几条。 */
+static inline size_t ai_teach_evict(AI *ai) {
+    if (!ai || !ai->pool) return 0;
+    size_t cap = ai_teach_mark_max();
+    size_t live = ai_teach_marks_live(ai);
+    if (live <= cap) return 0;
+    size_t want = live - cap, done = 0;
+    while (done < want) {
+        Token *oldest = NULL;
+        for (size_t i = 0; i < ai->pool->count; ++i) {
+            Token *t = ai->pool->tokens[i];
+            if (!ai_is_teach_mark(t)) continue;
+            if (!oldest || t->birth_tick < oldest->birth_tick ||
+                (t->birth_tick == oldest->birth_tick && t->id < oldest->id))
+                oldest = t;
+        }
+        if (!oldest) break;
+        ai_teach_mark_evict(oldest);
+        done++;
+    }
+    return done;
 }
 
 /* ==================== ② 触发接求解：**开放式关系问句**（§6.86） ====================
@@ -2603,7 +2660,8 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
     if (A && B) {
         char mk[160];
         agent_teach_name(mk, sizeof mk, aw, neg, rel_name_of(ai, rid), bw);
-        if (pool_find(ai->pool, mk)) {
+        Token *mt = pool_find(ai->pool, mk);
+        if (mt && !mt->is_garbage) {
             const char *t = ai_say_tpl("出处.你教的");
             der_fill3(resp, sizeof resp, t ? t : "这 条 是 你 教 我 的（来源 ： $2）",
                       jb, "教学留痕", NULL);
@@ -2637,7 +2695,7 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
     if (A && B && (neg ? rel_direct_neg(A, rid, B) : rel_direct(A, rid, B))) {
         const char *t = ai_say_tpl("出处.语料");
         snprintf(resp, sizeof resp, "%s",
-                 t ? t : "这 条 不 是 你 教 的 —— 是 语料 里 学 到 的（图 上 有 这 条 边）");
+                 t ? t : "这 条 **不 是 这 次 会话 教 的** —— 图 里 早 就 有（语料 ， 或者 以前 会话 教 的）");
         if (out_conf) *out_conf = 0.7f;
         g_last_src = AI_SRC_RELATION;
         char *r = (char *)malloc(strlen(resp) + 1);

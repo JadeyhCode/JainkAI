@@ -4429,14 +4429,10 @@ int main(int argc, char **argv) {
                      * 带参数 = 原来的"按共现学一句普通文本"。 */
                     AI *b = a->brain;
                     size_t marks = 0;
-                    for (size_t i = 0; i < b->pool->count; ++i) {
-                        const Token *t = b->pool->tokens[i];
-                        /* ⚠ 前缀长度别写死：`[教:` 是 5 字节（`[` 1 + `教` 3 + `:` 1）。
-                         * 写成 9 会把整段名字都比一遍 ⇒ 永远数出 0（实测栽过）。 */
-                        if (t && t->name &&
-                            !strncmp(t->name, MICRO_TEACH_TOKEN_PREFIX,
-                                     strlen(MICRO_TEACH_TOKEN_PREFIX))) marks++;
-                    }
+                    /* 只数**活着的**留痕：超过上限会被软删（§6.597），删掉的不该计数。
+                     * ⚠ 前缀长度别写死：`[教:` 是 5 字节（`[` 1 + `教` 3 + `:` 1）——
+                     * 写成 9 会把整段名字都比一遍 ⇒ 永远数出 0（实测栽过）。 */
+                    marks = ai_teach_marks_live(b);
                     printf("[学习设置]\n");
                     printf("  自然说法里的新词（造词）   = %s   ::natcoin on|off\n", b->nat_coin ? "开" : "关");
                     printf("  自然说法归一（定义句）     = %s   ::relnat on|off\n", b->rel_nat ? "开" : "关");

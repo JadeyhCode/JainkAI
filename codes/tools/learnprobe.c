@@ -302,8 +302,8 @@ int main(int argc, char **argv) {
             aip_shell_mirror_lead(back);
             ok(strstr(say(back, "你 怎么 知道 麒麟 属于 神兽"), "你 教 我 的") != NULL,
                "H5 重开之后仍答「你教我的」（**跨会话出处**）");
-            ok(strstr(say(back, "你 怎么 知道 猫 属于 动物"), "不 是 你 教 的") != NULL,
-               "H6 语料里的事实不冒充「你教我的」");
+            ok(strstr(say(back, "你 怎么 知道 猫 属于 动物"), "不 是 这 次 会话 教 的") != NULL,
+               "H6 语料里的事实不冒充「你教我的」（措辞：不是这次会话教的）");
             ai_free(back);
         }
         remove("_prov.bin");

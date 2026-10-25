@@ -1334,6 +1334,16 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.597 教学留痕**上限**：只保最近 N 条（AIP_TEACHMARK_MAX 可调小），最老的软删
+TM="$WORK/tm"; rm -rf "$TM"; mkdir -p "$TM"
+cp "$ROOT/model.bin" "$TM/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TM/" 2>/dev/null || true
+( cd "$TM" && { printf '::notepad off\n::char off\n'; for i in 1 2 3 4 5; do printf "麒麟$i 属于 神兽\n"; done; printf '::save m.bin\n'; } | \
+    env AIP_TEACHMARK_MAX=3 "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+( cd "$TM" && { printf '::notepad off\n::char off\n::learn\n'; } | env AIP_TEACHMARK_MAX=3 "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '教学留痕 3 个' "$TM/out2.txt" \
+    && ok "留痕**上限**生效（AIP_TEACHMARK_MAX=3 时教 5 条 ⇒ 只保 3 个）" \
+    || bad "留痕上限" "$(grep -a '教学留痕' "$TM/out2.txt" | head -1)"
+
 # §6.596 `::locative on|off`：地点块学习开关（`::learn` 总览里那条命令必须真的存在）
 LC3="$WORK/lc3"; rm -rf "$LC3"; mkdir -p "$LC3"
 cp "$ROOT/model.bin" "$LC3/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$LC3/" 2>/dev/null || true
@@ -1463,8 +1473,8 @@ cp "$ROOT/model.bin" "$PV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$R
 grep -qaF '这 条 是 你 教 我 的' "$PV/out.txt" \
     && ok "「你 怎么 知道 X」：教过的 ⇒ 说「这 条 是 你 教 我 的」" \
     || bad "出处-教的" "$(grep -a '教 我' "$PV/out.txt" | head -1)"
-grep -qaF '语料 里 学 到 的' "$PV/out.txt" \
-    && ok "没教过但图上有 ⇒ 说「是 语料 里 学 到 的」" \
+grep -qaF '不 是 这 次 会话 教 的' "$PV/out.txt" \
+    && ok "没教过但图上有 ⇒ 说清「不是这次会话教的」（§6.597 起措辞更诚实：语料或以前会话）" \
     || bad "出处-语料" "$(grep -a '语料' "$PV/out.txt" | head -1)"
 grep -qaF '我 图 里 没 有 这 条' "$PV/out.txt" \
     && ok "图里没有 ⇒ 老实说「没 有 这 条 —— 我 不 知道」" \
