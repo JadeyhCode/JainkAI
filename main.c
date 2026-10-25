@@ -4248,6 +4248,16 @@ int main(int argc, char **argv) {
                 uint8_t rid = rel_id_of(a->brain, w2, 0);   /* 只认表里已有的谓语（读操作不改表） */
                 if (!rid) { printf("[不认识的谓语：%s]\n", w2); continue; }
                 printf("[来源账] %s %s %s\n", w1, w2, w3);
+                /* §6.595 **教学留痕**：图里有没有 `[教:A_关系B]` —— 它随图存盘，
+                 * 所以"这条是你教的"跨会话认得出（修改账只进内存，重开就没了）。 */
+                {
+                    char mk[160];
+                    int is_neg = (strncmp(w2, "不", 3) == 0 && w2[3] == ' ');
+                    agent_teach_name(mk, sizeof mk, w1, is_neg,
+                                     is_neg ? w2 + 4 : w2, w3);
+                    if (pool_find(a->brain->pool, mk))
+                        printf("  **教学留痕：有**（%s）—— 这条是用户教的，随图存盘\n", mk);
+                }
                 /* ① 我的图里这条边在不在、是哪一档、命中多少 */
                 long ei = micro_edge_index(A, B);
                 if (ei >= 0) {
@@ -4466,6 +4476,8 @@ int main(int argc, char **argv) {
                 }
                 if (made)
                     printf("            当场造词 %zu 个（已进词表：以后能整词识别，也会随模型存盘）\n", made);
+                /* §6.595 留痕放**打印之后**：标记不是"教出来的词"，不该算进"当场造词 N 个" */
+                agent_teach_mark(a->brain, ta, rid, tb, neg);
                 continue;
             }
             case CMD_ASKCONFLICT: {

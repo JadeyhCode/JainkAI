@@ -44,6 +44,32 @@ static inline void agent_revise_name(char *dst, size_t cap, const char *a, int n
     think_utf8_clip(dst, cap, full);
 }
 
+/* §6.595 教学留痕的名字：`[教:A_关系B]`（否定：`[教:A_不_关系B]`）*/
+static inline void agent_teach_name(char *dst, size_t cap, const char *a, int neg,
+                                   const char *rel, const char *b) {
+    char full[256];
+    snprintf(full, sizeof full, MICRO_TEACH_TOKEN_PREFIX "%s_%s%s_%s]",
+             a ? a : "?", neg ? "不_" : "", rel ? rel : "?", b ? b : "?");
+    think_utf8_clip(dst, cap, full);
+}
+
+/* §6.595 **「你教我的」要能跨会话认**：用户教会一条关系事实时留一个 `[教:…]` 标记节点
+ * （走受审通道、当场过安全点）。它随图存盘 ⇒ 重开之后 `你 怎么 知道` 仍答得出"你教我的"。
+ * 只给**学习路径**用（语料/推论不标）。`mod_off` 时不留（跟 `[修正:…]` 同一个规矩）。 */
+static inline void agent_teach_mark(AI *ai, Token *A, uint8_t rid, Token *B, int neg) {
+    if (!ai || !A || !B || rid == 0 || rid >= REL_DYN_BASE) return;
+    if (micro_of(ai)->safe.mod_off) return;
+    ModIntent in;
+    memset(&in, 0, sizeof in);
+    in.type = MOD_ADD_TOKEN;
+    in.target = A;
+    agent_teach_name(in.name, sizeof in.name, A->name, neg, rel_name_of(ai, rid), B->name);
+    snprintf(in.source, sizeof in.source, "来源:教学");
+    (void)mod_propose(&micro_of(ai)->queue, &in);
+    /* 当场落地：下一句「你 怎么 知道」就要查得到（和 §6.172d 的 `[修正:]` 同一理由）*/
+    (void)micro_drain_queue(ai);
+}
+
 /* ==================== ② 触发接求解：**开放式关系问句**（§6.86） ====================
  *
  * 量出来的缺口（先量后改）：`猫 属于 什么` / `什么 属于 动物` / `谁 属于 动物` 这类
@@ -2306,6 +2332,7 @@ static inline char *agent_learn_locative(AI *ai, char *const *words, size_t n, f
         }
     }
     if (ai_write_rel(ai, A, B, REL_AT, 0, AI_WSRC_RELATION) != 0) return NULL;
+    agent_teach_mark(ai, A, REL_AT, B, 0);   /* §6.595 */
     ai->n_rel_learned++;
     /* 把"没记"的那部分如实说出来（A、`在`、地点之外还有词就说） */
     char dropped[64]; size_t dl = 0; dropped[0] = 0;
@@ -2572,7 +2599,22 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
     if (!aw || !bw || !rid) return NULL;
     Token *A = pool_find(ai->pool, aw), *B = pool_find(ai->pool, bw);
     char resp[256];
-    /* ① 本会话的账（最新在前） */
+    /* ① 图上有没有**教学留痕**（§6.595）：有 ⇒ 跨会话也认得出"你教我的" */
+    if (A && B) {
+        char mk[160];
+        agent_teach_name(mk, sizeof mk, aw, neg, rel_name_of(ai, rid), bw);
+        if (pool_find(ai->pool, mk)) {
+            const char *t = ai_say_tpl("出处.你教的");
+            der_fill3(resp, sizeof resp, t ? t : "这 条 是 你 教 我 的（来源 ： $2）",
+                      jb, "教学留痕", NULL);
+            if (out_conf) *out_conf = 0.8f;
+            g_last_src = AI_SRC_RELATION;
+            char *r = (char *)malloc(strlen(resp) + 1);
+            if (r) memcpy(r, resp, strlen(resp) + 1);
+            return r;
+        }
+    }
+    /* ② 本会话的账（最新在前） */
     if (A && B) {
         size_t cnt = ai_modlog_count(ai);
         for (size_t i = 0; i < cnt; ++i) {
@@ -3702,6 +3744,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
          * 第一版连 `aw` 一起查，把 `我 叫 小明`（名字介绍）也挡了，套件当场红。 */
         if (fr_is_func(rw) || fr_is_func(bw)) return NULL;
         if (ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION) != 0) return NULL;
+        agent_teach_mark(ai, A, rid, B, is_neg);   /* §6.595 留痕：这条是用户教的 */
         {
             /* §6.545 学习确认也进数据（四槽位：主语/否定词/关系/宾语） */
             const char *t = ai_say_tpl("学习.事实");
@@ -3743,6 +3786,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
         /* 统一写入通道：关系事实是**知识**，开关打开时改走受审通道（默认直写）。 */
         int rc = ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION);
         if (rc != 0) return NULL;
+        agent_teach_mark(ai, A, rid, B, is_neg);   /* §6.595 */
         /* **改口**：这一句把同一条边上对立极性的旧观测替掉了（token.h 里做的）。
          * 那是「用户改了主意」，不是「系统里有两份互相矛盾的依据」——
          * 回答要说清楚，否则用户不知道自己教的修正到底生效没有。 */
@@ -4033,6 +4077,7 @@ static inline char *agent_learn_new_words(AI *ai, char *const *words, size_t n,
     Token *conflict = NULL;
     if (!neg && rel_is_excl(ai, rid)) conflict = rel_excl_witness(ai, ta, rid, tb, 0);
     if (ai_write_rel(ai, ta, tb, rid, neg, AI_WSRC_RELATION) != 0) return NULL;
+    agent_teach_mark(ai, ta, rid, tb, neg);   /* §6.595 */
     ai->n_rel_learned++;
     ai->n_learned++;
     aip_note_fact(ai, ta->name, words[ri], tb->name);

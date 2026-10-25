@@ -281,6 +281,37 @@ int main(int argc, char **argv) {
         g_ag->brain = NULL;
     }
 
+    /* ---------- H. 「你教我的」要**跨会话**认（教学留痕随图存盘） ---------- */
+    {
+        AI *ai = ai_load_file(model);
+        if (!ai) { printf("读不到 %s\n", model); return 1; }
+        aip_shell_mirror_lead(ai);   /* G 组的理由同款：引导语要落成外壳词 */
+        g_ag->brain = ai;
+        say(ai, "麒麟 属于 神兽");
+        ok(strstr(say(ai, "你 怎么 知道 麒麟 属于 神兽"), "你 教 我 的") != NULL,
+           "H1 刚教完 ⇒ 出处是「你教我的」");
+        ok(pool_find(ai->pool, "[教:麒麟_属于_神兽]") != NULL,
+           "H2 图上留了教学痕迹 `[教:麒麟_属于_神兽]`（普通标记节点，随图存盘）");
+        size_t sz = ai_save_file(ai, "_prov.bin");
+        AI *back = sz ? ai_load_file("_prov.bin") : NULL;
+        ok(back != NULL, "H3 存盘再读回");
+        if (back) {
+            /* 关键：**新脑子**里没有本会话的修改账 ⇒ 靠留痕认 */
+            ok(pool_find(back->pool, "[教:麒麟_属于_神兽]") != NULL, "H4 读回来留痕还在");
+            g_ag->brain = back;
+            aip_shell_mirror_lead(back);
+            ok(strstr(say(back, "你 怎么 知道 麒麟 属于 神兽"), "你 教 我 的") != NULL,
+               "H5 重开之后仍答「你教我的」（**跨会话出处**）");
+            ok(strstr(say(back, "你 怎么 知道 猫 属于 动物"), "不 是 你 教 的") != NULL,
+               "H6 语料里的事实不冒充「你教我的」");
+            ai_free(back);
+        }
+        remove("_prov.bin");
+        ok(ai_check_ok(ai), "H7 全程不变式干净");
+        ai_free(ai);
+        g_ag->brain = NULL;
+    }
+
     free(g_ag);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

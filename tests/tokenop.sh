@@ -1320,6 +1320,27 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.595 教学留痕：`你 怎么 知道` 要能**跨会话**答"你教我的"（标记随图存盘）
+PV2="$WORK/pv2"; rm -rf "$PV2"; mkdir -p "$PV2"
+cp "$ROOT/model.bin" "$PV2/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PV2/" 2>/dev/null || true
+( cd "$PV2" && { printf '::notepad off\n::char off\n'; printf '麒麟 属于 神兽\n::save m.bin\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '已保存' "$PV2/out1.txt" \
+    && ok "教会一条事实并存盘（留痕 `[教:…]` 随图落盘）" \
+    || bad "留痕-存盘" "$(tail -2 "$PV2/out1.txt" | tr '\n' ' ')"
+( cd "$PV2" && { printf '::notepad off\n::char off\n'; printf '你 怎么 知道 麒麟 属于 神兽\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
+    && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
+    || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
+
+# §6.595 `::src` 也要认教学留痕（诊断命令和自然语言回答同一份判据）
+( cd "$PV2" 2>/dev/null && { printf '::notepad off\n::char off\n麒麟 属于 神兽\n::src 麒麟 属于 神兽\n'; } | \
+    "$WORK/aip" --model ""$ROOT/model.bin"" > src1.txt 2>&1 ) || true
+grep -qaF '**教学留痕：有**' "$PV2/src1.txt" \
+    && ok "`::src A R B` 认得出「教学留痕」（和 `你 怎么 知道` 同一份判据）" \
+    || bad "src-留痕" "$(grep -a '来源账\|教学' "$PV2/src1.txt" | head -2 | tr '\n' ' ')"
+
 # §6.594 `::askconflict off`：冲突**照样说清**，但不再追问"要 我 改 掉 旧 的 吗"
 AC="$WORK/ac"; rm -rf "$AC"; mkdir -p "$AC"
 cp "$ROOT/model.bin" "$AC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$AC/" 2>/dev/null || true
