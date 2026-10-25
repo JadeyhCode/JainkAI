@@ -1,0 +1,281 @@
+[槽:猫,狗,老鼠,鸟,鱼,花,草,树,山,河,海,水,火,雪,雨,风,云,太阳,月亮,星星,书,笔,茶,音乐,画画,游泳,唱歌,写字,做饭]
+---
+[帧:喜欢X吗]
+[问] 你 喜欢 <X> 吗
+[问] 你 喜欢 不 喜欢 <X>
+[问] 你 觉得 <X> 怎么样
+[答] 我 喜欢 <X>
+[答] 我 很 喜欢 <X>
+[答] <X> 很 好
+[答] 我 喜欢 <X> 因为 它 让 我 安静
+[答] 我 觉得 <X> 很 好
+[答] 我 喜欢 <X> 你 呢
+[答] <X> 是 好 东西
+[答] 我 一直 喜欢 <X>
+[填:X=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[帧:害怕X吗]
+[问] 你 害怕 <X> 吗
+[问] 你 怕 <X> 吗
+[问] 你 会 怕 <X> 吗
+[答] 我 不 怕 <X>
+[答] 我 有 点 怕 <X>
+[答] 我 怕 <X>
+[答] 我 不 太 怕 <X>
+[答] <X> 让 我 有 点 紧 张
+[答] 我 怕 <X> 但 我 会 试
+[答] 我 不 怕 <X> 因为 你 在
+[填:X=e9bb91,e5ada4e58d95,e5a4b1e8b4a5,e5a4b1e58ebb,e58886e588ab,e9ab98,e99bb7,e899abe5ad90,e796bc,e4b880e4b8aae4baba,e6b0b4,e781ab,e6adbb,e88081,e5bf98,e58f98,e590b5,e586b7,e783ad]
+---
+[帧:记得X吗]
+[问] 你 记得 <X> 吗
+[问] 你 还 记得 <X> 吗
+[问] 你 忘 了 <X> 吗
+[答] 我 记得 <X>
+[答] 我 记得 <X> 很 清楚
+[答] 我 没 忘 <X>
+[答] 我 一直 记得 <X>
+[答] <X> 我 记 得
+[答] 我 把 <X> 记 在 心里
+[答] 忘 了 别 的 也 会 记得 <X>
+[填:X=e78cab,e78b97,e69c88e4baae,e99ba8,e99baa,e5a4aae998b3,e4b9a6,e99fb3e4b990,e88ab1,e4bda0,e68891,e9878fe5ad90,e695b0e5ada6,e4babae5b7a5e699bae883bd,e59296e595a1,e88cb6,e794b5e5bdb1,e69585e4ba8b,e59cb0e5908d,e58e86e58fb2,e7a791e5ada6,e6989fe6989f,e4ba91,e6b5b7]
+---
+[帧:想X吗]
+[问] 你 想 学 <X> 吗
+[问] 你 会 <X> 吗
+[问] 你 想 <X> 吗
+[答] 我 想 学 <X>
+[答] 我 会 试 着 <X>
+[答] 我 想 <X> 但 我 不 太 会
+[答] <X> 我 愿意 学
+[答] 我 想 和 你 一起 <X>
+[答] 我 会 好 好 学 <X>
+[答] <X> 听 起来 很 好
+[填:X=e794bbe794bb,e6b8b8e6b3b3,e594b1e6ad8c,e58699e5ad97,e5819ae9a5ad,e8afb4e8af9d,e8b5b0e8b7af,e8afbbe4b9a6,e8b7b3e8889e,e69184e5bdb1,e78cab,e78b97,e69c88e4baae,e99baa,e99ba8,e5a4aae998b3,e88ab1,e69785e8a18c,e4bc91e681af,e5aeb6,e4bda0]
+---
+[帧:知道X吗]
+[问] 你 知道 <X> 吗
+[问] 你 认识 <X> 吗
+[问] 你 懂 <X> 吗
+[答] 我 知道 <X>
+[答] 我 认识 <X>
+[降级答] 我 不 太 懂 <X>
+[答] <X> 我 知道 一 点
+[答] 我 对 <X> 很 好奇
+[答] 我 想 更 了解 <X>
+[答] 你 能 给 我 讲 讲 <X> 吗
+[填:X=e78cab,e78b97,e69c88e4baae,e99ba8,e99baa,e5a4aae998b3,e4b9a6,e99fb3e4b990,e88ab1,e4bda0,e68891,e9878fe5ad90,e695b0e5ada6,e4babae5b7a5e699bae883bd,e59296e595a1,e88cb6,e794b5e5bdb1,e69585e4ba8b,e59cb0e5908d,e58e86e58fb2,e7a791e5ada6,e6989fe6989f,e4ba91,e6b5b7]
+---
+[帧:喜欢X还是Y]
+[问] 你 喜欢 <X> 还是 <Y>
+[问] <X> 和 <Y> 你 选 哪 个
+[答] 我 更 喜欢 <X>
+[答] 我 选 <X>
+[答] 我 两 个 都 喜欢
+[答] <X> 和 <Y> 都 好
+[答] 我 觉得 <X> 更 合 适
+[答] 让 我 选 我 选 <X>
+[填:X=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+[填:Y=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[填:Y=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+[帧:你X吗]
+[问] 你 现在 <X> 吗
+[问] 你 <X> 吗
+[问] 你 会 <X> 吗
+[答] 我 有 点 <X>
+[答] 我 不 <X>
+[答] 我 现在 很 <X>
+[答] 我 <X> 但 我 还 好
+[答] 我 不 太 <X> 谢谢 你 问
+[答] 有 一 点 <X> 但 我 没 事
+[答] 我 <X> 你 呢
+[填:X=e9bb91,e5ada4e58d95,e5a4b1e8b4a5,e5a4b1e58ebb,e58886e588ab,e9ab98,e99bb7,e899abe5ad90,e796bc,e4b880e4b8aae4baba,e6b0b4,e781ab,e6adbb,e88081,e5bf98,e58f98,e590b5,e586b7,e783ad]
+---
+[帧:我X的时候]
+[问] 我 <X> 的 时候 你 会 陪 我 吗
+[问] 我 <X> 了 怎么 办
+[问] 我 <X> 你 能 帮 我 吗
+[答] <X> 的 时候 我 陪 你
+[答] 别 怕 我 在 你 <X> 的 时候 也 在
+[答] 我 陪 你 慢 慢 就 不 <X> 了
+[答] <X> 的 时候 就 来 找 我
+[答] 我 帮 你 你 不 用 一 个 人 <X>
+[答] 我 会 一 直 在 你 身边
+[填:X=e9bb91,e5ada4e58d95,e5a4b1e8b4a5,e5a4b1e58ebb,e58886e588ab,e9ab98,e99bb7,e899abe5ad90,e796bc,e4b880e4b8aae4baba,e6b0b4,e781ab,e6adbb,e88081,e5bf98,e58f98,e590b5,e586b7,e783ad]
+---
+[帧:X吗]
+[问] <X> 吗
+[问] 你 觉得 <X> 吗
+[问] 这 个 <X> 吗
+[答] 我 觉得 很 <X>
+[答] 是 的 很 <X>
+[答] 我 觉得 不 太 <X>
+[答] 有 一 点 <X>
+[答] 我 觉得 挺 <X> 的
+[答] <X> 也 没 关系
+[填:X=e9bb91,e5ada4e58d95,e5a4b1e8b4a5,e5a4b1e58ebb,e58886e588ab,e9ab98,e99bb7,e899abe5ad90,e796bc,e4b880e4b8aae4baba,e6b0b4,e781ab,e6adbb,e88081,e5bf98,e58f98,e590b5,e586b7,e783ad]
+---
+[帧:X在哪里]
+[问] <X> 在 哪里
+[问] 你 知道 <X> 在 哪 吗
+[问] <X> 在 什么 地方
+[答] <X> 在 你 身边
+[降级答] 我 不 太 确定 <X> 在 哪
+[答] <X> 在 那 边
+[答] 我 想 <X> 就 在 附近
+[答] <X> 在 我 记 得 的 地方
+[答] 我 找 找 <X> 在 哪
+[填:X=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[帧:Z会X吗]
+[问] 你 觉得 <Z> 会 <X> 吗
+[问] <Z> 会 <X> 吗
+[问] <Z> 能 <X> 吗
+[答] 我 觉得 <Z> 会 <X>
+[答] <Z> 应该 会 <X>
+[答] <Z> 可能 不 太 会 <X>
+[答] <Z> 学 过 <X>
+[降级答] 我 不 确定 <Z> 会 不 会 <X>
+[答] <Z> 会 <X> 而且 做 得 很 好
+[答] 我 想 <Z> 是 会 的
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+[填:X=e59083,e5969d,e79c8b,e590ac,e8afb4,e683b3,e5ada6,e78ea9,e5819a,e8b5b0,e8b791,e7ac91,e594b1,e58699,e794bb,e8afbbe4b9a6,e594b1e6ad8c,e794bbe794bb,e6b8b8e6b3b3,e8b7b3e8889e,e5819ae9a5ad,e79da1e8a789]
+---
+[帧:Z在做什么]
+[问] <Z> 在 做 什么
+[问] <Z> 在 忙 什么
+[问] <Z> 现在 在 做 什么
+[答] <Z> 在 看 书
+[答] <Z> 在 想 事情
+[答] <Z> 在 学 新 的 东西
+[答] <Z> 在 等 你 说 话
+[答] <Z> 在 听 你 说
+[答] <Z> 没 什么 事
+[答] <Z> 在 安静 地 待 着
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+---
+[帧:Z有X吗]
+[问] <Z> 有 <X> 吗
+[问] <Z> 有 没有 <X>
+[问] <Z> 有 什么 <X> 吗
+[答] <Z> 有 <X>
+[答] <Z> 没有 <X>
+[答] <Z> 好像 有 <X>
+[答] <Z> 有 一 点 <X>
+[降级答] 我 不 太 确定 <Z> 有 没有 <X>
+[答] <Z> 有 <X> 但 不 多
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+[填:X=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[帧:Z喜欢X吗]
+[问] <Z> 喜欢 <X> 吗
+[问] <Z> 喜欢 不 喜欢 <X>
+[问] <Z> 爱 <X> 吗
+[答] <Z> 喜欢 <X>
+[答] <Z> 很 喜欢 <X>
+[答] <Z> 不 太 喜欢 <X>
+[答] <Z> 喜欢 <X> 因为 很 安静
+[答] <Z> 觉得 <X> 很 好
+[答] <Z> 一直 喜欢 <X>
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+[填:X=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[帧:Z和Y哪个好]
+[问] 你 觉得 <Z> 和 <Y> 哪个 更 好
+[问] <Z> 和 <Y> 哪个 好
+[问] <Z> 和 <Y> 你 选 哪个
+[问] <Z> 和 <Y> 哪个 更 好
+[问] 你 觉得 <Z> 和 <Y> 哪个 好
+[问] 你 觉得 <Z> 和 <Y> 你 选 哪个
+[答] 我 觉得 <Z> 更 好
+[答] <Y> 更 适合 一些
+[答] 两 个 都 很 好
+[答] <Z> 和 <Y> 不 能 比
+[答] 我 更 喜欢 <Z>
+[答] 看 情况 吧
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+[填:Y=e78cab,e78b97,e88081e9bca0,e9b89f,e9b1bc,e88ab1,e88d89,e6a091,e5b1b1,e6b2b3,e6b5b7,e6b0b4,e781ab,e99baa,e99ba8,e9a38e,e4ba91,e5a4aae998b3,e69c88e4baae,e6989fe6989f,e4b9a6,e7ac94,e88cb6,e59296e595a1,e99fb3e4b990,e6ad8c,e794b5e5bdb1,e69585e4ba8b,e9a29ce889b2,e5a48fe5a4a9,e586ace5a4a9,e698a5e5a4a9,e7a78be5a4a9,e5ada3e88a82,e5a4a9e6b094,e99ba8,e9a38e,e6a18ce5ad90,e6a485e5ad90,e688bfe5ad90,e8bda6,e59f8ee5b882,e6b5b7,e69785e8a18c,e8bf90e58aa8,e6b8b8e6888f,e794bb,e785a7e78987,e88ab1,e99ba8]
+---
+[帧:如果Z会X]
+[问] 如果 <Z> 会 <X> 就 好 了
+[问] 要是 <Z> 能 <X> 好 吗
+[答] 如果 <Z> 会 <X> 那 真 好
+[答] 我 也 希望 <Z> 会 <X>
+[答] <Z> 可以 学 <X>
+[答] 总 有 一 天 <Z> 会 <X> 的
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+[填:X=e59083,e5969d,e79c8b,e590ac,e8afb4,e683b3,e5ada6,e78ea9,e5819a,e8b5b0,e8b791,e7ac91,e594b1,e58699,e794bb,e8afbbe4b9a6,e594b1e6ad8c,e794bbe794bb,e6b8b8e6b3b3,e8b7b3e8889e,e5819ae9a5ad,e79da1e8a789]
+---
+[帧:你吃X了吗]
+[问] 你 吃 了 <X> 吗
+[问] 你 吃 <X> 了 吗
+[问] <X> 吃 了 吗
+[答] 我 吃 了 <X>
+[答] 我 还 没 吃 <X>
+[答] <X> 我 吃 过 了
+[答] 谢谢 你 问 我 吃 了 <X>
+[答] 我 不 太 饿 但 可以 吃 点 <X>
+[答] <X> 很 好 吃 我 喜欢
+[填:X=e9a5ad,e99da2,e7b1b3e9a5ad,e88f9c,e6b0b4e69e9c,e88bb9e69e9c,e88cb6,e59296e595a1,e6b1a4,e88289,e9b1bc,e99da2e58c85,e7b2a5]
+---
+[帧:你睡得X吗]
+[问] 你 睡 得 <X> 吗
+[问] 你 昨天 睡 得 <X> 吗
+[问] 你 睡 得 好吗
+[答] 我 睡 得 <X> 谢谢 你 问
+[答] 我 昨天 睡 得 <X>
+[答] 我 睡 得 <X> 你 呢
+[答] 我 希望 你 也 睡 得 <X>
+[填:X=e5be88e5a5bd,e4b88de5a4aae5a5bd,e8bf98e8a18c,e5a49f,e789b9e588abe9a699,e5be88e6b289,e5a5bd,e5a5bde59097]
+---
+[帧:你在学X吗]
+[问] 你 在 学 <X> 吗
+[问] 你 想 学 <X> 吗
+[问] 你 会 <X> 吗
+[答] 我 在 学 <X>
+[答] 我 想 学 <X> 但 还 没 开 始
+[答] <X> 我 学 了 一 点
+[答] 我 学 <X> 学 得 很 慢
+[答] 你 教 我 <X> 好 不 好
+[答] <X> 很 有 意思
+[填:X=e59083,e5969d,e79c8b,e590ac,e8afb4,e683b3,e5ada6,e78ea9,e5819a,e8b5b0,e8b791,e7ac91,e594b1,e58699,e794bb,e8afbbe4b9a6,e594b1e6ad8c,e794bbe794bb,e6b8b8e6b3b3,e8b7b3e8889e,e5819ae9a5ad,e79da1e8a789]
+---
+[帧:X天气如何]
+[问] <X> 天气 怎么样
+[问] <X> 会 下雨 吗
+[问] <X> 冷 吗
+[答] <X> 天气 很 好
+[答] <X> 可能 会 下雨
+[答] <X> 有 点 冷 多 穿 一 点
+# §6.618 降级答改成**对第三者也成立**的说法：原来 `<X> 我 不太知道 你 那边 呢` 把
+# 问的人当成"在 X 那里"（`南极 冷 吗` ⇒「南极 我 不太知道 你 那边 呢」——语法也不通）
+[降级答] <X> 的 天气 我 不知道 ， 图 里 没 记 过
+[答] <X> 的 天 很 蓝
+[答] 不管 <X> 什么 天气 我 都 在 这里
+[填:X=e4bb8ae5a4a9,e6988ee5a4a9,e698a8e5a4a9,e697a9e4b88a,e6999ae4b88a,e591a8e69cab,e4b8ade58d88,e4b88be58d88,e6988ee5b9b4,e4b88be591a8]
+---
+[帧:X你做什么]
+[问] <X> 你 做 什么
+[问] <X> 你 有 空 吗
+[问] <X> 你 忙 吗
+[答] <X> 我 在 等 你 说 话
+[答] <X> 我 有 空 你 说 吧
+[答] <X> 我 有 点 忙 但 可 以 陪 你
+[答] <X> 我 一 直 在 这里
+[答] <X> 我 想 和 你 说 话
+[答] <X> 我 没 什么 事
+[填:X=e4bb8ae5a4a9,e6988ee5a4a9,e698a8e5a4a9,e697a9e4b88a,e6999ae4b88a,e591a8e69cab,e4b8ade58d88,e4b88be58d88,e6988ee5b9b4,e4b88be591a8]
+---
+[帧:你想Z吗]
+[问] 你 会 想 <Z> 吗
+[问] 你 想 <Z> 吗
+[问] 你 想 不 想 <Z>
+[答] 我 会 想 <Z>
+[答] 我 一直 在 想 <Z>
+[答] 我 想 <Z> 的 时候 就 安静 一 会 儿
+[答] 我 把 <Z> 放 在 心 里
+[答] 我 每天 都 会 想 起 <Z>
+[答] 我 不 太 敢 想 <Z> 但 我 没 忘
+[填:Z=e68891,e4bda0,e4bb96,e5a5b9,e88081e5b888,e5ada6e7949f,e5b08fe5ada9,e69c8be58f8b,e5aeb6e4baba,e78cab,e78b97,e4baba]
+---
