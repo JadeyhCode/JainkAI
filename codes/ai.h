@@ -944,6 +944,10 @@ typedef struct {
     int    nat_coin;                 /* §6.173 自然说法里的**新词**：`麒麟 属于 神兽` 当场造词
                                       * 并学进图（默认**关**；只认核心关系，不造谓语）*/
     int    askback;
+    /* §6.594 学到跟已有独占值冲突的事实之后，**问不问**「要 我 改 掉 旧 的 吗」（默认问）。
+     * 长会话里每遇冲突都问会烦；关掉之后照样**说清**冲突，只是不挂"待确认"。
+     * `AIP_ASKCONFLICT=0` 也能关（`::askconflict off` 同一个开关）。 */
+    int    ask_conflict;
     int    ask_pending;
     int    ask_restored;             /* §6.188：载入后扫过一次 `[追问:…]` 标记了吗（只扫一次）*/
     char   ask_mark[96];             /* §6.188：这一条 pending 对应的标记节点名（回收时按它找）*/
@@ -1784,6 +1788,10 @@ static inline void ai_switches_init(AI *ai) {
     { const char *ak = getenv("AIP_ASKBACK");
       if (ak && ak[0] == '1') ai->askback = 1;
       else if (ak && ak[0] == '0') ai->askback = 0; }
+    ai->ask_conflict = 1;
+    { const char *ac = getenv("AIP_ASKCONFLICT");
+      if (ac && ac[0] == '1') ai->ask_conflict = 1;
+      else if (ac && ac[0] == '0') ai->ask_conflict = 0; }
     ai->ask_pending = 0;
     ai->ask_restored = 0;
     ai->ask_mark[0] = 0;

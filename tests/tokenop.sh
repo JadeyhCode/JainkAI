@@ -1320,6 +1320,27 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.594 `::askconflict off`：冲突**照样说清**，但不再追问"要 我 改 掉 旧 的 吗"
+AC="$WORK/ac"; rm -rf "$AC"; mkdir -p "$AC"
+cp "$ROOT/model.bin" "$AC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$AC/" 2>/dev/null || true
+( cd "$AC" && { printf '::notepad off\n::char off\n'; printf '::askconflict off\n狗 属于 植物\n对\n狗 属于 动物 吗\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '[冲突时追问「要 我 改 掉 旧 的 吗」= 关]' "$AC/out.txt" \
+    && ok "`::askconflict off` 生效（开关能读能改）" \
+    || bad "askconflict-开关" "$(grep -a '冲突' "$AC/out.txt" | head -1)"
+grep -qaF '要 撤 就 说「狗 不 属于 动物」' "$AC/out.txt" \
+    && ok "关掉追问之后：冲突**照样说清**，并给显式撤法（不静默）" \
+    || bad "askconflict-措辞" "$(grep -a '冲突' "$AC/out.txt" | head -1)"
+# 判据用「说「对」就改」这半句（帮助文本里没有它；而"要 我 改 掉 旧 的 吗"在 ::help 里 ⇒ 会假绿）
+if grep -a '^AI >' "$AC/out.txt" | grep -qaF '说「对」就改'; then
+    bad "askconflict-不追问" "$(grep -a '^AI >' "$AC/out.txt" | grep -a '说「对」就改' | head -1)"
+else
+    ok "关掉追问之后：**不再**问「要对才改」（帮助里没这半句 ⇒ 不会假绿）"
+fi
+grep -qaF '对 ， 狗 -[属于]-> 动物' "$AC/out.txt" \
+    && ok "关掉追问、回「对」不会撤旧值（没挂待确认）—— 旧值还在" \
+    || bad "askconflict-未撤" "$(grep -a '动物' "$AC/out.txt" | tail -1)"
+
 # §6.593 教学意图前缀（`我教你`/`记一下`/`请记住`）+ 「我刚才教了你什么」
 TL="$WORK/tl"; rm -rf "$TL"; mkdir -p "$TL"
 cp "$ROOT/model.bin" "$TL/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$TL/" 2>/dev/null || true

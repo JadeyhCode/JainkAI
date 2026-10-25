@@ -3558,20 +3558,22 @@ static inline int agent_conflict_after(AI *ai, Token *A, uint8_t rid, Token *B, 
                   aw ? aw : "?", rw ? rw : "?", conflict->name ? conflict->name : "?", NULL, NULL);
         return 1;
     }
-    /* 非更正：说清冲突 + 挂待确认 */
+    /* 非更正：说清冲突 +（**问了**才挂待确认，§6.594）*/
     {
-        const char *ct = ai_say_tpl("改口.还冲突");
+        const char *ct = ai_say_tpl(ai->ask_conflict ? "改口.还冲突" : "冲突.不问");
         const char *const ca[3] = { aw ? aw : "?", rw ? rw : "?",
                                     conflict->name ? conflict->name : "?" };
         size_t cl = strlen(resp);
         if (cl < cap) {
             char tmp[224];
             der_filln(tmp, sizeof tmp,
-                      ct ? ct : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）",
+                      ct ? ct : (ai->ask_conflict
+                                     ? "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）"
+                                     : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 要 撤 就 说「$1 不 $2 $3」）"),
                       ca, 3);
             snprintf(resp + cl, cap - cl, "%s", tmp);
         }
-        agent_retract_arm(ai, A, conflict, rid);
+        if (ai->ask_conflict) agent_retract_arm(ai, A, conflict, rid);
         ai->n_conflict_shown++;
     }
     return 0;
@@ -3757,19 +3759,20 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
             /* §6.585 极性改口的同时，**另一条互不包含的旧值可能还在**（例：狗 属于 植物 与
              * 狗 属于 动物 并存）—— 顺口带上，别让用户以为"改过来"就把旧类清掉了。 */
             if (conflict) {
-                const char *ct = ai_say_tpl("改口.还冲突");
+                const char *ct = ai_say_tpl(ai->ask_conflict ? "改口.还冲突" : "冲突.不问");
                 const char *const ca[3] = { aw, rw, conflict->name ? conflict->name : "?" };
                 size_t cl = strlen(resp0);
                 if (cl < sizeof resp0) {
                     const char *piece = ct ? ct
-                        : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）";
-                    char tmp[192];
+                        : (ai->ask_conflict
+                               ? "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 跟 它 冲突 ； 要 我 改 掉 旧 的 吗 ？ 说「对」就改）"
+                               : "（另外 我 这 儿 还 记 着 $1 $2 $3 —— 要 撤 就 说「$1 不 $2 $3」）");
+                    char tmp[224];
                     der_filln(tmp, sizeof tmp, piece, ca, 3);
                     snprintf(resp0 + cl, sizeof resp0 - cl, "%s", tmp);
                 }
                 ai->n_conflict_shown++;
-                /* §6.586 极性改口的同一句里"另一条冲突的旧值" ⇒ 一起挂上待确认改口 */
-                agent_retract_arm(ai, A, conflict, rid);
+                if (ai->ask_conflict) agent_retract_arm(ai, A, conflict, rid);
             }
             /* **修正的记忆 / 来源监控**：留一个 [修正:…] 标记节点（连回主语），
              * 这样「这件事被改口过」**记得住**，而旧观测不会冒充知识复活。

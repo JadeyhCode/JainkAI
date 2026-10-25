@@ -33,7 +33,9 @@ static char   g_out[1024];
 /* 说一句（走完整流水线：分句 → 关系学习/答复）*/
 static const char *say(AI *ai, const char *s) {
     if (!g_ag) return "";
-    if (g_ag->brain != ai) { g_ag->brain = ai; }
+    g_ag->brain = ai;
+    /* ⚠ 这里**不**镜像 `[lead]`：空脑子（A~F 组）不该被塞进外壳标记词（实测会让 12 项失败）。
+     * 需要引导语的组（G 组，真模型）在加载之后自己调一次 `aip_shell_mirror_lead()`。 */
     memset(g_out, 0, sizeof g_out);
     agent_step(g_ag, s, g_out, sizeof g_out);
     return g_out;
@@ -229,6 +231,52 @@ int main(int argc, char **argv) {
         const char *r4 = say(ai, "谁 说 的 恐龙 属于 鸟");
         ok(r4[0] != 0, "E 「谁 说 的 …」也有答复（不炸）");
         ok(ai_check_ok(ai), "E 全程不变式干净");
+        ai_free(ai);
+        g_ag->brain = NULL;
+    }
+
+    /* ---------- G. 一次**完整的交互学习会话**（顺序执行，像真人一样一路教下来） ----------
+     * 这一组**必须用真模型**：教学意图（`我 教 你 …`）走的是数据层 `[lead]`，
+     * `ai_new()` 不加载 patterns.txt ⇒ 那些说法不会被剥（A~D 组不依赖数据，所以能用空脑子）。 */
+    {
+        AI *ai = ai_load_file(model);
+        if (!ai) { printf("读不到 %s\n", model); return 1; }
+        /* ⚠ `[lead]` 引导语要**镜像成图上的外壳词**才生效（main.c 换模型时也调这一处）。 */
+        aip_shell_mirror_lead(ai);
+        g_ag->brain = ai;
+        const char *r1 = say(ai, "我 教 你 麒麟 属于 神兽");
+        ok(strstr(r1, "记下 了") != NULL, "G1 「我 教 你 …」⇒ 学下来");
+        ok(strstr(say(ai, "麒麟 属于 神兽 吗"), "对 ，") != NULL, "G2 立刻问得出来");
+        ok(strstr(say(ai, "你 怎么 知道 麒麟 属于 神兽"), "你 教 我 的") != NULL,
+           "G3 问出处 ⇒ 「你 教 我 的」");
+        say(ai, "神兽 属于 动物");
+        ok(strstr(say(ai, "麒麟 属于 动物 吗"), "对 ，") != NULL, "G4 继承：麒麟 属于 动物 也对");
+        say(ai, "麒麟 有 三 个 角");
+        ok(strstr(say(ai, "麒麟 有 角 吗"), "对 ，") != NULL, "G5 数量蕴含：有 角 对");
+        ok(strstr(say(ai, "麒麟 有 几 个 角"), "三 个 角") != NULL, "G6 问数目 ⇒ 三 个 角");
+        say(ai, "狗 属于 动物");
+        const char *rc = say(ai, "狗 属于 植物");
+        ok(strstr(rc, "冲 突") != NULL || strstr(rc, "冲突") != NULL, "G7 冲突当场说清");
+        ok(agent_retract_pending(ai), "G8 挂上待确认（可以一个字改口）");
+        ok(strstr(say(ai, "对"), "撤 掉 了") != NULL, "G9 回「对」⇒ 撤掉旧值");
+        ok(strstr(say(ai, "狗 属于 动物 吗"), "不 对 ，") != NULL, "G10 撤完之后旧值答「不 对」");
+        say(ai, "不 对 ， 狗 属于 犬科");
+        ok(knows(ai, "狗", "属于", "犬科", 0), "G11 「不 对 ，X」⇒ 学到 X");
+        const char *r12 = say(ai, "我刚才教了你什么");
+        ok(strstr(r12, "教 了") != NULL && strstr(r12, "麒麟") != NULL,
+           "G12 「我刚才教了你什么」列得出来");
+        /* 存读：教的东西要还在 */
+        size_t sz = ai_save_file(ai, "_session.bin");
+        AI *back = sz ? ai_load_file("_session.bin") : NULL;
+        ok(back != NULL, "G13 会话可以存盘再读回");
+        if (back) {
+            ok(knows(back, "麒麟", "属于", "神兽", 0) && knows(back, "麒麟", "属于", "动物", 0) &&
+               knows(back, "麒麟", "有", "三个角", 0),
+               "G14 读回来：会话里教的事实都在");
+            ai_free(back);
+        }
+        remove("_session.bin");
+        ok(ai_check_ok(ai), "G15 整个会话之后不变式干净");
         ai_free(ai);
         g_ag->brain = NULL;
     }
