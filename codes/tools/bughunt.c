@@ -21,6 +21,8 @@
 #include "../aicheck.h"
 #include "../xbrain.h"
 #include "../parts.h"   /* 局部加载：aip_parts_* */
+#include "../code.h"    /* §6.599 代码区：写-跑-看错-改的**纯内存**部分（词法往返 / 修法表 / 观测标记）*/
+#include "../action.h"  /* action_observe_mark 的宿主（code_observe 走它）*/
 
 #include <stdio.h>
 #include <string.h>
@@ -221,6 +223,59 @@ int main(int argc, char **argv) {
                 int got = token_op_run(ai, nm, args, na, note, sizeof note);
                 if (trace) fprintf(stderr, "[op] %s rc=%d note=%.60s\n", nm, got, note);
                 if (got < -1) { printf("  ✗ 第 %d 步 op「%s」返回 %d\n", t, nm, got); bad_step = 1; }
+            } else if (act < 76) {
+                /* §6.599 **代码区**（阶段② 之前完全没随机打到）：只碰纯内存那几件
+                 * —— 词法往返、修法表、观测标记；**不跑编译器**（不碰外部世界）。 */
+                switch (rnd(4)) {
+                case 0: {   /* 词法往返：随机 ASCII 拼一行"源码" */
+                    char src[96];
+                    size_t k = 0;
+                    const char *frag[] = { "int main(void){", "  return 0;", "}", "printf(\"x\");",
+                                           "if (a<b) {", "  x = 1;", "/* c */", "char *s = \"y\";" };
+                    unsigned nf = rnd(4) + 1;
+                    for (unsigned f = 0; f < nf && k + 24 < sizeof src; ++f) {
+                        const char *q = frag[rnd((unsigned)(sizeof frag / sizeof frag[0]))];
+                        size_t ql = strlen(q);
+                        memcpy(src + k, q, ql); k += ql;
+                        if (rnd(2)) src[k++] = '\n';
+                    }
+                    src[k] = 0;
+                    char why[128];
+                    int rt = lex_roundtrip(src, why, sizeof why);
+                    if (!rt && !strstr(why, "词数超过上限")) {
+                        printf("  ✗ 第 %d 步 词法往返不成立：「%s」 why=%s\n", t, src, why);
+                        bad_step = 1;
+                    }
+                    break;
+                }
+                case 1: {   /* 修法表：造一条假错误，让规则改一行，验"改完还以 0 结尾" */
+                    char line[96] = "int x = 1";
+                    int line_no = (int)rnd(2) + 1;
+                    (void)code_fix_semicolon(line, sizeof line, line_no);
+                    if (!memchr(line, 0, sizeof line)) { printf("  ✗ 第 %d 步 修法输出没结尾\n", t); bad_step = 1; }
+                    break;
+                }
+                case 2: {   /* 观测标记：`[代码:rc]` 走受审通道（和 ::code 同一条路）*/
+                    int rc = (int)rnd(13) - 9;
+                    int got = code_observe(ai, rc);
+                    if (got < 0) { printf("  ✗ 第 %d 步 code_observe(%d) 返回 %d\n", t, rc, got); bad_step = 1; }
+                    break;
+                }
+                default: {  /* 词法扫描 + 规范化：边界是"够不够长" */
+                    char src[64];
+                    snprintf(src, sizeof src, "a+b*c%d", (int)rnd(100));
+                    LexProg lp;
+                    lex_scan(src, &lp);
+                    char canon[256];
+                    size_t need = lex_canon_need(&lp);
+                    size_t wrote = lex_canon(&lp, canon, sizeof canon);
+                    if (need < sizeof canon && wrote > need) {
+                        printf("  ✗ 第 %d 步 lex_canon 写超了（need=%zu wrote=%zu）\n", t, need, wrote);
+                        bad_step = 1;
+                    }
+                    break;
+                }
+                }
             } else if (act < 78) {
                 /* 元认知/维护类操作 */
                 switch (rnd(3)) {
@@ -253,17 +308,39 @@ int main(int argc, char **argv) {
                     remove("_bughunt.parts");
                 }
             } else {
-                /* 跨脑搬运：存流水 → 抄进第二个脑（本地优先/冲突可见都在里面）*/
+                /* 跨脑搬运 / **多脑切换**（§6.599 也接进随机）：存流水 → 抄进第二个脑，
+                 * 三种模式轮着来（本地优先 / 强行覆盖 / 只查不写）；抄完两个脑都要过不变式。
+                 * 另外偶尔把第二个脑**存盘再读回**（等于"切到另一个脑再切回来"的路）。 */
                 static AI *b2 = NULL;
                 if (!b2) b2 = ai_new();
                 if (b2) {
                     (void)xb_journal_save(ai, "_bughunt.j");
+                    static const XbMode MODES[3] = { XB_MODE_LOCAL_WINS, XB_MODE_FORCE, XB_MODE_CHECK };
+                    XbMode md = MODES[rnd(3)];
                     XbResult xr;
-                    (void)xb_journal_replay(b2, "_bughunt.j", XB_MODE_LOCAL_WINS, &xr);
+                    (void)xb_journal_replay(b2, "_bughunt.j", md, &xr);
                     AiCheck c2;
                     if (!aip_check_ai(b2, &c2)) {
-                        printf("  ✗ 第 %d 步第二个脑不变式坏了：%s\n", t, c2.first);
+                        printf("  ✗ 第 %d 步第二个脑不变式坏了（模式 %d）：%s\n", t, (int)md, c2.first);
                         bad_step = 1;
+                    }
+                    if (rnd(3) == 0) {
+                        /* 切换：第二个脑存盘 → 读回成第三个脑 → 也验 */
+                        size_t wr2 = ai_save_file(b2, "_bughunt2.bin");
+                        AI *b3 = wr2 ? ai_load_file("_bughunt2.bin") : NULL;
+                        if (wr2 && !b3) {
+                            printf("  ✗ 第 %d 步第二个脑存盘之后读不回来（%zu 字节）\n", t, wr2);
+                            bad_step = 1;
+                        }
+                        if (b3) {
+                            AiCheck c3;
+                            if (!aip_check_ai(b3, &c3)) {
+                                printf("  ✗ 第 %d 步第三个脑不变式坏了：%s\n", t, c3.first);
+                                bad_step = 1;
+                            }
+                            ai_free(b3);
+                        }
+                        remove("_bughunt2.bin");
                     }
                     remove("_bughunt.j");
                 }
