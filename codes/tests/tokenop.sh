@@ -1318,6 +1318,33 @@ grep -qaF '对 ， 猫头鹰 -[怕]-> 光' "$TK/out.txt" \
 grep -qaF '记下 了 ： 猫 喵 鱼' "$TK/out.txt" && grep -qaF '对 ， 猫 -[喵]-> 鱼' "$TK/out.txt" \
     && ok "反过来：**单字动态谓语**（猫 喵 鱼）照样学得进（没有被上面那条规则误杀）" \
     || bad "单字谓语" "$(grep -aE '喵' "$TK/out.txt" | tr '\n' ' ')"
+# §6.591 定义句/全称句的说法归一（`所有…都` / `是 一种` / `是…的一种`）
+DF="$WORK/df"; rm -rf "$DF"; mkdir -p "$DF"
+cp "$ROOT/model.bin" "$DF/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$DF/" 2>/dev/null || true
+( cd "$DF" && { printf '::notepad off\n::char off\n::hypo cache off\n::rel analogy off\n';     printf '所有 的 麒麟 都 属于 神兽\n麒麟 属于 神兽 吗\n麒麟 是 一种 神兽\n猫 属于 哪 一 类\n'; } | \
+    "$WORK/aip" --model m.bin > out.txt 2>&1 ) || true
+grep -qaF '记下 了 ： 麒麟 属于 神兽' "$DF/out.txt" && grep -qaF '对 ， 麒麟 -[属于]-> 神兽' "$DF/out.txt" \
+    && ok "「所有 的 X 都 R Y」⇒ 学成 X R Y，且问得出来" \
+    || bad "全称句" "$(grep -a '麒麟' "$DF/out.txt" | head -2 | tr '\n' ' ')"
+grep -qaF '我 知道 ： 麒麟 是 神兽' "$DF/out.txt" \
+    && ok "「X 是 一种 Y」⇒ 归一成 `X 是 Y`（不再听不懂）" \
+    || bad "是一种" "$(grep -a '一种' "$DF/out.txt" | head -1)"
+grep -qaF '我 记 的 是 ： 猫 属于 动物' "$DF/out.txt" \
+    && ok "疑问句里的「哪一类」**不被归一**（`猫 属于 哪 一 类` 照常答）" \
+    || bad "疑问不剥" "$(grep -a '猫' "$DF/out.txt" | tail -1)"
+# 正反问（A 不 A）也是问句：`猫算不算动物这一类` 不能被归一削成「猫算不算动物这」
+( cd "$DF" && { printf '::notepad off\n::char off\n猫算不算动物这一类\n'; } | \
+    "$WORK/aip" --model m.bin > out3.txt 2>&1 ) || true
+grep -qaF '对 ， 猫 -[属于]-> 动物' "$DF/out3.txt" \
+    && ok "正反问（算不算/是不是/会不会…）**不当成定义句**（照常答，不被削成词串）" \
+    || bad "正反问不剥" "$(grep -a 'AI >' "$DF/out3.txt" | tail -1)"
+# `::relnat off` 时整条路径关掉（自然说法归一属于 §6.233 的开关）
+( cd "$DF" && { printf '::notepad off\n::relnat off\n所有 的 龙 都 属于 神兽\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qa '不太懂\|不 太 懂' "$DF/out2.txt" \
+    && ok "「::relnat off」时定义句归一也关掉（开关统一，不是一个新旁路）" \
+    || bad "relnat 门控" "$(grep -a 'AI >' "$DF/out2.txt" | tail -1)"
+
 # §6.590 「你 怎么 知道」：出处（教的是教、语料是语料、推的是推、没有就说没有）
 PV="$WORK/pv"; rm -rf "$PV"; mkdir -p "$PV"
 cp "$ROOT/model.bin" "$PV/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PV/" 2>/dev/null || true

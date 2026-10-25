@@ -7163,6 +7163,70 @@ static inline int agent_say_bare(AI *ai, int kind, char *out, size_t out_cap) {
     return 1;
 }
 
+/* §6.591 这句子**像不像问句**：疑问词 + 正反问（A 不 A）+ 语气尾巴都算。
+ * 定义句归一（`所有…都`/`是一种`/`的一种`）绝不能动问句 ——
+ * 实测 `猫算不算动物这一类` 被削成「猫算不算动物这」⇒ 答复变成一串词（genprobe6 −1）。 */
+static inline int aip_questionish(const char *s) {
+    if (!s || !s[0]) return 0;
+    static const char *q[] = { "哪", "什么", "谁", "几", "多少", "怎么", "为什么", "吗", "呢",
+                               "是否", "如何", "算不算", "是不是", "会不会", "有没有",
+                               "属不属于", "包不包括", "对不对", "能不能", "要不要", "行不行",
+                               NULL };
+    for (size_t i = 0; q[i]; ++i) if (strstr(s, q[i])) return 1;
+    return 0;
+}
+
+/* §6.591 定义句/全称句的**文本级**归一：删掉全称词、量词、定义助词。
+ * 返回 1 = 改过（调用方用输出缓冲替换输入）。规则全在这里，一处可读。 */
+static inline int aip_strip_def_phrases(const char *in, char *out, size_t cap) {
+    if (!in || !out || cap < 8) return 0;
+    char buf[256];
+    snprintf(buf, sizeof buf, "%s", in);
+    int univ = (strstr(buf, "所有") || strstr(buf, "每") || strstr(buf, "任何") ||
+                strstr(buf, "一切") || strstr(buf, "各种") || strstr(buf, "全部"));
+    static const char *del[] = {
+        "所有 的 ", "所有的", "所有 ", "所有",
+        "每一 个", "每个 ", "每个", "任何 ", "任何",
+        "一切 ", "一切", "各种 ", "各种", "全部 ", "全部",
+        " 的 一种", " 的 一类", "的 一种", "的一种", "的 一类", "的一类",
+        "一种 ", "一种", "一 种", "一类 ", "一类",
+        NULL };
+    int changed = 0;
+    for (size_t k = 0; del[k]; ++k) {
+        size_t pl = strlen(del[k]);
+        for (;;) {
+            char *at = strstr(buf, del[k]);
+            if (!at) break;
+            memmove(at, at + pl, strlen(at + pl) + 1);
+            changed = 1;
+        }
+    }
+    if (univ) {         /* `都`：只在全称句里当结构词删 */
+        for (;;) {
+            char *at = strstr(buf, "都");
+            if (!at) break;
+            memmove(at, at + 3, strlen(at + 3) + 1);
+            changed = 1;
+        }
+    }
+    if (!changed) return 0;
+    /* collapse 连续空格 / 收拾首尾 */
+    char tidy[256];
+    size_t o = 0;
+    int sp = 0;
+    for (const char *q = buf; *q && o + 1 < sizeof tidy; ++q) {
+        if (*q == ' ') { sp = 1; continue; }
+        if (sp && o > 0) tidy[o++] = ' ';
+        sp = 0;
+        tidy[o++] = *q;
+    }
+    tidy[o] = 0;
+    while (o > 0 && tidy[o - 1] == ' ') tidy[--o] = 0;
+    if (!tidy[0]) return 0;
+    snprintf(out, cap, "%.*s", (int)(cap - 1), tidy);
+    return 1;
+}
+
 static inline size_t agent_step(Agent *a, const char *input, char *out, size_t out_cap) {
     if (!a || !input || !out || out_cap == 0) return 0;
     out[0] = 0;
@@ -7318,6 +7382,13 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
             break;
         }
     }
+    /* §6.591 **定义句/全称句的说法归一（文本级）**：用户教东西最常用的句式往往不是 "X R Y" ——
+     *   `所有 的 麒麟 都 属于 神兽`、`麒麟 是 一种 神兽`、`麒麟 是 神兽 的 一种`
+     * 以前这些整句学不进（实测 4 种句式里 3 种掉降级答复）。分词会把「所有」切成 所/有，
+     * 所以必须在**分词之前**按短语删；删的全是全称词/量词/定义助词，实词一个不动。
+     * `都` 只在句子真的含全称词时才删（`我们 都 去` 这种不动）。 */
+    if (ai->rel_nat && input_eff && !aip_questionish(input_eff) &&
+        aip_strip_def_phrases(input_eff, decl_in, sizeof decl_in)) input_eff = decl_in;
     {   /* §6.305/§6.307 同义词 + 词缀归一（数据表）：`猫咪` ⇒ `猫`、`小鲸鱼` ⇒ `鲸鱼`。
      * 跑**最多 3 遍直到不再变化**：`小猫咪` 第一遍变成「猫咪」（前缀剥掉 小），
      * 第二遍才被同义词表收成「猫」——只跑一遍会卡在半成品上。 */
@@ -7517,6 +7588,9 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                                    : ai_tokenize(ai, input_eff, &n);
     /* §6.375 副词填充（真的/其实/确实/实际上/到底/究竟）：删掉再走后面所有判据 */
     if (words && n > 0) (void)aip_strip_fillers(words, &n);
+    /* §6.591 备注：**不**在这里删孤立的「类」。试过（把 `神兽类` 收成 `神兽`），
+     * 但分词把 `人类` 切成 人/类 时会把宾语削成「人」（tokenop 的多脑回读当场红）。
+     * 现在只做文本级的全称词/量词剥离，`类` 留给数据/词表处理。 */
     /* §6.268 记下"这是不是一个问句、问的是什么（关系/极性/宾语）"——「那狗呢」靠它补全。
      * 放在这里（分词后、所有路径之前）一处记录，比在各条答复路径里分别记可靠。 */
     if (words && n >= 3) {
