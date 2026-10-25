@@ -1294,6 +1294,59 @@ static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_
     return NULL;
 }
 
+/* ============================ §6.602 独占关系的**矛盾扫描** ============================
+ *
+ * 学习机制允许"先都记着、冲突当场说清"（§6.585/§6.586）⇒ 长期跑下来图里**允许**存在
+ * "A 同时属于两个互不包含的类"。以前只有 `::rel <A>` 一个词能看到 ⚠，没有全局清单。
+ * 这里补**全图扫描**（只扫独占关系；同一个词有 ≥2 个值时才有意义）：
+ *   · 判据和求解器同一份：`rel_is_excl` + 双向包含（`rel_direct` / `rel_solve_go` 且 `status>0`）；
+ *   · 只报"互不包含"的成对值（`猫 属于 猫科` + `猫 属于 动物` **不算**：猫科 ⊂ 动物）；
+ *   · 只诊断、不修：怎么裁决由用户决定（说「不对」走追问式改口，或显式说「X 不 R Y」）。
+ */
+static inline int aip_excl_contained(AI *ai, const Token *x, const Token *y) {
+    if (!ai || !x || !y) return 0;
+    if (rel_direct(x, REL_IS_A, y)) return 1;
+    Proof pf;
+    memset(&pf, 0, sizeof pf);
+    if (rel_solve_go(ai, x, REL_IS_A, y, 0, &pf, 0, NULL, 0) && pf.status > 0) return 1;
+    return 0;
+}
+/* 返回矛盾条数；`first`/`cap` 里放前 `max_want` 条的可读描述。 */
+static inline size_t aip_check_excl_conflicts(AI *ai, char *first, size_t cap, size_t max_want) {
+    if (first && cap) first[0] = 0;
+    if (!ai || !ai->pool) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *A = ai->pool->tokens[i];
+        if (!A || A->is_garbage || !token_assocs_resident(A)) continue;
+        for (size_t j = 0; j < A->count; ++j) {
+            const AssocEntry *e1 = &token_assocs_ro(A)[j];
+            if (!e1->main || e1->main == A) continue;
+            uint8_t rid = 0;
+            for (uint8_t r = 1; r < REL_DYN_BASE; ++r)
+                if (e1->rel & REL_BIT(r)) { rid = r; break; }
+            if (!rid || !rel_is_excl(ai, rid)) continue;
+            for (size_t k = j + 1; k < A->count; ++k) {
+                const AssocEntry *e2 = &token_assocs_ro(A)[k];
+                if (!e2->main || e2->main == A || e2->main == e1->main) continue;
+                if (!(e2->rel & REL_BIT(rid))) continue;
+                if (aip_excl_contained(ai, e1->main, e2->main)) continue;
+                if (aip_excl_contained(ai, e2->main, e1->main)) continue;
+                n++;
+                if (n <= max_want && first && cap) {
+                    size_t off = strlen(first);
+                    if (off + 8 < cap)
+                        snprintf(first + off, cap - off, "%s%s %s %s ／ %s（互不包含）",
+                                 off ? "； " : "", A->name ? A->name : "?",
+                                 rel_name_of(ai, rid), e1->main->name ? e1->main->name : "?",
+                                 e2->main->name ? e2->main->name : "?");
+                }
+            }
+        }
+    }
+    return n;
+}
+
 static inline void rel_solve(AI *ai, const Token *a, uint8_t rid, const Token *b,
                              int want_neg, Proof *pf) {
     if (!pf) return;

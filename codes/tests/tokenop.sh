@@ -1334,6 +1334,25 @@ grep -qaF '这 条 是 你 教 我 的' "$PV2/out2.txt" \
     && ok "**重开之后**问出处 ⇒ 仍答「你教我的」（跨会话，靠留痕不靠内存账）" \
     || bad "留痕-跨会话" "$(grep -a 'AI >' "$PV2/out2.txt" | tail -1)"
 
+# §6.602 `::contradict`：全图扫独占关系的矛盾（只报不改；包含关系不算矛盾）
+CT="$WORK/ct"; rm -rf "$CT"; mkdir -p "$CT"
+cp "$ROOT/model.bin" "$CT/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$CT/" 2>/dev/null || true
+( cd "$CT" && { printf '::notepad off\n::char off\n'; printf '::contradict\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '[独占矛盾] 0 条' "$CT/out1.txt" \
+    && ok "「::contradict」扫出厂模型：0 条（出厂图里没有互不包含的独占值）" \
+    || bad "contradict-出厂" "$(grep -a '独占矛盾' "$CT/out1.txt" | head -1)"
+( cd "$CT" && { printf '::notepad off\n::char off\n::askconflict off\n'; printf '狗 属于 动物\n狗 属于 植物\n::contradict\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '[独占矛盾] 1 条' "$CT/out2.txt" && grep -qaF '狗 属于 动物 ／ 植物' "$CT/out2.txt" \
+    && ok "教两条互不包含的独占值 ⇒ 「::contradict」报 1 条并点名两个值" \
+    || bad "contradict-冲突" "$(grep -a '独占矛盾\|狗 属于' "$CT/out2.txt" | tail -2 | tr '\n' ' ')"
+( cd "$CT" && { printf '::notepad off\n::char off\n::askconflict off\n'; printf '狗 属于 犬科\n犬科 属于 动物\n::contradict\n'; } | \
+    "$WORK/aip" --model m.bin > out3.txt 2>&1 ) || true
+grep -qaF '[独占矛盾] 0 条' "$CT/out3.txt" && ! grep -qaF '犬科 ／ 动物' "$CT/out3.txt" \
+    && ok "**包含关系不算矛盾**（犬科 ⊂ 动物：「::contradict」不把它列成互不包含）" \
+    || bad "contradict-包含" "$(grep -a '独占矛盾\|犬科' "$CT/out3.txt" | tail -2 | tr '\n' ' ')"
+
 # §6.600 parts 上下文绑定在**某个池**上：换脑/加载模型之前必须先 close（否则 use-after-free）
 PL="$WORK/pl"; rm -rf "$PL"; mkdir -p "$PL"
 cp "$ROOT/model.bin" "$PL/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PL/" 2>/dev/null || true

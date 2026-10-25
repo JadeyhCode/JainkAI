@@ -564,6 +564,7 @@ typedef enum {
     CMD_NATCOIN,            /* §6.173 自然说法里的新词（默认关） */
     CMD_ASKCONFLICT,        /* §6.594 学到冲突时问不问"要改吗"（默认问） */
     CMD_LOCATIVE,           /* §6.596 地点学习（A V 在 B ⇒ A 在 B）开关 */
+    CMD_CONTRADICT,         /* §6.602 全图扫一遍：独占关系里"互不包含"的矛盾（只报不改） */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -694,6 +695,10 @@ static const CmdDef CMDS[] = {
       "看上一轮的**推导链**（按步摊开，带验证标记）；\n也可现场构造：::der 猫 有 毛", CMD_DER },
     { "style", NULL, 1, "基本",
       "换一种说法说同一份链（0结论/1结论+链/2只链/3符号）", CMD_STYLE },
+    { "contradict", NULL, 1, "基本",
+      "全图扫一遍**独占关系的矛盾**（§6.602）：同一个词同时属于两个互不包含的类（`猫 属于 动物` 与\n"
+      "`猫 属于 植物`）。只报不改 —— 裁决方式：说「不对」走追问式改口，或显式说「X 不 R Y」。\n"
+      "（`猫 属于 猫科` + `猫 属于 动物` **不算**：猫科 ⊂ 动物，包含关系不是矛盾）", CMD_CONTRADICT },
     { "rel", NULL, 2, "基本",
       "列出这个词的关系知识（属于/有/会/怕…）\n"
       "开关：`::rel first on|off` **先链后联想**（默认开，§6.124：确定性推理答不出才用同类互推答「大概」）；\n"
@@ -4451,6 +4456,18 @@ int main(int argc, char **argv) {
                        "（lex.h 的 lex_roundtrip，判据只有那一处），痕里多一行「词法：…」。\n");
                 printf("  关着：`::code` 的输出与今天逐字节相同；`::lex <文本>` 是「看一眼」的命令，"
                        "任何时候都能用。\n");
+                continue;
+            }
+            case CMD_CONTRADICT: {
+                /* §6.602 **全局矛盾清单**（以前只有 `::rel <A>` 一个词能看到 ⚠）*/
+                char first[512];
+                size_t n = aip_check_excl_conflicts(a->brain, first, sizeof first, 8);
+                if (n == 0) printf("[独占矛盾] 0 条 —— 图上没有「同时属于两个互不包含的类」的词\n");
+                else {
+                    printf("[独占矛盾] %zu 条%s\n", n, n > 8 ? "（只列前 8 条）" : "");
+                    printf("  %s\n", first);
+                    printf("  要裁决：说「不对」走追问式改口，或显式说「X 不 R Y」（只撤关系位，共现留着）\n");
+                }
                 continue;
             }
             case CMD_LEARN: {
