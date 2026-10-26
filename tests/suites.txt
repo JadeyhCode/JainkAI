@@ -98,6 +98,8 @@ learnprobe|gcc -std=c11 -O2 -Wall -Wextra -o build_learnprobe tools/learnprobe.c
 # §6.599 随机动作集已扩到 `::op` 原语 / 代码区（词法往返、修法表、观测标记）/ 多脑三模式
 # ＋"第二个脑存盘再切回"。三个种子跑完都过才算过（只跑一个种子容易漏掉某条新分支）。
 bughunt|gcc -std=c11 -O2 -Wall -Wextra -o build_bughunt tools/bughunt.c -lm && { ./build_bughunt model.bin 20261025 300 > ctest.log 2>&1 && ./build_bughunt model.bin 1234 300 >> ctest.log 2>&1 && ./build_bughunt model.bin 777 300 >> ctest.log 2>&1; }; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.632 规模门槛：合成大图（**S 档 3 秒**；M 档约 100 秒，只在手动跑时用 M/L）
+scale|sh tests/scale.sh S > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.617 写-跑-看错-改 的机械闭环（真机跑 gcc；要 ::act on，只在 _t/work 里发生）
 codetry|sh tests/codetry.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.606 真实用户会话验收：教→问→改口→冲突→存读→切脑（一段像人说话的剧本走完）
