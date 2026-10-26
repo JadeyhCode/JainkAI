@@ -2766,6 +2766,9 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
     }
 }
 
+static inline const char *agent_reason_find(AI *ai, const char *a, const char *r,
+                                            const char *b);   /* §6.627 定义在后面 */
+
 static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
                                        float *out_conf, int *handled) {
     if (handled) *handled = 0;
@@ -2869,8 +2872,20 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
     const char *neg_txt = neg ? "不 " : "";
     const char *opp_txt = neg ? "" : "不 ";
     int answered = 0;
+    /* §6.627 **用户教过的"因为"优先**：`为什么 A R B` 先看原因表（有就照说，并声明*这是你教的、
+     * 我没验证*）；没有才回到"因为 A R B —— 直接记着的事实"。 */
+    if (A && B && rw) {
+        const char *why2 = agent_reason_find(ai, aw, rw, bw);
+        if (why2) {
+            const char *t = ai_say_tpl("推理.有原因");
+            const char *const a1[1] = { why2 };
+            der_filln(buf, sizeof buf, t ? t : "因为 $1 —— 你 教 我 的（我 没 验 过 对 不 对）", a1, 1);
+            answered = 1;
+        }
+    }
     int got_pol = 0;
-    if (A && B) {
+    if (!answered && A && B) {      /* §6.627 用户教过的原因已经答了 ⇒ 别拿"直接记着的事实"盖掉 */
+
         rel_solve(ai, A, rid, B, 0, &pf);
         if (pf.status != 0) got_pol = pf.status;
         else {
@@ -3762,6 +3777,106 @@ static inline int agent_attr_teach_raw(AI *ai, const char *input, char *out, siz
     const char *const a[2] = { w[0], w[2] };
     der_filln(out, cap, t ? t : "「$1 很 $2」这 种 属性 我 现在 学 不 进 —— 我 只 认 A 关系 B", a, 2);
     return 1;
+}
+
+/* §6.627 **"因为"只记不推**（会话内）：
+ *   · 学：`A R B 因为 C`（因果在后）或 `因为 C ，A R B`（因果在前，靠逗号分）；
+ *   · 答：`为什么 A R B` ⇒ 「因为 C —— 你 教 我 的（我 没 验 过 对 不 对）」。
+ * ⚠ 它不是图里的边，也不进存档（图只有 A R B 三元组）—— 关掉进程就没了，登记在案。 */
+static inline void agent_reason_note(AI *ai, const char *a, uint8_t rid, const char *b,
+                                     const char *why) {
+    if (!ai || !a || !b || !why || !why[0] || rid == 0) return;
+    const char *rn = rel_name_of(ai, rid);
+    if (!rn || !rn[0]) return;
+    size_t k = (size_t)ai->n_reason % 16;
+    snprintf(ai->reasons[k].a, sizeof ai->reasons[k].a, "%.39s", a);
+    snprintf(ai->reasons[k].r, sizeof ai->reasons[k].r, "%.19s", rn);
+    snprintf(ai->reasons[k].b, sizeof ai->reasons[k].b, "%.39s", b);
+    snprintf(ai->reasons[k].why, sizeof ai->reasons[k].why, "%.119s", why);
+    ai->n_reason++;
+}
+/* 找 `A R B` 的原因；找到返回原因串（指向内部存储），否则 NULL。 */
+static inline const char *agent_reason_find(AI *ai, const char *a, const char *r, const char *b) {
+    if (!ai || !a || !r || !b || ai->n_reason <= 0) return NULL;
+    int n = ai->n_reason < 16 ? ai->n_reason : 16;
+    for (int i = n - 1; i >= 0; --i) {          /* 后说的优先 */
+        int k = i % 16;
+        if (ai->reasons[k].a[0] && !strcmp(ai->reasons[k].a, a) &&
+            !strcmp(ai->reasons[k].r, r) && !strcmp(ai->reasons[k].b, b))
+            return ai->reasons[k].why;
+    }
+    return NULL;
+}
+/* 学一句"因为"：成功写进原因表并答复。`words` 用**带标点的原词**（要靠逗号分前后）。 */
+static inline int agent_learn_reason(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0 || n < 6) return 0;
+    size_t yi = n;                                 /* 「因为」的位置 */
+    for (size_t i = 0; i < n; ++i) if (words[i] && !strcmp(words[i], "因为")) { yi = i; break; }
+    if (yi == n) return 0;
+    /* 因果在后：`A … 因为 C`（因为 之前是完整事实，之后是原因） */
+    if (yi >= 3) {
+        char *fact[8]; size_t fn = 0;
+        for (size_t i = 0; i < yi && fn < 8; ++i) if (words[i]) fact[fn++] = words[i];
+        char why[120]; size_t wl = 0;
+        for (size_t i = yi + 1; i < n; ++i) {
+            if (!words[i]) continue;
+            size_t l = strlen(words[i]);
+            if (wl + l + 2 >= sizeof why) break;
+            if (wl) why[wl++] = ' ';
+            memcpy(why + wl, words[i], l); wl += l;
+        }
+        why[wl] = 0;
+        if (!why[0]) return 0;
+        /* 事实侧自己拼 A/R/B：`企鹅 属于 鸟类` 里的 `企鹅` 常被切成 企/鹅，
+         * 交给 `rel_parse` 会拼不对（实测「因为」学不进去）。这里找**第一个关系词**，
+         * 它前面全拼成主语、后面全拼成宾语 —— 和 natcoin 同一个思路。 */
+        char jb[64]; const char *aw = NULL, *bw = NULL, *rw = NULL;
+        uint8_t rid = 0; int neg = 0, q = 0;
+        size_t ri = fn;
+        for (size_t i = 1; i + 1 < fn; ++i) {
+            uint8_t id = rel_id_of(ai, fact[i], 0);
+            if (id) { ri = i; rid = id; break; }
+        }
+        if (ri == fn || !rid) return 0;
+        {
+            static char abuf[64], bbuf[64];
+            size_t oa = 0, ob = 0;
+            for (size_t i = 0; i < ri; ++i) {
+                size_t l = strlen(fact[i]);
+                if (oa + l + 1 >= sizeof abuf) return 0;
+                memcpy(abuf + oa, fact[i], l); oa += l;
+            }
+            abuf[oa] = 0;
+            for (size_t i = ri + 1; i < fn; ++i) {
+                size_t l = strlen(fact[i]);
+                if (ob + l + 1 >= sizeof bbuf) return 0;
+                memcpy(bbuf + ob, fact[i], l); ob += l;
+            }
+            bbuf[ob] = 0;
+            if (!abuf[0] || !bbuf[0]) return 0;
+            aw = abuf; bw = bbuf; rw = rel_name_of(ai, rid);
+        }
+        (void)jb; (void)neg; (void)q;
+        /* 事实本身还没学过 ⇒ **顺手学掉**（`A R B 因为 C` 本来就是在断言 A R B），
+         * 再记原因。也要落教学留痕，否则「你怎么知道」查不到出处。 */
+        Token *A2 = pool_token_intern(ai->pool, aw);
+        Token *B2 = pool_token_intern(ai->pool, bw);
+        if (!A2 || !B2 || A2 == B2) return 0;
+        if (!rel_direct(A2, rid, B2)) {
+            if (ai_write_rel(ai, A2, B2, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+            agent_teach_mark(ai, A2, rid, B2, 0);
+            ai->n_rel_learned++;
+        }
+        agent_reason_note(ai, aw, rid, bw, why);
+        char fact_txt[160];
+        snprintf(fact_txt, sizeof fact_txt, "%.30s %s %.30s", aw, rw ? rw : "?", bw);
+        const char *t = ai_say_tpl("学习.原因");
+        const char *const a2[2] = { fact_txt, why };
+        der_filln(out, cap, t ? t : "记下 了 ： 你 说 $1 是 因 为 $2（原因 我 只 记 你 说 的，不 验 证）",
+                  a2, 2);
+        return 1;
+    }
+    return 0;
 }
 
 /* §6.626 **亲属/身份称谓**：`A 是 我 的 K`（K 在 `[class] kinship` 表里）⇒
@@ -8555,6 +8670,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         float rc = 0.5f;
         resp = agent_forget_request(ai, words, n, &rc);
         if (resp) conf = rc;
+    }
+    if (!resp) {
+        /* §6.627 `因为`：**先于** multi（它要用带逗号的原词分"原因/事实"）*/
+        char rb[512] = {0};
+        if (agent_learn_reason(ai, words, n, rb, sizeof rb)) {
+            resp = (char *)malloc(strlen(rb) + 1);
+            if (resp) memcpy(resp, rb, strlen(rb) + 1);
+            conf = 0.6f;
+        }
     }
     if (!resp) {
         float rc = 0.5f;
