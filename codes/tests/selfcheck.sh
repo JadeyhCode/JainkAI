@@ -268,14 +268,15 @@ echo "== ⑪ agent_step 的早退都走 agent_say（§6.404）=="
 # （§6.450 之后：三条裸答复收进 `agent_say_bare()` 一处，所以计数从 14 降到 9；
 #   §6.586 新增"追问式改口"的一个早退出口（回「对/不」接住之后也要记 last_reply）⇒ 10；
 #   §6.593 新增"我刚才教了什么"（从修改账回顾）的早退出口 ⇒ 11；
-#   §6.616 新增"明确在教属性句（`我 教 你 ， 南极 很 冷`）就照实说学不进"的早退出口 ⇒ 12）
+#   §6.616 新增"明确在教属性句（`我 教 你 ， 南极 很 冷`）就照实说学不进"的早退出口 ⇒ 12；
+#   §6.626 新增"亲属句（`小明 是 我 的 表弟`）在 reply 桶之前先接"的早退出口 ⇒ 13）
 # （3 条已定性：空闲主动说话 / 空闲沉默 / 主出口 —— 见 agent.h 的注释）。
 # 数字变了就 FAIL：新增早退要么改走 agent_say，要么把理由写进注释并**同步改这里的期望**。
 if [ -f agent.h ]; then
     n_say=$(grep -c 'agent_say(ai, out)' agent.h || true)
     n_raw=$(grep -c 'return strlen(out);' agent.h || true)
-    if [ "$n_say" = "12" ] && [ "$n_raw" = "3" ]; then
-        say OK "早退出口核对：agent_say 12 处 / 裸 return 3 处（与注释一致）"
+    if [ "$n_say" = "13" ] && [ "$n_raw" = "3" ]; then
+        say OK "早退出口核对：agent_say 13 处 / 裸 return 3 处（与注释一致）"
     else
         say FAIL "早退出口变了：agent_say=$n_say（期望 11）/ 裸 return=$n_raw（期望 3）—— 新早退请走 agent_say，或改注释并同步这里"
         bad=1

@@ -3764,6 +3764,95 @@ static inline int agent_attr_teach_raw(AI *ai, const char *input, char *out, siz
     return 1;
 }
 
+/* §6.626 **亲属/身份称谓**：`A 是 我 的 K`（K 在 `[class] kinship` 表里）⇒
+ * 记成 `A --[亲属]--> K`。为什么要有这张表：所有格 `我 的 <名词>` 到处都是（`我 的 猫`），
+ * 不能一律当亲属记；只有表里那些词才是"称谓"。 */
+static inline int agent_is_kinship(const char *w) {
+    if (!w || !w[0]) return 0;
+    /* 词类表来自数据（`[class] kinship=...`） */
+    for (size_t i = 0; i < g_class_n; ++i) {
+        if (strcmp(g_class_name[i], "kinship") != 0) continue;
+        const char *p = g_class_words[i];
+        size_t off = 0;
+        while (p[off]) {
+            size_t l = 0;
+            while (p[off + l] && p[off + l] != ',') l++;
+            if (l && strlen(w) == l && !strncmp(w, p + off, l)) return 1;
+            off += l;
+            if (p[off] == ',') off++;
+        }
+    }
+    return 0;
+}
+/* `A 是 我 的 K`：成功就写边并填 out。返回 1 = 已答复。 */
+static inline int agent_learn_kinship(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0 || n < 4) return 0;
+    /* 形状：A… 是 我/你/他 的 K —— A 可以是多字（拼起来），K 是最后一个词 */
+    size_t shi = n;   /* 「是」的位置 */
+    for (size_t i = 1; i + 3 < n + 1 && i < n; ++i)
+        if (!strcmp(words[i], "是") || !strcmp(words[i], "叫")) { shi = i; break; }
+    if (shi == n || shi + 3 >= n + 1) return 0;
+    if (shi + 3 != n - 1 && shi + 3 != n) return 0;    /* 是 我 的 K ⇒ 正好到句尾 */
+    const char *owner = words[shi + 1];
+    if (!owner || (strcmp(owner, "我") != 0 && strcmp(owner, "你") != 0 && strcmp(owner, "他") != 0))
+        return 0;
+    if (!words[shi + 2] || strcmp(words[shi + 2], "的") != 0) return 0;
+    const char *k = words[n - 1];
+    if (!agent_is_kinship(k)) return 0;
+    char al[32]; size_t al_n = 0;
+    for (size_t i = 0; i < shi; ++i) {
+        size_t wl = strlen(words[i]);
+        if (al_n + wl + 1 >= sizeof al) return 0;
+        memcpy(al + al_n, words[i], wl); al_n += wl;
+    }
+    al[al_n] = 0;
+    Token *A = pool_token_intern(ai->pool, al);
+    Token *K = pool_token_intern(ai->pool, k);
+    uint8_t rid = rel_id_of(ai, "亲属", 1);
+    if (!A || !K || A == K || !rid) return 0;
+    if (ai_write_rel(ai, A, K, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+    agent_teach_mark(ai, A, rid, K, 0);
+    ai->n_rel_learned++;
+    aip_note_fact(ai, al, "亲属", k);
+    const char *t = ai_say_tpl("学习.亲属");
+    const char *const a2[2] = { al, k };
+    der_filln(out, cap, t ? t : "记下 了 ： $1 是 你 的 $2（亲属/身份）", a2, 2);
+    return 1;
+}
+/* §6.626b **分词之前**认亲属句：`小明 是 我 的 表弟` —— 这条形状会被 `[reply]` 桶里的
+ * 那句"我 是 你 的 朋 友"先抢走（实测），所以在 reply 桶**之前**先接。
+ * 只认"空格分开的五段"：`A 是 我/你/他 的 K`（K 在 kinship 表里）。 */
+static inline int agent_learn_kinship_raw(AI *ai, const char *input, char *out, size_t cap) {
+    if (!ai || !input || !out || cap == 0) return 0;
+    char buf[128];
+    snprintf(buf, sizeof buf, "%s", input);
+    char *w[8]; size_t n = 0;
+    for (char *t = buf; *t && n < 8; ) {
+        while (*t == ' ' || *t == '\t') t++;
+        if (!*t) break;
+        w[n++] = t;
+        while (*t && *t != ' ' && *t != '\t') t++;
+        if (*t) { *t = 0; t++; }
+    }
+    if (n != 5) return 0;
+    if (strcmp(w[1], "是") != 0) return 0;
+    if (strcmp(w[2], "我") != 0 && strcmp(w[2], "你") != 0 && strcmp(w[2], "他") != 0) return 0;
+    if (strcmp(w[3], "的") != 0) return 0;
+    if (!agent_is_kinship(w[4])) return 0;
+    Token *A = pool_token_intern(ai->pool, w[0]);
+    Token *K = pool_token_intern(ai->pool, w[4]);
+    uint8_t rid = rel_id_of(ai, "亲属", 1);
+    if (!A || !K || A == K || !rid) return 0;
+    if (ai_write_rel(ai, A, K, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+    agent_teach_mark(ai, A, rid, K, 0);
+    ai->n_rel_learned++;
+    aip_note_fact(ai, w[0], "亲属", w[4]);
+    const char *t = ai_say_tpl("学习.亲属");
+    const char *const a2[2] = { w[0], w[4] };
+    der_filln(out, cap, t ? t : "记下 了 ： $1 是 你 的 $2（亲属/身份）", a2, 2);
+    return 1;
+}
+
 /* §6.623 **属性问句**：`X 很 冷 吗` —— 教过 `X --[属性]--> 冷` 就答对，没教过就照实说。
  * 只认"程度词 + 形容词"这一个形状（`南极 很 冷 吗` / `南极 挺 冷 吗`）；别的一律返回 0（不抢别的路）。 */
 static inline int agent_attr_question(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
@@ -7015,6 +7104,25 @@ static inline int agent_identity_note(AI *ai, char *const *words, size_t n,
     if (!subj) return 0;
     Token *A = pool_find(ai->pool, subj);
     if (!A) return 0;                      /* 不认识这个实体 ⇒ 交给"我还 不 认识"那条 */
+    /* §6.626 先看**亲属/身份**：教过 `小明 是 我 的 表弟` ⇒ 这里答"小明 是你 的 表弟"，
+     * 比"我不知道名字"有用得多。 */
+    {
+        uint8_t krid = rel_id_of(ai, "亲属", 0);
+        if (krid) {
+            /* ⚠ **动态关系不在 `rel` 位掩码里**：它存在 `e->dyn`（1 基，`rid - REL_DYN_BASE + 1`）。
+             * 我第一版写的是 `e->rel & REL_BIT(krid)` —— 永远不成立（实测「小明 是谁」还是答"不知道名字"）。 */
+            uint8_t kdyn = (krid >= REL_DYN_BASE) ? (uint8_t)(krid - REL_DYN_BASE + 1) : 0;
+            for (size_t i = 0; i < A->count; ++i) {
+                const AssocEntry *e = &token_assocs_ro(A)[i];
+                if (kdyn ? (e->dyn != kdyn) : !(e->rel & REL_BIT(krid))) continue;
+                if (!e->main || !e->main->name) continue;
+                const char *t = ai_say_tpl("知道.亲属");
+                const char *const ak[2] = { subj, e->main->name };
+                der_filln(out, cap, t ? t : "$1 是 你 的 $2", ak, 2);
+                return 1;
+            }
+        }
+    }
     /* 类别：顺一层 属于 */
     const char *cat = NULL;
     for (size_t i = 0; i < A->count; ++i) {
@@ -7844,6 +7952,14 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
      * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
      * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
+    /* §6.626b 亲属句（`小明 是 我 的 表弟`）：reply 桶会先答"我是你的朋友"，所以这里先接 */
+    if (!ai->ask_pending) {
+        char kb[512] = {0};
+        if (agent_learn_kinship_raw(ai, input, kb, sizeof kb)) {
+            snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), kb);
+            return agent_say(ai, out);
+        }
+    }
     /* §6.616b 明确在教"属性句"（`我 教 你 ， 南极 很 冷`）⇒ 照实说学不进（别回聊天）*/
     if (!ai->ask_pending) {
         char ab[512];
@@ -8470,6 +8586,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         if (resp) conf = rc;
     }
     /* §6.218 地点块：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）*/
+    if (!resp) {
+        /* §6.626 亲属/身份称谓（`小明 是 我 的 表弟`）—— 在关系层之前：
+         * 它也是"A 是 B"的形状，但 B 是称谓表里的词，走专用记录。 */
+        char kb[512] = {0};
+        if (agent_learn_kinship(ai, lw, ln, kb, sizeof kb)) {
+            resp = (char *)malloc(strlen(kb) + 1);
+            if (resp) memcpy(resp, kb, strlen(kb) + 1);
+            conf = 0.7f;
+        }
+    }
     if (!resp) {
         float rc = 0.5f;
         resp = agent_learn_locative(ai, lw, ln, &rc);
