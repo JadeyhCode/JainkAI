@@ -3766,6 +3766,7 @@ static inline int agent_attr_teach_raw(AI *ai, const char *input, char *out, siz
             if (ai_write_rel(ai, A, Y, arid, 0, AI_WSRC_RELATION) == 0) {
                 agent_teach_mark(ai, A, arid, Y, 0);
                 ai->n_rel_learned++;
+                aip_note_fact(ai, w[0], "属性", w[2]);   /* §6.628 指代要靠 last_subject */
                 const char *t = ai_say_tpl("学习.属性");
                 const char *const a[2] = { w[0], w[2] };
                 der_filln(out, cap, t ? t : "记下 了 ： $1 很 $2（属性）", a, 2);
@@ -9293,6 +9294,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
                                       NULL};
         int skip = 0;
         for (size_t i = 0; skip0[i]; ++i) if (!strcmp(words[0], skip0[i])) { skip = 1; break; }
+        /* §6.628 **别把分词碎片记成上一句主语**：`灵狐兽 很 冷` 分词是 灵/狐/兽 ⇒ 记成「灵」
+         * ⇒ 下一句「他 很 冷 吗」替换后得到「灵 很 冷」（实测）。判据：首词是单字，且和下一词
+         * 拼起来是池里**已有的多字词** ⇒ 它是碎片，跳过（学成功那条路会记整词）。 */
+        if (!skip && n >= 2 && words[0] && words[1] &&
+            strlen(words[0]) == 3 && strlen(words[1]) == 3) {
+            char pair[8];
+            snprintf(pair, sizeof pair, "%s%s", words[0], words[1]);
+            if (pool_find(ai->pool, pair)) skip = 1;
+        }
         /* §6.624 别把学习时记下的**完整主语**覆盖回分词碎片：
          * 现在 last_subject 是 `小明`、words[0] 是 `小` ⇒ 前缀关系，就不覆盖。 */
         if (!skip && pool_find(ai->pool, words[0]) && strlen(words[0]) < sizeof ai->last_subject &&
