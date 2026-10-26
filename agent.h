@@ -2768,6 +2768,9 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
 
 static inline const char *agent_reason_find(AI *ai, const char *a, const char *r,
                                             const char *b);   /* §6.627 定义在后面 */
+static inline int agent_reason_fact_parse(AI *ai, char *const *fact, size_t fn,
+                                          char *abuf, size_t acap, uint8_t *out_rid,
+                                          char *bbuf, size_t bcap);   /* §6.629 见后面 */
 
 static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
                                        float *out_conf, int *handled) {
@@ -2827,6 +2830,27 @@ static inline char *agent_why_question(AI *ai, char *const *words, size_t n,
                     char wbuf[640];
                     der_filln(wbuf, sizeof wbuf, t ? t : "我 只 记 了 $1 在 $2（地点）—— 没 记 原因", a2, 2);
                     if (out_conf) *out_conf = 0.6f;
+                    if (handled) *handled = 1;
+                    char *rr = (char *)malloc(strlen(wbuf) + 1);
+                    if (rr) memcpy(rr, wbuf, strlen(wbuf) + 1);
+                    return rr;
+                }
+            }
+        }
+        /* §6.629 **属性事实也能有原因**：`为什么 灵狐兽 很 冷` —— `rel_parse` 认不出「很」，
+         * 但原因表里可能有（`[教:…]` 那条 `A 很 Y` 的原因）。先用共享解析器试一次。 */
+        {
+            char ab[64], bb[64];
+            uint8_t arid2 = 0;
+            if (agent_reason_fact_parse(ai, rest, rn, ab, sizeof ab, &arid2, bb, sizeof bb)) {
+                const char *why3 = agent_reason_find(ai, ab, rel_name_of(ai, arid2), bb);
+                if (why3) {
+                    const char *t = ai_say_tpl("推理.有原因");
+                    const char *const a1[1] = { why3 };
+                    char wbuf[640];
+                    der_filln(wbuf, sizeof wbuf,
+                              t ? t : "因为 $1 —— 你 教 我 的（我 没 验 过 对 不 对）", a1, 1);
+                    if (out_conf) *out_conf = 0.7f;
                     if (handled) *handled = 1;
                     char *rr = (char *)malloc(strlen(wbuf) + 1);
                     if (rr) memcpy(rr, wbuf, strlen(wbuf) + 1);
@@ -3809,11 +3833,106 @@ static inline const char *agent_reason_find(AI *ai, const char *a, const char *r
     return NULL;
 }
 /* 学一句"因为"：成功写进原因表并答复。`words` 用**带标点的原词**（要靠逗号分前后）。 */
+/* §6.629 从"事实那半句"里抽出 A / R / B —— 两种形状：
+ *   ① 关系词在中间（`企鹅 属于 鸟类`）；
+ *   ② **程度词 + 形容词**（`灵狐兽 很 冷` ⇒ 关系「属性」）—— 这样"为什么 X 很 Y"也能有原因。 */
+static inline int agent_reason_fact_parse(AI *ai, char *const *fact, size_t fn,
+                                          char *abuf, size_t acap, uint8_t *out_rid,
+                                          char *bbuf, size_t bcap) {
+    if (!ai || !fact || fn < 3 || !abuf || !bbuf || !out_rid) return 0;
+    size_t ri = fn; uint8_t rid = 0;
+    for (size_t i = 1; i + 1 < fn; ++i) {
+        uint8_t id = rel_id_of(ai, fact[i], 0);
+        if (id) { ri = i; rid = id; break; }
+    }
+    if (ri == fn) {
+        /* 第二种：`A 很 Y`（程度词当"属性关系"）*/
+        static const char *deg[] = { "很", "挺", "太", "非常", "特别", "真", "好", NULL };
+        size_t di = fn;
+        for (size_t i = 1; i + 1 < fn; ++i) {
+            for (size_t k = 0; deg[k]; ++k)
+                if (!strcmp(fact[i], deg[k])) { di = i; break; }
+            if (di != fn) break;
+        }
+        if (di == fn || di + 2 != fn) return 0;
+        rid = rel_id_of(ai, "属性", 1);
+        if (!rid) return 0;
+        ri = di;
+    }
+    size_t oa = 0, ob = 0;
+    for (size_t i = 0; i < ri; ++i) {
+        size_t l = strlen(fact[i]);
+        if (oa + l + 1 >= acap) return 0;
+        memcpy(abuf + oa, fact[i], l); oa += l;
+    }
+    abuf[oa] = 0;
+    for (size_t i = ri + 1; i < fn; ++i) {
+        size_t l = strlen(fact[i]);
+        if (ob + l + 1 >= bcap) return 0;
+        memcpy(bbuf + ob, fact[i], l); ob += l;
+    }
+    bbuf[ob] = 0;
+    if (!abuf[0] || !bbuf[0] || !strcmp(abuf, bbuf)) return 0;
+    *out_rid = rid;
+    return 1;
+}
+
 static inline int agent_learn_reason(AI *ai, char *const *words, size_t n, char *out, size_t cap) {
     if (!ai || !words || !out || cap == 0 || n < 6) return 0;
     size_t yi = n;                                 /* 「因为」的位置 */
     for (size_t i = 0; i < n; ++i) if (words[i] && !strcmp(words[i], "因为")) { yi = i; break; }
     if (yi == n) return 0;
+    /* §6.629 **因果在前**：`因为 C ，A R B` —— 「因为」在句首，靠**逗号**把原因和事实分开。
+     * （以前只认因果在后；这两种说法在中文里一样常见。） */
+    if (yi == 0) {
+        size_t comma = n;
+        for (size_t i = 1; i < n; ++i) {
+            const char *w = words[i];
+            if (!w) continue;
+            if (!strcmp(w, "，") || !strcmp(w, ",") || !strcmp(w, "。") || !strcmp(w, "."))
+            { comma = i; break; }
+        }
+        if (comma == n || comma < 3 || comma + 3 > n) return 0;
+        char why[120]; size_t wl = 0;
+        for (size_t i = 1; i < comma; ++i) {
+            if (!words[i]) continue;
+            size_t l = strlen(words[i]);
+            if (wl + l + 2 >= sizeof why) break;
+            if (wl) why[wl++] = ' ';
+            memcpy(why + wl, words[i], l); wl += l;
+        }
+        why[wl] = 0;
+        if (!why[0]) return 0;
+        /* 事实侧：逗号之后那些词，自己拼 A/R/B */
+        char *fact[8]; size_t fn = 0;
+        for (size_t i = comma + 1; i < n && fn < 8; ++i) {
+            const char *w = words[i];
+            if (!w || !w[0]) continue;
+            if (!strcmp(w, "，") || !strcmp(w, ",")) continue;
+            fact[fn++] = words[i];
+        }
+        if (fn < 3) return 0;
+        static char ab2[64], bb2[64];
+        uint8_t rid = 0;
+        if (!agent_reason_fact_parse(ai, fact, fn, ab2, sizeof ab2, &rid, bb2, sizeof bb2)) return 0;
+        Token *A2 = pool_token_intern(ai->pool, ab2);
+        Token *B2 = pool_token_intern(ai->pool, bb2);
+        if (!A2 || !B2) return 0;
+        if (!rel_direct(A2, rid, B2)) {
+            if (ai_write_rel(ai, A2, B2, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+            agent_teach_mark(ai, A2, rid, B2, 0);
+            ai->n_rel_learned++;
+        }
+        agent_reason_note(ai, ab2, rid, bb2, why);
+        char fact_txt[160];
+        snprintf(fact_txt, sizeof fact_txt, "%.30s %s %.30s", ab2,
+                 rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?", bb2);
+        const char *t = ai_say_tpl("学习.原因");
+        const char *const a2[2] = { fact_txt, why };
+        der_filln(out, cap, t ? t : "记下 了 ： 你 说 $1 是 因 为 $2（原因 我 只 记 你 说 的，不 验 证）",
+                  a2, 2);
+        return 1;
+    }
     /* 因果在后：`A … 因为 C`（因为 之前是完整事实，之后是原因） */
     if (yi >= 3) {
         char *fact[8]; size_t fn = 0;
@@ -3828,36 +3947,13 @@ static inline int agent_learn_reason(AI *ai, char *const *words, size_t n, char 
         }
         why[wl] = 0;
         if (!why[0]) return 0;
-        /* 事实侧自己拼 A/R/B：`企鹅 属于 鸟类` 里的 `企鹅` 常被切成 企/鹅，
-         * 交给 `rel_parse` 会拼不对（实测「因为」学不进去）。这里找**第一个关系词**，
-         * 它前面全拼成主语、后面全拼成宾语 —— 和 natcoin 同一个思路。 */
-        char jb[64]; const char *aw = NULL, *bw = NULL, *rw = NULL;
-        uint8_t rid = 0; int neg = 0, q = 0;
-        size_t ri = fn;
-        for (size_t i = 1; i + 1 < fn; ++i) {
-            uint8_t id = rel_id_of(ai, fact[i], 0);
-            if (id) { ri = i; rid = id; break; }
-        }
-        if (ri == fn || !rid) return 0;
-        {
-            static char abuf[64], bbuf[64];
-            size_t oa = 0, ob = 0;
-            for (size_t i = 0; i < ri; ++i) {
-                size_t l = strlen(fact[i]);
-                if (oa + l + 1 >= sizeof abuf) return 0;
-                memcpy(abuf + oa, fact[i], l); oa += l;
-            }
-            abuf[oa] = 0;
-            for (size_t i = ri + 1; i < fn; ++i) {
-                size_t l = strlen(fact[i]);
-                if (ob + l + 1 >= sizeof bbuf) return 0;
-                memcpy(bbuf + ob, fact[i], l); ob += l;
-            }
-            bbuf[ob] = 0;
-            if (!abuf[0] || !bbuf[0]) return 0;
-            aw = abuf; bw = bbuf; rw = rel_name_of(ai, rid);
-        }
-        (void)jb; (void)neg; (void)q;
+        /* 事实侧自己拼 A/R/B（`企鹅` 常被切成 企/鹅，交给 `rel_parse` 会拼不对；
+         * 也支持"程度词 + 形容词"那种属性事实）。 */
+        static char abuf[64], bbuf[64];
+        uint8_t rid = 0;
+        if (!agent_reason_fact_parse(ai, fact, fn, abuf, sizeof abuf, &rid, bbuf, sizeof bbuf))
+            return 0;
+        const char *aw = abuf, *bw = bbuf, *rw = rel_name_of(ai, rid);
         /* 事实本身还没学过 ⇒ **顺手学掉**（`A R B 因为 C` 本来就是在断言 A R B），
          * 再记原因。也要落教学留痕，否则「你怎么知道」查不到出处。 */
         Token *A2 = pool_token_intern(ai->pool, aw);
