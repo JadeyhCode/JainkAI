@@ -1351,6 +1351,20 @@ grep -qaF '记下 了 ： 猫 属于 动物 ； 狗 属于 宠物' "$MX/out2.txt
     && ok "**两个陈述 + 问句**：两条都学、都报出来（以前一句 `return NULL` 全丢）" \
     || bad "混句-两条" "$(grep -a 'AI >' "$MX/out2.txt" | head -1)"
 
+# §6.630 **"因为"进存档**（v15）：教过的原因，重开之后还答得出来
+RS="$WORK/rs"; rm -rf "$RS"; mkdir -p "$RS"
+cp "$ROOT/model.bin" "$RS/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$RS/" 2>/dev/null || true
+( cd "$RS" && { printf '::notepad off\n::char off\n'; printf '因为 会 飞 ， 灵狐兽 属于 神兽\n::save m.bin\n'; } | \
+    "$WORK/aip" --model m.bin > out1.txt 2>&1 ) || true
+grep -qaF '是 因 为 会 飞' "$RS/out1.txt" \
+    && ok "教「因为」能记住（当场回「你说 … 是因为 …」）" \
+    || bad "reason-教" "$(grep -a 'AI >' "$RS/out1.txt" | head -1)"
+( cd "$RS" && { printf '::notepad off\n::char off\n为什么 灵狐兽 属于 神兽\n'; } | \
+    "$WORK/aip" --model m.bin > out2.txt 2>&1 ) || true
+grep -qaF '因为 会 飞 —— 你 教 我 的' "$RS/out2.txt" \
+    && ok "**重开之后**原因还在（v15 写进存档了；以前是会话内的）" \
+    || bad "reason-存读" "$(grep -a 'AI >' "$RS/out2.txt" | head -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

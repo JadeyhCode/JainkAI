@@ -64,7 +64,7 @@ elif [ -n "$legacy_use" ]; then
 else
     ok "语境（subs/subs_not）字段已从 AssocEntry 删掉，且全仓没有访问点（v10，省 64 字节/条）"
 fi
-grep -q '^#define MODEL_VERSION 14u' "$ROOT/model_io.h" \
+grep -q '^#define MODEL_VERSION 15u' "$ROOT/model_io.h" \
     && ok "存档版本 = 14（§6.299 删 hv/hv_prev；v13 及更早仍读得回来）" \
     || bad "存档版本" "$(grep -m1 'MODEL_VERSION' "$ROOT/model_io.h")"
 run '::tokens 12\n' o3b

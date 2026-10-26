@@ -47,7 +47,7 @@
  *     文件与内存各瘦一圈（内存里那 64 字节/条也从 AssocEntry 里删了）。
  *     v9 及以前照样读得回来：按 has_ctx 把那两段跳过去，读进来的边当**普通边**
  *     （旧文件里实测一条带语境的都没有；手工造过的那种会**少一层条件**，登记在案 —— 见 §6.50）。 */
-#define MODEL_VERSION 14u  /* v14: 删掉 hv/hv_prev（VSA 绑定代数整套撤销，§6.299）；读 v13 时按旧布局丢弃 */  /* v13: 他者**改口历史**（BelHist，§6.112） */  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
+#define MODEL_VERSION 15u  /* v15: 尾部加"因为"表（§6.630，AI.reasons[16]）—— 旧档没有这一段 ⇒ 空表 */  /* v14: 删掉 hv/hv_prev（VSA 绑定代数整套撤销，§6.299）；读 v13 时按旧布局丢弃 */  /* v13: 他者**改口历史**（BelHist，§6.112） */  /* v12: 边存**时刻集合**（tset/n_tset，§6.111） */  /* v11: **N1 思考对象**持久化（摘要：结论/缺口/复没复核，§6.110） */  /* v7: 边增加**否定**关系与**动态**关系字节（L2 完整逻辑链） */
 
 /* ---------------------------------------------------------------- 字节流 */
 
@@ -418,6 +418,20 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
          * 存盘重载后 hits 翻倍。这个 bug 是被 embed.sh 的
          * 「读盘前后语义邻居一致」抓出来的。 */
         mw_str(&w, nm, (uint32_t)strlen(nm));
+    }
+
+    /* §6.630 **"因为"表也进存档**（v15）：以前它是**会话内**的（关进程就没），
+     * 用户教过的原因重启就丢 —— 与"教学留痕能跨会话"不一致。
+     * 布局：`n` + 每条四段（a/r/b/why，`mw_str` 自带长度前缀）。 */
+    mw_u32(&w, (uint32_t)(ai->n_reason < 16 ? ai->n_reason : 16));
+    {
+        int nr = ai->n_reason < 16 ? ai->n_reason : 16;
+        for (int i = 0; i < nr; ++i) {
+            mw_str(&w, ai->reasons[i].a, (uint32_t)strlen(ai->reasons[i].a));
+            mw_str(&w, ai->reasons[i].r, (uint32_t)strlen(ai->reasons[i].r));
+            mw_str(&w, ai->reasons[i].b, (uint32_t)strlen(ai->reasons[i].b));
+            mw_str(&w, ai->reasons[i].why, (uint32_t)strlen(ai->reasons[i].why));
+        }
     }
 
     if (w.err) return 0;
@@ -1073,6 +1087,23 @@ static inline AI *ai_load_file(const char *path) {
             if (len) { if (mr_raw(&r, nm, len) != 0) { free(nm); goto fail_ai; } }
             nm[len] = 0;
             ai->dynrel_name[ai->dynrel_n++] = nm;
+        }
+    }
+    /* §6.630 v15：把"因为"表读回来（旧档没有这一段 ⇒ n_reason=0，行为与以前一致） */
+    if (mver >= 15u) {
+        uint32_t nr = mr_u32(&r);
+        if (r.err || nr > 16u) goto fail_ai;
+        ai->n_reason = (int)nr;
+        for (uint32_t i = 0; i < nr; ++i) {
+            char *dst[4] = { ai->reasons[i].a, ai->reasons[i].r, ai->reasons[i].b, ai->reasons[i].why };
+            size_t cap[4] = { sizeof ai->reasons[i].a, sizeof ai->reasons[i].r,
+                              sizeof ai->reasons[i].b, sizeof ai->reasons[i].why };
+            for (int k = 0; k < 4; ++k) {
+                uint32_t len = mr_u32(&r);
+                if (r.err || len >= cap[k]) goto fail_ai;
+                if (len && mr_raw(&r, dst[k], len) != 0) goto fail_ai;
+                dst[k][len] = 0;
+            }
         }
     }
     np->loading = 1;                      /* §6.111：下面这段重建里的 touch 不算"观测" */
