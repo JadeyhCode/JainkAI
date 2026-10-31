@@ -4047,6 +4047,53 @@ static inline int agent_source_tier(const char *src) {
     return 40;
 }
 
+/* §6.647 **问到的是一条待证**：不在事实层，但也不该答"不太懂" —— 照实说"只听说过、没核实"。
+ * 返回 1 = 找到了（out 里是答复）。内联扫标记（agent.h 不能 include claim.h）。 */
+static inline int agent_claim_answer(AI *ai, char *const *words, size_t n,
+                                     char *out, size_t cap) {
+    if (!ai || !words || n < 3 || !out || cap == 0) return 0;
+    /* 只认 `A R B [吗|呢]` 的问句形状 */
+    size_t wn = n;
+    if (wn >= 4 && (!strcmp(words[wn - 1], "吗") || !strcmp(words[wn - 1], "呢"))) wn--;
+    if (wn < 3) return 0;
+    uint8_t rid = rel_id_of(ai, words[1], 0);
+    if (!rid) return 0;
+    const char *rn = rel_name_of(ai, rid);
+    if (!rn) return 0;
+    /* 宾语可能被切碎（`鸟类` → 鸟/类）⇒ 把 words[2..] 拼回去（待证的标记名是按整词记的） */
+    char bj[64]; size_t bo = 0;
+    for (size_t i = 2; i < wn; ++i) {
+        size_t l = strlen(words[i]);
+        if (bo + l + 1 >= sizeof bj) return 0;
+        memcpy(bj + bo, words[i], l); bo += l;
+    }
+    bj[bo] = 0;
+    if (!bj[0]) return 0;
+    char suffix[96];
+    int w = snprintf(suffix, sizeof suffix, ":%s_%s_%s]", words[0], rn, bj);
+    if (w < 0 || (size_t)w >= sizeof suffix) return 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->is_garbage || !t->name) continue;
+        if (strncmp(t->name, MICRO_CLAIM_TOKEN_PREFIX, strlen(MICRO_CLAIM_TOKEN_PREFIX)) != 0) continue;
+        size_t nl = strlen(t->name), sl = strlen(suffix);
+        if (nl <= sl || strcmp(t->name + nl - sl, suffix) != 0) continue;
+        const char *sp = t->name + strlen(MICRO_CLAIM_TOKEN_PREFIX);
+        const char *c1 = strchr(sp, ':');
+        if (!c1) continue;
+        char src[24];
+        size_t l1 = (size_t)(c1 - sp);
+        if (l1 == 0 || l1 >= sizeof src) continue;
+        memcpy(src, sp, l1); src[l1] = 0;
+        const char *tp = ai_say_tpl("待证.被问");
+        const char *const a4[4] = { words[0], rn, bj, src };
+        der_filln(out, cap,
+                  tp ? tp : "这 条 我 只 听 说 过（来源：$4，待 证）—— 没 核 实", a4, 4);
+        return 1;
+    }
+    return 0;
+}
+
 static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
                                         char *out, size_t cap);   /* §6.636 定义在后面 */
 
@@ -9039,6 +9086,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (getenv("AIP_NATDBG2")) {
         fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
+    }
+    if (!resp) {
+        /* §6.647 问到的正好是一条待证 ⇒ 照实说"只听说过、没核实"（比"不太懂"诚实） */
+        char cb2[512] = {0};
+        if (agent_claim_answer(ai, lw, ln, cb2, sizeof cb2)) {
+            resp = (char *)malloc(strlen(cb2) + 1);
+            if (resp) memcpy(resp, cb2, strlen(cb2) + 1);
+            conf = 0.5f;
+        }
     }
     if (!resp) {
         /* §6.636 **待证**：`听说 …` 这类不写事实层 */

@@ -125,6 +125,23 @@ int main(void) {
         }
         ai_free(d);
     }
+    /* ⑪ §6.647 问到待证时照实说（不进事实层，也不装懂） */
+    {
+        AI *e = ai_new();
+        aip_patterns_load(e);
+        relations_load(e, "relations.txt");
+        char o[256] = {0};
+        agent_claim_from_text(e, "听说 猫 属于 鸟类", o, sizeof o);
+        char ans[256] = {0};
+        char *q[4] = { "猫", "属于", "鸟类", "吗" };
+        ok(agent_claim_answer(e, q, 4, ans, sizeof ans) == 1, "问到待证 ⇒ 有专门答复（不是「不太懂」）");
+        ok(strstr(ans, "待 证") != NULL || strstr(ans, "待证") != NULL, "答复里写明**待证**");
+        Token *A = pool_find(e->pool, "猫"), *B = pool_find(e->pool, "鸟类");
+        ok(!(A && B && rel_direct(A, REL_IS_A, B)), "答复**不**把它当事实（边还是没有）");
+        char *q2[3] = { "猫", "属于", "动物" };
+        ok(agent_claim_answer(e, q2, 3, ans, sizeof ans) == 0, "没听说过的问句 ⇒ 不抢（返回 0）");
+        ai_free(e);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;
