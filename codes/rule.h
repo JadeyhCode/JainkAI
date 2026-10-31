@@ -499,6 +499,52 @@ static inline int rule_check(AI *ai, char *out, size_t cap) {
             }
         }
     }
+    /* ④ **循环依赖提示**（§6.671）：头名 → 前提名 建一张有向图，找环。
+     * 递归规则（`祖先 :- 父, 祖先`）本来就成环 —— **有底规则就正常**，所以这一项**只提示、
+     * 不计入 bad**（不计进"问题条数"，但在输出里点名，让人自己判断）。 */
+    {
+        char nm[32][40];
+        size_t nn = 0;
+        for (size_t i = 0; i < nr && nn < 32; ++i) {
+            Token *h = rule_head(ai, rs[i]);
+            RuleAtom ha2;
+            if (!h || !rule_node_to_atom(ai, h, &ha2)) continue;
+            int dup = 0;
+            for (size_t k = 0; k < nn; ++k) if (!strcmp(nm[k], ha2.name)) { dup = 1; break; }
+            if (!dup) snprintf(nm[nn++], sizeof nm[0], "%.39s", ha2.name);
+        }
+        int edge[32][32];
+        memset(edge, 0, sizeof edge);
+        for (size_t i = 0; i < nr && nn; ++i) {
+            Token *h = rule_head(ai, rs[i]);
+            RuleAtom ha3;
+            if (!h || !rule_node_to_atom(ai, h, &ha3)) continue;
+            size_t hi = nn;
+            for (size_t k = 0; k < nn; ++k) if (!strcmp(nm[k], ha3.name)) { hi = k; break; }
+            if (hi == nn) continue;
+            size_t np2 = rule_npremise(ai, rs[i]);
+            for (size_t k = 1; k <= np2; ++k) {
+                Token *pp = rule_part(ai, rs[i], "前提", k);
+                RuleAtom pa3;
+                if (!pp || !rule_node_to_atom(ai, pp, &pa3)) continue;
+                for (size_t m = 0; m < nn; ++m)
+                    if (!strcmp(nm[m], pa3.name)) { edge[hi][m] = 1; break; }
+            }
+        }
+        /* 传递闭包（n ≤ 32，O(n³) 足够） */
+        int reach[32][32];
+        memcpy(reach, edge, sizeof edge);
+        for (size_t k = 0; k < nn; ++k)
+            for (size_t i = 0; i < nn; ++i)
+                if (reach[i][k])
+                    for (size_t j = 0; j < nn; ++j) if (reach[k][j]) reach[i][j] = 1;
+        for (size_t i = 0; i < nn; ++i)
+            if (reach[i][i]) {
+                RC_SAY("⚠ 循环依赖：%.24s 依赖自己（有底规则就正常；没有底规则会永远推不出来）\n",
+                       nm[i]);
+                break;                     /* 只提示一次，别刷屏 */
+            }
+    }
     if (out && cap) out[o < cap ? o : cap - 1] = 0;
 #undef RC_SAY
     return bad;

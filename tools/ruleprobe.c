@@ -286,6 +286,22 @@ int main(void) {
         ok(ai_is_derived_mark(pool_find(e->pool, "[推:x299_怕_y]")), "最新的还在");
         ai_free(e);
     }
+    /* §6.671 循环依赖**只提示**（递归规则合法；不算硬问题） */
+    {
+        AI *c3 = ai_new();
+        char *h[2] = { "$x", "$z" };
+        char *p1[2] = { "$x", "$y" }, *p2[2] = { "$y", "$z" };
+        char *pa3[2][PRED_MAX_ARGS];
+        pa3[0][0] = p1[0]; pa3[0][1] = p1[1]; pa3[1][0] = p2[0]; pa3[1][1] = p2[1];
+        const char *pn3[2] = { "父", "祖先" };
+        size_t pns3[2] = { 2, 2 };
+        add_rule(c3, "祖先", h, 2, pn3, pa3, pns3, 2);
+        char msg2[1024] = {0};
+        int bad2 = rule_check(c3, msg2, sizeof msg2);
+        ok(bad2 == 0, "递归规则**不算硬问题**（bad = 0）");
+        ok(strstr(msg2, "循环依赖") != NULL, "但会**提示**循环依赖（有底规则就正常）");
+        ai_free(c3);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

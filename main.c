@@ -4620,8 +4620,9 @@ int main(int argc, char **argv) {
                 } else if (!strncmp(r, "check", 5)) {
                     char cb[2048] = {0};
                     int bad = rule_check(a->brain, cb, sizeof cb);
-                    if (bad == 0) printf("[规则体检] 全部合格（安全条件/自环/重复 三项都过）\n");
+                    if (bad == 0) printf("[规则体检] 没有硬问题（安全条件 / 重复规则两项都过）\n");
                     else printf("[规则体检] %d 处问题：\n%s", bad, cb);
+                    if (bad == 0 && cb[0]) printf("%s", cb);   /* §6.671 提示类（循环依赖） */
                     continue;
                 } else if (!strncmp(r, "add", 3)) {
                     const char *body = r + 3;
