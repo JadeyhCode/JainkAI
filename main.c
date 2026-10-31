@@ -781,7 +781,7 @@ static const CmdDef CMDS[] = {
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
     { "lang", "<子命令>", 1, "基本",
       "**语言包**（最小版）：`::lang list` 看 lang/ 下有什么；`::lang load en` 装；`::lang current` 看当前；"
-      "`::lang off` 卸。\n装好之后**输入先逐词翻译 + 按词序重排**再走中文流水线（词表 lang/<code>/words.txt，"
+      "`::lang setorder SOV|SVO`（猜不准时手动定）│`::lang off` 卸。\n装好之后**输入先逐词翻译 + 按词序重排**再走中文流水线（词表 lang/<code>/words.txt，"
       "词序 meta.txt 的 order=SVO|SOV）。\n⚠ 不是翻译器：不认的词原样留着；不做语法/形态", CMD_LANG },
     { "paper", "<子命令>", 1, "基本",
       "**读论文（离线）**：只处理工作区里的纯文本（≤256 KB），抽『恰好三段』的断言。\n"
@@ -4375,6 +4375,23 @@ int main(int argc, char **argv) {
                     if (g_lang_n == 0) printf("[语言包] 没装（都按中文处理）\n");
                     else printf("[语言包] 当前 = %s（%zu 个词，词序 %s）\n", g_lang_code, g_lang_n,
                                 g_lang_sov ? "SOV" : "SVO");
+                    continue;
+                }
+                if (!strncmp(r, "setorder", 8)) {
+                    const char *v = r + 8;
+                    while (*v == ' ' || *v == '\t') v++;
+                    if (!strncmp(v, "SOV", 3) || !strncmp(v, "sov", 3) ||
+                        !strncmp(v, "SVO", 3) || !strncmp(v, "svo", 3)) {
+                        int sov = (v[0] == 'S' || v[0] == 's') && (v[1] == 'O' || v[1] == 'o');
+                        char dir[256];
+                        snprintf(dir, sizeof dir, "%s", g_lang_code[0] ? g_lang_code : "lang/en");
+                        if (lang_set_order(dir, sov))
+                            printf("[语言包] 词序改成 %s（写回 %s/meta.txt）\n", sov ? "SOV" : "SVO", dir);
+                        else printf("[语言包] 词序改成 %s（没写盘：%s/meta.txt 打不开）\n",
+                                    sov ? "SOV" : "SVO", dir);
+                    } else {
+                        printf("[用法] ::lang setorder SOV|SVO（归纳猜不准时手动定）\n");
+                    }
                     continue;
                 }
                 if (!strncmp(r, "off", 3)) {

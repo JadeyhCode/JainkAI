@@ -21,6 +21,19 @@ static char g_lang_to[LANG_MAX_WORDS][LANG_WORD_CAP];
 static size_t g_lang_n;
 static int  g_lang_sov;
 
+/* §6.652 手动定词序（归纳"猜不准"时的出口）：改内存里的顺序 + 写回 meta.txt */
+static inline int lang_set_order(const char *dir, int sov) {
+    g_lang_sov = sov ? 1 : 0;
+    if (!dir || !dir[0]) return 0;
+    char path[512];
+    snprintf(path, sizeof path, "%s/meta.txt", dir);
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    fprintf(f, "# 词序由 ::lang setorder 手动设定\norder=%s\n", sov ? "SOV" : "SVO");
+    fclose(f);
+    return 1;
+}
+
 static inline void lang_reset(void) {
     g_lang_code[0] = 0;
     g_lang_n = 0;

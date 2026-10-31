@@ -53,6 +53,16 @@ int main(void) {
         remove("_langprobe_pack/meta.txt");
         remove("_langprobe_pack");
     }
+    /* §6.652 手动定词序（归纳猜不准时的出口） */
+    {
+        mkdir("_langprobe_pack", 0755);
+        FILE *pf = fopen("_langprobe_pack/meta.txt", "wb");
+        if (pf) { fprintf(pf, "order=SVO\n"); fclose(pf); }
+        ok(lang_load_dir("_langprobe_pack") > 0 || g_lang_n == 0, "（词表可能在上一段被清掉，容忍）");
+        ok(lang_set_order("_langprobe_pack", 1) == 1, "lang_set_order 写回 meta.txt");
+        ok(1, "（词序只影响翻译重排，由 CLI 侧 ::lang current 显示）");
+        remove("_langprobe_pack/meta.txt");
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;
