@@ -143,6 +143,38 @@ int main(void) {
         remove("_ruleprobe.bin");
     }
 
+    /* §6.649 规则体检：安全条件 + 重复规则 */
+    {
+        AI *d = ai_new();
+        char *h[2] = { "$x", "$y" };
+        char *okp[1][PRED_MAX_ARGS] = { { "$x", "$y" } };
+        char *okpa[1][PRED_MAX_ARGS];
+        okpa[0][0] = okp[0][0]; okpa[0][1] = okp[0][1];
+        const char *okn[1] = { "父" };
+        size_t okns[1] = { 2 };
+        char *badp[1][PRED_MAX_ARGS] = { { "$x", "$z" } };
+        char *badpa[1][PRED_MAX_ARGS];
+        badpa[0][0] = badp[0][0]; badpa[0][1] = badp[0][1];
+        add_rule(d, "祖先", h, 2, okn, okpa, okns, 1);
+        add_rule(d, "祖先", h, 2, okn, badpa, okns, 1);      /* 不安全：$y 不在前提 */
+        add_rule(d, "祖先", h, 2, okn, okpa, okns, 1);       /* 与第一条完全重复 */
+        char msg[1024] = {0};
+        int bad = rule_check(d, msg, sizeof msg);
+        ok(bad == 2, "rule_check 恰好报 2 处（不安全 1 + 重复 1）");
+        ok(strstr(msg, "不在前提里") != NULL, "报出**不安全**（头的变量不在前提）");
+        ok(strstr(msg, "完全相同") != NULL, "报出**重复规则**");
+        char m2[256] = {0};
+        AI *e = ai_new();
+        char *h2[1] = { "$x" };
+        char *q[1][PRED_MAX_ARGS] = { { "$x" } };
+        char *qpa[1][PRED_MAX_ARGS];
+        qpa[0][0] = q[0][0];
+        const char *qn[1] = { "父" };
+        size_t qns[1] = { 1 };
+        add_rule(e, "单目", h2, 1, qn, qpa, qns, 1);
+        ok(rule_check(e, m2, sizeof m2) == 0, "合格的规则 ⇒ 0 处问题");
+        ai_free(d); ai_free(e);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

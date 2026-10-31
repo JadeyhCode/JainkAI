@@ -390,4 +390,71 @@ static inline int rule_prove(AI *ai, const char *name, char *const *args, size_t
     return tr.depth_limited ? 0 : 0;    /* 未知就是未知（不把"证不出来"说成假） */
 }
 
+/* §6.649 **规则体检**：只看三件事（都是"写了但推不出东西"的典型）：
+ *   ① **安全条件**：规则头里的每个 `$变量` 必须在前提里也出现（Datalog 的 safety）——
+ *      否则"证明"会拿一个没绑定的变量去当值；
+ *   ② **重复规则**：头和前提集合完全一样的两条规则（纯冗余）。
+ * ⚠ 自环（`环($x) :- 环($x)`）**没有**做成本项检查：第一版写了、但查不出来（节点比较没命中），
+ *   而且求解器的**栈检测**本来就能拦（返回未知、不挂死，见 §6.635 的探针）—— 如实不承诺。
+ * 返回 0 = 全部合格；>0 = 问题条数。问题描述写进 out（可空）。 */
+static inline int rule_check(AI *ai, char *out, size_t cap) {
+    if (!ai) return 0;
+    Token *rs[128];
+    size_t nr = rule_list(ai, rs, 128);
+    int bad = 0;
+    size_t o = 0;
+#define RC_SAY(...) do { if (out && o < cap) { int w_ = snprintf(out + o, cap - o, __VA_ARGS__);                         if (w_ > 0) o += (size_t)w_; } } while (0)
+    for (size_t i = 0; i < nr; ++i) {
+        Token *h = rule_head(ai, rs[i]);
+        RuleAtom ha;
+        if (!h || !rule_node_to_atom(ai, h, &ha)) continue;
+        /* ① 安全条件：头的变量 ⊆ 前提的变量（先把前提里的变量收成一个表，再逐个查） */
+        char pv[32][40]; size_t npv = 0;
+        size_t np = rule_npremise(ai, rs[i]);
+        for (size_t k = 1; k <= np; ++k) {
+            Token *pp = rule_part(ai, rs[i], "前提", k);
+            RuleAtom pa;
+            if (!pp || !rule_node_to_atom(ai, pp, &pa)) continue;
+            for (size_t m = 0; m < pa.n && npv < 32; ++m)
+                if (pa.args[m][0] == '$') snprintf(pv[npv++], sizeof pv[0], "%s", pa.args[m]);
+        }
+        for (size_t k = 0; k < ha.n; ++k) {
+            if (ha.args[k][0] != '$') continue;
+            int found = 0;
+            for (size_t m = 0; m < npv && !found; ++m)
+                if (!strcmp(pv[m], ha.args[k])) found = 1;
+            if (!found) {
+                bad++;
+                RC_SAY("%s：头里的 %s **不在前提里**（不安全：推的时候没有值可绑）\n",
+                       rs[i]->name, ha.args[k]);
+            }
+        }
+        /* ③ 重复规则（头 + 前提集合完全一样） */
+        for (size_t j = i + 1; j < nr; ++j) {
+            Token *h2 = rule_head(ai, rs[j]);
+            RuleAtom hb;
+            if (!h2 || !rule_node_to_atom(ai, h2, &hb)) continue;
+            if (strcmp(hb.name, ha.name) || hb.n != ha.n) continue;
+            int same = 1;
+            for (size_t k = 0; k < ha.n && same; ++k)
+                if (strcmp(hb.args[k], ha.args[k])) same = 0;
+            if (!same) continue;
+            size_t np2 = rule_npremise(ai, rs[j]);
+            if (np2 != np) continue;
+            for (size_t k = 1; k <= np && same; ++k) {
+                Token *p1 = rule_part(ai, rs[i], "前提", k), *p2 = rule_part(ai, rs[j], "前提", k);
+                if (!p1 || !p2 || strcmp(p1->name ? p1->name : "", p2->name ? p2->name : "")) same = 0;
+            }
+            if (same) {
+                bad++;
+                RC_SAY("%s 与 %s：**完全相同**的规则（纯冗余）\n", rs[i]->name, rs[j]->name);
+                break;
+            }
+        }
+    }
+    if (out && cap) out[o < cap ? o : cap - 1] = 0;
+#undef RC_SAY
+    return bad;
+}
+
 #endif /* RULE_H */

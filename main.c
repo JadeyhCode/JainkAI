@@ -796,7 +796,8 @@ static const CmdDef CMDS[] = {
     { "rule", "<子命令>", 1, "基本",
       "**规则即数据**：list 看已有规则；add 加一条（Horn 规则，只有肯定前提）：\n"
       "::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n"
-      "最多 4 条前提；变量写成 `$x`；规则随图存盘", CMD_RULE },
+      "最多 4 条前提；变量写成 `$x`；规则随图存盘\n"
+      "::rule check 体检（头的变量必须在前提里 / 自环无底 / 重复规则）", CMD_RULE },
     { "prove", "<名字> <参数…>", 2, "基本",
       "**证明**：从图里的事实 + 规则推一个具体结论（后向链，深度 ≤8、步数 ≤32）。\n"
       "::prove 祖先 甲 丙    ⇒ 证明了会给**每一步**（用了哪条事实、哪条规则）；\n"
@@ -4540,6 +4541,12 @@ int main(int argc, char **argv) {
                         printf("  %s  ←  %s   （%zu 条前提）\n", rs[i]->name ? rs[i]->name : "?",
                                h && h->name ? h->name : "?", np);
                     }
+                } else if (!strncmp(r, "check", 5)) {
+                    char cb[2048] = {0};
+                    int bad = rule_check(a->brain, cb, sizeof cb);
+                    if (bad == 0) printf("[规则体检] 全部合格（安全条件/自环/重复 三项都过）\n");
+                    else printf("[规则体检] %d 处问题：\n%s", bad, cb);
+                    continue;
                 } else if (!strncmp(r, "add", 3)) {
                     const char *body = r + 3;
                     while (*body == ' ' || *body == '\t') body++;
