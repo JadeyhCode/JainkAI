@@ -1456,6 +1456,17 @@ grep -qaF '读不到 不存在.txt' "$PP/o2.txt" \
 
 # §6.639 语言包的行为由 `tools/langprobe.c` 钉（这里不重复跑：并行套件里它对 `_t` 目录敏感，会偶发失败）
 
+# §6.657 **前向链推出的东西，出处说"我自己推的"**（不说成"你教的"）
+PV="$WORK/prov"; rm -rf "$PV"; mkdir -p "$PV"
+cp "$ROOT/model.bin" "$PV/m.bin"; cp "$ROOT/patterns.txt" "$PV/" 2>/dev/null || true
+( cd "$PV" && printf '::notepad off\n::char off\n::pred make 父 甲 乙\n::rule add 怕($x,$y) :- 父($x,$y)\n::rule apply\n你 怎么 知道 甲 怕 乙\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaF '推出 1 条新事实' "$PV/o.txt" \
+    && ok "::rule apply 推出一条关系事实（怕(甲,乙)）" \
+    || bad "prov-推" "$(grep -a '前向链' "$PV/o.txt" | head -1)"
+grep -qaF '自己 推' "$PV/o.txt" \
+    && ok "追问出处 ⇒ 说**我自己推的**（不是"你教的"）" \
+    || bad "prov-说" "$(grep -a 'AI >' "$PV/o.txt" | tail -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

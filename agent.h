@@ -2723,6 +2723,22 @@ static inline char *agent_provenance(AI *ai, char *const *words, size_t n, float
             return r;
         }
     }
+    /* ①b §6.657 **推出来的**（前向链落的 `[推:…]` 留痕）⇒ 照实说"我自己推的"，不说成"你教的" */
+    if (A && B) {
+        char dm[160];
+        snprintf(dm, sizeof dm, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, aw,
+                 rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?", bw);
+        Token *dt = pool_find(ai->pool, dm);
+        if (dt && !dt->is_garbage) {
+            const char *t = ai_say_tpl("出处.我推的");
+            snprintf(resp, sizeof resp, "%s", t ? t : "这 条 是 我 自己 推 出来 的");
+            if (out_conf) *out_conf = 0.7f;
+            g_last_src = AI_SRC_RELATION;
+            char *r = (char *)malloc(strlen(resp) + 1);
+            if (r) memcpy(r, resp, strlen(resp) + 1);
+            return r;
+        }
+    }
     /* ② 本会话的账（最新在前） */
     if (A && B) {
         size_t cnt = ai_modlog_count(ai);
