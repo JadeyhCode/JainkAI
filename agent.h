@@ -4064,6 +4064,69 @@ static inline int agent_learn_reason(AI *ai, char *const *words, size_t n, char 
     return 0;
 }
 
+/* §6.668（重做）**谓词实例的出处**：`你 怎么 知道 怕(甲,乙)`。
+ * 为什么要走**原始串**：分词会把 `怕(甲,乙)` 拆成 `怕`/`甲`/`乙`（括号和逗号都丢了，
+ * 甚至 `祖先` 被拆成 祖/先）—— 上一轮按 token 判"含 '('"永远不成立（§6.668 的失败）。
+ * 所以：在**分词之前**从整句里认出 `名字(参数,…)`，直接拼谓词实例名去池里找。 */
+static inline int agent_prov_pred_raw(AI *ai, const char *input, char *out, size_t cap,
+                                      float *cf) {
+    if (!ai || !input || !out || cap == 0) return 0;
+    const char *lp = strchr(input, '(');
+    const char *rp = lp ? strrchr(input, ')') : NULL;
+    if (!lp || !rp || rp <= lp) return 0;
+    /* 名字：'(' 之前、最后一个空白之后 */
+    const char *ns = lp;
+    while (ns > input && ns[-1] != ' ' && ns[-1] != '\t') ns--;
+    size_t nl = (size_t)(lp - ns);
+    if (nl == 0 || nl >= 64) return 0;
+    char name[64];
+    memcpy(name, ns, nl); name[nl] = 0;
+    /* 参数：括号里按 , 和空白切 */
+    char args[8][64]; size_t na = 0;
+    const char *q = lp + 1;
+    while (q < rp && na < 8) {
+        while (q < rp && (*q == ' ' || *q == ',' || *q == '\t')) q++;
+        if (q >= rp) break;
+        size_t o = 0;
+        while (q < rp && *q != ',' && *q != ' ') {
+            if (o + 1 < sizeof args[0]) args[na][o++] = *q;
+            q++;
+        }
+        args[na][o] = 0;
+        if (o) na++;
+    }
+    if (na < 2) return 0;
+    char pn[256];
+    int w = snprintf(pn, sizeof pn, "%s%s(", MICRO_PRED_TOKEN_PREFIX, name);
+    if (w < 0 || (size_t)w >= sizeof pn) return 0;
+    size_t o = (size_t)w;
+    for (size_t i = 0; i < na; ++i) {
+        int w2 = snprintf(pn + o, sizeof pn - o, "%s%s", args[i], (i + 1 == na) ? ")]" : ",");
+        if (w2 < 0 || o + (size_t)w2 >= sizeof pn) return 0;
+        o += (size_t)w2;
+    }
+    Token *p = pool_find(ai->pool, pn);
+    if (!p) {
+        const char *t = ai_say_tpl("不知道.没这条");
+        snprintf(out, cap, "%s", t ? t : "我 图 里 没 记 过 这 条（不 编）。");
+        if (cf) *cf = 0.5f;
+        return 1;
+    }
+    char dm[200];
+    snprintf(dm, sizeof dm, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, args[0], name, args[1]);
+    Token *dt = pool_find(ai->pool, dm);
+    if (dt && !dt->is_garbage) {
+        const char *t = ai_say_tpl("出处.我推的");
+        snprintf(out, cap, "%s", t ? t : "这 条 是 我 自己 推 出来 的");
+        if (cf) *cf = 0.7f;
+        return 1;
+    }
+    const char *t = ai_say_tpl("出处.图上");
+    snprintf(out, cap, "%s", t ? t : "这 条 是 图 上 记 着 的（不 是 我 推 的）");
+    if (cf) *cf = 0.6f;
+    return 1;
+}
+
 /* §6.636 **待证**：带来源前缀（`听说/据说/论文/书上…`）的话**不写事实层**。
  * 返回 1 = 已处理（记了待证并答复）。判据是 `[class] hedge` 里的词打头。 */
 static inline int agent_is_hedge(const char *w) {
@@ -8558,6 +8621,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
      * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
      * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
+    /* §6.668 谓词实例的出处（原始串里有括号时先试；分词后括号就没了） */
+    if (!ai->ask_pending && strchr(input, '(') && strchr(input, ')')) {
+        char pb[256] = {0};
+        float pc = 0.5f;
+        if (agent_prov_pred_raw(ai, input, pb, sizeof pb, &pc)) {
+            snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), pb);
+            return agent_say(ai, out);
+        }
+    }
     /* §6.636 **待证**：`听说/据说/…` 这种**带来源前缀**的话 —— reply 桶里那条
      * 「听说的我不当事实」会先把它顶掉（实测），所以在 reply 桶之前先接：
      * 记成待证标记（不进事实层），并回一句"先记成待证"。 */
