@@ -128,4 +128,41 @@ static inline int claim_accept(AI *ai, Token *node, char *out, size_t cap) {
     return 1;
 }
 
+/* §6.637 来源可信度（0-100）：读 `[class] trust=听说:30,…`；表里没有 ⇒ 40（"来历不明"）。
+ * 为什么要这张表："两个来源"这种判据不能靠字符串比较，要有**分档**；将来论文/语料接进来才有落点。 */
+static inline int claim_source_tier(AI *ai, const char *src) {
+    (void)ai;
+    return agent_source_tier(src);      /* 一张表（`[class] trust`），实现只有一份 */
+}
+/* 有没有**别的来源**说过同一件事（交叉验证的原料） */
+static inline Token *claim_find_other(AI *ai, const char *src, const char *a, const char *r,
+                                      const char *b, char *out_src, size_t scap) {
+    Claim all[64];
+    size_t n = claim_list(ai, all, 64);
+    for (size_t i = 0; i < n; ++i) {
+        if (strcmp(all[i].src, src) == 0) continue;
+        if (strcmp(all[i].a, a) || strcmp(all[i].r, r) || strcmp(all[i].b, b)) continue;
+        if (out_src && scap) snprintf(out_src, scap, "%s", all[i].src);
+        return all[i].node;
+    }
+    return NULL;
+}
+/* 两个来源都说过 ⇒ 升格成事实（写边 + 记 `[来源合计:…]` 留痕，不冒充"教学留痕"） */
+static inline int claim_promote_two(AI *ai, Token *keep, Token *drop, char *out, size_t cap) {
+    if (!ai || !keep || !keep->name) return 0;
+    char src[24], a[40], r[24], b[40];
+    if (!claim_parse(keep->name, src, sizeof src, a, sizeof a, r, sizeof r, b, sizeof b)) return 0;
+    uint8_t rid = rel_id_of(ai, r, 0);
+    if (!rid) rid = rel_id_of(ai, r, 1);
+    Token *A = pool_token_intern(ai->pool, a);
+    Token *B = pool_token_intern(ai->pool, b);
+    if (!rid || !A || !B || A == B) return 0;
+    if (ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+    ai->n_rel_learned++;
+    if (out && cap) snprintf(out, cap, "%s", ai_say_tpl("待证.两源") ? ai_say_tpl("待证.两源") : "");
+    claim_reject(ai, keep);
+    if (drop) claim_reject(ai, drop);
+    return 1;
+}
+
 #endif /* CLAIM_H */

@@ -4356,8 +4356,8 @@ int main(int argc, char **argv) {
                 if (n == 0) { printf("[待证] 没有待证的说法（带「听说/据说/论文…」的话才会进这里）\n"); continue; }
                 printf("[待证] 共 %zu 条（**都不算数**，等你确认）：\n", n);
                 for (size_t i = 0; i < n; ++i)
-                    printf("  %2zu. %s %s %s   （来源：%s）\n", i + 1, cl[i].a, cl[i].r, cl[i].b,
-                           cl[i].src);
+                    printf("  %2zu. %s %s %s   （来源：%s，可信度 %d/100）\n", i + 1, cl[i].a,
+                           cl[i].r, cl[i].b, cl[i].src, claim_source_tier(a->brain, cl[i].src));
                 printf("      确认：::claim accept N    丢掉：::claim reject N\n");
                 continue;
             }

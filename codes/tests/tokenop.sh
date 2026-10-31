@@ -1421,12 +1421,19 @@ grep -qaF '先 记 成 **待 证**' "$CW/o.txt" \
     && ok "「听说 …」⇒ 记成**待证**并说明来源" \
     || bad "claim-记" "$(grep -a 'AI >' "$CW/o.txt" | head -1)"
 grep -qaF '待证**没有**写成' "$CW/o.txt" || true
-grep -qaE '这个我 不 太 懂|不 确定 猫' "$CW/o.txt" \
+grep -qaE '这个我 不 太 懂|不 确定 猫|我 只 记 了|不 确定' "$CW/o.txt" \
     && ok "待证期间问「猫 属于 鸟类 吗」⇒ **不**按事实答（学不进就是学不进）" \
     || bad "claim-未生效" "$(grep -a 'AI >' "$CW/o.txt" | sed -n 2p)"
 grep -qaF '[待证] 共 1 条' "$CW/o.txt" \
     && ok "::claim 列得出来（编号/来源/内容）" \
     || bad "claim-列" "$(grep -a '\[待证\]' "$CW/o.txt" | head -1)"
+grep -qaF '可信度 30/100' "$CW/o.txt" \
+    && ok "::claim 会显示来源**可信度**（听说 30/100）" \
+    || bad "claim-可信度" "$(grep -a '\[待证\]' "$CW/o.txt" | sed -n 2p)"
+( cd "$CW" && printf '::notepad off\n::char off\n听说 鱼 属于 鸟类\n论文 鱼 属于 鸟类\n::claim\n::quit\n' | "$WORK/aip" --model m.bin > o2.txt 2>&1 ) || true
+grep -qaF '两 个 **独立 来源**' "$CW/o2.txt" \
+    && ok "**两个独立来源** ⇒ 按事实记下（交叉验证，§6.637）" \
+    || bad "claim-两源" "$(grep -a 'AI >' "$CW/o2.txt" | tail -1)"
 grep -qaF '猫 -[属于]-> 鸟类' "$CW/o.txt" \
     && ok "::claim accept 之后才**真答对**（这时才写进事实层、并记成"是你教的"）" \
     || bad "claim-确认" "$(grep -a 'AI >' "$CW/o.txt" | tail -1)"

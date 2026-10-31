@@ -48,35 +48,42 @@ int main(void) {
     ok(claim_list(a, cl, 8) == 1, "同一条再来一次 ⇒ 还是 1 条（不重复造标记）");
     ok(a->pool->count == before, "词池没有多出新词（内部标记复用）");
 
-    /* ⑤ 第二个来源 ⇒ **另一条**（仍然都不算数） */
+    /* ⑤ 第二个来源 ⇒ **交叉验证**：按事实记下（§6.637 的新行为） */
     agent_claim_from_text(a, "论文 猫 属于 鸟类", out, sizeof out);
-    ok(claim_list(a, cl, 8) == 2, "另一个来源 ⇒ 单独一条（不自动合并/不自动升格）");
+    ok(strstr(out, "两 个") != NULL || strstr(out, "两个") != NULL, "第二个独立来源 ⇒ 答复「两个来源」");
+    {
+        Token *A = pool_find(a->pool, "猫"), *B = pool_find(a->pool, "鸟类");
+        ok(A && B && rel_direct(A, REL_IS_A, B), "两个来源之后**按事实记下**");
+        ok(claim_list(a, cl, 8) == 0, "两条待证都清掉（变事实了）");
+    }
 
-    /* ⑥ 确认第一条 ⇒ 这时才是事实，并且留教学痕 */
+    /* ⑥ 单一来源那条：确认才升格（换一件事，别和上面混） */
+    ok(agent_claim_from_text(a, "听说 狗 属于 鸟类", out, sizeof out) == 1, "再记一条单一来源的待证");
     Claim one;
-    ok(claim_at(a, 0, &one) == 1, "claim_at(0) 取得到");
+    ok(claim_at(a, 0, &one) == 1, "claim_at(0) 取得到（狗 那条）");
     char line[160] = {0};
     int acc = one.node ? claim_accept(a, one.node, line, sizeof line) : 0;
     ok(acc == 1, "claim accept ⇒ 升格成功");
     {
-        Token *A = pool_find(a->pool, "猫"), *B = pool_find(a->pool, "鸟类");
-        ok(A && B && rel_direct(A, REL_IS_A, B), "确认之后**事实边**才出现（对 ， 猫 属于 鸟类）");
+        Token *A = pool_find(a->pool, "狗"), *B = pool_find(a->pool, "鸟类");
+        ok(A && B && rel_direct(A, REL_IS_A, B), "确认之后**事实边**才出现");
         char mark[96];
-        snprintf(mark, sizeof mark, "%s%s", MICRO_TEACH_TOKEN_PREFIX, "猫_属于_鸟类]");
+        snprintf(mark, sizeof mark, "%s%s", MICRO_TEACH_TOKEN_PREFIX, "狗_属于_鸟类]");
         ok(pool_find(a->pool, mark) != NULL, "同时落了**教学留痕**（是用户确认的）");
     }
-    ok(claim_list(a, cl, 8) == 1, "确认的那条从待证里消失（只剩论文那条）");
+    ok(claim_list(a, cl, 8) == 0, "确认的那条从待证里消失");
 
     /* ⑦ 重复确认 ⇒ 拒绝（标记已经没了） */
     ok(claim_accept(a, one.node, line, sizeof line) == 0, "同一条再确认一次 ⇒ 0（不重复写）");
 
-    /* ⑧ 丢掉剩下的那条 */
+    /* ⑧ 丢掉一条 */
+    agent_claim_from_text(a, "据说 羊 属于 鸟类", out, sizeof out);
     Claim two;
     ok(claim_at(a, 0, &two) == 1 && claim_reject(a, two.node) == 1, "reject ⇒ 丢掉一条");
     ok(claim_list(a, cl, 8) == 0, "丢掉之后待证空了");
 
     /* ⑨ 存读：待证跟着图走 */
-    agent_claim_from_text(a, "据说 狗 属于 鸟类", out, sizeof out);
+    agent_claim_from_text(a, "据说 马 属于 鸟类", out, sizeof out);
     size_t sz = ai_save_file(a, "_claimprobe.bin");
     AI *b = sz ? ai_load_file("_claimprobe.bin") : NULL;
     ok(b != NULL, "有待证的图能存能读");
@@ -91,6 +98,33 @@ int main(void) {
     }
     remove("_claimprobe.bin");
 
+
+    /* ⑩ §6.637 来源分档 + 交叉验证 */
+    ok(claim_source_tier(a, "听说") == 30 && claim_source_tier(a, "论文") == 50 &&
+       claim_source_tier(a, "书上") == 60, "来源可信度读表：听说 30 / 论文 50 / 书上 60");
+    ok(claim_source_tier(a, "某未知来源") == 40, "表里没有的来源 ⇒ 40（来历不明，不猜高）");
+    {
+        AI *d = ai_new();
+        aip_patterns_load(d);
+        relations_load(d, "relations.txt");
+        char o1[256] = {0}, o2[256] = {0};
+        ok(agent_claim_from_text(d, "听说 鱼 属于 鸟类", o1, sizeof o1) == 1, "第一个来源 ⇒ 记成待证");
+        {
+            Token *A = pool_find(d->pool, "鱼"), *B = pool_find(d->pool, "鸟类");
+            ok(!(A && B && rel_direct(A, REL_IS_A, B)), "一个来源时**还不是事实**");
+        }
+        ok(agent_claim_from_text(d, "论文 鱼 属于 鸟类", o2, sizeof o2) == 1, "第二个来源 ⇒ 处理");
+        ok(strstr(o2, "两 个") != NULL || strstr(o2, "两个") != NULL, "答复说「两个独立来源」");
+        {
+            Token *A = pool_find(d->pool, "鱼"), *B = pool_find(d->pool, "鸟类");
+            ok(A && B && rel_direct(A, REL_IS_A, B), "两个来源之后**按事实记下**（边写进去了）");
+        }
+        {
+            Claim dc[8];
+            ok(claim_list(d, dc, 8) == 0, "两条待证都清掉了（已经变事实，不再挂待证）");
+        }
+        ai_free(d);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

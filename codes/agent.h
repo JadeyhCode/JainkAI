@@ -4024,6 +4024,28 @@ static inline int agent_is_hedge(const char *w) {
     }
     return 0;
 }
+/* §6.637 来源可信度（0-100）：读 `[class] trust=听说:30,…`；表里没有 ⇒ 40（"来历不明"）。
+ * 放在 agent.h 里是因为"两个来源升格"这条路径在 agent.h（它不能 include claim.h）。 */
+static inline int agent_source_tier(const char *src) {
+    if (!src || !src[0]) return 0;
+    for (size_t i = 0; i < g_class_n; ++i) {
+        if (strcmp(g_class_name[i], "trust") != 0) continue;
+        const char *p = g_class_words[i];
+        while (*p) {
+            const char *c = strchr(p, ',');
+            size_t l = c ? (size_t)(c - p) : strlen(p);
+            const char *colon = memchr(p, ':', l);
+            if (colon) {
+                size_t wl = (size_t)(colon - p);
+                if (wl == strlen(src) && !strncmp(p, src, wl)) return atoi(colon + 1);
+            }
+            if (!c) break;
+            p = c + 1;
+        }
+    }
+    return 40;
+}
+
 static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
                                         char *out, size_t cap);   /* §6.636 定义在后面 */
 
@@ -4107,6 +4129,66 @@ static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
                          words[0], a, rn, b);
         if (w < 0 || (size_t)w >= sizeof nm) return 0;
         if (!pool_token_intern(ai->pool, nm)) return 0;
+    }
+    /* §6.637 **交叉验证**：同一件事已经被**别的来源**待证着 ⇒ 两个独立来源都这么说，
+     * 先按事实记下（可信度取两个来源平均值，并明说"按事实记的"，不冒充"你教的"）。
+     * 这里**内联**扫池子（`agent.h` 不能 include `claim.h`，那会反向依赖）。 */
+    {
+        char suffix[96];
+        int w = snprintf(suffix, sizeof suffix, ":%s_%s_%s]", a, rn, b);
+        if (w > 0 && (size_t)w < sizeof suffix) {
+            char other_src[24] = {0};
+            Token *other = NULL;
+            for (size_t i = 0; i < ai->pool->count && !other; ++i) {
+                Token *t = ai->pool->tokens[i];
+                if (!t || t->is_garbage || !t->name) continue;
+                if (strncmp(t->name, MICRO_CLAIM_TOKEN_PREFIX, strlen(MICRO_CLAIM_TOKEN_PREFIX)) != 0)
+                    continue;
+                size_t nl = strlen(t->name), sl = strlen(suffix);
+                if (nl <= sl || strcmp(t->name + nl - sl, suffix) != 0) continue;
+                /* 取出它的来源段（前缀之后、第一个 ':' 之前） */
+                const char *sp = t->name + strlen(MICRO_CLAIM_TOKEN_PREFIX);
+                const char *c1 = strchr(sp, ':');
+                if (!c1) continue;
+                size_t l1 = (size_t)(c1 - sp);
+                if (l1 == 0 || l1 >= sizeof other_src) continue;
+                if (l1 == strlen(words[0]) && !strncmp(sp, words[0], l1)) continue;   /* 同源不算 */
+                memcpy(other_src, sp, l1); other_src[l1] = 0;
+                other = t;
+            }
+            if (other && other_src[0]) {
+                Token *A2 = pool_token_intern(ai->pool, a);
+                Token *B2 = pool_token_intern(ai->pool, b);
+                if (A2 && B2 && A2 != B2 &&
+                    ai_write_rel(ai, A2, B2, rid, 0, AI_WSRC_RELATION) == 0) {
+                    ai->n_rel_learned++;
+                    other->is_garbage = 1;
+                    /* 新来的那条也一起丢掉：它已经变成事实了，不该再挂在待证里 */
+                    {
+                        char nm2[160];
+                        int w2 = snprintf(nm2, sizeof nm2, "%s%s:%s_%s_%s]",
+                                          MICRO_CLAIM_TOKEN_PREFIX, words[0], a, rn, b);
+                        if (w2 > 0 && (size_t)w2 < sizeof nm2) {
+                            Token *self = pool_find(ai->pool, nm2);
+                            if (self) self->is_garbage = 1;
+                        }
+                    }
+                    int t1 = agent_source_tier(words[0]);
+                    int t2 = agent_source_tier(other_src);
+                    {
+                        char sbuf[64];
+                        snprintf(sbuf, sizeof sbuf, "%s、%s", words[0], other_src);
+                        const char *tp = ai_say_tpl("待证.两源");
+                        char tb[16];
+                        snprintf(tb, sizeof tb, "%d", (t1 + t2) / 2);
+                        const char *const a5[5] = { a, rn, b, sbuf, tb };
+                        der_filln(out, cap, tp ? tp : "两个来源都这么说（$4）⇒ 先按事实记下（$5/100）",
+                                  a5, 5);
+                    }
+                    return 1;
+                }
+            }
+        }
     }
     const char *t = ai_say_tpl("待证.记下");
     const char *const a4[4] = { a, rn, b, words[0] };
