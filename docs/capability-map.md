@@ -93,6 +93,15 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z241. 语言包（§6.639）
+- `lang/<code>/words.txt`（外语=中文）+ `meta.txt`（order=SVO|SOV）；`::lang load|current|list|off`。
+- 装了包 ⇒ 输入**先逐词翻译 + 词序重排**再走中文流水线（`lang_core.h`）；一个词都不认识 ⇒ 原样走中文。
+- 判据：`tools/langprobe.c` **8 项**；整包 61/61。
+- 坑：① 循环 include ⇒ 拆 `lang_core.h`（只依赖 stdio/string）；② tokenop 里那条检查在并行 `_t` 下偶发失败
+  ⇒ 移出到 standalone probe，**根因没查到底**。
+- 边界：只逐词+重排；无形态/从句/归纳（`::lang induce` 未做）；词表手写 11 词；
+  `lang_core.h` 的表是**全局**（多脑共用一套语言包）。
+
 ## 4z240. 读论文（离线）：抽断言 → 全进待证（§6.638）
 - 边界：不读 PDF、不联网、不做指代消解；只抽**恰好三段**（`A 关系 B`，中间词在 relations.txt 里）。
 - 做法：`paper.h`（切句/抽断言/去重/写待证）+ `::paper read <文件>` / `::paper list` + `papers/sample.txt`。

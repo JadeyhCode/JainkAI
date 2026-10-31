@@ -1454,6 +1454,8 @@ grep -qaF '读不到 不存在.txt' "$PP/o2.txt" \
     && ok "文件不存在 ⇒ **明确说读不到**（不假装读过）" \
     || bad "paper-缺" "$(grep -a '论文' "$PP/o2.txt" | head -1)"
 
+# §6.639 语言包的行为由 `tools/langprobe.c` 钉（这里不重复跑：并行套件里它对 `_t` 目录敏感，会偶发失败）
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

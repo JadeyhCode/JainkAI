@@ -17,6 +17,7 @@
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
 #include "claim.h"      /* §6.636 待证：::claim */
 #include "paper.h"      /* §6.638 读论文（离线）：::paper */
+#include "lang.h"       /* §6.639 语言包：::lang */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -582,6 +583,7 @@ typedef enum {
     CMD_PROVE,              /* §6.635 证明：::prove 名字 参数… */
     CMD_CLAIM,              /* §6.636 待证：list / accept N / reject N */
     CMD_PAPER,              /* §6.638 读论文（离线）：read <文件> / list */
+    CMD_LANG,               /* §6.639 语言包：list / load <code> / current / off */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -776,6 +778,10 @@ static const CmdDef CMDS[] = {
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
+    { "lang", "<子命令>", 1, "基本",
+      "**语言包**（最小版）：`::lang list` 看 lang/ 下有什么；`::lang load en` 装；`::lang current` 看当前；"
+      "`::lang off` 卸。\n装好之后**输入先逐词翻译 + 按词序重排**再走中文流水线（词表 lang/<code>/words.txt，"
+      "词序 meta.txt 的 order=SVO|SOV）。\n⚠ 不是翻译器：不认的词原样留着；不做语法/形态", CMD_LANG },
     { "paper", "<子命令>", 1, "基本",
       "**读论文（离线）**：只处理工作区里的纯文本（≤256 KB），抽『恰好三段』的断言。\n"
       "::paper read <文件>   抽断言 ⇒ **全部进待证**（不写事实层）\n"
@@ -4330,6 +4336,56 @@ int main(int argc, char **argv) {
                           : "verified（够得着**且前提本身有据**才算）"));
                 printf("  activate 档用的是**受限扩散**（深度≤2、能量≥0.25、从权重≥0.3 的焦点词出发）\n");
                 printf("  前提本身**被提到**永远算成立；这一档只回答「没提到，但它成立吗」\n");
+                continue;
+            }
+            case CMD_LANG: {
+                /* §6.639 `::lang list|load <code>|current|off` */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                if (!*r || !strncmp(r, "current", 7)) {
+                    if (g_lang_n == 0) printf("[语言包] 没装（都按中文处理）\n");
+                    else printf("[语言包] 当前 = %s（%zu 个词，词序 %s）\n", g_lang_code, g_lang_n,
+                                g_lang_sov ? "SOV" : "SVO");
+                    continue;
+                }
+                if (!strncmp(r, "off", 3)) {
+                    lang_reset();
+                    printf("[语言包] 卸了（回到中文）\n");
+                    continue;
+                }
+                if (!strncmp(r, "list", 4)) {
+                    printf("[语言包] lang/ 下的包（用 ::lang load <code> 装）：\n");
+                    FILE *p2 = popen("ls -1 lang 2>/dev/null", "r");
+                    if (!p2) { printf("   （列不出来）\n"); continue; }
+                    char buf[128]; int any = 0;
+                    while (fgets(buf, sizeof buf, p2)) {
+                        char *nl = strchr(buf, '\n'); if (nl) *nl = 0;
+                        if (!buf[0]) continue;
+                        printf("   %s\n", buf);
+                        any = 1;
+                    }
+                    pclose(p2);
+                    if (!any) printf("   （lang/ 是空的 —— 见 §6.639 的包格式）\n");
+                    continue;
+                }
+                if (!strncmp(r, "load", 4)) {
+                    const char *p2 = r + 4;
+                    while (*p2 == ' ' || *p2 == '\t') p2++;
+                    char code[64];
+                    snprintf(code, sizeof code, "%s", p2);
+                    if (!code[0]) { printf("[用法] ::lang load <code>（例：::lang load en）\n"); continue; }
+                    char dir[256];
+                    snprintf(dir, sizeof dir, "lang/%s", code);
+                    size_t n = lang_load_dir(dir);
+                    if (n == 0) {
+                        printf("[语言包] 装不上：%s/words.txt 读不到或词表是空的（不猜）\n", dir);
+                        continue;
+                    }
+                    printf("[语言包] 装好 %s：%zu 个词，词序 %s —— 现在的外语输入会先翻成中文\n",
+                           code, n, g_lang_sov ? "SOV" : "SVO");
+                    continue;
+                }
+                printf("[用法] ::lang list | load <code> | current | off\n");
                 continue;
             }
             case CMD_PAPER: {

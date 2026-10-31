@@ -5,6 +5,7 @@
 #define AGENT_H
 
 #include "ai.h"
+#include "lang_core.h"   /* §6.639 语言包：翻译要在分词之前发生（只依赖标准库，避免循环 include） */
 #include "drive.h"
 #include "action.h"      /* 受审的外部执行 + 写文件（层；默认关） */
 #include "code.h"        /* 写-跑-看错-改 的机械闭环（降级版；默认关） */
@@ -8462,6 +8463,10 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 用栈上的缓冲拼，不动 `input`（历史记录仍记用户原话）。 */
     char decl_in[256];
     const char *input_eff = input;
+    /* §6.639 **语言包**：装了外语包 ⇒ 先把输入逐词翻译 + 按词序重排，再走中文流水线。
+     * 翻不出一个词就原样走中文（不硬翻、不猜）。 */
+    char lang_buf[512];
+    if (g_lang_n && lang_translate(input, lang_buf, sizeof lang_buf)) input_eff = lang_buf;
     g_input_corrected = 0;
     /* §6.589 用户最自然的更正说法：「不 对 ， 猫 属于 猫科」/「错了，…」。
      * 以前整句进流水线：首句「不 对」只有 2 个词，`agent_learn_multi` 见短句直接 return NULL
