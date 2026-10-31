@@ -165,17 +165,26 @@ static inline size_t paper_ingest(AI *ai, const char *path, size_t *made, char *
         if (note && cap) snprintf(note, cap, "读不到 %s（只读工作区里的纯文本）", path);
         return 0;
     }
-    static char txt[PAPER_MAX_BYTES + 1];
+    /* §6.664 缓冲区放**堆**（原来是 static 256 KB ⇒ 不可重入、两个脑不能同时读）*/
+    char *txt = (char *)malloc(PAPER_MAX_BYTES + 1);
+    if (!txt) {
+        fclose(f);
+        if (note && cap) snprintf(note, cap, "内存不够（要 %u KB 缓冲）", PAPER_MAX_BYTES / 1024);
+        return 0;
+    }
     size_t got = fread(txt, 1, PAPER_MAX_BYTES, f);
     int big = !feof(f);
     fclose(f);
     txt[got] = 0;
     if (big) {
+        free(txt);
         if (note && cap) snprintf(note, cap, "%s 超过 %u KB，拒绝（先切一段）", path, PAPER_MAX_BYTES / 1024);
         return 0;
     }
     PaperClaim cs[PAPER_MAX_CLAIMS];
     size_t n = paper_extract(ai, txt, cs, PAPER_MAX_CLAIMS);
+    free(txt);
+    txt = NULL;
     if (n == 0) {
         if (note && cap) snprintf(note, cap, "从 %s 里一**条三段式断言**都没抽到（我不猜）", path);
         return 0;
