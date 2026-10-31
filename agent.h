@@ -362,6 +362,36 @@ static AIP_TLS unsigned long g_shape_hit[AIP_SHAPE_MAX];
 /* §6.582 上一轮学到的主语/关系/宾语（`$A/$W/$O` 会话变量的来源）——
  * 原来是**全局**的，所以「两个脑在同一线程里轮流用」也会串味。这一轮搬进 `AI`
  * （`ai->lf_a/lf_r/lf_b`）：线程与脑都各有一份。 */
+/* §6.634 **奖励**：学对了 +，被纠正/说错 −。只记"落地的事件"，不记意图。
+ * ⚠ 第一版**不直接改学习强度**（那是一个隐形旋钮，得先 A/B 证明"不奖也对"）；
+ * 只做三件事：① 短期值（每轮 ×0.9 衰减，夹 [-5,+5]）；② 会话累计；③ 最近 8 个事件的可查账。 */
+static inline void ai_reward(AI *ai, float d, const char *what) {
+    if (!ai || d == 0.0f) return;
+    ai->reward += d;
+    if (ai->reward > 5.0f) ai->reward = 5.0f;
+    if (ai->reward < -5.0f) ai->reward = -5.0f;
+    ai->reward_cum += d;
+    ai->reward_n++;
+    size_t k = ai->rhead % 8;
+    ai->rlog[k].d = d;
+    snprintf(ai->rlog[k].what, sizeof ai->rlog[k].what, "%s", what ? what : "?");
+    ai->rhead++;
+}
+/* §6.634 **奖励门**：`reward_gate` 开着、且最近错得多（短期奖励 ≤ −1）⇒ 冲突时**多问一句**。
+ * 为什么只接这一处：奖励不该偷偷改学习强度（那是隐形旋钮）；它能改的最安全的一件事是
+ * "被纠正多了就更谨慎"，而"谨慎"在这里有现成出口 —— 冲突时问「要改吗」。默认关（只计量）。 */
+static inline int agent_conflict_ask_on(const AI *ai) {
+    if (!ai) return 0;
+    if (ai->ask_conflict) return 1;
+    return ai->reward_gate && ai->reward <= -1.0f;
+}
+/* 每轮衰减（在 agent_step 开头调一次） */
+static inline void ai_reward_tick(AI *ai) {
+    if (!ai) return;
+    ai->reward *= 0.9f;
+    if (ai->reward > -0.05f && ai->reward < 0.05f) ai->reward = 0.0f;
+}
+
 static inline void aip_note_fact(AI *ai, const char *a, const char *r, const char *b) {
     if (!ai) return;
     /* §6.582 存在 `AI` 上（不是全局）：多脑/多线程各记各的 */
@@ -4216,7 +4246,7 @@ static inline int agent_conflict_after(AI *ai, Token *A, uint8_t rid, Token *B, 
     }
     /* 非更正：说清冲突 +（**问了**才挂待确认，§6.594）*/
     {
-        const char *ct = ai_say_tpl(ai->ask_conflict ? "改口.还冲突" : "冲突.不问");
+        const char *ct = ai_say_tpl(agent_conflict_ask_on(ai) ? "改口.还冲突" : "冲突.不问");
         const char *const ca[3] = { aw ? aw : "?", rw ? rw : "?",
                                     conflict->name ? conflict->name : "?" };
         size_t cl = strlen(resp);
@@ -4229,7 +4259,8 @@ static inline int agent_conflict_after(AI *ai, Token *A, uint8_t rid, Token *B, 
                       ca, 3);
             snprintf(resp + cl, cap - cl, "%s", tmp);
         }
-        if (ai->ask_conflict) agent_retract_arm(ai, A, conflict, rid);
+        if (agent_conflict_ask_on(ai)) { agent_retract_arm(ai, A, conflict, rid);
+            if (!ai->ask_conflict) ai_reward(ai, -0.5f, "谨慎模式"); }
         ai->n_conflict_shown++;
     }
     return 0;
@@ -4434,7 +4465,7 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
             /* §6.585 极性改口的同时，**另一条互不包含的旧值可能还在**（例：狗 属于 植物 与
              * 狗 属于 动物 并存）—— 顺口带上，别让用户以为"改过来"就把旧类清掉了。 */
             if (conflict) {
-                const char *ct = ai_say_tpl(ai->ask_conflict ? "改口.还冲突" : "冲突.不问");
+                const char *ct = ai_say_tpl(agent_conflict_ask_on(ai) ? "改口.还冲突" : "冲突.不问");
                 const char *const ca[3] = { aw, rw, conflict->name ? conflict->name : "?" };
                 size_t cl = strlen(resp0);
                 if (cl < sizeof resp0) {
@@ -4447,7 +4478,8 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
                     snprintf(resp0 + cl, sizeof resp0 - cl, "%s", tmp);
                 }
                 ai->n_conflict_shown++;
-                if (ai->ask_conflict) agent_retract_arm(ai, A, conflict, rid);
+                if (agent_conflict_ask_on(ai)) { agent_retract_arm(ai, A, conflict, rid);
+            if (!ai->ask_conflict) ai_reward(ai, -0.5f, "谨慎模式"); }
             }
             /* **修正的记忆 / 来源监控**：留一个 [修正:…] 标记节点（连回主语），
              * 这样「这件事被改口过」**记得住**，而旧观测不会冒充知识复活。
@@ -7599,6 +7631,7 @@ static inline int agent_retract_reply(AI *ai, const char *input, char *out, size
     agent_retract_disarm(ai);
     if (!A || !old || !rid) return 0;
     if (no) {
+        ai_reward(ai, -0.5f, "改口被拒");       /* §6.634 我说错了、用户不要改 ⇒ 负奖励 */
         const char *t = ai_say_tpl("改口.不撤");
         der_fill5(out, cap, t ? t : "那 就 两 条 都 留 着 ； 要 撤 旧 的 就 说「$1 不 $2 $3」",
                   A->name ? A->name : "?", rel_name_of(ai, rid), old->name ? old->name : "?",
@@ -7614,6 +7647,7 @@ static inline int agent_retract_reply(AI *ai, const char *input, char *out, size
     }
     A->edges_dirty = 1;
     ai->n_revised++;
+    ai_reward(ai, +0.5f, "改口确认");           /* §6.634 用户确认 ⇒ 正奖励 */
     ai_modlog_note_retract(ai, A, old, rid, AI_WSRC_RELATION);
     if (!micro_of(ai)->safe.mod_off) {           /* 改口标记（和 §6.168 那套一样，可追溯）*/
         ModIntent in;
@@ -8090,6 +8124,7 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     out[0] = 0;
 
     AI *ai = a->brain;
+    ai_reward_tick(ai);         /* §6.634 奖励每轮 ×0.9 衰减（空轮也衰减） */
     ai->learn_note[0] = 0;      /* §6.607 每轮重置："混句里学到的"只在本轮内有效 */
     ai->learn_note_only = 0;
     ai->pool->current_tick++;
@@ -8804,7 +8839,8 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
         float rc = 0.5f;
         resp = agent_learn_relation(ai, lw, ln, &rc);
         if (getenv("AIP_NATDBG2")) fprintf(stderr, "[disp] relation=%s\n", resp ? "有" : "空");
-        if (resp) conf = rc;
+        if (resp) { conf = rc; ai_reward(ai, +1.0f, "学会一条"); }   /* §6.634 */
+
     }
     /* §6.218 地点块：`A V 在 B` / `A 在 B V` ⇒ 学 `A 在 B`（动词那半句如实说没记）*/
     if (!resp) {

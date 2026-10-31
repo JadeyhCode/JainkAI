@@ -1365,6 +1365,37 @@ grep -qaF '因为 会 飞 —— 你 教 我 的' "$RS/out2.txt" \
     && ok "**重开之后**原因还在（v15 写进存档了；以前是会话内的）" \
     || bad "reason-存读" "$(grep -a 'AI >' "$RS/out2.txt" | head -1)"
 
+# §6.633 **谓词（多元关系）**：::pred make/list/show —— 参数进实例名，实例=节点
+PW="$WORK/pred"; rm -rf "$PW"; mkdir -p "$PW"
+cp "$ROOT/model.bin" "$PW/m.bin"; cp "$ROOT/patterns.txt" "$PW/" 2>/dev/null || true
+pred_run() { ( cd "$PW" && printf '%b' "::notepad off\n::char off\n$1::quit\n" | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true; }
+pred_run '::pred make 敌人 甲 乙\n::pred make 敌人 甲 丙\n'
+grep -qaF '[谓词:敌人(甲,乙)]' "$PW/o.txt" \
+    && ok "::pred make 造出实例节点「[谓词:敌人(甲,乙)]」（参数进名字）" \
+    || bad "pred-make" "$(grep -a '谓词' "$PW/o.txt" | head -1)"
+pred_run '::pred make 敌人 甲 乙\n::pred show 敌人\n'
+grep -qaF '甲, 乙' "$PW/o.txt" \
+    && ok "::pred show 列出实例与参数（甲, 乙）" \
+    || bad "pred-show" "$(grep -a '谓词' "$PW/o.txt" | head -1)"
+pred_run '::pred make 九元 a b c d e f g h i\n'
+grep -qaF '不记：参数最多 8 个' "$PW/o.txt" \
+    && ok "9 个参数 ⇒ **拒绝**（不截断成 8 个还报『记下』）" \
+    || bad "pred-上限" "$(tail -2 "$PW/o.txt" | tr '\n' ' ')"
+
+# §6.634 **奖励机制**：学到一条 +1、可查账、可清零、调节口默认 off
+RW="$WORK/reward"; rm -rf "$RW"; mkdir -p "$RW"
+cp "$ROOT/model.bin" "$RW/m.bin"; cp "$ROOT/patterns.txt" "$RW/" 2>/dev/null || true
+( cd "$RW" && printf '::notepad off\n::char off\n小猫 属于 猫科\n::reward\n::reward on\n::reward reset\n::reward\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaE '短期 = \+1\.00' "$RW/o.txt" \
+    && ok "学到一条 ⇒ 奖励 +1（当场可查）" \
+    || bad "reward-学" "$(grep -a '奖励' "$RW/o.txt" | head -1)"
+grep -qaF '调节口 = on' "$RW/o.txt" \
+    && ok "::reward on 打开调节口（默认 off：只计量）" \
+    || bad "reward-on" "$(grep -a '调节口' "$RW/o.txt" | head -1)"
+grep -qaE '短期 = \+0\.00' "$RW/o.txt" \
+    && ok "::reward reset 清零" \
+    || bad "reward-reset" "$(tail -2 "$RW/o.txt" | tr '\n' ' ')"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

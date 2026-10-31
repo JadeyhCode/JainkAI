@@ -13,6 +13,7 @@
 #include "model_io.h"
 #include "parts.h"      /* §6.569 局部加载：::parts 命令 */
 #include "xbrain.h"     /* §6.580 跨脑知识语义：照抄 / 冲突可见 / force */
+#include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -572,6 +573,8 @@ typedef enum {
     CMD_SRC,                /* 来源账：这条知识是哪来的（基准/观测/推论/他说的/假设） */
     CMD_TRIGGERS,           /* 对话触发：有哪几种说法能直接干活 */
     CMD_TRUST,              /* 逐条可信度是否参与判定（默认关） */
+    CMD_PRED,               /* §6.633 谓词（多元关系）：list / make / show */
+    CMD_REWARD,             /* §6.634 奖励：看/清零/开关"更谨慎" */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -766,6 +769,16 @@ static const CmdDef CMDS[] = {
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
+    { "reward", NULL, 1, "基本",
+      "**奖励**：学对/改口确认 +，被拒/被纠正 −（短期值每轮 ×0.9 衰减，夹在 ±5）。\n"
+      "::reward        看当前值/累计/最近 8 个事件\n"
+      "::reward reset  清零\n"
+      "::reward on|off **只开一个口子**：on 时『最近错得多（≤−1）』就多问一句要不要改；默认关",
+      CMD_REWARD },
+    { "pred", "<子命令>", 1, "基本",
+      "**谓词（多元关系）**：list（列已记的谓词名）| make <名字> <参数1> <参数2> … | show <名字>。\n"
+      "一条实例 = 一个节点 `[谓词:名字(参数1,参数2)]`，参数挂在 `参数K` 边上（最多 8 个）。\n"
+      "它不是「理解」：只是把三元图当多元谓词用；参数里不能有括号/逗号，也不能嵌套谓词", CMD_PRED },
     { "trust", NULL, 1, "基本",
       "逐条可信度是否参与判定：off（默认，只说清我更信哪一条）| on（差得多时按它选边）", CMD_TRUST },
     { "triggers", NULL, 1, "基本",
@@ -4292,6 +4305,112 @@ int main(int argc, char **argv) {
                           : "verified（够得着**且前提本身有据**才算）"));
                 printf("  activate 档用的是**受限扩散**（深度≤2、能量≥0.25、从权重≥0.3 的焦点词出发）\n");
                 printf("  前提本身**被提到**永远算成立；这一档只回答「没提到，但它成立吗」\n");
+                continue;
+            }
+            case CMD_REWARD: {
+                /* §6.634 奖励：看 / reset / on|off（on 只是"更谨慎"的一个口子，默认关） */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                AI *B = a->brain;
+                if (!strncmp(r, "reset", 5)) {
+                    B->reward = B->reward_cum = 0.0f;
+                    B->reward_n = 0; B->rhead = 0;
+                    memset(B->rlog, 0, sizeof B->rlog);
+                    printf("[奖励] 已清零\n");
+                } else if (!strncmp(r, "on", 2) || !strncmp(r, "off", 3)) {
+                    B->reward_gate = !strncmp(r, "on", 2) ? 1 : 0;
+                    printf("[奖励] 调节口 = %s（%s）\n", B->reward_gate ? "on" : "off",
+                           B->reward_gate ? "最近错得多（≤−1）时会**多问一句要不要改**"
+                                          : "只计量，不改行为");
+                } else {
+                    printf("[奖励] 短期 = %+.2f   会话累计 = %+.2f   事件 = %d   调节口 = %s\n",
+                           (double)B->reward, (double)B->reward_cum, B->reward_n,
+                           B->reward_gate ? "on" : "off");
+                    size_t n = (size_t)B->reward_n < 8 ? (size_t)B->reward_n : 8;
+                    for (size_t i = 0; i < n; ++i) {
+                        size_t k = (B->rhead + 8 - 1 - i) % 8;
+                        printf("  %+.1f  %s\n", (double)B->rlog[k].d, B->rlog[k].what);
+                    }
+                    printf("  口径：学到一条 +1；改口确认 +0.5；改口被拒 −0.5；每轮 ×0.9 衰减\n");
+                }
+                continue;
+            }
+            case CMD_PRED: {
+                /* §6.633 谓词（多元关系）：list / make / show <名字> */
+                char sub[32] = "";
+                const char *parg = carg ? carg : "";
+                if (sscanf(parg, "%31s", sub) != 1 || !sub[0]) sub[0] = 0;
+                if (!sub[0] || !strcmp(sub, "list")) {
+                    char names[64][64];
+                    size_t n = pred_list_names(a->brain, names, 64);
+                    if (n == 0) { printf("[谓词] 还没有记过任何谓词（::pred make <名字> <参数1> <参数2>…）\n"); continue; }
+                    printf("[谓词] 共 %zu 个名字：\n", n);
+                    for (size_t i = 0; i < n; ++i) {
+                        Token *ins[16];
+                        size_t m = pred_instances(a->brain, names[i], ins, 16);
+                        printf("  %s  （%zu 条实例）\n", names[i], m);
+                    }
+                } else if (!strcmp(sub, "make")) {
+                    char nm[64];
+                    const char *p2 = parg + (int)strlen(sub);
+                    while (*p2 == ' ' || *p2 == '\t') p2++;
+                    if (sscanf(p2, "%63s", nm) != 1 || !nm[0]) { printf("[用法] ::pred make <名字> <参数1> <参数2> …\n"); continue; }
+                    p2 += strlen(nm);
+                    /* 参数一个个切出来（拷进自己的缓冲，别去改命令行那块只读内存） */
+                    char abuf[PRED_MAX_ARGS][96];
+                    char *args[PRED_MAX_ARGS]; size_t na = 0;
+                    while (na < PRED_MAX_ARGS) {
+                        while (*p2 == ' ' || *p2 == '\t') p2++;
+                        if (!*p2) break;          /* ⚠ 这里是 break（退出 while）；写成 continue 会死循环 */
+                        size_t L = 0;
+                        while (p2[L] && p2[L] != ' ' && p2[L] != '\t' && L + 1 < sizeof abuf[0]) L++;
+                        memcpy(abuf[na], p2, L); abuf[na][L] = 0;
+                        args[na] = abuf[na];
+                        na++;
+                        p2 += L;
+                        while (*p2 == ' ' || *p2 == '\t') p2++;
+                    }
+                    if (na == 0) { printf("[用法] ::pred make <名字> <参数1> <参数2> …（至少一个参数）\n"); continue; }
+                    /* §6.633 **超过 8 个参数要拒绝，不能悄悄截断**（第一版就是截断成 8 个还报"记下"，
+                     * 这是"造假事实"的一种）——看后面还有没有剩的词。 */
+                    {
+                        const char *rest = p2;
+                        while (rest && (*rest == ' ' || *rest == '\t')) rest++;
+                        if (rest && *rest) {
+                            printf("[谓词] 不记：参数最多 %d 个，你给了 %d 个以上（不截断、不猜）\n",
+                                   PRED_MAX_ARGS, PRED_MAX_ARGS);
+                            continue;
+                        }
+                    }
+                    Token *pp = pred_make(a->brain, nm, args, na);
+                    if (!pp) { printf("[谓词] 造不出来：参数 1..%d 个、值里不能有括号/逗号、名字不能是「参数N」\n", PRED_MAX_ARGS); continue; }
+                    printf("[谓词] 记下：%s\n", pp->name);
+                } else if (!strcmp(sub, "show")) {
+                    char nm[64];
+                    const char *p2 = parg + (int)strlen(sub);
+                    while (*p2 == ' ' || *p2 == '\t') p2++;
+                    if (sscanf(p2, "%63s", nm) != 1 || !nm[0]) { printf("[用法] ::pred show <名字>\n"); continue; }
+                    Token *ins[16];
+                    size_t m = pred_instances(a->brain, nm, ins, 16);
+                    if (m == 0) { printf("[谓词] 没记过「%s」\n", nm); continue; }
+                    printf("[谓词] 「%s」共 %zu 条实例：\n", nm, m);
+                    for (size_t i = 0; i < m; ++i) {
+                        int aok = 0;
+                        size_t ar = pred_arity(a->brain, ins[i], &aok);
+                        printf("  %s", ins[i]->name);
+                        if (!aok) printf("   ⚠ 结构不全（名字说有 %zu 个参数，边上缺）", ar);
+                        else {
+                            printf("   ");
+                            for (size_t k = 1; k <= ar; ++k) {
+                                Token *v = pred_arg(a->brain, ins[i], k);
+                                printf("%s%s", v && v->name ? v->name : "?", (k == ar) ? "" : ", ");
+                            }
+                        }
+                        printf("\n");
+                    }
+                } else {
+                    printf("[用法] ::pred list | ::pred make <名字> <参数…> | ::pred show <名字>\n");
+                }
                 continue;
             }
             case CMD_TRUST: {
