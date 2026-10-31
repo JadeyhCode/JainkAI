@@ -20,6 +20,7 @@
 #include "../agent.h"
 #include "../model_io.h"
 #include "../share.h"
+#include "../paper.h"      /* §6.665 并发读论文：每个脑各读一遍，验"没有共享静态缓冲" */
 
 #include <pthread.h>
 #include <stdatomic.h>
@@ -147,6 +148,25 @@ static void *cold_worker(void *arg) {
 static char g_teach_out[NT][TEACH_N][OUT_CAP];
 static char g_teach_cross[NT][OUT_CAP];
 static const char *g_teach_model;
+/* §6.665 并发读论文：每个线程一个脑，读同一个样本文件 */
+static const char *g_paper_file;
+static size_t g_paper_n[NT];
+static size_t g_paper_claims_ech[NT];
+static void *paper_worker(void *arg) {
+    long t = (long)arg;
+    AI *b = ai_load_file(g_teach_model);
+    if (!b) return NULL;
+    g_paper_n[t] = 0;
+    g_paper_claims_ech[t] = 0;
+    char note[512] = {0};
+    size_t made = 0;
+    size_t n = paper_ingest(b, g_paper_file, &made, note, sizeof note);
+    g_paper_n[t] = n;
+    g_paper_claims_ech[t] = made;
+    ai_free(b);
+    return NULL;
+}
+
 static void *teach_worker(void *arg) {
     long t = (long)arg;
     Agent *a = agent_with_model(g_teach_model);
@@ -192,6 +212,39 @@ int main(int argc, char **argv) {
         (void)out;
         ok(answered, "④ 一边问答一边翻配置开关：每条问题都有答复（没崩、没读到半个状态）");
         for (int t = 0; t < NT; ++t) agent_free(w[t]);
+        printf("\n通过 %d / 失败 %d\n", passes, fails);
+        return fails ? 1 : 0;
+    }
+
+    /* ---- 并发读论文（`concprobe <模型> --paper`）：每个线程一个脑、读同一个文件 ---- */
+    if (argc > 2 && strcmp(argv[2], "--paper") == 0) {
+        g_teach_model = model;
+        /* 自己写一个样本（不依赖仓库路径：套件在 `_t/par/conc/` 下跑，看不到 papers/） */
+        {
+            FILE *pf = fopen("_concprobe_paper.txt", "wb");
+            if (pf) {
+                fprintf(pf, "企鹅 属于 鸟类。企鹅 会 游泳。麒麟 属于 神兽。\n");
+                fclose(pf);
+            }
+            g_paper_file = "_concprobe_paper.txt";
+        }
+        pthread_t th[NT];
+        for (long t = 0; t < NT; ++t) pthread_create(&th[t], NULL, paper_worker, (void *)t);
+        for (int t = 0; t < NT; ++t) pthread_join(th[t], NULL);
+        int all_ok = 1, same = 1;
+        for (int t = 0; t < NT; ++t) {
+            if (g_paper_n[t] == 0) all_ok = 0;
+            if (t > 0 && g_paper_n[t] != g_paper_n[0]) same = 0;
+        }
+        ok(all_ok, "④ 并发读论文：每个脑都抽到了断言（没崩、没空）");
+        ok(same, "④ 并发读论文：各脑抽到的条数**一致**（没有共享缓冲互相踩）");
+        {
+            int wrote = 1;
+            for (int t = 0; t < NT; ++t)
+                if (g_paper_claims_ech[t] != g_paper_n[t]) wrote = 0;
+            ok(wrote, "④ 并发读论文：抽到的每一条都写进了自己的待证队列（各脑独立）");
+        }
+        remove("_concprobe_paper.txt");
         printf("\n通过 %d / 失败 %d\n", passes, fails);
         return fails ? 1 : 0;
     }
