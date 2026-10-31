@@ -4064,6 +4064,14 @@ int main(int argc, char **argv) {
                            a->brain->code_multi ? "3 次（第二次还编不过就用**新的错误**再认规则再改）" : "1 次");
                     continue;
                 }
+                if (arg && strncmp(arg, "test", 4) == 0) {
+                    const char *dir = arg + 4;
+                    while (*dir == ' ') dir++;
+                    char nb[512] = {0};
+                    (void)code_test_dir(a->brain, dir, nb, sizeof nb);
+                    printf("[测试] %s\n", nb[0] ? nb : "（没跑成）");
+                    continue;
+                }
                 if (arg && strncmp(arg, "build", 5) == 0) {
                     const char *dir = arg + 5;
                     while (*dir == ' ') dir++;

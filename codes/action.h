@@ -329,6 +329,74 @@ static inline int action_refuse(const char *what, const char *why) {
 }
 
 /* 跑一条外部命令。返回：子进程退出码（正常）/ -9（超时被杀）/ -2（被拒）。 */
+/* §6.645 **跑自己刚编出来的产物**（只给"测试驱动"用；窄到不能再窄）。
+ *
+ * 规则（写死，别放宽）：
+ *   · `rel` 必须是**相对路径**、不含 `..`、**以 `.out` 结尾**（我们自己的产物命名）；
+ *   · 文件必须真的在 ACTION_WORK_DIR 下、且可执行；
+ *   · cwd = ACTION_WORK_DIR，stdin = /dev/null，超时 5 s，输出进审计账（和别的命令一样）；
+ *   · **不加进白名单**：`::act run a.out` 照样被拒 —— 这个入口只由 `::code test` 调。
+ */
+static inline int action_run_product(AI *ai, const char *rel) {
+    if (!ai || !rel || !rel[0]) return -1;
+    g_act.last_reason[0] = 0; g_act.last_out[0] = 0; g_act.last_mark[0] = 0;
+    g_act.last_rc = -1; g_act.last_ms = 0;
+    if (!ai->act_on)
+        return action_refuse(rel, "这一层默认关（::act on）");
+    size_t l = strlen(rel);
+    if (l < 5 || strcmp(rel + l - 4, ".out")) return action_refuse(rel, "只许跑 `.out` 产物");
+    if (rel[0] == '/' || strstr(rel, "..")) return action_refuse(rel, "只许工作区里的相对路径");
+    if (action_ensure_workdir() != 0) return action_refuse(rel, "工作目录建不出来");
+    char full[ACTION_PATH_CAP + 64];
+    snprintf(full, sizeof full, "%s/%s", ACTION_WORK_DIR, rel);
+    struct stat st;
+    if (stat(full, &st) != 0 || !S_ISREG(st.st_mode) || !(st.st_mode & S_IXUSR))
+        return action_refuse(rel, "产物不在（或不带可执行位）—— 先 ::code build / ::code try");
+    int pfd[2];
+    if (pipe(pfd) != 0) return action_refuse(rel, "pipe() 失败");
+    long t0 = action_now_ms();
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return action_refuse(rel, "fork() 失败"); }
+    if (pid == 0) {
+        int dn = open("/dev/null", O_RDONLY);
+        if (dn >= 0) { (void)dup2(dn, 0); close(dn); }
+        (void)dup2(pfd[1], 1); (void)dup2(pfd[1], 2);
+        close(pfd[0]); close(pfd[1]);
+        if (chdir(ACTION_WORK_DIR) != 0) _exit(126);
+        /* ⚠ chdir 之后要用**相对工作区的路径**（`full` 是相对原始 cwd 的 ⇒ execl 必失败 rc=127） */
+        execl(rel, rel, (char *)NULL);
+        _exit(127);
+    }
+    close(pfd[1]);
+    /* 读输出（有界）+ 超时杀：和 action_run 同一套语义，但代码短 —— 只服务测试产物 */
+    size_t used = 0;
+    int status = 0;
+    for (;;) {
+        char tmp[512];
+        ssize_t got = read(pfd[0], tmp, sizeof tmp);
+        if (got > 0) {
+            size_t cp = (size_t)got;
+            if (used + cp >= sizeof g_act.last_out - 1) cp = sizeof g_act.last_out - 1 - used;
+            memcpy(g_act.last_out + used, tmp, cp); used += cp;
+            g_act.last_out[used] = 0;
+            continue;
+        }
+        if (got == 0) break;
+        if (action_now_ms() - t0 > 5000) { kill(pid, SIGKILL); break; }
+        struct timespec ts = { 0, 5 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+        int w = waitpid(pid, &status, WNOHANG);
+        if (w == pid) break;
+    }
+    close(pfd[0]);
+    (void)waitpid(pid, &status, 0);
+    g_act.last_rc = WIFEXITED(status) ? WEXITSTATUS(status) : -9;
+    g_act.last_ms = action_now_ms() - t0;
+    snprintf(g_act.last_mark, sizeof g_act.last_mark, "[运行:%d]", g_act.last_rc);
+    g_act.n_run++;
+    return g_act.last_rc;
+}
+
 static inline int action_run(AI *ai, const char *line) {
     /* 注意：`action_check` 只查 argv 表面；`#include` 要看**文件内容** ⇒ 另扫一遍。 */
     if (!ai) return -1;

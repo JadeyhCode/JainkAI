@@ -153,6 +153,31 @@ grep -qaE '编不过（rc=1）' c9 \
     || bad "proj-坏" "$(grep -a '多文件' c9 | head -1)"
 rm -f _t/work/proj/bad.c
 
+echo "== ⑨ 测试驱动（§6.645）：::code test —— 产物退出码当判据 =="
+mkdir -p _t/work/tgreen _t/work/tred
+cat > _t/work/tgreen/main.c <<'EOF'
+#include <stdio.h>
+static int add(int a, int b) { return a + b; }
+int main(void) { if (add(2, 3) != 5) { printf("FAIL add\n"); return 1; } printf("ok\n"); return 0; }
+EOF
+cat > _t/work/tred/main.c <<'EOF'
+#include <stdio.h>
+static int add(int a, int b) { return a - b; }
+int main(void) { if (add(2, 3) != 5) { printf("FAIL add\n"); return 1; } printf("ok\n"); return 0; }
+EOF
+run '::code test tgreen\n' c10
+grep -qaF '**测试全绿**' c10 \
+    && ok "tgreen：编过且产物 rc=0 ⇒ **测试全绿**" \
+    || bad "test-绿" "$(grep -a '测试' c10 | head -1)"
+run '::code test tred\n' c11
+grep -qaF '测试不过**（rc=1）：FAIL add' c11 \
+    && ok "tred：编过但 rc=1 ⇒ **测试不过**，并带出输出（FAIL add）" \
+    || bad "test-红" "$(grep -a '测试' c11 | head -1)"
+run '::act run a.out\n' c12
+grep -qaF '不在白名单里' c12 \
+    && ok "产物入口**没有**放宽白名单（::act run a.out 仍被拒）" \
+    || bad "test-白名单" "$(grep -a '白名单' c12 | head -1)"
+
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \
     && ok "产物只在「_t/work/」里（cwd 边界没破）" \

@@ -312,6 +312,30 @@ static inline int code_build_dir(AI *ai, const char *dir, char *note, size_t cap
     return rc;
 }
 
+/* §6.645 **测试驱动**：编 + **跑**（`_t/work/<dir>/a.out`）。
+ * 判据是**产物退出码**：0 = 绿；非 0 = 红（把输出尾巴带出来）。
+ * 只跑 `.out` 产物（`action_run_product` 那条窄入口），不碰别的命令。 */
+static inline int code_test_dir(AI *ai, const char *dir, char *note, size_t cap) {
+    if (!ai || !dir || !dir[0]) return -2;
+    int rc = code_build_dir(ai, dir, note, cap);
+    if (rc != 0) return rc;
+    char prog[ACTION_PATH_CAP + 32];
+    snprintf(prog, sizeof prog, "%s/a.out", dir);
+    int trc = action_run_product(ai, prog);
+    if (note && cap) {
+        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（a.out rc=0）", dir);
+        else {
+            char tail[256] = {0};
+            const char *o = action_book()->last_out;
+            size_t ol = o ? strlen(o) : 0;
+            if (ol > 200) o += ol - 200;
+            snprintf(tail, sizeof tail, "%.200s", o ? o : "");
+            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d）：%s", dir, trc, tail);
+        }
+    }
+    return trc;
+}
+
 static inline int code_round(AI *ai, const char *rel) {
     CodeRun *cr = &g_code;
     cr->attempts = 0; cr->first_rc = cr->final_rc = -1; cr->rule = -1;
