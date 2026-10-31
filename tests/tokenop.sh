@@ -1438,6 +1438,22 @@ grep -qaF '猫 -[属于]-> 鸟类' "$CW/o.txt" \
     && ok "::claim accept 之后才**真答对**（这时才写进事实层、并记成"是你教的"）" \
     || bad "claim-确认" "$(grep -a 'AI >' "$CW/o.txt" | tail -1)"
 
+# §6.638 **读论文（离线）**：::paper read ⇒ 抽断言、全进待证（不写事实层）
+PP="$WORK/paper"; rm -rf "$PP"; mkdir -p "$PP/papers"
+cp "$ROOT/model.bin" "$PP/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/relations.txt" "$PP/" 2>/dev/null || true
+cp "$ROOT/papers/sample.txt" "$PP/papers/sample.txt" 2>/dev/null || printf '企鹅 属于 鸟类。\n麒麟 属于 神兽。\n' > "$PP/papers/sample.txt"
+( cd "$PP" && printf '::notepad off\n::char off\n::paper read papers/sample.txt\n::claim\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaE '抽到 [0-9]+ 条，记为待证 [0-9]+ 条' "$PP/o.txt" \
+    && ok "::paper read 抽到断言、全部记为待证（样本里是 3 条）" \
+    || bad "paper-抽" "$(grep -a '论文' "$PP/o.txt" | head -1)"
+grep -qaF '（来源：论文，可信度 50/100）' "$PP/o.txt" \
+    && ok "待证来源是「论文」、可信度 50/100" \
+    || bad "paper-来源" "$(grep -a '待证' "$PP/o.txt" | sed -n 2p)"
+( cd "$PP" && printf '::notepad off\n::char off\n::paper read 不存在.txt\n::quit\n' | "$WORK/aip" --model m.bin > o2.txt 2>&1 ) || true
+grep -qaF '读不到 不存在.txt' "$PP/o2.txt" \
+    && ok "文件不存在 ⇒ **明确说读不到**（不假装读过）" \
+    || bad "paper-缺" "$(grep -a '论文' "$PP/o2.txt" | head -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

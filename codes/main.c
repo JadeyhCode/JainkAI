@@ -16,6 +16,7 @@
 #include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
 #include "claim.h"      /* §6.636 待证：::claim */
+#include "paper.h"      /* §6.638 读论文（离线）：::paper */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -580,6 +581,7 @@ typedef enum {
     CMD_RULE,               /* §6.635 规则：list / add */
     CMD_PROVE,              /* §6.635 证明：::prove 名字 参数… */
     CMD_CLAIM,              /* §6.636 待证：list / accept N / reject N */
+    CMD_PAPER,              /* §6.638 读论文（离线）：read <文件> / list */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -774,6 +776,11 @@ static const CmdDef CMDS[] = {
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
+    { "paper", "<子命令>", 1, "基本",
+      "**读论文（离线）**：只处理工作区里的纯文本（≤256 KB），抽『恰好三段』的断言。\n"
+      "::paper read <文件>   抽断言 ⇒ **全部进待证**（不写事实层）\n"
+      "::paper list         看 papers/ 下有什么样本\n"
+      "⚠ 不会读 PDF、不联网、不做指代消解；抽不到的就不抽（宁可漏，不要编）", CMD_PAPER },
     { "claim", "<子命令>", 1, "基本",
       "**待证**（不轻信）：带「听说/据说/论文/书上/网上」的话只记成待证，**不进事实层**。\n"
       "::claim            列出待证（编号/来源/内容）\n"
@@ -4323,6 +4330,44 @@ int main(int argc, char **argv) {
                           : "verified（够得着**且前提本身有据**才算）"));
                 printf("  activate 档用的是**受限扩散**（深度≤2、能量≥0.25、从权重≥0.3 的焦点词出发）\n");
                 printf("  前提本身**被提到**永远算成立；这一档只回答「没提到，但它成立吗」\n");
+                continue;
+            }
+            case CMD_PAPER: {
+                /* §6.638 `::paper read <文件>` / `::paper list` */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                if (!strncmp(r, "list", 4) || !*r) {
+                    printf("[论文] 看 papers/（默认样本目录）—— 用 ::paper read papers/xxx.txt 抽断言\n");
+                    continue;
+                }
+                if (!strncmp(r, "read", 4)) {
+                    const char *p = r + 4;
+                    while (*p == ' ' || *p == '\t') p++;
+                    char fn[256];
+                    snprintf(fn, sizeof fn, "%s", p);
+                    if (!fn[0]) { printf("[用法] ::paper read <文件>\n"); continue; }
+                    FILE *f = fopen(fn, "rb");
+                    if (!f) { printf("[论文] 读不到 %s（只读工作区里的纯文本）\n", fn); continue; }
+                    static char txt[PAPER_MAX_BYTES + 1];
+                    size_t got = fread(txt, 1, PAPER_MAX_BYTES, f);
+                    int big = !feof(f);
+                    fclose(f);
+                    txt[got] = 0;
+                    if (big) { printf("[论文] 文件超过 %u KB，拒绝（先切一段）\n", PAPER_MAX_BYTES / 1024); continue; }
+                    PaperClaim cs[PAPER_MAX_CLAIMS];
+                    size_t n = paper_extract(a->brain, txt, cs, PAPER_MAX_CLAIMS);
+                    if (n == 0) {
+                        printf("[论文] 从 %s 里**一条三段式断言**都没抽到（我不猜）\n", fn);
+                        continue;
+                    }
+                    size_t made = paper_to_claims(a->brain, cs, n);
+                    printf("[论文] %s：抽到 %zu 条，记为待证 %zu 条（**都不算数**）\n", fn, n, made);
+                    for (size_t i = 0; i < n && i < 8; ++i)
+                        printf("  · %s %s %s\n", cs[i].a, cs[i].r, cs[i].b);
+                    printf("  确认：::claim accept N    丢掉：::claim reject N\n");
+                    continue;
+                }
+                printf("[用法] ::paper read <文件> | ::paper list\n");
                 continue;
             }
             case CMD_CLAIM: {
