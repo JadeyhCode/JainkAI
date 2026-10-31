@@ -21,4 +21,6 @@
 
 /* 表与翻译在 lang_core.h（agent.h 也要用，避免循环 include） */
 
+/* §6.640 归纳时的"关系词"判据：交给调用方（main.c）用 AI 的关系表判。
+ * 这里只声明一个 typedef 用法示例，实现在 main.c 里作为回调传进 lang_induce()。 */
 #endif /* LANG_H */

@@ -1652,6 +1652,12 @@ static Token *contradict_verdict(AI *b, const AipExclConflict *r, char *why, siz
     return NULL;
 }
 
+/* §6.640 归纳用的"关系词"判据（用当前 AI 的关系表） */
+static AI *g_lang_ai;
+static int lang_rel_word_cb(const char *zh) {
+    return g_lang_ai && zh && rel_id_of(g_lang_ai, zh, 0) != 0;
+}
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -4366,6 +4372,41 @@ int main(int argc, char **argv) {
                     }
                     pclose(p2);
                     if (!any) printf("   （lang/ 是空的 —— 见 §6.639 的包格式）\n");
+                    continue;
+                }
+                if (!strncmp(r, "induce", 6)) {
+                    const char *p2 = r + 6;
+                    while (*p2 == ' ' || *p2 == '\t') p2++;
+                    char fn[256], code[64];
+                    if (sscanf(p2, "%255s %63s", fn, code) != 2) {
+                        printf("[用法] ::lang induce <平行句文件> <code>（每行：外语词… = 中文词…）\n");
+                        continue;
+                    }
+                    FILE *in = fopen(fn, "rb");
+                    if (!in) { printf("[归纳] 读不到 %s\n", fn); continue; }
+                    char dir[256];
+                    snprintf(dir, sizeof dir, "lang/%s", code);
+                    char cmd[320];
+                    snprintf(cmd, sizeof cmd, "mkdir -p '%s' 2>/dev/null", dir);
+                    if (system(cmd) != 0) { /* 建不出来就在写盘那步失败 */ }
+                    g_lang_ai = a->brain;
+                    LangInduce st;
+                    memset(&st, 0, sizeof st);
+                    size_t pairs = lang_induce(in, dir, lang_rel_word_cb, &st);
+                    fclose(in);
+                    if (pairs == 0) {
+                        printf("[归纳] 一条都没学到（有效行 %zu / 跳过 %zu）—— 不写空包\n",
+                               st.lines, st.skipped);
+                        continue;
+                    }
+                    printf("[归纳] %zu 对词，来自 %zu 行（跳过 %zu 行）\n", pairs, st.lines, st.skipped);
+                    if (st.ambiguous)
+                        printf("       词序**猜不准**（SVO 与 SOV 两种排法都说得通）⇒ 先按 SVO 写，"
+                               "要 SOV 就改 %s/meta.txt\n", dir);
+                    else
+                        printf("       词序判据：SVO 冲突 %zu / SOV 冲突 %zu ⇒ %s\n",
+                               st.svo_votes, st.sov_votes, st.sov ? "SOV" : "SVO");
+                    printf("       写到 %s/ —— 用 ::lang load %s 装上\n", dir, code);
                     continue;
                 }
                 if (!strncmp(r, "load", 4)) {
