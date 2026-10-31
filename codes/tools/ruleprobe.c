@@ -270,6 +270,22 @@ int main(void) {
         ok(rule_apply_once(f, 1, &fs) == 0 || fs.truncated || fs.derived <= 1, "有上限参数（≤1 时不会超）");
         ai_free(f);
     }
+    /* §6.658 `[推:…]` 有上限：造 300 个留痕 ⇒ 淘汰到 ≤256（最老的先死） */
+    {
+        AI *e = ai_new();
+        for (int i = 0; i < 300; ++i) {
+            char mk[64];
+            snprintf(mk, sizeof mk, "[推:x%03d_怕_y]", i);
+            pool_token_intern(e->pool, mk);
+        }
+        ok(ai_derived_marks_live(e) == 300, "造了 300 个 `[推:]` 留痕");
+        size_t killed = ai_derived_evict(e);
+        ok(killed == 44, "淘汰 44 个（300 − 256）");
+        ok(ai_derived_marks_live(e) == 256, "上限 256 生效");
+        ok(!ai_is_derived_mark(pool_find(e->pool, "[推:x000_怕_y]")), "**最老的**被淘汰");
+        ok(ai_is_derived_mark(pool_find(e->pool, "[推:x299_怕_y]")), "最新的还在");
+        ai_free(e);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

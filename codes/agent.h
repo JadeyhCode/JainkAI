@@ -87,6 +87,47 @@ static inline size_t ai_teach_mark_max(void) {
     }
     return AI_TEACH_MARK_MAX;
 }
+/* §6.658 **`[推:…]` 也有上限**（§6.657 记下的缺口）：前向链每推一条就落一个留痕，
+ * 反复 `::rule apply` 会无限长。策略与教学留痕一样：只保最近 N 条（默认 256，`AIP_DERIVEDMAX` 可调），
+ * **最老的软删**（标垃圾；不搬池子指针）。 */
+#define AI_DERIVED_MARK_MAX 256
+static inline size_t ai_derived_mark_max(void) {
+    const char *e = getenv("AIP_DERIVEDMAX");
+    if (e && e[0]) {
+        long v = strtol(e, NULL, 10);
+        if (v > 0 && v <= 4096) return (size_t)v;
+    }
+    return AI_DERIVED_MARK_MAX;
+}
+static inline int ai_is_derived_mark(const Token *t) {
+    return t && t->name && !t->is_garbage &&
+           !strncmp(t->name, MICRO_TAUGHT_DERIVED_PREFIX, strlen(MICRO_TAUGHT_DERIVED_PREFIX));
+}
+/* 数活着的 `[推:]` */
+static inline size_t ai_derived_marks_live(AI *ai) {
+    size_t n = 0;
+    if (!ai || !ai->pool) return 0;
+    for (size_t i = 0; i < ai->pool->count; ++i)
+        if (ai_is_derived_mark(ai->pool->tokens[i])) n++;
+    return n;
+}
+/* 超上限就软删最老的几条。返回删了几条。 */
+static inline size_t ai_derived_evict(AI *ai) {
+    if (!ai || !ai->pool) return 0;
+    size_t cap = ai_derived_mark_max();
+    size_t live = ai_derived_marks_live(ai);
+    if (live <= cap) return 0;
+    size_t need = live - cap, killed = 0;
+    for (size_t i = 0; i < ai->pool->count && killed < need; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!ai_is_derived_mark(t)) continue;
+        t->is_garbage = 1;
+        t->count = 0;
+        killed++;
+    }
+    return killed;
+}
+
 static inline int ai_is_teach_mark(const Token *t) {
     return t && t->name && !t->is_garbage &&
            !strncmp(t->name, MICRO_TEACH_TOKEN_PREFIX, strlen(MICRO_TEACH_TOKEN_PREFIX));

@@ -537,6 +537,7 @@ static inline int rule_fwd_derive(AI *ai, const RuleAtom *hg) {
     snprintf(mk, sizeof mk, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, a,
              rid ? (rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?") : hg->name, b);
     (void)pool_token_intern(ai->pool, mk);
+    (void)ai_derived_evict(ai);      /* §6.658 留痕有上限（最老的软删） */
     return 1;
 }
 
