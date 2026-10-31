@@ -503,17 +503,22 @@ static inline int rule_check(AI *ai, char *out, size_t cap) {
      * 递归规则（`祖先 :- 父, 祖先`）本来就成环 —— **有底规则就正常**，所以这一项**只提示、
      * 不计入 bad**（不计进"问题条数"，但在输出里点名，让人自己判断）。 */
     {
-        char nm[32][40];
+        enum { RC_MAXN = 64 };
+        char nm[RC_MAXN][40];
         size_t nn = 0;
-        for (size_t i = 0; i < nr && nn < 32; ++i) {
-            Token *h = rule_head(ai, rs[i]);
-            RuleAtom ha2;
-            if (!h || !rule_node_to_atom(ai, h, &ha2)) continue;
-            int dup = 0;
-            for (size_t k = 0; k < nn; ++k) if (!strcmp(nm[k], ha2.name)) { dup = 1; break; }
-            if (!dup) snprintf(nm[nn++], sizeof nm[0], "%.39s", ha2.name);
+        size_t total_names = 0;
+        for (size_t i = 0; i < nr; ++i) {
+            Token *h_all = rule_head(ai, rs[i]);
+            RuleAtom ha_all;
+            if (!h_all || !rule_node_to_atom(ai, h_all, &ha_all)) continue;
+            int dup_all = 0;
+            for (size_t k = 0; k < nn; ++k) if (!strcmp(nm[k], ha_all.name)) { dup_all = 1; break; }
+            if (!dup_all) { total_names++; if (nn < RC_MAXN) snprintf(nm[nn++], sizeof nm[0], "%.39s", ha_all.name); }
         }
-        int edge[32][32];
+        if (total_names > nn)
+            RC_SAY("⚠ 规则名字超过 %d 个（%zu），循环检测**只看前 %d 个**（其余没查）\n",
+                   (int)RC_MAXN, total_names, (int)RC_MAXN);
+        int edge[RC_MAXN][RC_MAXN];
         memset(edge, 0, sizeof edge);
         for (size_t i = 0; i < nr && nn; ++i) {
             Token *h = rule_head(ai, rs[i]);
@@ -532,7 +537,7 @@ static inline int rule_check(AI *ai, char *out, size_t cap) {
             }
         }
         /* 传递闭包（n ≤ 32，O(n³) 足够） */
-        int reach[32][32];
+        int reach[RC_MAXN][RC_MAXN];
         memcpy(reach, edge, sizeof edge);
         for (size_t k = 0; k < nn; ++k)
             for (size_t i = 0; i < nn; ++i)
