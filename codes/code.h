@@ -282,6 +282,10 @@ static inline int code_round(AI *ai, const char *rel) {
     size_t got = fread(src, 1, CODE_SRC_CAP - 1, f);
     fclose(f);
     src[got] = 0;
+    /* §6.641 **回滚用的原件**：在**任何修改之前**留一份（第一版放晚了：拷贝的是已经改过的 src，
+     * 于是"还原"还原成了改后的样子 —— 实测文件里分号还在）。 */
+    char *orig = (char *)malloc(CODE_SRC_CAP);
+    if (orig) memcpy(orig, src, got + 1);
 
     /* 代码词法（`::ascii on` 才走）：源码先过一遍 **ASCII 逐字保留** 判据 ——
      * "我写出去的字节，词法层一个都没改" 是写代码这件事的前置条件（线 A ③）。
@@ -365,6 +369,14 @@ static inline int code_round(AI *ai, const char *rel) {
     int rc2 = action_run(ai, cmd);
     cr->attempts = 2;
     cr->final_rc = rc2;
+    /* §6.641 **还编不过 ⇒ 回滚**（只在"不再多轮"的默认路径上做；多轮开着时交给多轮） */
+    if (rc2 != 0 && !ai->code_multi && orig) {
+        if (action_write_file(ai, rel, orig) == 0) {
+            code_cat(cr->note, sizeof cr->note,
+                     "；**改完还编不过 ⇒ 已把文件还原**（不给你留半坏的源码）", NULL, NULL);
+        }
+    }
+    free(orig);
     /* **C③ 第二件：多轮自我修正**（默认关，`::code multi on` / `AIP_CODEMULTI=1`）：
      * 第二次还编不过时，**用新的错误再认一遍规则**、再改一处、再编一次（总次数 ≤ 3）。
      * 老行为 = 只改一次（默认关 ⇒ 逐字节相同）；这里只用多出来的那一轮，不改已有那一轮。 */

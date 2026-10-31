@@ -104,6 +104,26 @@ grep -qa '按规则补了声明' c6 \
     && ok "说清「类型只能猜 int」（机械降级的代价照实说）" \
     || bad "undecl.c-说明" "$(grep -a '改了什么' c6 | head -1)"
 
+echo "== ⑦ 回滚（§6.641）：改完还编不过 ⇒ 把文件**还原** =="
+cat > _t/work/two.c <<'EOF'
+int main(void) {
+  int x = 1
+  foo();
+  return x;
+}
+EOF
+run '::code try two.c\n::code\n' c7
+grep -qaE '编译 2 次.*最终 rc=1' c7 \
+    && ok "two.c：改一次、还编不过 ⇒ 最终 rc=1（不假装修好）" \
+    || bad "two.c-闭环" "$(grep -a '写代码闭环' c7 | head -1)"
+grep -qaF '已把文件还原' c7 \
+    && ok "说明里写了「已把文件还原」" \
+    || bad "two.c-说明" "$(grep -a '改了什么' c7 | head -1)"
+grep -qaF 'int x = 1' _t/work/two.c && ! grep -qaF 'int x = 1;' _t/work/two.c \
+    && ! grep -qaF 'int x;' _t/work/two.c \
+    && ok "**文件真的还原了**（补的分号没了 —— 不给你留半坏的源码）" \
+    || bad "two.c-回滚" "$(sed -n 2p _t/work/two.c)"
+
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \
     && ok "产物只在「_t/work/」里（cwd 边界没破）" \
