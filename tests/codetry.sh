@@ -215,6 +215,20 @@ grep -qaF '2 FAIL' c17 \
     && ok "两条 FAIL ⇒ 计数「2 FAIL」" \
     || bad "assert-红计数" "$(grep -a '测试' c17 | head -1)"
 
+echo "== ⑫ 严格判据（§6.661）：rc=0 但打了 FAIL ⇒ 严格模式下算红 =="
+cat > _t/work/tmix.c <<'EOF'
+#include <stdio.h>
+int main(void) { printf("ok a\n"); printf("FAIL b\n"); return 0; }
+EOF
+run '::code test tmix.c\n' c18
+grep -qaF '测试全绿' c18 \
+    && ok "默认（只看退出码）：rc=0 ⇒ **测试全绿**（尽管打了 1 条 FAIL）" \
+    || bad "strict-默认" "$(grep -a '测试' c18 | head -1)"
+run '::code strict on\n::code test tmix.c\n' c19
+grep -qaF '打了 1 条 FAIL（严格模式）⇒ **测试不过**' c19 \
+    && ok "严格模式：rc=0 但有 FAIL 行 ⇒ **测试不过**（且不谎报 rc）" \
+    || bad "strict-开" "$(grep -a '测试' c19 | head -1)"
+
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \
     && ok "产物只在「_t/work/」里（cwd 边界没破）" \

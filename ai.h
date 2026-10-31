@@ -963,6 +963,8 @@ typedef struct {
     /* §6.648 待证确认：我上一轮回过"这条只听说过"，用户说「算」就把它升格。
      * 存 **token id**（不是指针：跨池/跨存读都稳定）；0 = 没有挂着的。 */
     uint32_t ask_claim_id;
+    /* §6.661 测试判据是否**严格**：on 时"产物 rc=0 但打了 FAIL 行"也算红（默认 off = 只看 rc）。 */
+    int code_strict;
     struct { float d; char what[24]; } rlog[8];   /* 最近 8 个事件（环形） */
     size_t rhead;
     /* §6.627 **"因为"只记不推**（会话内）：`因为 C ，A R B` ⇒ 记住 C 是 A R B 的原因。

@@ -348,9 +348,14 @@ static inline int code_test_file(AI *ai, const char *rel, char *note, size_t cap
     int trc = action_run_product(ai, prog);
     size_t nok2 = 0, nbad2 = 0;
     code_count_asserts(action_book()->last_out, &nok2, &nbad2);
+    int strict_red2 = (ai->code_strict && trc == 0 && nbad2 > 0);   /* §6.661 严格 */
     if (note && cap) {
-        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（%s.out rc=0；断言 %zu ok / %zu FAIL）",
-                               rel, rel, nok2, nbad2);
+        if (trc == 0 && !strict_red2)
+            snprintf(note, cap, "%s：编过、**测试全绿**（%s.out rc=0；断言 %zu ok / %zu FAIL）",
+                     rel, rel, nok2, nbad2);
+        else if (strict_red2)
+            snprintf(note, cap, "%s：产物 rc=0，但打了 %zu 条 FAIL（严格模式）⇒ **测试不过**",
+                     rel, nbad2);
         else {
             const char *o = action_book()->last_out;
             size_t ol = o ? strlen(o) : 0;
@@ -374,9 +379,14 @@ static inline int code_test_dir(AI *ai, const char *dir, char *note, size_t cap)
     int trc = action_run_product(ai, prog);
     size_t nok = 0, nbad = 0;
     code_count_asserts(action_book()->last_out, &nok, &nbad);
+    int strict_red = (ai->code_strict && trc == 0 && nbad > 0);   /* §6.661 严格：FAIL 行也算红 */
     if (note && cap) {
-        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（a.out rc=0；断言 %zu ok / %zu FAIL）",
-                               dir, nok, nbad);
+        if (trc == 0 && !strict_red)
+            snprintf(note, cap, "%s：编过、**测试全绿**（a.out rc=0；断言 %zu ok / %zu FAIL）",
+                     dir, nok, nbad);
+        else if (strict_red)
+            snprintf(note, cap, "%s：产物 rc=0，但打了 %zu 条 FAIL（严格模式）⇒ **测试不过**",
+                     dir, nbad);
         else {
             char tail[256] = {0};
             const char *o = action_book()->last_out;

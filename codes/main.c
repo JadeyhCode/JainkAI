@@ -761,7 +761,7 @@ static const CmdDef CMDS[] = {
       "受审的外部执行 + 写文件（默认关）：::act on|off｜run <命令…>｜write <相对路径> <文本…>｜out｜timeout <ms>", CMD_ACT },
     { "code", NULL, 1, "基本",
       "写-跑-看错-改 的机械闭环（降级版）：::code try <相对路径>｜::code build <目录>（多文件一次编）"
-      "｜::code multi on|off｜::code 看痕。修法只有两类，最多改一次；改完还编不过会**还原**源码", CMD_CODE },
+      "｜::code test <目录|文件.c>｜::code strict on|off｜::code multi on|off｜::code 看痕。修法只有两类，最多改一次；改完还编不过会**还原**源码", CMD_CODE },
     { "feat", "<特征词> [特征词…]", 2, "基本",
       "**特征集合 → 概念**：把每个特征词的**入边来源**当一票，看哪个词被命中最多次\n"
       "  （只读；答的是「像什么」=联想，不是「是什么」=判定）", CMD_FEAT },
@@ -4064,6 +4064,16 @@ int main(int argc, char **argv) {
                     else if (*v) { printf("[用法] ::code multi on|off\n"); continue; }
                     printf("[多轮自我修正 = %s]（最多改 %s）\n", a->brain->code_multi ? "开" : "关（默认）",
                            a->brain->code_multi ? "3 次（第二次还编不过就用**新的错误**再认规则再改）" : "1 次");
+                    continue;
+                }
+                if (arg && strncmp(arg, "strict", 6) == 0) {
+                    const char *v = arg + 6;
+                    while (*v == ' ') v++;
+                    if (!strcmp(v, "on"))        a->brain->code_strict = 1;
+                    else if (!strcmp(v, "off"))  a->brain->code_strict = 0;
+                    else if (*v) { printf("[用法] ::code strict on|off\n"); continue; }
+                    printf("[测试判据 = %s]（%s）\n", a->brain->code_strict ? "严格" : "只看退出码（默认）",
+                           a->brain->code_strict ? "产物 rc=0 但打了 FAIL 行 ⇒ 也算红" : "FAIL 行只报数、不参与判定");
                     continue;
                 }
                 if (arg && strncmp(arg, "test", 4) == 0) {
