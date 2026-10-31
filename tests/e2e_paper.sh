@@ -42,7 +42,7 @@ grep -qaE '对 ， 企鹅 -\[属于\]-> 鸟类' out.txt \
     || bad "答对" "$(grep -a 'AI >' out.txt | tail -1)"
 
 echo "== ③ 教规则 + 证明（给每一步） =="
-run '::pred make 父 甲 乙\n::pred make 父 乙 丙\n::rule add 祖先($x,$y) :- 父($x,$y)\n::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n::prove 祖先 甲 丙\n'
+run '::pred make 父 甲 乙\n::pred make 父 乙 丙\n::rule add 祖先($x,$y) :- 父($x,$y)\n::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n::prove 祖先(甲,丙)\n'
 grep -qaF '祖先(甲,丙) ⇒ **成立**' out.txt \
     && ok "::prove 祖先(甲,丙) ⇒ 成立（两跳）" \
     || bad "证明" "$(grep -a '证明' out.txt | head -1)"

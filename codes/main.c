@@ -4702,7 +4702,34 @@ int main(int argc, char **argv) {
                     args[na] = abuf[na]; na++;
                     p += L;
                 }
-                if (na == 0) { printf("[用法] ::prove <名字> <参数…>（参数要写具体值，不能是变量）\n"); continue; }
+                /* §6.667 也认**括号形式**：`::prove 祖先(甲,乙)`（和 ::pred 的写法一致） */
+                if (na == 0 && strchr(nm, '(')) {   /* 括号形式：空格切不出参数 ⇒ na 仍为 0 */
+                    char buf2[256];
+                    snprintf(buf2, sizeof buf2, "%s", nm);
+                    char *lp = strchr(buf2, '(');
+                    char *rp = strrchr(buf2, ')');
+                    if (lp && rp && rp > lp) {
+                        *lp = 0;
+                        *rp = 0;
+                        snprintf(nm, sizeof nm, "%.63s", buf2);
+                        char *q2 = lp + 1;
+                        na = 0;
+                        while (*q2 && na < PRED_MAX_ARGS) {
+                            while (*q2 == ' ' || *q2 == '\t' || *q2 == ',') q2++;
+                            if (!*q2) break;
+                            char *st2 = q2;
+                            while (*q2 && *q2 != ',' && *q2 != ' ') q2++;
+                            char sv = *q2;
+                            *q2 = 0;
+                            snprintf(abuf[na], sizeof abuf[0], "%s", st2);
+                            args[na] = abuf[na];
+                            na++;
+                            if (!sv) break;
+                            q2++;
+                        }
+                    }
+                }
+                if (na == 0) { printf("[用法] ::prove <名字> <参数…> 或 <名字>(<参数,…>)（参数要具体值，不能是变量）\n"); continue; }
                 char out[4096];
                 int rc = rule_prove(a->brain, nm, args, na, out, sizeof out);
                 if (rc == 1) {
