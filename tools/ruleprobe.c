@@ -240,6 +240,33 @@ int main(void) {
         ok(pred_find(f, "祖先", g, 2) != NULL, "推出的结论**真的是事实**（pred_find 找得到）");
         ok(pool_find(f->pool, "[推:甲_祖先_乙]") != NULL, "落事实时留了 `[推:…]` 留痕（和 [教:] 分开）");
         ok(rule_apply_once(f, 200, &fs) == 0, "再跑一遍 ⇒ 0 条（已经有的不重复写）");
+        /* §6.656 不动点：链式规则（祖先 :- 父, 祖先）能自己链下去 */
+        {
+            AI *c2 = ai_new();
+            pred_make(c2, "父", b1, 2);
+            pred_make(c2, "父", b2, 2);
+            char *h2[2] = { "$x", "$z" };
+            char *r1[2] = { "$x", "$y" }, *r2[2] = { "$y", "$z" };
+            char *par[2][PRED_MAX_ARGS];
+            par[0][0] = r1[0]; par[0][1] = r1[1]; par[1][0] = r2[0]; par[1][1] = r2[1];
+            const char *pn2[2] = { "父", "祖先" };
+            size_t pns2[2] = { 2, 2 };
+            char *hb[2] = { "$x", "$y" };
+            char *pb[2] = { "$x", "$y" };
+            char *pab[1][PRED_MAX_ARGS];
+            pab[0][0] = pb[0]; pab[0][1] = pb[1];
+            const char *pnb[1] = { "父" };
+            size_t pnsb[1] = { 2 };
+            add_rule(c2, "祖先", hb, 2, pnb, pab, pnsb, 1);
+            add_rule(c2, "祖先", h2, 2, pn2, par, pns2, 2);
+            RuleForward fx;
+            memset(&fx, 0, sizeof fx);
+            int got2 = rule_apply_fixpoint(c2, 200, 5, &fx);
+            ok(got2 >= 3, "不动点：链式规则推出 ≥3 条（含两跳 祖先(甲,丙)）");
+            char *g3[2] = { "甲", "丙" };
+            ok(pred_find(c2, "祖先", g3, 2) != NULL, "**两跳结论**真的落了（甲→丙）");
+            ai_free(c2);
+        }
         ok(rule_apply_once(f, 1, &fs) == 0 || fs.truncated || fs.derived <= 1, "有上限参数（≤1 时不会超）");
         ai_free(f);
     }

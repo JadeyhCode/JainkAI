@@ -515,78 +515,112 @@ static inline int rule_check(AI *ai, char *out, size_t cap) {
  */
 typedef struct { size_t derived, truncated, checked; } RuleForward;
 
+/* 把结论落成事实（关系边或谓词实例 + `[推:…]` 留痕）。返回 1 = 新写了一条。 */
+static inline int rule_fwd_derive(AI *ai, const RuleAtom *hg) {
+    if (!ai || !hg || hg->n < 2) return 0;
+    for (size_t k = 0; k < hg->n; ++k)
+        if (hg->args[k][0] == '$') return 0;      /* 没绑全 ⇒ 不落（不猜） */
+    uint8_t rid = rel_id_of(ai, hg->name, 0);
+    const char *a = hg->args[0];
+    const char *b = hg->args[1];
+    if (rid) {
+        Token *A = pool_token_intern(ai->pool, a), *B = pool_token_intern(ai->pool, b);
+        if (!A || !B || A == B || rel_direct(A, rid, B)) return 0;
+        if (ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+    } else {
+        char *ga[PRED_MAX_ARGS];
+        for (size_t z = 0; z < hg->n; ++z) ga[z] = (char *)hg->args[z];
+        if (pred_find(ai, hg->name, ga, hg->n)) return 0;
+        if (!pred_make(ai, hg->name, ga, hg->n)) return 0;
+    }
+    char mk[160];
+    snprintf(mk, sizeof mk, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, a,
+             rid ? (rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?") : hg->name, b);
+    (void)pool_token_intern(ai->pool, mk);
+    return 1;
+}
+
+/* 前提的**递归 join**：第 k 条起，能不能在现有事实里绑全（§6.656：链式规则要靠这个）。 */
+static inline void rule_fwd_body(AI *ai, const Token *rule, size_t k, const RuleSubst *s,
+                                 const RuleAtom *head, RuleForward *st, size_t max_derive) {
+    if (!ai || !rule || !s || !head || !st) return;
+    if (st->truncated) return;
+    size_t np = rule_npremise(ai, rule);
+    if (k > np) {
+        RuleAtom hg;
+        if (rule_ground(s, head, &hg)) {
+            if (rule_fwd_derive(ai, &hg)) st->derived++;
+            if (st->derived >= max_derive) st->truncated = 1;
+        }
+        return;
+    }
+    Token *pp = rule_part(ai, rule, "前提", k);
+    RuleAtom pa;
+    if (!pp || !rule_node_to_atom(ai, pp, &pa)) return;
+    if ((unsigned char)pa.name[0] == 0xE4 && (unsigned char)pa.name[1] == 0xB8 &&
+        (unsigned char)pa.name[2] == 0x8D) return;          /* 否定前提：前向不接 */
+    RuleAtom g;
+    if (rule_ground(s, &pa, &g)) {
+        Token *node = NULL;
+        st->checked++;
+        if (rule_atom_to_node(ai, &g, &node))
+            rule_fwd_body(ai, rule, k + 1, s, head, st, max_derive);
+        return;
+    }
+    Token *inst[256];
+    size_t ni = pred_instances(ai, pa.name, inst, 256);
+    for (size_t i = 0; i < ni && !st->truncated; ++i) {
+        if (rule_instance_has_var(ai, inst[i])) continue;
+        RuleSubst s2 = *s;
+        st->checked++;
+        if (!rule_unify(ai, &pa, inst[i], &s2)) continue;
+        rule_fwd_body(ai, rule, k + 1, &s2, head, st, max_derive);
+    }
+}
+
 static inline int rule_apply_once(AI *ai, size_t max_derive, RuleForward *st) {
     if (!ai) return 0;
-    RuleForward local;
-    memset(&local, 0, sizeof local);
+    RuleForward tot;
+    memset(&tot, 0, sizeof tot);
     Token *rules[64];
     size_t nr = rule_list(ai, rules, 64);
-    for (size_t i = 0; i < nr; ++i) {
+    for (size_t i = 0; i < nr && !tot.truncated; ++i) {
         Token *h = rule_head(ai, rules[i]);
         RuleAtom ha;
         if (!h || !rule_node_to_atom(ai, h, &ha)) continue;
         if ((unsigned char)ha.name[0] == 0xE4 && (unsigned char)ha.name[1] == 0xB8 &&
-            (unsigned char)ha.name[2] == 0x8D) continue;      /* 否定结论这轮不做 */
-        /* 用**第一条前提**的事实枚举做驱动（足够覆盖常见规则；多条前提时逐条 join） */
+            (unsigned char)ha.name[2] == 0x8D) continue;     /* 否定结论：不做 */
+        if (rule_npremise(ai, rules[i]) == 0) continue;
         RuleSubst s0;
         memset(&s0, 0, sizeof s0);
-        Token *inst[256];
-        size_t ni = 0;
-        size_t np = rule_npremise(ai, rules[i]);
-        if (np == 0) continue;
-        Token *p1 = rule_part(ai, rules[i], "前提", 1);
-        RuleAtom pa;
-        if (!p1 || !rule_node_to_atom(ai, p1, &pa)) continue;
-        if ((unsigned char)pa.name[0] == 0xE4 && (unsigned char)pa.name[1] == 0xB8 &&
-            (unsigned char)pa.name[2] == 0x8D) continue;      /* 否定前提：这轮跳过 */
-        ni = pred_instances(ai, pa.name, inst, 256);
-        for (size_t k = 0; k < ni; ++k) {
-            RuleSubst s = s0;
-            if (rule_instance_has_var(ai, inst[k])) continue;  /* 模式节点不是事实 */
-            if (!rule_unify(ai, &pa, inst[k], &s)) continue;
-            local.checked++;
-            int ok = 1;
-            for (size_t m = 2; m <= np && ok; ++m) {
-                Token *pp = rule_part(ai, rules[i], "前提", m);
-                RuleAtom pb;
-                if (!pp || !rule_node_to_atom(ai, pp, &pb)) { ok = 0; break; }
-                RuleAtom g;
-                if (!rule_ground(&s, &pb, &g)) { ok = 0; break; }
-                Token *node = NULL;
-                if (!rule_atom_to_node(ai, &g, &node)) ok = 0;
-            }
-            if (!ok) continue;
-            RuleAtom hg;
-            if (!rule_ground(&s, &ha, &hg)) continue;
-            char *a = hg.args[0];
-            char *b = hg.n > 1 ? hg.args[1] : NULL;
-            if (!a || !b) continue;                    /* 只落二元结论（谓词化没接前向链） */
-            if (local.derived >= max_derive) { local.truncated = 1; break; }
-            uint8_t rid = rel_id_of(ai, hg.name, 0);
-            if (rid) {
-                /* 关系词形式的结论 ⇒ 写关系边 */
-                Token *A = pool_token_intern(ai->pool, a), *B = pool_token_intern(ai->pool, b);
-                if (!A || !B || A == B || rel_direct(A, rid, B)) continue;
-                if (ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION) != 0) continue;
-            } else {
-                /* 谓词形式（`祖先(甲,乙)`）⇒ 写谓词实例；已有就不重复 */
-                char *ga[PRED_MAX_ARGS];
-                for (size_t z = 0; z < hg.n; ++z) ga[z] = hg.args[z];
-                if (pred_find(ai, hg.name, ga, hg.n)) continue;
-                if (!pred_make(ai, hg.name, ga, hg.n)) continue;
-            }
-            const char *relmark = rel_name_of(ai, rid);
-            /* 留痕：`[推:A_关系_B]`，和 `[教:…]` 分开 —— 推出来的不能说成"你教的" */
-            char mk[160];
-            snprintf(mk, sizeof mk, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, a,
-                     relmark ? relmark : hg.name, b);
-            (void)pool_token_intern(ai->pool, mk);
-            local.derived++;
-        }
-        if (local.truncated) break;
+        rule_fwd_body(ai, rules[i], 1, &s0, &ha, &tot, max_derive);
     }
-    if (st) *st = local;
-    return (int)local.derived;
+    if (st) *st = tot;
+    return (int)tot.derived;
+}
+
+/* §6.656 **前向链的不动点**（有界）：反复 `rule_apply_once` 直到"这一遍 0 条"或到遍数上限。
+ * 边界：遍数 ≤5、总派生 ≤200（两个上限都可被调用方收紧）；命中任一上限 ⇒ `truncated=1`。
+ * 这条把 §6.655 的"只跑一遍"补上 —— 链式规则（`祖先 :- 父, 祖先`）现在能自己链下去。 */
+static inline int rule_apply_fixpoint(AI *ai, size_t max_derive, int max_pass, RuleForward *st) {
+    if (!ai) return 0;
+    RuleForward tot;
+    memset(&tot, 0, sizeof tot);
+    if (max_pass < 1) max_pass = 1;
+    if (max_pass > 5) max_pass = 5;
+    for (int p = 0; p < max_pass; ++p) {
+        RuleForward one;
+        memset(&one, 0, sizeof one);
+        size_t left = (max_derive > tot.derived) ? (max_derive - tot.derived) : 0;
+        int got = rule_apply_once(ai, left, &one);
+        tot.derived += (size_t)got;
+        tot.checked += one.checked;
+        if (one.truncated) tot.truncated = 1;
+        if (got == 0) break;                 /* 不动点：这一遍一条都没有 */
+        if (tot.derived >= max_derive) { tot.truncated = (p + 1 < max_pass); break; }
+    }
+    if (st) *st = tot;
+    return (int)tot.derived;
 }
 
 #endif /* RULE_H */

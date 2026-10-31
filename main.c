@@ -798,7 +798,7 @@ static const CmdDef CMDS[] = {
       "::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n"
       "最多 4 条前提；变量写成 `$x`；规则随图存盘\n"
       "::rule check 体检（头的变量必须在前提里 / 重复规则）\n"
-      "::rule apply 前向链**跑一遍**（有界 200 条；推出的带 `[推:…]` 留痕）", CMD_RULE },
+      "::rule apply 前向链跑到**不动点**（≤5 遍、总量 ≤200；推出的带 `[推:…]` 留痕）", CMD_RULE },
     { "prove", "<名字> <参数…>", 2, "基本",
       "**证明**：从图里的事实 + 规则推一个具体结论（后向链，深度 ≤8、步数 ≤32）。\n"
       "::prove 祖先 甲 丙    ⇒ 证明了会给**每一步**（用了哪条事实、哪条规则）；\n"
@@ -4562,9 +4562,9 @@ int main(int argc, char **argv) {
                 } else if (!strncmp(r, "apply", 5)) {
                     RuleForward fs;
                     memset(&fs, 0, sizeof fs);
-                    int got = rule_apply_once(a->brain, 200, &fs);
-                    printf("[前向链] 推出 %d 条新事实（检查了 %zu 个候选%s）\n", got, fs.checked,
-                           fs.truncated ? "，**已截断**（上限 200）" : "");
+                    int got = rule_apply_fixpoint(a->brain, 200, 5, &fs);
+                    printf("[前向链] 推出 %d 条新事实（检查了 %zu 个候选，最多 5 遍%s）\n", got,
+                           fs.checked, fs.truncated ? "，**已截断**（上限 200/5 遍）" : "");
                     if (got) printf("       落进去的带 `[推:…]` 留痕（和 `[教:…]` 分开）\n");
                     continue;
                 } else if (!strncmp(r, "check", 5)) {
