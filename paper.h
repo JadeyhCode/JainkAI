@@ -151,4 +151,46 @@ static inline size_t paper_to_claims(AI *ai, const PaperClaim *cs, size_t n) {
     return made;
 }
 
+/* §6.663 **一条入口**：读文件 → 抽断言 → 写待证。`::paper read` 与 `::paper fetch` 共用，
+ * 不再各自复制一遍（上一轮的重复代码就是两次实现开始漂移的起点）。
+ * 返回抽到的断言数；`*made` 是真正写进待证的条数；note 里是给人看的说明。 */
+static inline size_t paper_ingest(AI *ai, const char *path, size_t *made, char *note, size_t cap) {
+    if (made) *made = 0;
+    if (!ai || !path || !path[0]) {
+        if (note && cap) snprintf(note, cap, "没给文件");
+        return 0;
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        if (note && cap) snprintf(note, cap, "读不到 %s（只读工作区里的纯文本）", path);
+        return 0;
+    }
+    static char txt[PAPER_MAX_BYTES + 1];
+    size_t got = fread(txt, 1, PAPER_MAX_BYTES, f);
+    int big = !feof(f);
+    fclose(f);
+    txt[got] = 0;
+    if (big) {
+        if (note && cap) snprintf(note, cap, "%s 超过 %u KB，拒绝（先切一段）", path, PAPER_MAX_BYTES / 1024);
+        return 0;
+    }
+    PaperClaim cs[PAPER_MAX_CLAIMS];
+    size_t n = paper_extract(ai, txt, cs, PAPER_MAX_CLAIMS);
+    if (n == 0) {
+        if (note && cap) snprintf(note, cap, "从 %s 里一**条三段式断言**都没抽到（我不猜）", path);
+        return 0;
+    }
+    size_t m = paper_to_claims(ai, cs, n);
+    if (made) *made = m;
+    if (note && cap) {
+        snprintf(note, cap, "%s：抽到 %zu 条，记为待证 %zu 条（**都不算数**）", path, n, m);
+        for (size_t i = 0; i < n && i < 8; ++i) {
+            size_t o = strlen(note);
+            if (o + 96 < cap)
+                snprintf(note + o, cap - o, "\n  · %.39s %.23s %.39s", cs[i].a, cs[i].r, cs[i].b);
+        }
+    }
+    return n;
+}
+
 #endif /* PAPER_H */

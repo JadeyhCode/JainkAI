@@ -4510,27 +4510,11 @@ int main(int argc, char **argv) {
                         continue;
                     }
                     fclose(cf);
-                    /* 交给同一条 read 路径 */
-                    char rl[600];
-                    snprintf(rl, sizeof rl, "read %s", path);
                     printf("[论文] 从本地缓存取到 %s，开始抽断言\n", path);
-                    {   /* 复用 read 分支的实现：手工调用抽取 */
-                        FILE *f2 = fopen(path, "rb");
-                        static char txt[PAPER_MAX_BYTES + 1];
-                        size_t got = f2 ? fread(txt, 1, PAPER_MAX_BYTES, f2) : 0;
-                        int big = f2 ? !feof(f2) : 0;
-                        if (f2) fclose(f2);
-                        txt[got] = 0;
-                        if (big) { printf("[论文] 文件超过 %u KB，拒绝\n", PAPER_MAX_BYTES / 1024); continue; }
-                        PaperClaim cs[PAPER_MAX_CLAIMS];
-                        size_t n = paper_extract(a->brain, txt, cs, PAPER_MAX_CLAIMS);
-                        if (n == 0) { printf("[论文] 一条三段式断言都没抽到（我不猜）\n"); continue; }
-                        size_t made = paper_to_claims(a->brain, cs, n);
-                        printf("[论文] 抽到 %zu 条，记为待证 %zu 条（**都不算数**）\n", n, made);
-                        for (size_t i = 0; i < n && i < 8; ++i)
-                            printf("  · %s %s %s\n", cs[i].a, cs[i].r, cs[i].b);
-                    }
-                    (void)rl;
+                    char nb2[1536] = {0};
+                    size_t made2 = 0;
+                    (void)paper_ingest(a->brain, path, &made2, nb2, sizeof nb2);
+                    printf("%s\n", nb2[0] ? nb2 : "（没抽到）");
                     continue;
                 }
                 if (!strncmp(r, "read", 4)) {
@@ -4539,24 +4523,12 @@ int main(int argc, char **argv) {
                     char fn[256];
                     snprintf(fn, sizeof fn, "%s", p);
                     if (!fn[0]) { printf("[用法] ::paper read <文件>\n"); continue; }
-                    FILE *f = fopen(fn, "rb");
-                    if (!f) { printf("[论文] 读不到 %s（只读工作区里的纯文本）\n", fn); continue; }
-                    static char txt[PAPER_MAX_BYTES + 1];
-                    size_t got = fread(txt, 1, PAPER_MAX_BYTES, f);
-                    int big = !feof(f);
-                    fclose(f);
-                    txt[got] = 0;
-                    if (big) { printf("[论文] 文件超过 %u KB，拒绝（先切一段）\n", PAPER_MAX_BYTES / 1024); continue; }
-                    PaperClaim cs[PAPER_MAX_CLAIMS];
-                    size_t n = paper_extract(a->brain, txt, cs, PAPER_MAX_CLAIMS);
-                    if (n == 0) {
-                        printf("[论文] 从 %s 里**一条三段式断言**都没抽到（我不猜）\n", fn);
-                        continue;
-                    }
-                    size_t made = paper_to_claims(a->brain, cs, n);
-                    printf("[论文] %s：抽到 %zu 条，记为待证 %zu 条（**都不算数**）\n", fn, n, made);
-                    for (size_t i = 0; i < n && i < 8; ++i)
-                        printf("  · %s %s %s\n", cs[i].a, cs[i].r, cs[i].b);
+                    char nb[1536] = {0};
+                    size_t made = 0;
+                    size_t n = paper_ingest(a->brain, fn, &made, nb, sizeof nb);
+                    (void)made;
+                    (void)n;
+                    printf("%s\n", nb[0] ? nb : "（没抽到）");
                     printf("  确认：::claim accept N    丢掉：::claim reject N\n");
                     continue;
                 }
