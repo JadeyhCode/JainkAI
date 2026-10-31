@@ -193,6 +193,32 @@ int main(void) {
         ok(strstr(go, "规则") != NULL, "缺口里点名**哪条规则**");
         ai_free(g);
     }
+    /* §6.654 否定前提（NAF）：鸟会飞，企鹅例外 */
+    {
+        AI *n = ai_new();
+        char *b1[2] = { "麻雀", "麻雀" }, *b2[2] = { "企鹅", "企鹅" };
+        pred_make(n, "鸟", b1, 1);            /* 鸟(麻雀) */
+        pred_make(n, "鸟", b2, 1);            /* 鸟(企鹅) */
+        pred_make(n, "企鹅", b2, 1);          /* 企鹅(企鹅) */
+        char *h[1] = { "$x" };
+        char *q1[1] = { "$x" }, *q2b[1] = { "$x" };
+        char *pa[2][PRED_MAX_ARGS];
+        pa[0][0] = q1[0]; pa[1][0] = q2b[0];
+        const char *pn[2] = { "鸟", "不企鹅" };
+        size_t pns[2] = { 1, 1 };
+        Token *r = add_rule(n, "会飞", h, 1, pn, pa, pns, 2);
+        ok(r != NULL, "带否定前提的规则能建（`不企鹅($x)`）");
+        char o1[1024] = {0};
+        char *g1[1] = { "麻雀" };
+        ok(rule_prove(n, "会飞", g1, 1, o1, sizeof o1) == 1, "会飞(麻雀) ⇒ 成立（企鹅不成立）");
+        ok(strstr(o1, "否定前提成立") != NULL, "证明里写明**否定前提**是怎么成立的");
+        char o2[1024] = {0};
+        char *g2[1] = { "企鹅" };
+        ok(rule_prove(n, "会飞", g2, 1, o2, sizeof o2) == 0, "会飞(企鹅) ⇒ 推不出来（例外生效）");
+        ok(strstr(o2, "否定前提成立") == NULL,
+           "被否定挡下时**不谎称**否定前提成立（前面证过的正面事实照常出现）");
+        ai_free(n);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

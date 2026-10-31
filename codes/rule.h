@@ -291,6 +291,36 @@ static inline int rule_body(AI *ai, const Token *rule, size_t k, RuleSubst *s, i
     Token *pp = rule_part(ai, rule, "前提", k);
     RuleAtom pa;
     if (!pp || !rule_node_to_atom(ai, pp, &pa)) return 0;
+    /* §6.654 **否定前提（NAF）**：前提名以「不」开头 ⇒ 要求"正面那条**推不出来**"才算成立。
+     * 边界（写死）：只在**目标已具体**（变量都绑上）时可用；正面那条一旦触到深度/循环截断，
+     * 否定**不算成立**（否则深度一截断就会凭空"证明"出否定 → 假结论）。 */
+    int is_neg = ((unsigned char)pa.name[0] == 0xE4 && (unsigned char)pa.name[1] == 0xB8 &&
+                  (unsigned char)pa.name[2] == 0x8D);          /* UTF-8 「不」= E4 B8 8D */
+    if (is_neg) {
+        char base[40];
+        snprintf(base, sizeof base, "%.39s", pa.name + 3);
+        RuleAtom pos = pa;
+        snprintf(pos.name, sizeof pos.name, "%s", base);
+        RuleAtom pg;
+        if (!rule_ground(s, &pos, &pg)) {
+            if (tr) rule_trace_add(tr, "否定前提里有没绑定的变量 ⇒ 这条规则用不了（不猜）");
+            return 0;
+        }
+        RuleSubst fresh2;
+        memset(&fresh2, 0, sizeof fresh2);
+        RuleTrace sub;
+        memset(&sub, 0, sizeof sub);
+        int pr = rule_solve(ai, &pg, &fresh2, depth - 1, &sub, stack, sn);
+        if (pr) return 0;                        /* 正面成立 ⇒ 否定前提失败 */
+        if (sub.depth_limited) {                 /* 截断过 ⇒ 不敢说"没有" */
+            if (tr) rule_trace_add(tr, "否定前提撞到深度/循环截断 ⇒ 不算成立（不猜）");
+            return 0;
+        }
+        char nline[200];
+        snprintf(nline, sizeof nline, "否定前提成立：%.20s(%.20s) 推不出来", pos.name, pg.args[0]);
+        if (tr) rule_trace_add(tr, nline);
+        return rule_body(ai, rule, k + 1, s, depth, tr, stack, sn);
+    }
     RuleAtom g;
     if (rule_ground(s, &pa, &g)) {
         /* 这条前提已经具体了：当子目标证（事实或规则）。
