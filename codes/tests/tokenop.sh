@@ -1396,6 +1396,23 @@ grep -qaE '短期 = \+0\.00' "$RW/o.txt" \
     && ok "::reward reset 清零" \
     || bad "reward-reset" "$(tail -2 "$RW/o.txt" | tr '\n' ' ')"
 
+# §6.635 **规则 + 证明**：::rule add / ::rule / ::prove（后向链，有界）
+RP="$WORK/rule"; rm -rf "$RP"; mkdir -p "$RP"
+cp "$ROOT/model.bin" "$RP/m.bin"; cp "$ROOT/patterns.txt" "$RP/" 2>/dev/null || true
+( cd "$RP" && printf '::notepad off\n::char off\n::pred make 父 甲 乙\n::pred make 父 乙 丙\n::rule add 祖先($x,$y) :- 父($x,$y)\n::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n::prove 祖先 甲 丙\n::prove 祖先 丙 甲\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaF '[规则:R2]（2 条前提）' "$RP/o.txt" \
+    && ok "::rule add 加两条规则（R1 基例 / R2 递归）" \
+    || bad "rule-add" "$(grep -a '规则' "$RP/o.txt" | head -1)"
+grep -qaF '祖先(甲,丙) ⇒ **成立**' "$RP/o.txt" \
+    && ok "::prove 祖先 甲 丙 ⇒ **成立**（两跳：父(甲,乙)+父(乙,丙)）" \
+    || bad "prove-成立" "$(grep -a '证明' "$RP/o.txt" | head -1)"
+grep -qaF '选取事实' "$RP/o.txt" && grep -qaF '规则 [规则:R' "$RP/o.txt" \
+    && ok "证明里给出**每一步**（选了哪条事实、用了哪条规则）" \
+    || bad "prove-步骤" "$(grep -a -A2 '证明' "$RP/o.txt" | head -3 | tr '\n' ' ')"
+grep -qaF '祖先(丙,甲) ⇒ **推不出来**（未知，不是假）' "$RP/o.txt" \
+    && ok "证不出来 ⇒ 说**未知**（不把"推不出"说成"假"）" \
+    || bad "prove-未知" "$(grep -a '丙,甲' "$RP/o.txt" | head -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

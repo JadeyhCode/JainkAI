@@ -14,6 +14,7 @@
 #include "parts.h"      /* §6.569 局部加载：::parts 命令 */
 #include "xbrain.h"     /* §6.580 跨脑知识语义：照抄 / 冲突可见 / force */
 #include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
+#include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -575,6 +576,8 @@ typedef enum {
     CMD_TRUST,              /* 逐条可信度是否参与判定（默认关） */
     CMD_PRED,               /* §6.633 谓词（多元关系）：list / make / show */
     CMD_REWARD,             /* §6.634 奖励：看/清零/开关"更谨慎" */
+    CMD_RULE,               /* §6.635 规则：list / add */
+    CMD_PROVE,              /* §6.635 证明：::prove 名字 参数… */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -769,6 +772,14 @@ static const CmdDef CMDS[] = {
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
+    { "rule", "<子命令>", 1, "基本",
+      "**规则即数据**：list 看已有规则；add 加一条（Horn 规则，只有肯定前提）：\n"
+      "::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n"
+      "最多 4 条前提；变量写成 `$x`；规则随图存盘", CMD_RULE },
+    { "prove", "<名字> <参数…>", 2, "基本",
+      "**证明**：从图里的事实 + 规则推一个具体结论（后向链，深度 ≤8、步数 ≤32）。\n"
+      "::prove 祖先 甲 丙    ⇒ 证明了会给**每一步**（用了哪条事实、哪条规则）；\n"
+      "证不出来就说**未知** —— 不会把『推不出』说成『假』", CMD_PROVE },
     { "reward", NULL, 1, "基本",
       "**奖励**：学对/改口确认 +，被拒/被纠正 −（短期值每轮 ×0.9 衰减，夹在 ±5）。\n"
       "::reward        看当前值/累计/最近 8 个事件\n"
@@ -4305,6 +4316,116 @@ int main(int argc, char **argv) {
                           : "verified（够得着**且前提本身有据**才算）"));
                 printf("  activate 档用的是**受限扩散**（深度≤2、能量≥0.25、从权重≥0.3 的焦点词出发）\n");
                 printf("  前提本身**被提到**永远算成立；这一档只回答「没提到，但它成立吗」\n");
+                continue;
+            }
+            case CMD_RULE: {
+                /* §6.635 `::rule list` / `::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)` */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                if (!strncmp(r, "list", 4) || !*r) {
+                    Token *rs[64];
+                    size_t n = rule_list(a->brain, rs, 64);
+                    if (n == 0) { printf("[规则] 还没有（::rule add 结论($x) :- 前提($x)）\n"); continue; }
+                    printf("[规则] 共 %zu 条：\n", n);
+                    for (size_t i = 0; i < n; ++i) {
+                        Token *h = rule_head(a->brain, rs[i]);
+                        size_t np = rule_npremise(a->brain, rs[i]);
+                        printf("  %s  ←  %s   （%zu 条前提）\n", rs[i]->name ? rs[i]->name : "?",
+                               h && h->name ? h->name : "?", np);
+                    }
+                } else if (!strncmp(r, "add", 3)) {
+                    const char *body = r + 3;
+                    while (*body == ' ' || *body == '\t') body++;
+                    static char buf[600];
+                    snprintf(buf, sizeof buf, "%s", body);
+                    char *sep = strstr(buf, ":-");
+                    if (!sep) { printf("[用法] ::rule add 结论($x,$y) :- 前提($x,$y), 前提2($y)\n"); continue; }
+                    *sep = 0;
+                    char *hs = buf;
+                    while (*hs == ' ' || *hs == '\t') hs++;
+                    static char hname[64];
+                    static char habuf[PRED_MAX_ARGS][64];
+                    char *hargs[PRED_MAX_ARGS]; size_t hn = 0;
+                    if (!rule_parse_atom(hs, hname, sizeof hname, hargs, &hn)) {
+                        printf("[规则] 结论那半句看不懂（要写 名字(参数,…)）\n"); continue;
+                    }
+                    for (size_t i = 0; i < hn; ++i) { snprintf(habuf[i], sizeof habuf[i], "%s", hargs[i]); hargs[i] = habuf[i]; }
+                    static char pnames[RULE_MAX_PREMISE][64];
+                    static char pabuf[RULE_MAX_PREMISE][PRED_MAX_ARGS][64];
+                    const char *pnptr[RULE_MAX_PREMISE];
+                    char *pargptr[RULE_MAX_PREMISE][PRED_MAX_ARGS];
+                    size_t pns[RULE_MAX_PREMISE];
+                    size_t np = 0;
+                    char *p = sep + 2;
+                    while (*p && np < RULE_MAX_PREMISE) {
+                        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+                        if (!*p) break;
+                        char *st = p;
+                        int depth = 0;
+                        while (*p) {
+                            if (*p == '(') depth++;
+                            else if (*p == ')') { depth--; if (depth <= 0) { p++; break; } }
+                            else if (*p == ',' && depth == 0) break;
+                            p++;
+                        }
+                        char save = *p;
+                        *p = 0;
+                        char pn[64]; char *pa[PRED_MAX_ARGS]; size_t pan = 0;
+                        if (!rule_parse_atom(st, pn, sizeof pn, pa, &pan)) {
+                            printf("[规则] 前提看不懂：%.60s\n", st); np = 0; break;
+                        }
+                        snprintf(pnames[np], sizeof pnames[0], "%s", pn);
+                        for (size_t i = 0; i < pan; ++i) {
+                            snprintf(pabuf[np][i], sizeof pabuf[0][0], "%s", pa[i]);
+                            pargptr[np][i] = pabuf[np][i];
+                        }
+                        pns[np] = pan;
+                        np++;
+                        *p = save;
+                        if (*p == ',') p++;
+                    }
+                    if (np == 0) { printf("[规则] 前提至少要一条（Horn 规则：没有空体规则）\n"); continue; }
+                    for (size_t i = 0; i < np; ++i) pnptr[i] = pnames[i];
+                    Token *rr = rule_add(a->brain, hname, hargs, hn, pnptr, pargptr, pns, np);
+                    if (!rr) { printf("[规则] 加不进去：参数 1..%d、前提 ≤%d；变量写成 $x\n",
+                                     PRED_MAX_ARGS, RULE_MAX_PREMISE); continue; }
+                    printf("[规则] 记下：%s（%zu 条前提）\n", rr->name, np);
+                } else {
+                    printf("[用法] ::rule list | ::rule add 结论($x) :- 前提($x)\n");
+                }
+                continue;
+            }
+            case CMD_PROVE: {
+                /* §6.635 `::prove <名字> <参数…>` */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                char nm[64]; char abuf[PRED_MAX_ARGS][64]; char *args[PRED_MAX_ARGS]; size_t na = 0;
+                const char *p = r;
+                if (sscanf(p, "%63s", nm) != 1 || !nm[0]) { printf("[用法] ::prove <名字> <参数…>\n"); continue; }
+                p += strlen(nm);
+                while (na < PRED_MAX_ARGS) {
+                    while (*p == ' ' || *p == '\t') p++;
+                    if (!*p) break;
+                    size_t L = 0;
+                    while (p[L] && p[L] != ' ' && p[L] != '\t' && L + 1 < sizeof abuf[0]) L++;
+                    memcpy(abuf[na], p, L); abuf[na][L] = 0;
+                    args[na] = abuf[na]; na++;
+                    p += L;
+                }
+                if (na == 0) { printf("[用法] ::prove <名字> <参数…>（参数要写具体值，不能是变量）\n"); continue; }
+                char out[4096];
+                int rc = rule_prove(a->brain, nm, args, na, out, sizeof out);
+                if (rc == 1) {
+                    printf("[证明] %s(%s", nm, args[0]);
+                    for (size_t i = 1; i < na; ++i) printf(",%s", args[i]);
+                    printf(") ⇒ **成立**\n%s", out);
+                } else if (rc == 0) {
+                    printf("[证明] %s(%s", nm, args[0]);
+                    for (size_t i = 1; i < na; ++i) printf(",%s", args[i]);
+                    printf(") ⇒ **推不出来**（未知，不是假）\n%s", out);
+                } else {
+                    printf("[用法] 参数要具体（不能是 $变量）；最多 %d 个\n", PRED_MAX_ARGS);
+                }
                 continue;
             }
             case CMD_REWARD: {

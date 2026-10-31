@@ -1,0 +1,393 @@
+/* rule.h — **规则即数据 + 有界后向链 + 证明**（阶段二 WP2；§6.635）
+ *
+ * 目标：让"会根据已有条件去证明新的东西"落地，而且**不扩图**。
+ *
+ * 表示（全部复用现有节点/边）：
+ *   · 规则节点 `[规则:R<N>]`（内核内部命名空间，随图存盘）；
+ *   · `[规则:R<N>] --[结论]--> 谓词模式`，`--[前提K]--> 谓词模式`（`结论`/`前提K` 是动态关系）；
+ *   · 谓词模式就是 pred.h 的实例节点，只是参数可以是**变量名**（字面 `$x`），例如
+ *     `[谓词:祖先($x,$z)]`；
+ *   · 事实就是**没有变量**的实例节点（`[谓词:父(甲,乙)]`）。
+ *
+ * 求解：**后向链**（goal 驱动）—— 目标先看是不是事实，再看有没有规则的"结论"与它匹配；
+ * 匹配 = 把规则头里的 `$变量` 绑定到目标参数；然后逐个证明前提（变量已经绑定就用绑定值）。
+ *
+ * 三条硬边界（写死，避免"看起来能证明"）：
+ *   1. **只有 Horn 规则**：前提全为正文字，没有否定、没有函数符号、没有等式/不等式；
+ *   2. **有界**：深度（默认 8）、步数（默认 32）、循环检测（同一目标在栈上重复 ⇒ 该分支失败）；
+ *   3. 只回答三种结局：**证明了 / 证不出来（未知）/ 结构坏了（规则或实例不自洽）**——
+ *      **绝不把"证不出来"说成"假"**（开放世界，和整个项目一致）。
+ */
+#ifndef RULE_H
+#define RULE_H
+
+#include "pred.h"
+
+#define RULE_PREFIX      MICRO_RULE_TOKEN_PREFIX
+#define RULE_MAX_PREMISE 4
+#define RULE_MAX_VARS    16
+#define RULE_MAX_DEPTH    8
+#define RULE_MAX_STEPS   32
+
+static inline int rule_is_rule_name(const char *n) {
+    return n && strncmp(n, RULE_PREFIX, strlen(RULE_PREFIX)) == 0;
+}
+
+/* ---- 原子/文本 ---------------------------------------------------------- */
+
+/* `名字(参数1,参数2)` —— 参数可以是 `$x` */
+static inline const char *rule_atom_text(const char *name, char *const *args, size_t n,
+                                        char *buf, size_t cap) {
+    return pred_full_name(name, args, n, buf, cap);
+}
+
+/* 解析 `名字(参数1,参数2)`；name/args 指进 s（会被临时改写的副本），返回 1 = 成功。 */
+static inline int rule_parse_atom(char *s, char *name, size_t ncap,
+                                  char *args[PRED_MAX_ARGS], size_t *an) {
+    if (!s || !name || !args || !an) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    char *lp = strchr(s, '(');
+    char *rp = strrchr(s, ')');
+    if (!lp || !rp || rp < lp) return 0;
+    size_t nl = (size_t)(lp - s);
+    if (nl == 0 || nl >= ncap) return 0;
+    memcpy(name, s, nl); name[nl] = 0;
+    *an = 0;
+    char *p = lp + 1;
+    while (p < rp) {
+        while (p < rp && (*p == ' ' || *p == '\t')) p++;
+        if (p >= rp) break;
+        char *st = p;
+        while (p < rp && *p != ',') p++;
+        char *en = p;                              /* 指向 ',' 或 ')' */
+        while (en > st && (en[-1] == ' ' || en[-1] == '\t')) en--;
+        if (en == st || *an >= PRED_MAX_ARGS) return 0;
+        /* ⚠ **先算好下一个起点再截断**：先 `*en = 0` 会把 ',' 也写成 0，
+         * 于是 `p++` 的判断失效、第二个参数变成空串（第一版 CLI 就是这么坏的）。 */
+        char *next = (p < rp && *p == ',') ? p + 1 : NULL;
+        *en = 0;
+        args[(*an)++] = st;
+        if (!next) break;
+        p = next;
+    }
+    return *an > 0;
+}
+
+/* ---- 造规则 ------------------------------------------------------------ */
+
+/* 造一条规则：head + 若干 premise（都按"名字 + 参数串"给）。返回规则节点，失败 NULL。 */
+static inline Token *rule_add(AI *ai, const char *hname, char *const *hargs, size_t hn,
+                              const char **pnames,
+                              char *(*pargs)[PRED_MAX_ARGS], const size_t *pns,
+                              size_t np) {
+    if (!ai || !hname || !hargs || hn == 0 || np == 0 || np > RULE_MAX_PREMISE) return NULL;
+    if (!pnames || !pargs || !pns) return NULL;
+    /* 规则节点名：`[规则:R<N>]`，N 取现有最大值 + 1（存盘重载后能续上） */
+    int maxid = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->is_garbage || !t->name || !rule_is_rule_name(t->name)) continue;
+        /* 名字是 `[规则:R<N>]` —— 跳过前缀和那个 'R' 再取号（第一版忘了跳 R ⇒ 永远返回 R1，
+         * 两条规则挤在同一个节点上、前提集被合并，`prove` 就永远证不出来）。 */
+        int v = atoi(t->name + strlen(RULE_PREFIX) + 1);
+        if (v > maxid) maxid = v;
+    }
+    char tb[PRED_NAME_CAP];
+    /* ① **先把结论/前提的谓词节点都建好**（失败就在这一步回去，别留下一条空规则）*/
+    if (!rule_atom_text(hname, hargs, hn, tb, sizeof tb)) return NULL;
+    Token *hp = pred_make(ai, hname, hargs, hn);
+    if (!hp) return NULL;
+    Token *pp[RULE_MAX_PREMISE];
+    for (size_t k = 0; k < np; ++k) {
+        if (!pnames[k] || !pargs[k] || pns[k] == 0) return NULL;
+        pp[k] = pred_make(ai, pnames[k], pargs[k], pns[k]);
+        if (!pp[k]) return NULL;
+    }
+    /* ② 再建规则节点、挂边 */
+    char rn[48];
+    snprintf(rn, sizeof rn, RULE_PREFIX "R%d]", maxid + 1);
+    Token *r = pool_token_intern(ai->pool, rn);
+    if (!r) return NULL;
+    uint8_t rid_head = rel_id_of(ai, "结论", 1);
+    if (!rid_head || ai_write_rel(ai, r, hp, rid_head, 0, AI_WSRC_RELATION) != 0) return NULL;
+    for (size_t k = 0; k < np; ++k) {
+        char prn[24];
+        snprintf(prn, sizeof prn, "前提%zu", k + 1);
+        uint8_t rid = rel_id_of(ai, prn, 1);
+        if (!rid || ai_write_rel(ai, r, pp[k], rid, 0, AI_WSRC_RELATION) != 0) return NULL;
+    }
+    return r;
+}
+
+/* ---- 读规则 ------------------------------------------------------------ */
+
+/* 规则的结论 / 第 k 个前提（k 从 1 开始）；没有返回 NULL。 */
+static inline Token *rule_part(AI *ai, const Token *r, const char *relname, size_t k) {
+    if (!ai || !r || !relname) return NULL;
+    char rn[24];
+    if (k) snprintf(rn, sizeof rn, "%s%zu", relname, k);
+    else   snprintf(rn, sizeof rn, "%s", relname);
+    uint8_t rid = rel_id_of(ai, rn, 0);
+    if (!rid || rid < REL_DYN_BASE) return NULL;
+    uint8_t dyn = (uint8_t)(rid - REL_DYN_BASE + 1);
+    for (size_t i = 0; i < r->count; ++i) {
+        const AssocEntry *e = &token_assocs_ro(r)[i];
+        if (e->dyn == dyn && e->main) return e->main;
+    }
+    return NULL;
+}
+static inline Token *rule_head(AI *ai, const Token *r) { return rule_part(ai, r, "结论", 0); }
+static inline size_t rule_npremise(AI *ai, const Token *r) {
+    size_t n = 0;
+    for (size_t k = 1; k <= RULE_MAX_PREMISE; ++k) if (rule_part(ai, r, "前提", k)) n = k;
+    return n;
+}
+static inline size_t rule_list(AI *ai, Token **out, size_t cap) {
+    size_t n = 0;
+    for (size_t i = 0; i < ai->pool->count && n < cap; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || t->is_garbage || !t->name || !rule_is_rule_name(t->name)) continue;
+        out[n++] = t;
+    }
+    return n;
+}
+
+/* ---- 求解（后向链） ---------------------------------------------------- */
+
+typedef struct {
+    char name[40];
+    char args[PRED_MAX_ARGS][40];
+    size_t n;
+} RuleAtom;
+
+static inline int rule_atom_to_node(AI *ai, const RuleAtom *at, Token **out) {
+    if (!ai || !at || !out || at->n == 0 || at->n > PRED_MAX_ARGS) return 0;
+    char *a[PRED_MAX_ARGS];
+    for (size_t i = 0; i < at->n; ++i) a[i] = (char *)at->args[i];
+    Token *p = pred_find(ai, at->name, a, at->n);
+    if (!p) return 0;
+    *out = p;
+    return 1;
+}
+static inline int rule_node_to_atom(AI *ai, const Token *p, RuleAtom *out) {
+    if (!ai || !p || !out || !p->name) return 0;
+    char plain[64];
+    if (!pred_plain_name(p->name, plain, sizeof plain)) return 0;
+    snprintf(out->name, sizeof out->name, "%.39s", plain);
+    int ok = 0;
+    size_t n = pred_arity(ai, p, &ok);
+    if (!ok || n == 0 || n > PRED_MAX_ARGS) return 0;
+    out->n = n;
+    for (size_t k = 1; k <= n; ++k) {
+        Token *v = pred_arg(ai, p, k);
+        if (!v || !v->name) return 0;
+        snprintf(out->args[k - 1], sizeof out->args[0], "%.39s", v->name);
+    }
+    return 1;
+}
+
+typedef struct { char var[24]; char val[40]; } RuleBind;
+typedef struct {
+    RuleBind b[RULE_MAX_VARS];
+    size_t   n;
+} RuleSubst;
+
+static inline const char *rule_lookup(const RuleSubst *s, const char *var) {
+    if (!s || !var || var[0] != '$') return NULL;
+    for (size_t i = 0; i < s->n; ++i) if (!strcmp(s->b[i].var, var)) return s->b[i].val;
+    return NULL;
+}
+static inline int rule_bind(RuleSubst *s, const char *var, const char *val) {
+    if (!s || !var || !val) return 0;
+    const char *have = rule_lookup(s, var);
+    if (have) return strcmp(have, val) == 0;
+    if (s->n >= RULE_MAX_VARS) return 0;
+    snprintf(s->b[s->n].var, sizeof s->b[s->n].var, "%.23s", var);
+    snprintf(s->b[s->n].val, sizeof s->b[s->n].val, "%.39s", val);
+    s->n++;
+    return 1;
+}
+/* 把原子按当前绑定实例化（变量换成值）；还有没绑的变量 ⇒ 返回 0（不能当事实查） */
+static inline int rule_ground(const RuleSubst *s, const RuleAtom *at, RuleAtom *out) {
+    if (!s || !at || !out) return 0;
+    *out = *at;
+    for (size_t i = 0; i < out->n; ++i) {
+        if (out->args[i][0] != '$') continue;
+        const char *v = rule_lookup(s, out->args[i]);
+        if (!v) return 0;
+        snprintf(out->args[i], sizeof out->args[i], "%.39s", v);
+    }
+    return 1;
+}
+
+typedef struct {
+    char  text[RULE_MAX_STEPS * 96];
+    size_t used;
+    int   depth_limited;    /* 有分支是因为深度/循环被截断的 ⇒ 结论只能算"未知" */
+} RuleTrace;
+
+static inline void rule_trace_add(RuleTrace *t, const char *line) {
+    if (!t || !line) return;
+    size_t l = strlen(line);
+    if (t->used + l + 2 >= sizeof t->text) return;
+    memcpy(t->text + t->used, line, l);
+    t->used += l;
+    t->text[t->used++] = '\n';
+    t->text[t->used] = 0;
+}
+
+/* ---- 求解内核：goal 驱动 + 合取回溯 ------------------------------------
+ * 为什么需要"枚举事实"这一层：`祖先($x,$z) :- 父($x,$y), 祖先($y,$z)` 里前提 1 的 `$y`
+ * **还没绑定** —— 只查"具体事实"永远失败（第一版就是这么错的：trace 里只有事实那一行）。
+ * 所以：带变量的前提要去**枚举同名同元数的实例**逐条绑定（标准的 join）。
+ * 仍有边界：如果某条前提**整体**带未绑定变量、而同名实例一条都没有，就按"未知"失败
+ * （不做"目标驱动的枚举推导"，那要另一套机制）。 */
+/* 这个实例里有没有变量参数（`$x`）—— **有就不是事实，是模式**。
+ * 为什么必须区分：规则头和前提本身也是 `[谓词:父($x,$y)]` 这种节点，它们和图里的事实
+ * 混在同一个池子里。第一版把它们也当事实 ⇒ `父` 对**任意参数**都"成立"（`rule_unify`
+ * 把 `$x` 绑成了字面的 `$x`），`祖先(甲,丙)` 于是推出无穷长的假链、最后失败。
+ */
+static inline int rule_instance_has_var(AI *ai, const Token *p) {
+    int ok = 0;
+    size_t n = pred_arity(ai, p, &ok);
+    if (!ok) return 0;
+    for (size_t k = 1; k <= n; ++k) {
+        Token *v = pred_arg(ai, p, k);
+        if (v && v->name && v->name[0] == '$') return 1;
+    }
+    return 0;
+}
+
+static inline int rule_unify(AI *ai, const RuleAtom *at, const Token *p, RuleSubst *s) {
+    if (rule_instance_has_var(ai, p)) return 0;      /* 模式节点不是事实 */
+    int ok = 0;
+    size_t n = pred_arity(ai, p, &ok);
+    if (!ok || n != at->n) return 0;
+    RuleSubst t = *s;
+    for (size_t k = 0; k < n; ++k) {
+        Token *v = pred_arg(ai, p, k + 1);
+        if (!v || !v->name) return 0;
+        if (at->args[k][0] == '$') { if (!rule_bind(&t, at->args[k], v->name)) return 0; }
+        else if (strcmp(at->args[k], v->name) != 0) return 0;
+    }
+    *s = t;
+    return 1;
+}
+
+static inline int rule_solve(AI *ai, const RuleAtom *goal, RuleSubst *s, int depth,
+                             RuleTrace *tr, char stack[][64], size_t sn);
+
+/* 第 k 条前提起，能不能全部满足（成功时 s 里带着绑定） */
+static inline int rule_body(AI *ai, const Token *rule, size_t k, RuleSubst *s, int depth,
+                            RuleTrace *tr, char stack[][64], size_t sn) {
+    size_t np = rule_npremise(ai, rule);
+    if (k > np) return 1;
+    Token *pp = rule_part(ai, rule, "前提", k);
+    RuleAtom pa;
+    if (!pp || !rule_node_to_atom(ai, pp, &pa)) return 0;
+    RuleAtom g;
+    if (rule_ground(s, &pa, &g)) {
+        /* 这条前提已经具体了：当子目标证（事实或规则）。
+         * ⚠ **子目标要用空绑定**：不同规则用同名变量（`$x`）很常见，把父层的绑定带进去会让
+         * 子目标匹配头时"$x 必须等于甲"从而失败（第一版就是这么错的：内层连 body 都不进）。 */
+        RuleSubst fresh;
+        memset(&fresh, 0, sizeof fresh);
+        RuleSubst s2 = *s;
+        return rule_solve(ai, &g, &fresh, depth - 1, tr, stack, sn) &&
+               rule_body(ai, rule, k + 1, &s2, depth, tr, stack, sn);
+    }
+    /* 还没绑全：枚举同名同元数的实例，逐条绑定后继续 */
+    Token *inst[256];
+    size_t ni = pred_instances(ai, pa.name, inst, 256);
+    for (size_t i = 0; i < ni; ++i) {
+        RuleSubst s2 = *s;
+        if (!rule_unify(ai, &pa, inst[i], &s2)) continue;
+        char st2[16][64];
+        memcpy(st2, stack, sizeof st2);
+        if (rule_body(ai, rule, k + 1, &s2, depth, tr, st2, sn)) {
+            /* 把"用了哪条事实"记进证明 —— 否则链里只有规则名，读的人不知道凭什么 */
+            char line[160];
+            snprintf(line, sizeof line, "选取事实：%.60s", inst[i]->name ? inst[i]->name : "?");
+            rule_trace_add(tr, line);
+            *s = s2;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static inline int rule_solve(AI *ai, const RuleAtom *goal, RuleSubst *s, int depth,
+                             RuleTrace *tr, char stack[][64], size_t sn) {
+    if (!ai || !goal || depth <= 0) { if (tr) tr->depth_limited = 1; return 0; }
+    char key[64];
+    snprintf(key, sizeof key, "%.20s(%.18s%.18s)", goal->name,
+             goal->args[0], goal->n > 1 ? goal->args[1] : "");
+    for (size_t i = 0; i < sn && i < 16; ++i)
+        if (!strcmp(stack[i], key)) { if (tr) tr->depth_limited = 1; return 0; }
+    RuleAtom g;
+    if (rule_ground(s, goal, &g)) {
+        Token *p = NULL;
+        if (rule_atom_to_node(ai, &g, &p)) {
+            char line[160];
+            snprintf(line, sizeof line, "事实：%.20s(%.30s%.1s%.30s)", g.name,
+                     g.args[0], g.n > 1 ? "," : "", g.n > 1 ? g.args[1] : "");
+            rule_trace_add(tr, line);
+            return 1;
+        }
+    }
+    Token *rules[64];
+    size_t nr = rule_list(ai, rules, 64);
+    for (size_t i = 0; i < nr; ++i) {
+        Token *head = rule_head(ai, rules[i]);
+        RuleAtom ha;
+        if (!head || !rule_node_to_atom(ai, head, &ha)) continue;
+        if (strcmp(ha.name, goal->name) != 0 || ha.n != goal->n) continue;
+        RuleSubst s2 = *s;
+        int unify_ok = 1;
+        for (size_t k = 0; k < ha.n && unify_ok; ++k) {
+            if (ha.args[k][0] == '$') unify_ok = rule_bind(&s2, ha.args[k], goal->args[k]);
+            else unify_ok = !strcmp(ha.args[k], goal->args[k]);
+        }
+        if (!unify_ok) continue;
+        char st2[16][64];
+        memcpy(st2, stack, sizeof st2);
+        if (sn < 16) snprintf(st2[sn], sizeof st2[0], "%s", key);
+        RuleSubst s3 = s2;
+        if (!rule_body(ai, rules[i], 1, &s3, depth - 1, tr, st2, sn + 1)) continue;
+        char line[200];
+        snprintf(line, sizeof line, "规则 %.24s：%.20s(%.24s%.1s%.24s) ⇐ %zu 条前提",
+                 rules[i]->name, ha.name, ha.args[0], ha.n > 1 ? "," : "",
+                 ha.n > 1 ? ha.args[1] : "", rule_npremise(ai, rules[i]));
+        rule_trace_add(tr, line);
+        *s = s3;
+        return 1;
+    }
+    return 0;
+}
+
+/* 对外：证明一个**具体**目标（参数都是词，不含变量）。
+ * 返回 1 = 证明了（tr 里有步骤）、0 = 证不出来（未知）、-1 = 参数/结构不对。 */
+static inline int rule_prove(AI *ai, const char *name, char *const *args, size_t n,
+                            char *out, size_t cap) {
+    if (!ai || !name || !args || n == 0 || n > PRED_MAX_ARGS) return -1;
+    RuleAtom goal;
+    memset(&goal, 0, sizeof goal);
+    snprintf(goal.name, sizeof goal.name, "%.39s", name);
+    goal.n = n;
+    for (size_t i = 0; i < n; ++i) {
+        if (!args[i] || !args[i][0] || args[i][0] == '$') return -1;   /* 目标必须具体 */
+        snprintf(goal.args[i], sizeof goal.args[0], "%.39s", args[i]);
+    }
+    RuleTrace tr;
+    memset(&tr, 0, sizeof tr);
+    RuleSubst s;
+    memset(&s, 0, sizeof s);
+    char stack[16][64];
+    memset(stack, 0, sizeof stack);
+    int r = rule_solve(ai, &goal, &s, RULE_MAX_DEPTH, &tr, stack, 0);
+    if (out && cap) snprintf(out, cap, "%.*s", (int)(cap - 1), tr.text);
+    if (r == 1) return 1;
+    return tr.depth_limited ? 0 : 0;    /* 未知就是未知（不把"证不出来"说成假） */
+}
+
+#endif /* RULE_H */
