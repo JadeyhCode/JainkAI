@@ -787,6 +787,7 @@ static const CmdDef CMDS[] = {
       "**读论文（离线）**：只处理工作区里的纯文本（≤256 KB），抽『恰好三段』的断言。\n"
       "::paper read <文件>   抽断言 ⇒ **全部进待证**（不写事实层）\n"
       "::paper list         看 papers/ 下有什么样本\n"
+      "::paper fetch <名字>  从 **papers/cache/** 取本地缓存（**这一版不联网**）\n"
       "⚠ 不会读 PDF、不联网、不做指代消解；抽不到的就不抽（宁可漏，不要编）", CMD_PAPER },
     { "claim", "<子命令>", 1, "基本",
       "**待证**（不轻信）：带「听说/据说/论文/书上/网上」的话只记成待证，**不进事实层**。\n"
@@ -4486,6 +4487,50 @@ int main(int argc, char **argv) {
                 while (*r == ' ' || *r == '\t') r++;
                 if (!strncmp(r, "list", 4) || !*r) {
                     printf("[论文] 看 papers/（默认样本目录）—— 用 ::paper read papers/xxx.txt 抽断言\n");
+                    continue;
+                }
+                if (!strncmp(r, "fetch", 5)) {
+                    /* §6.662 **不做网络**：`fetch` 只是"从本地缓存取"（papers/cache/<名字>）。
+                     * 想读真论文就先把纯文本放进缓存（人来做这一步），内核不联网。 */
+                    const char *nm = r + 5;
+                    while (*nm == ' ' || *nm == '\t') nm++;
+                    char named[256];
+                    snprintf(named, sizeof named, "%s", nm);
+                    if (!named[0]) {
+                        printf("[论文] 用法：::paper fetch <缓存里的名字>（先把它放进 papers/cache/）\n");
+                        printf("       ⚠ 这一版**不联网**：fetch 只从本地缓存取，取不到就明说\n");
+                        continue;
+                    }
+                    char path[512];
+                    snprintf(path, sizeof path, "papers/cache/%s", named);
+                    FILE *cf = fopen(path, "rb");
+                    if (!cf) {
+                        printf("[论文] 缓存里没有 %s —— **不联网**（把纯文本放进 papers/cache/ 再 fetch）\n",
+                               named);
+                        continue;
+                    }
+                    fclose(cf);
+                    /* 交给同一条 read 路径 */
+                    char rl[600];
+                    snprintf(rl, sizeof rl, "read %s", path);
+                    printf("[论文] 从本地缓存取到 %s，开始抽断言\n", path);
+                    {   /* 复用 read 分支的实现：手工调用抽取 */
+                        FILE *f2 = fopen(path, "rb");
+                        static char txt[PAPER_MAX_BYTES + 1];
+                        size_t got = f2 ? fread(txt, 1, PAPER_MAX_BYTES, f2) : 0;
+                        int big = f2 ? !feof(f2) : 0;
+                        if (f2) fclose(f2);
+                        txt[got] = 0;
+                        if (big) { printf("[论文] 文件超过 %u KB，拒绝\n", PAPER_MAX_BYTES / 1024); continue; }
+                        PaperClaim cs[PAPER_MAX_CLAIMS];
+                        size_t n = paper_extract(a->brain, txt, cs, PAPER_MAX_CLAIMS);
+                        if (n == 0) { printf("[论文] 一条三段式断言都没抽到（我不猜）\n"); continue; }
+                        size_t made = paper_to_claims(a->brain, cs, n);
+                        printf("[论文] 抽到 %zu 条，记为待证 %zu 条（**都不算数**）\n", n, made);
+                        for (size_t i = 0; i < n && i < 8; ++i)
+                            printf("  · %s %s %s\n", cs[i].a, cs[i].r, cs[i].b);
+                    }
+                    (void)rl;
                     continue;
                 }
                 if (!strncmp(r, "read", 4)) {

@@ -1467,6 +1467,18 @@ grep -qaF '自己 推' "$PV/o.txt" \
     && ok "追问出处 ⇒ 说**我自己推的**（不是"你教的"）" \
     || bad "prov-说" "$(grep -a 'AI >' "$PV/o.txt" | tail -1)"
 
+# §6.662 **论文缓存**：::paper fetch 只从本地取（不联网），取不到就明说
+PCa="$WORK/pcache"; rm -rf "$PCa"; mkdir -p "$PCa/papers/cache"
+cp "$ROOT/model.bin" "$PCa/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/relations.txt" "$PCa/" 2>/dev/null || true
+printf '企鹅 属于 鸟类。\n麒麟 属于 神兽。\n' > "$PCa/papers/cache/c.txt"
+( cd "$PCa" && printf '::notepad off\n::char off\n::paper fetch c.txt\n::paper fetch 没有这个.txt\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaE '从本地缓存取到 papers/cache/c.txt' "$PCa/o.txt" \
+    && ok "::paper fetch 从本地缓存取到文件" \
+    || bad "paper-fetch" "$(grep -a '论文' "$PCa/o.txt" | head -1)"
+grep -qaF '**不联网**' "$PCa/o.txt" \
+    && ok "缓存里没有 ⇒ 明确说**不联网**（不假装去抓）" \
+    || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true
