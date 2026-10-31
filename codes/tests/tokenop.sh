@@ -1459,7 +1459,7 @@ grep -qaF '读不到 不存在.txt' "$PP/o2.txt" \
 # §6.657 **前向链推出的东西，出处说"我自己推的"**（不说成"你教的"）
 PV="$WORK/prov"; rm -rf "$PV"; mkdir -p "$PV"
 cp "$ROOT/model.bin" "$PV/m.bin"; cp "$ROOT/patterns.txt" "$PV/" 2>/dev/null || true
-( cd "$PV" && printf '::notepad off\n::char off\n::pred make 父 甲 乙\n::rule add 怕($x,$y) :- 父($x,$y)\n::rule add 祖先($x,$y) :- 父($x,$y)\n::rule apply\n你 怎么 知道 甲 怕 乙\n你 怎么 知道 祖先(甲,乙)\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+( cd "$PV" && printf '::notepad off\n::char off\n::pred make 父 甲 乙\n::rule add 怕($x,$y) :- 父($x,$y)\n::rule add 祖先($x,$y) :- 父($x,$y)\n::rule apply\n你 怎么 知道 甲 怕 乙\n你 怎么 知道 祖先(甲,乙)\n你 怎么 知道 怕(甲,乙)\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
 grep -qaE '推出 [0-9]+ 条新事实' "$PV/o.txt" \
     && ok "::rule apply 推出事实（怕(甲,乙) 与 祖先(甲,乙)）" \
     || bad "prov-推" "$(grep -a '前向链' "$PV/o.txt" | head -1)"
@@ -1483,7 +1483,7 @@ grep -qaF 'papers/cache/' "$PCa/o2.txt" \
     && ok "::paper list 真的列目录（papers/ 与 papers/cache/，§6.666）" \
     || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
 
-grep -qaF '自己 推' "$PV/o.txt" && [ "$(grep -ac '自己 推' "$PV/o.txt")" -ge 2 ] \
+grep -qaF '自己 推' "$PV/o.txt" && [ "$(grep -ac '自己 推' "$PV/o.txt")" -ge 3 ] \
     && ok "**谓词实例**的出处也说得清（`你 怎么 知道 祖先(甲,乙)` ⇒ 我推的，§6.668）" \
     || bad "prov-谓词" "$(grep -a 'AI >' "$PV/o.txt" | tail -1)"
 

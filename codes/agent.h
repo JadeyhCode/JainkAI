@@ -4106,7 +4106,46 @@ static inline int agent_prov_pred_raw(AI *ai, const char *input, char *out, size
         o += (size_t)w2;
     }
     Token *p = pool_find(ai->pool, pn);
+    /* §6.669 **关系形式写成括号**（`怕(甲,乙)` 里的 `怕` 是关系词）：谓词实例找不到时，
+     * 退回三元语义 `甲 怕 乙` 去查留痕 —— 不然会误说"没记过"（上一轮登记的错位）。 */
     if (!p) {
+        /* 两种括号写法都试：
+         *   ① `怕(甲,乙)`      —— 名字就是关系词（关系在前）
+         *   ② `猫(属于,动物)`  —— 名字是主语、第一个参数是关系词（A R B 的形状）
+         * 这是 §6.669 修的错位：只试 ① 会把 ② 误判成"没记过"。 */
+        uint8_t rid2 = rel_id_of(ai, name, 0);
+        const char *sa = args[0], *sb = args[1];
+        if (!rid2) {
+            uint8_t ridm = rel_id_of(ai, args[0], 0);
+            if (ridm) { rid2 = ridm; sa = name; sb = args[1]; }
+        }
+        Token *A2 = pool_find(ai->pool, sa), *B2 = pool_find(ai->pool, sb);
+        if (rid2 && A2 && B2) {
+            char mk[200];
+            agent_teach_name(mk, sizeof mk, sa, 0, rel_name_of(ai, rid2), sb);
+            Token *mt = pool_find(ai->pool, mk);
+            if (mt && !mt->is_garbage) {
+                const char *t = ai_say_tpl("出处.你教的");
+                snprintf(out, cap, "%s", t ? t : "这 条 是 你 教 我 的");
+                if (cf) *cf = 0.8f;
+                return 1;
+            }
+            snprintf(mk, sizeof mk, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, sa,
+                     rel_name_of(ai, rid2) ? rel_name_of(ai, rid2) : "?", sb);
+            Token *dt2 = pool_find(ai->pool, mk);
+            if (dt2 && !dt2->is_garbage) {
+                const char *t = ai_say_tpl("出处.我推的");
+                snprintf(out, cap, "%s", t ? t : "这 条 是 我 自己 推 出来 的");
+                if (cf) *cf = 0.7f;
+                return 1;
+            }
+            if (rel_direct(A2, rid2, B2)) {
+                const char *t = ai_say_tpl("出处.图上");
+                snprintf(out, cap, "%s", t ? t : "这 条 是 图 上 记 着 的（不 是 我 推 的）");
+                if (cf) *cf = 0.6f;
+                return 1;
+            }
+        }
         const char *t = ai_say_tpl("不知道.没这条");
         snprintf(out, cap, "%s", t ? t : "我 图 里 没 记 过 这 条（不 编）。");
         if (cf) *cf = 0.5f;
