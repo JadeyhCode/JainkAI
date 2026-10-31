@@ -302,6 +302,25 @@ int main(void) {
         ok(strstr(msg2, "循环依赖") != NULL, "但会**提示**循环依赖（有底规则就正常）");
         ai_free(c3);
     }
+    /* §6.673 三元谓词的留痕带全参数（"三元以上判不准"这条修掉） */
+    {
+        AI *t3 = ai_new();
+        char *f3[3] = { "甲", "乙", "丙" };
+        pred_make(t3, "给", f3, 3);
+        char *h3[3] = { "$x", "$y", "$z" };
+        char *p3[3] = { "$x", "$y", "$z" };
+        char *pa4[1][PRED_MAX_ARGS];
+        pa4[0][0] = p3[0]; pa4[0][1] = p3[1]; pa4[0][2] = p3[2];
+        const char *pn4[1] = { "给" };
+        size_t pns4[1] = { 3 };
+        add_rule(t3, "送出", h3, 3, pn4, pa4, pns4, 1);
+        RuleForward f3s;
+        memset(&f3s, 0, sizeof f3s);
+        ok(rule_apply_fixpoint(t3, 100, 3, &f3s) >= 1, "三元规则能推出（送出(甲,乙,丙)）");
+        ok(pool_find(t3->pool, "[推:甲_送出_乙_丙]") != NULL,
+           "留痕里带**全部三个参数**（不再只记前两个）");
+        ai_free(t3);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

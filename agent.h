@@ -4152,8 +4152,25 @@ static inline int agent_prov_pred_raw(AI *ai, const char *input, char *out, size
         return 1;
     }
     char dm[200];
-    snprintf(dm, sizeof dm, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, args[0], name, args[1]);
+    /* §6.673 先按**全参数**找（三元以上），再退回两参数（老格式/二元） */
+    {
+        int dw = snprintf(dm, sizeof dm, "%s%s_%s_%s", MICRO_TAUGHT_DERIVED_PREFIX, args[0],
+                          name, args[1]);
+        if (dw > 0 && (size_t)dw < sizeof dm) {
+            for (size_t z = 2; z < na; ++z) {
+                int w3 = snprintf(dm + dw, sizeof dm - dw, "_%s", args[z]);
+                if (w3 < 0 || dw + (size_t)w3 >= sizeof dm - 1) break;
+                dw += w3;
+            }
+            snprintf(dm + dw, sizeof dm - dw, "]");
+        }
+    }
     Token *dt = pool_find(ai->pool, dm);
+    if (!dt && na > 2) {
+        char dm2[200];
+        snprintf(dm2, sizeof dm2, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, args[0], name, args[1]);
+        dt = pool_find(ai->pool, dm2);
+    }
     if (dt && !dt->is_garbage) {
         const char *t = ai_say_tpl("出处.我推的");
         snprintf(out, cap, "%s", t ? t : "这 条 是 我 自己 推 出来 的");

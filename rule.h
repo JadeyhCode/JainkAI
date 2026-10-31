@@ -584,9 +584,19 @@ static inline int rule_fwd_derive(AI *ai, const RuleAtom *hg) {
         if (pred_find(ai, hg->name, ga, hg->n)) return 0;
         if (!pred_make(ai, hg->name, ga, hg->n)) return 0;
     }
-    char mk[160];
-    snprintf(mk, sizeof mk, "%s%s_%s_%s]", MICRO_TAUGHT_DERIVED_PREFIX, a,
-             rid ? (rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?") : hg->name, b);
+    /* §6.673 留痕里带上**全部**参数（三元以上的谓词"是我推的吗"才判得准）：
+     * `[推:a_名字_b_c…]`；二元时与旧格式完全一致（向后兼容）。 */
+    char mk[200];
+    int mw = snprintf(mk, sizeof mk, "%s%s_%s_%s", MICRO_TAUGHT_DERIVED_PREFIX, a,
+                      rid ? (rel_name_of(ai, rid) ? rel_name_of(ai, rid) : "?") : hg->name, b);
+    if (mw > 0 && (size_t)mw < sizeof mk) {
+        for (size_t z = 2; z < hg->n; ++z) {
+            int w2 = snprintf(mk + mw, sizeof mk - mw, "_%s", hg->args[z]);
+            if (w2 < 0 || mw + (size_t)w2 >= sizeof mk - 1) break;
+            mw += w2;
+        }
+        snprintf(mk + mw, sizeof mk - mw, "]");
+    }
     (void)pool_token_intern(ai->pool, mk);
     (void)ai_derived_evict(ai);      /* §6.658 留痕有上限（最老的软删） */
     return 1;
