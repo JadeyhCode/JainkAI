@@ -1478,6 +1478,10 @@ grep -qaE '从本地缓存取到 papers/cache/c.txt' "$PCa/o.txt" \
 grep -qaF '**不联网**' "$PCa/o.txt" \
     && ok "缓存里没有 ⇒ 明确说**不联网**（不假装去抓）" \
     || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
+( cd "$PCa" && printf '::notepad off\n::paper list\n::quit\n' | "$WORK/aip" --model m.bin > o2.txt 2>&1 ) || true
+grep -qaF 'papers/cache/' "$PCa/o2.txt" \
+    && ok "::paper list 真的列目录（papers/ 与 papers/cache/，§6.666）" \
+    || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
 
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"

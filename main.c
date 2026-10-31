@@ -16,6 +16,7 @@
 #include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
 #include "claim.h"      /* §6.636 待证：::claim */
+#include <dirent.h>
 #include "paper.h"      /* §6.638 读论文（离线）：::paper */
 #include "lang.h"       /* §6.639 语言包：::lang */
 #include <stdio.h>
@@ -4486,7 +4487,23 @@ int main(int argc, char **argv) {
                 const char *r = carg ? carg : "";
                 while (*r == ' ' || *r == '\t') r++;
                 if (!strncmp(r, "list", 4) || !*r) {
-                    printf("[论文] 看 papers/（默认样本目录）—— 用 ::paper read papers/xxx.txt 抽断言\n");
+                    /* §6.666 真的列目录（原来只打一行提示） */
+                    const char *dirs[2] = { "papers", "papers/cache" };
+                    for (int d = 0; d < 2; ++d) {
+                        DIR *dp2 = opendir(dirs[d]);
+                        if (!dp2) { printf("[论文] %s/（不存在）\n", dirs[d]); continue; }
+                        printf("[论文] %s/：\n", dirs[d]);
+                        struct dirent *de2;
+                        int any = 0;
+                        while ((de2 = readdir(dp2))) {
+                            if (de2->d_name[0] == '.') continue;
+                            printf("   %s\n", de2->d_name);
+                            any++;
+                        }
+                        closedir(dp2);
+                        if (!any) printf("   （空）\n");
+                    }
+                    printf("   读法：::paper read papers/xxx.txt ｜ 缓存：::paper fetch xxx.txt（不联网）\n");
                     continue;
                 }
                 if (!strncmp(r, "fetch", 5)) {
