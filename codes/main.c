@@ -789,6 +789,7 @@ static const CmdDef CMDS[] = {
       "::paper read <文件>   抽断言 ⇒ **全部进待证**（不写事实层）\n"
       "::paper list         看 papers/ 下有什么样本\n"
       "::paper fetch <名字>  从 **papers/cache/** 取本地缓存（**这一版不联网**）\n"
+      "::paper search <关键词> 在 papers/ 与 papers/cache/ 里**本地检索**（不联网）\n"
       "⚠ 不会读 PDF、不联网、不做指代消解；抽不到的就不抽（宁可漏，不要编）", CMD_PAPER },
     { "claim", "<子命令>", 1, "基本",
       "**待证**（不轻信）：带「听说/据说/论文/书上/网上」的话只记成待证，**不进事实层**。\n"
@@ -4504,6 +4505,47 @@ int main(int argc, char **argv) {
                         if (!any) printf("   （空）\n");
                     }
                     printf("   读法：::paper read papers/xxx.txt ｜ 缓存：::paper fetch xxx.txt（不联网）\n");
+                    continue;
+                }
+                if (!strncmp(r, "search", 6)) {
+                    /* §6.675 **本地检索**（不联网）：在 papers/ 与 papers/cache/ 里找关键词。
+                     * 只报"哪个文件、命中几行、第一行长什么样"，**不抽断言**（要抽用 read/fetch）。 */
+                    const char *kw = r + 6;
+                    while (*kw == ' ' || *kw == '\t') kw++;
+                    if (!*kw) { printf("[论文] 用法：::paper search <关键词>（只搜 papers/ 与 papers/cache/）\n"); continue; }
+                    const char *dirs2[2] = { "papers", "papers/cache" };
+                    int hits = 0, files = 0;
+                    for (int d = 0; d < 2; ++d) {
+                        DIR *dp3 = opendir(dirs2[d]);
+                        if (!dp3) continue;
+                        struct dirent *de3;
+                        while ((de3 = readdir(dp3)) && files < 50) {
+                            if (de3->d_name[0] == '.') continue;
+                            char fp[512];
+                            snprintf(fp, sizeof fp, "%s/%s", dirs2[d], de3->d_name);
+                            FILE *f3 = fopen(fp, "rb");
+                            if (!f3) continue;
+                            char line[512]; int n_hit = 0; char first[512] = {0};
+                            while (fgets(line, sizeof line, f3)) {
+                                if (!strstr(line, kw)) continue;
+                                n_hit++;
+                                if (!first[0]) {
+                                    size_t ll = strlen(line);
+                                    while (ll && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) line[--ll] = 0;
+                                    snprintf(first, sizeof first, "%s", line);
+                                }
+                            }
+                            fclose(f3);
+                            files++;
+                            if (n_hit) {
+                                printf("[论文] %s：命中 %d 行 —— %s\n", fp, n_hit, first);
+                                hits += n_hit;
+                            }
+                        }
+                        closedir(dp3);
+                    }
+                    if (!hits) printf("[论文] 本地没搜到「%s」（扫了 %d 个文件；**不联网**）\n", kw, files);
+                    else printf("[论文] 共命中 %d 行（不联网；要抽断言就把命中的文件 ::paper read）\n", hits);
                     continue;
                 }
                 if (!strncmp(r, "fetch", 5)) {

@@ -1479,6 +1479,14 @@ grep -qaF '**不联网**' "$PCa/o.txt" \
     && ok "缓存里没有 ⇒ 明确说**不联网**（不假装去抓）" \
     || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
 ( cd "$PCa" && printf '::notepad off\n::paper list\n::quit\n' | "$WORK/aip" --model m.bin > o2.txt 2>&1 ) || true
+printf '企鹅 属于 鸟类。\n' > "$PCa/papers/cache/s2.txt"
+( cd "$PCa" && printf '::notepad off\n::paper search 企鹅\n::paper search 没有这个词\n::quit\n' | "$WORK/aip" --model m.bin > o3.txt 2>&1 ) || true
+grep -qaE '命中 [0-9]+ 行' "$PCa/o3.txt" \
+    && ok "::paper search 本地检索命中（不联网，§6.675）" \
+    || bad "paper-search" "$(grep -a '论文' "$PCa/o3.txt" | head -1)"
+grep -qaF '本地没搜到' "$PCa/o3.txt" \
+    && ok "搜不到 ⇒ 明说「本地没搜到」（**不联网**）" \
+    || bad "paper-search-空" "$(grep -a '论文' "$PCa/o3.txt" | tail -1)"
 grep -qaF 'papers/cache/' "$PCa/o2.txt" \
     && ok "::paper list 真的列目录（papers/ 与 papers/cache/，§6.666）" \
     || bad "paper-fetch-缺" "$(grep -a '论文' "$PCa/o.txt" | tail -1)"
