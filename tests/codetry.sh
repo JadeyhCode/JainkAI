@@ -178,6 +178,29 @@ grep -qaF '不在白名单里' c12 \
     && ok "产物入口**没有**放宽白名单（::act run a.out 仍被拒）" \
     || bad "test-白名单" "$(grep -a '白名单' c12 | head -1)"
 
+echo "== ⑩ 单文件产物也能跑（§6.646）：::code test <文件.c> =="
+cat > _t/work/sfok.c <<'EOF'
+int main(void) { return 0; }
+EOF
+cat > _t/work/sfbad.c <<'EOF'
+int main(void) { return 3; }
+EOF
+run '::code test sfok.c\n' c13
+grep -qaF 'sfok.c：编过、**测试全绿**' c13 \
+    && ok "sfok.c：闭环编过 + 产物 rc=0 ⇒ 测试全绿" \
+    || bad "test-单文件-绿" "$(grep -a '测试' c13 | head -1)"
+run '::code test sfbad.c\n' c14
+grep -qaF '测试不过**（rc=3）' c14 \
+    && ok "sfbad.c：编过但产物 rc=3 ⇒ 测试不过" \
+    || bad "test-单文件-红" "$(grep -a '测试' c14 | head -1)"
+cat > _t/work/nc.c <<'EOF'
+int main(void) { return 不存在的名字; }
+EOF
+run '::code test nc.c\n' c15
+grep -qaF '**没编过**' c15 \
+    && ok "nc.c：编不过 ⇒ **不跑**（先编过才跑）" \
+    || bad "test-单文件-没编过" "$(grep -a '测试' c15 | head -1)"
+
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \
     && ok "产物只在「_t/work/」里（cwd 边界没破）" \

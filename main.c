@@ -4065,10 +4065,15 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 if (arg && strncmp(arg, "test", 4) == 0) {
-                    const char *dir = arg + 4;
-                    while (*dir == ' ') dir++;
+                    const char *t = arg + 4;
+                    while (*t == ' ') t++;
+                    if (!*t) { printf("[用法] ::code test <目录|文件.c>\n"); continue; }
                     char nb[512] = {0};
-                    (void)code_test_dir(a->brain, dir, nb, sizeof nb);
+                    size_t tl = strlen(t);
+                    if (tl > 2 && !strcmp(t + tl - 2, ".c"))   /* 单文件 ⇒ 先走闭环再跑 */
+                        (void)code_test_file(a->brain, t, nb, sizeof nb);
+                    else
+                        (void)code_test_dir(a->brain, t, nb, sizeof nb);
                     printf("[测试] %s\n", nb[0] ? nb : "（没跑成）");
                     continue;
                 }

@@ -312,6 +312,33 @@ static inline int code_build_dir(AI *ai, const char *dir, char *note, size_t cap
     return rc;
 }
 
+static inline int code_round(AI *ai, const char *rel);   /* §6.646：单文件测试要先走它 */
+
+/* §6.646 **单文件产物也能跑**：`::code test <文件.c>` —— 先走一遍"写-编-看错-改"闭环，
+ * 然后跑 `<文件>.out`（单文件闭环的产物名）。判据同上：产物退出码。
+ * 只跑 `.out`（和 §6.645 同一条窄入口）。 */
+static inline int code_test_file(AI *ai, const char *rel, char *note, size_t cap) {
+    if (!ai || !rel || !rel[0]) return -2;
+    int rc = code_round(ai, rel);
+    if (rc != 0) {
+        if (note && cap) snprintf(note, cap, "%s：**没编过**（rc=%d）—— 不跑", rel, rc);
+        return rc;
+    }
+    char prog[ACTION_PATH_CAP + 32];
+    snprintf(prog, sizeof prog, "%s%s", rel, CODE_OUT_NAME);   /* <文件>.out */
+    int trc = action_run_product(ai, prog);
+    if (note && cap) {
+        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（%s.out rc=0）", rel, rel);
+        else {
+            const char *o = action_book()->last_out;
+            size_t ol = o ? strlen(o) : 0;
+            if (ol > 200) o += ol - 200;
+            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d）：%.200s", rel, trc, o ? o : "");
+        }
+    }
+    return trc;
+}
+
 /* §6.645 **测试驱动**：编 + **跑**（`_t/work/<dir>/a.out`）。
  * 判据是**产物退出码**：0 = 绿；非 0 = 红（把输出尾巴带出来）。
  * 只跑 `.out` 产物（`action_run_product` 那条窄入口），不碰别的命令。 */
