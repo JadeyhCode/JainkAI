@@ -255,6 +255,9 @@ static inline int micro_token_reserved(const Token *t) {
 /* §6.635 **规则节点**（阶段二 WP2）：`[规则:R<N>]`，`结论`/`前提K` 边挂谓词模式。
  * 和 `[谓词:…]` 一样是**图里的普通节点**（随图存盘），所以同样要进内部命名空间。 */
 #define MICRO_RULE_TOKEN_PREFIX "[规则:"
+/* §6.636 **待证标记**（阶段二 WP4）：`[待证:<来源>:A_R_B]`。
+ * 它是**留痕不是知识**（不建 A--R-->B 那条边、不参与推理），但随图存盘 ⇒ 重启后 `::claim` 还列得出来。 */
+#define MICRO_CLAIM_TOKEN_PREFIX "[待证:"
 #define MICRO_TOKEN_PROC_PREFIX PROC_TOKEN_PREFIX   /* 过程根：`[过程:名字]`（第 9 条 ①） */
 
 /* 内核自有的**图内节点**命名空间（可以参与边）。
@@ -265,7 +268,7 @@ static inline int micro_internal_ns(const char *name) {
                                       MICRO_TEMP_TOKEN_PREFIX, MICRO_REVISE_TOKEN_PREFIX,
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
                                       MICRO_CODE_TOKEN_PREFIX, MICRO_PRED_TOKEN_PREFIX,
-                                      MICRO_RULE_TOKEN_PREFIX,
+                                      MICRO_RULE_TOKEN_PREFIX, MICRO_CLAIM_TOKEN_PREFIX,
                                       MICRO_EXEC_TOKEN_PREFIX,
                                       MICRO_TOKEN_PROC_PREFIX, MICRO_REMIND_TOKEN_PREFIX,
                                       MICRO_REVOKE_TOKEN_PREFIX, MICRO_TEACH_TOKEN_PREFIX, NULL };

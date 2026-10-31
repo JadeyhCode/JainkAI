@@ -1413,6 +1413,24 @@ grep -qaF '祖先(丙,甲) ⇒ **推不出来**（未知，不是假）' "$RP/o.
     && ok "证不出来 ⇒ 说**未知**（不把"推不出"说成"假"）" \
     || bad "prove-未知" "$(grep -a '丙,甲' "$RP/o.txt" | head -1)"
 
+# §6.636 **待证（不轻信）**：听说/论文 之类的话不进事实层，::claim 确认才升格
+CW="$WORK/claim"; rm -rf "$CW"; mkdir -p "$CW"
+cp "$ROOT/model.bin" "$CW/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/relations.txt" "$CW/" 2>/dev/null || true
+( cd "$CW" && printf '::notepad off\n::char off\n听说 猫 属于 鸟类\n猫 属于 鸟类 吗\n::claim\n::claim accept 1\n猫 属于 鸟类 吗\n::quit\n' | "$WORK/aip" --model m.bin > o.txt 2>&1 ) || true
+grep -qaF '先 记 成 **待 证**' "$CW/o.txt" \
+    && ok "「听说 …」⇒ 记成**待证**并说明来源" \
+    || bad "claim-记" "$(grep -a 'AI >' "$CW/o.txt" | head -1)"
+grep -qaF '待证**没有**写成' "$CW/o.txt" || true
+grep -qaE '这个我 不 太 懂|不 确定 猫' "$CW/o.txt" \
+    && ok "待证期间问「猫 属于 鸟类 吗」⇒ **不**按事实答（学不进就是学不进）" \
+    || bad "claim-未生效" "$(grep -a 'AI >' "$CW/o.txt" | sed -n 2p)"
+grep -qaF '[待证] 共 1 条' "$CW/o.txt" \
+    && ok "::claim 列得出来（编号/来源/内容）" \
+    || bad "claim-列" "$(grep -a '\[待证\]' "$CW/o.txt" | head -1)"
+grep -qaF '猫 -[属于]-> 鸟类' "$CW/o.txt" \
+    && ok "::claim accept 之后才**真答对**（这时才写进事实层、并记成"是你教的"）" \
+    || bad "claim-确认" "$(grep -a 'AI >' "$CW/o.txt" | tail -1)"
+
 # §6.605 **带标点的教法也是人话**：`麒麟，属于 神兽` / `我 教 你 ， 麒麟 属于 神兽`
 PC="$WORK/pc"; rm -rf "$PC"; mkdir -p "$PC"
 cp "$ROOT/model.bin" "$PC/m.bin"; cp "$ROOT/patterns.txt" "$ROOT/frames.txt" "$ROOT/relations.txt" "$PC/" 2>/dev/null || true

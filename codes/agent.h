@@ -4006,6 +4006,114 @@ static inline int agent_learn_reason(AI *ai, char *const *words, size_t n, char 
     return 0;
 }
 
+/* §6.636 **待证**：带来源前缀（`听说/据说/论文/书上…`）的话**不写事实层**。
+ * 返回 1 = 已处理（记了待证并答复）。判据是 `[class] hedge` 里的词打头。 */
+static inline int agent_is_hedge(const char *w) {
+    if (!w || !w[0]) return 0;
+    for (size_t i = 0; i < g_class_n; ++i) {
+        if (strcmp(g_class_name[i], "hedge") != 0) continue;
+        const char *p = g_class_words[i];
+        size_t off = 0;
+        while (p[off]) {
+            size_t l = 0;
+            while (p[off + l] && p[off + l] != ',') l++;
+            if (l && strlen(w) == l && !strncmp(w, p + off, l)) return 1;
+            off += l;
+            if (p[off] == ',') off++;
+        }
+    }
+    return 0;
+}
+static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
+                                        char *out, size_t cap);   /* §6.636 定义在后面 */
+
+/* §6.636 在**原始输入**上认来源前缀（`听说` 分词后是 听/说，按 token 认不出来 —— 实测）。
+ * 返回命中的前缀词（写进 buf）与它的字节长度；没有返回 0。 */
+static inline int agent_hedge_prefix(const char *input, char *buf, size_t cap, size_t *plen) {
+    if (!input || !buf || cap == 0) return 0;
+    size_t best = 0;
+    for (size_t i = 0; i < g_class_n; ++i) {
+        if (strcmp(g_class_name[i], "hedge") != 0) continue;
+        const char *p = g_class_words[i];
+        size_t off = 0;
+        while (p[off]) {
+            size_t l = 0;
+            while (p[off + l] && p[off + l] != ',') l++;
+            if (l && l > best && !strncmp(input, p + off, l)) {
+                best = l;
+                snprintf(buf, cap, "%.*s", (int)l, p + off);
+            }
+            off += l;
+            if (p[off] == ',') off++;
+        }
+    }
+    if (!best) return 0;
+    if (plen) *plen = best;
+    return 1;
+}
+/* 从整句里认待证：`听说 猫 属于 鸟类` ⇒ 记标记并答复 */
+static inline int agent_claim_from_text(AI *ai, const char *input, char *out, size_t cap) {
+    char src[24];
+    size_t pl = 0;
+    if (!ai || !input || !out) return 0;
+    if (!agent_hedge_prefix(input, src, sizeof src, &pl)) return 0;
+    const char *rest = input + pl;
+    while (*rest == ' ' || *rest == '\t') rest++;
+    if (!*rest) return 0;
+    size_t sn = 0;
+    char **sw = ai_tokenize(ai, rest, &sn);
+    if (!sw) return 0;
+    char *w2[16]; size_t wn = 0;
+    w2[wn++] = src;
+    for (size_t i = 0; i < sn && wn < 16; ++i) if (sw[i] && sw[i][0]) w2[wn++] = sw[i];
+    /* ⚠ **先答复、后释放**：w2[1..] 指向 sw 里的词；先 free 再调就是悬空指针
+     * （第一版就这么错的：步骤都对，`claim_statement` 拿到的是垃圾 ⇒ 静默返回 0）。 */
+    int rr = (wn < 4) ? 0 : agent_claim_statement(ai, w2, wn, out, cap);
+    ai_free_words(sw, sn);
+    return rr;
+}
+
+static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
+                                        char *out, size_t cap) {
+    if (!ai || !words || n < 4 || !out || cap == 0) return 0;
+    if (!agent_is_hedge(words[0])) return 0;
+    /* 事实侧：找第一个关系词（和 §6.627 一个思路：`企鹅` 常被切碎，自己拼） */
+    size_t ri = n; uint8_t rid = 0;
+    for (size_t i = 1; i + 1 < n; ++i) {
+        uint8_t id = rel_id_of(ai, words[i], 0);
+        if (id) { ri = i; rid = id; break; }
+    }
+    if (ri == n || ri < 2 || !rid) return 0;
+    char a[40], b[64]; size_t oa = 0, ob = 0;
+    for (size_t i = 1; i < ri; ++i) {
+        size_t l = strlen(words[i]);
+        if (oa + l + 1 >= sizeof a) return 0;
+        memcpy(a + oa, words[i], l); oa += l;
+    }
+    a[oa] = 0;
+    for (size_t i = ri + 1; i < n; ++i) {
+        size_t l = strlen(words[i]);
+        if (ob + l + 1 >= sizeof b) return 0;
+        memcpy(b + ob, words[i], l); ob += l;
+    }
+    b[ob] = 0;
+    if (!a[0] || !b[0]) return 0;
+    const char *rn = rel_name_of(ai, rid);
+    if (!rn) return 0;
+    /* 标记名就在这里拼（`agent.h` 不能 include `claim.h`：那会反向依赖） */
+    {
+        char nm[160];
+        int w = snprintf(nm, sizeof nm, "%s%s:%s_%s_%s]", MICRO_CLAIM_TOKEN_PREFIX,
+                         words[0], a, rn, b);
+        if (w < 0 || (size_t)w >= sizeof nm) return 0;
+        if (!pool_token_intern(ai->pool, nm)) return 0;
+    }
+    const char *t = ai_say_tpl("待证.记下");
+    const char *const a4[4] = { a, rn, b, words[0] };
+    der_filln(out, cap, t ? t : "先 记 成 待 证 ： $1 $2 $3（来源：$4）", a4, 4);
+    return 1;
+}
+
 /* §6.626 **亲属/身份称谓**：`A 是 我 的 K`（K 在 `[class] kinship` 表里）⇒
  * 记成 `A --[亲属]--> K`。为什么要有这张表：所有格 `我 的 <名词>` 到处都是（`我 的 猫`），
  * 不能一律当亲属记；只有表里那些词才是"称谓"。 */
@@ -8199,6 +8307,16 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
      * 位置移到 `self_route` **之前**（§6.285）：能力/天气/时钟/联网这几条也搬进了数据表，
      * 必须让数据先有机会命中，否则数据永远被代码抢在前面。它仍在分词/学习之前 ——
      * 所以还能挡住"会被误学成事实"的说法（`放首歌听听`/`随便聊聊`）。 */
+    /* §6.636 **待证**：`听说/据说/…` 这种**带来源前缀**的话 —— reply 桶里那条
+     * 「听说的我不当事实」会先把它顶掉（实测），所以在 reply 桶之前先接：
+     * 记成待证标记（不进事实层），并回一句"先记成待证"。 */
+    if (!ai->ask_pending) {
+        char cb[512] = {0};
+        if (agent_claim_from_text(ai, input, cb, sizeof cb)) {
+            snprintf(out, out_cap, "%.*s", (int)(out_cap ? out_cap - 1 : 0), cb);
+            return agent_say(ai, out);
+        }
+    }
     /* §6.626b 亲属句（`小明 是 我 的 表弟`）：reply 桶会先答"我是你的朋友"，所以这里先接 */
     if (!ai->ask_pending) {
         char kb[512] = {0};
@@ -8834,6 +8952,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (getenv("AIP_NATDBG2")) {
         fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
+    }
+    if (!resp) {
+        /* §6.636 **待证**：`听说 …` 这类不写事实层 */
+        char cb[512] = {0};
+        if (agent_claim_statement(ai, lw, ln, cb, sizeof cb)) {
+            resp = (char *)malloc(strlen(cb) + 1);
+            if (resp) memcpy(resp, cb, strlen(cb) + 1);
+            conf = 0.5f;
+        }
     }
     if (!resp) {
         float rc = 0.5f;

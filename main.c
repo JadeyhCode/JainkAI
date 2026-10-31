@@ -15,6 +15,7 @@
 #include "xbrain.h"     /* §6.580 跨脑知识语义：照抄 / 冲突可见 / force */
 #include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
+#include "claim.h"      /* §6.636 待证：::claim */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -578,6 +579,7 @@ typedef enum {
     CMD_REWARD,             /* §6.634 奖励：看/清零/开关"更谨慎" */
     CMD_RULE,               /* §6.635 规则：list / add */
     CMD_PROVE,              /* §6.635 证明：::prove 名字 参数… */
+    CMD_CLAIM,              /* §6.636 待证：list / accept N / reject N */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -772,6 +774,11 @@ static const CmdDef CMDS[] = {
       "::wgate ev on|off  闸门里的**候选证据项**（链长 + 链底可信度；默认关，先 A/B）", CMD_WGATE },
     { "premhold", NULL, 1, "基本",
       "前提成立的判据：mention（默认，只在注意窗口里算成立）| activate（图上够得着也算）", CMD_PREMHOLD },
+    { "claim", "<子命令>", 1, "基本",
+      "**待证**（不轻信）：带「听说/据说/论文/书上/网上」的话只记成待证，**不进事实层**。\n"
+      "::claim            列出待证（编号/来源/内容）\n"
+      "::claim accept N   你确认 ⇒ 这时才算数（并记成「是你教的」）\n"
+      "::claim reject N   丢掉", CMD_CLAIM },
     { "rule", "<子命令>", 1, "基本",
       "**规则即数据**：list 看已有规则；add 加一条（Horn 规则，只有肯定前提）：\n"
       "::rule add 祖先($x,$z) :- 父($x,$y), 祖先($y,$z)\n"
@@ -4316,6 +4323,42 @@ int main(int argc, char **argv) {
                           : "verified（够得着**且前提本身有据**才算）"));
                 printf("  activate 档用的是**受限扩散**（深度≤2、能量≥0.25、从权重≥0.3 的焦点词出发）\n");
                 printf("  前提本身**被提到**永远算成立；这一档只回答「没提到，但它成立吗」\n");
+                continue;
+            }
+            case CMD_CLAIM: {
+                /* §6.636 待证：list / accept N / reject N */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                Claim cl[64];
+                size_t n = claim_list(a->brain, cl, 64);
+                if (!strncmp(r, "accept", 6) || !strncmp(r, "reject", 6)) {
+                    int acc = !strncmp(r, "accept", 6);
+                    const char *p = r + 6;
+                    while (*p == ' ' || *p == '\t') p++;
+                    int idx = (*p >= '0' && *p <= '9') ? atoi(p) - 1 : -1;
+                    if (idx < 0 || (size_t)idx >= n) {
+                        printf("[待证] 没有第 %d 条（现在一共 %zu 条）\n", idx + 1, n);
+                        continue;
+                    }
+                    if (acc) {
+                        char line[160];
+                        if (claim_accept(a->brain, cl[idx].node, line, sizeof line))
+                            printf("[待证] 好，按你说的算数：%s（记成「是你教的」）\n", line);
+                        else
+                            printf("[待证] 升不上去（那条的关系/词现在对不上）\n");
+                    } else {
+                        claim_reject(a->brain, cl[idx].node);
+                        printf("[待证] 丢掉了：%s %s %s（来源：%s）\n", cl[idx].a, cl[idx].r,
+                               cl[idx].b, cl[idx].src);
+                    }
+                    continue;
+                }
+                if (n == 0) { printf("[待证] 没有待证的说法（带「听说/据说/论文…」的话才会进这里）\n"); continue; }
+                printf("[待证] 共 %zu 条（**都不算数**，等你确认）：\n", n);
+                for (size_t i = 0; i < n; ++i)
+                    printf("  %2zu. %s %s %s   （来源：%s）\n", i + 1, cl[i].a, cl[i].r, cl[i].b,
+                           cl[i].src);
+                printf("      确认：::claim accept N    丢掉：::claim reject N\n");
                 continue;
             }
             case CMD_RULE: {
