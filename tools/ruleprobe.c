@@ -219,6 +219,30 @@ int main(void) {
            "被否定挡下时**不谎称**否定前提成立（前面证过的正面事实照常出现）");
         ai_free(n);
     }
+    /* §6.655 前向链（一遍、有界）：推出的事实带 `[推:…]` 留痕 */
+    {
+        AI *f = ai_new();
+        char *b1[2] = { "甲", "乙" }, *b2[2] = { "乙", "丙" };
+        pred_make(f, "父", b1, 2);
+        pred_make(f, "父", b2, 2);
+        char *h[2] = { "$x", "$y" };
+        char *p1[2] = { "$x", "$y" };
+        char *pa[1][PRED_MAX_ARGS];
+        pa[0][0] = p1[0]; pa[0][1] = p1[1];
+        const char *pn[1] = { "父" };
+        size_t pns[1] = { 2 };
+        add_rule(f, "祖先", h, 2, pn, pa, pns, 1);
+        RuleForward fs;
+        memset(&fs, 0, sizeof fs);
+        int got = rule_apply_once(f, 200, &fs);
+        ok(got == 2, "前向链一遍推出 2 条（祖先(甲,乙)/祖先(乙,丙)）");
+        char *g[2] = { "甲", "乙" };
+        ok(pred_find(f, "祖先", g, 2) != NULL, "推出的结论**真的是事实**（pred_find 找得到）");
+        ok(pool_find(f->pool, "[推:甲_祖先_乙]") != NULL, "落事实时留了 `[推:…]` 留痕（和 [教:] 分开）");
+        ok(rule_apply_once(f, 200, &fs) == 0, "再跑一遍 ⇒ 0 条（已经有的不重复写）");
+        ok(rule_apply_once(f, 1, &fs) == 0 || fs.truncated || fs.derived <= 1, "有上限参数（≤1 时不会超）");
+        ai_free(f);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

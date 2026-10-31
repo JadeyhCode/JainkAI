@@ -258,6 +258,9 @@ static inline int micro_token_reserved(const Token *t) {
 /* §6.636 **待证标记**（阶段二 WP4）：`[待证:<来源>:A_R_B]`。
  * 它是**留痕不是知识**（不建 A--R-->B 那条边、不参与推理），但随图存盘 ⇒ 重启后 `::claim` 还列得出来。 */
 #define MICRO_CLAIM_TOKEN_PREFIX "[待证:"
+/* §6.655 **推出来的**（前向链落的事实）留痕：`[推:A_关系_B]` —— 与 `[教:…]` 分开，
+ * 推出来的不能说成"你教的"（`::src` 才查得出区别）。 */
+#define MICRO_TAUGHT_DERIVED_PREFIX "[推:"
 #define MICRO_TOKEN_PROC_PREFIX PROC_TOKEN_PREFIX   /* 过程根：`[过程:名字]`（第 9 条 ①） */
 
 /* 内核自有的**图内节点**命名空间（可以参与边）。
@@ -269,6 +272,7 @@ static inline int micro_internal_ns(const char *name) {
                                       MICRO_DRAFT_TOKEN_PREFIX, MICRO_RUN_TOKEN_PREFIX,
                                       MICRO_CODE_TOKEN_PREFIX, MICRO_PRED_TOKEN_PREFIX,
                                       MICRO_RULE_TOKEN_PREFIX, MICRO_CLAIM_TOKEN_PREFIX,
+                                      MICRO_TAUGHT_DERIVED_PREFIX,
                                       MICRO_EXEC_TOKEN_PREFIX,
                                       MICRO_TOKEN_PROC_PREFIX, MICRO_REMIND_TOKEN_PREFIX,
                                       MICRO_REVOKE_TOKEN_PREFIX, MICRO_TEACH_TOKEN_PREFIX, NULL };
