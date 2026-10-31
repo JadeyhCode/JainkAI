@@ -228,6 +228,12 @@ typedef struct {
 
 static inline void rule_trace_add(RuleTrace *t, const char *line) {
     if (!t || !line) return;
+    /* §6.653 同一条"缺口"会被递归里每一层各记一次 ⇒ 和**上一条**一样就跳过（去重） */
+    if ((unsigned char)line[0] == 0xE7 && (unsigned char)line[1] == 0xBC &&
+        (unsigned char)line[2] == 0xBA && t->used > 0) {   /* UTF-8 「缺」= E7 BC BA */
+        size_t l = strlen(line), start = (t->used > l + 1) ? t->used - l - 1 : 0;
+        if (!strncmp(t->text + start, line, l)) return;
+    }
     size_t l = strlen(line);
     if (t->used + l + 2 >= sizeof t->text) return;
     memcpy(t->text + t->used, line, l);
@@ -353,7 +359,18 @@ static inline int rule_solve(AI *ai, const RuleAtom *goal, RuleSubst *s, int dep
         memcpy(st2, stack, sizeof st2);
         if (sn < 16) snprintf(st2[sn], sizeof st2[0], "%s", key);
         RuleSubst s3 = s2;
-        if (!rule_body(ai, rules[i], 1, &s3, depth - 1, tr, st2, sn + 1)) continue;
+        if (!rule_body(ai, rules[i], 1, &s3, depth - 1, tr, st2, sn + 1)) {
+            /* §6.653 **缺口清单**：规则匹配上了、但前提证不出来 —— 记一句，给 `::prove` 用。
+             * 只记"匹配上的规则"（没匹配的规则不是缺口，是无关）。 */
+            RuleTrace *tr2 = tr;
+            if (tr2) {
+                char gline[200];
+                snprintf(gline, sizeof gline, "缺口：规则 %.24s（%s）的前提证不出来",
+                         rules[i]->name, goal->name);
+                rule_trace_add(tr2, gline);
+            }
+            continue;
+        }
         char line[200];
         snprintf(line, sizeof line, "规则 %.24s：%.20s(%.24s%.1s%.24s) ⇐ %zu 条前提",
                  rules[i]->name, ha.name, ha.args[0], ha.n > 1 ? "," : "",

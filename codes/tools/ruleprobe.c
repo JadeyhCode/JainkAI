@@ -72,7 +72,8 @@ int main(void) {
     char *g3[2] = { "丙", "甲" };
     memset(out, 0, sizeof out);
     ok(rule_prove(a, "祖先", g3, 2, out, sizeof out) == 0, "祖先(丙,甲) ⇒ **0（未知）**，不是「假」");
-    ok(strstr(out, "规则") == NULL, "未知时**不编**证明步骤");
+    ok(strstr(out, "事实：") == NULL && strstr(out, "选取事实") == NULL,
+       "未知时**不编**证明步骤（只有缺口清单，没有假的事实/选取事实行）");
 
     /* 参数/形状检查 */
     ok(rule_prove(a, "不存在", g1, 2, out, sizeof out) == 0, "没见过的名字 ⇒ 未知（不崩）");
@@ -174,6 +175,23 @@ int main(void) {
         add_rule(e, "单目", h2, 1, qn, qpa, qns, 1);
         ok(rule_check(e, m2, sizeof m2) == 0, "合格的规则 ⇒ 0 处问题");
         ai_free(d); ai_free(e);
+    }
+    /* §6.653 失败时给**缺口清单**（哪条匹配上的规则、前提证不出来） */
+    {
+        AI *g = ai_new();
+        char *h[2] = { "$x", "$z" };
+        char *p1[2] = { "$x", "$y" }, *p2[2] = { "$y", "$z" };
+        char *pa[2][PRED_MAX_ARGS];
+        pa[0][0] = p1[0]; pa[0][1] = p1[1]; pa[1][0] = p2[0]; pa[1][1] = p2[1];
+        const char *pn[2] = { "父", "祖先" };
+        size_t pns[2] = { 2, 2 };
+        add_rule(g, "祖先", h, 2, pn, pa, pns, 2);
+        char go[1024] = {0};
+        char *q[2] = { "甲", "丙" };
+        ok(rule_prove(g, "祖先", q, 2, go, sizeof go) == 0, "没有事实 ⇒ 证不出来");
+        ok(strstr(go, "缺口") != NULL, "失败时给出**缺口清单**（不是只说「推不出来」）");
+        ok(strstr(go, "规则") != NULL, "缺口里点名**哪条规则**");
+        ai_free(g);
     }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
