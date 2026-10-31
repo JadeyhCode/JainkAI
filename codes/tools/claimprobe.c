@@ -142,6 +142,39 @@ int main(void) {
         ok(agent_claim_answer(e, q2, 3, ans, sizeof ans) == 0, "没听说过的问句 ⇒ 不抢（返回 0）");
         ai_free(e);
     }
+    /* ⑫ §6.648 说「算」⇒ 挂着的那条待证升格；说「不算」⇒ 丢掉 */
+    {
+        AI *f = ai_new();
+        aip_patterns_load(f);
+        relations_load(f, "relations.txt");
+        char o[256] = {0};
+        agent_claim_from_text(f, "听说 鱼 属于 鸟类", o, sizeof o);
+        char ans[256] = {0};
+        char *q[4] = { "鱼", "属于", "鸟类", "吗" };
+        ok(agent_claim_answer(f, q, 4, ans, sizeof ans) == 1 && f->ask_claim_id != 0,
+           "答复待证时**挂上**了等待确认的那条");
+        char *yes[1] = { "算" };
+        char r2[256] = {0};
+        ok(agent_claim_confirm(f, yes, 1, r2, sizeof r2) == 1, "说「算」⇒ 升格");
+        {
+            Token *A = pool_find(f->pool, "鱼"), *B = pool_find(f->pool, "鸟类");
+            ok(A && B && rel_direct(A, REL_IS_A, B), "升格之后**事实层**有了这条");
+        }
+        ok(f->ask_claim_id == 0, "确认过之后不再挂着（只等一轮）");
+
+        agent_claim_from_text(f, "据说 羊 属于 鸟类", o, sizeof o);
+        char *q2[4] = { "羊", "属于", "鸟类", "吗" };
+        ok(agent_claim_answer(f, q2, 4, ans, sizeof ans) == 1, "第二条待证也能问出来");
+        char *no[1] = { "不 算" };
+        ok(agent_claim_confirm(f, no, 1, r2, sizeof r2) == 1, "说「不算」⇒ 丢掉");
+        {
+            Claim cl[16];
+            ok(claim_list(f, cl, 16) == 0, "丢掉之后待证队列空了");
+            Token *A = pool_find(f->pool, "羊"), *B = pool_find(f->pool, "鸟类");
+            ok(!(A && B && rel_direct(A, REL_IS_A, B)), "「不算」**没有**写进事实层");
+        }
+        ai_free(f);
+    }
     ai_free(a);
     printf("\n通过 %d / 失败 %d\n", passes, fails);
     return fails ? 1 : 0;

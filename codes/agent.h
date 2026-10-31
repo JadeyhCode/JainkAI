@@ -4085,6 +4085,7 @@ static inline int agent_claim_answer(AI *ai, char *const *words, size_t n,
         size_t l1 = (size_t)(c1 - sp);
         if (l1 == 0 || l1 >= sizeof src) continue;
         memcpy(src, sp, l1); src[l1] = 0;
+        ai->ask_claim_id = t->id;        /* §6.648 挂上：下一轮说「算」就升格 */
         const char *tp = ai_say_tpl("待证.被问");
         const char *const a4[4] = { words[0], rn, bj, src };
         der_filln(out, cap,
@@ -4092,6 +4093,69 @@ static inline int agent_claim_answer(AI *ai, char *const *words, size_t n,
         return 1;
     }
     return 0;
+}
+
+/* §6.648 「算 / 不算」⇒ 把挂着的那条待证升格或丢掉。返回 1 = 已答复。 */
+static inline int agent_claim_confirm(AI *ai, char *const *words, size_t n,
+                                      char *out, size_t cap) {
+    if (!ai || !words || !out || cap == 0 || ai->ask_claim_id == 0) return 0;
+    if (n == 0 || n > 3) return 0;
+    char j[48]; size_t jo = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!words[i] || !words[i][0]) continue;
+        jo += (size_t)snprintf(j + jo, sizeof j - jo, "%s%s", jo ? " " : "", words[i]);
+    }
+    static const char *yes[] = { "算", "算 了", "行", "好", "对", "是", "确认", "可以", NULL };
+    static const char *no[]  = { "不 算", "不算", "别", "不 用", "不用", "算了", "不", "不要", NULL };
+    int y = 0, nn = 0;
+    for (size_t i = 0; yes[i]; ++i) if (!strcmp(j, yes[i])) { y = 1; break; }
+    for (size_t i = 0; no[i]; ++i)  if (!strcmp(j, no[i]))  { nn = 1; break; }
+    if (!y && !nn) return 0;                     /* 不是回答我 */
+    Token *t = pool_token_by_id(ai->pool, ai->ask_claim_id);
+    ai->ask_claim_id = 0;                         /* 一次就清（只等一轮） */
+    if (!t || t->is_garbage || !t->name) return 0;
+    /* 从标记名里取 A/R/B */
+    char src[24], a[40], r[24], b[40];
+    const char *p = t->name + strlen(MICRO_CLAIM_TOKEN_PREFIX);
+    const char *c1 = strchr(p, ':');
+    if (!c1) return 0;
+    size_t l1 = (size_t)(c1 - p);
+    if (l1 == 0 || l1 >= sizeof src) return 0;
+    memcpy(src, p, l1); src[l1] = 0;
+    p = c1 + 1;
+    const char *u1 = strchr(p, '_'); if (!u1) return 0;
+    size_t la = (size_t)(u1 - p);
+    if (la == 0 || la >= sizeof a) return 0;
+    memcpy(a, p, la); a[la] = 0;
+    p = u1 + 1;
+    const char *u2 = strrchr(p, '_'); if (!u2 || u2 == p) return 0;
+    size_t lr = (size_t)(u2 - p);
+    if (lr == 0 || lr >= sizeof r) return 0;
+    memcpy(r, p, lr); r[lr] = 0;
+    p = u2 + 1;
+    const char *end = strrchr(p, ']');
+    size_t lb = end ? (size_t)(end - p) : strlen(p);
+    if (lb == 0 || lb >= sizeof b) return 0;
+    memcpy(b, p, lb); b[lb] = 0;
+    if (nn) {
+        t->is_garbage = 1;
+        const char *tp = ai_say_tpl("待证.不算");
+        const char *const a3[3] = { a, r, b };
+        der_filln(out, cap, tp ? tp : "那 就 当 没 听 说 过 —— 不 记（$1 $2 $3）", a3, 3);
+        return 1;
+    }
+    uint8_t rid = rel_id_of(ai, r, 0);
+    if (!rid) rid = rel_id_of(ai, r, 1);
+    Token *A = pool_token_intern(ai->pool, a), *B = pool_token_intern(ai->pool, b);
+    if (!rid || !A || !B || A == B) return 0;
+    if (!rel_direct(A, rid, B) && ai_write_rel(ai, A, B, rid, 0, AI_WSRC_RELATION) != 0) return 0;
+    agent_teach_mark(ai, A, rid, B, 0);
+    ai->n_rel_learned++;
+    t->is_garbage = 1;
+    const char *tp = ai_say_tpl("待证.算");
+    const char *const a3[3] = { a, r, b };
+    der_filln(out, cap, tp ? tp : "好 ， 按 事实 记 下 了 ： $1 $2 $3", a3, 3);
+    return 1;
 }
 
 static inline int agent_claim_statement(AI *ai, char *const *words, size_t n,
@@ -9086,6 +9150,15 @@ static inline size_t agent_step(Agent *a, const char *input, char *out, size_t o
     if (getenv("AIP_NATDBG2")) {
         fprintf(stderr, "[disp] n=%zu resp=%s input_eff=%.60s\n", n, resp ? "已有" : "空", input_eff);
         for (size_t z = 0; z < n; ++z) fprintf(stderr, "   w[%zu]=%s\n", z, words[z] ? words[z] : "?");
+    }
+    if (!resp) {
+        /* §6.648 上一轮我说过"这条只听说过"，这一轮用户说「算 / 不算」 */
+        char cc[512] = {0};
+        if (agent_claim_confirm(ai, lw, ln, cc, sizeof cc)) {
+            resp = (char *)malloc(strlen(cc) + 1);
+            if (resp) memcpy(resp, cc, strlen(cc) + 1);
+            conf = 0.7f;
+        }
     }
     if (!resp) {
         /* §6.647 问到的正好是一条待证 ⇒ 照实说"只听说过、没核实"（比"不太懂"诚实） */

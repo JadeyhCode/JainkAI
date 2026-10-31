@@ -960,6 +960,9 @@ typedef struct {
     float  reward_cum;    /* 会话内累计 */
     int    reward_n;      /* 事件数 */
     int    reward_gate;   /* 0 = 只计量（默认）；1 = 让我"更谨慎"（见 agent.h 的用法） */
+    /* §6.648 待证确认：我上一轮回过"这条只听说过"，用户说「算」就把它升格。
+     * 存 **token id**（不是指针：跨池/跨存读都稳定）；0 = 没有挂着的。 */
+    uint32_t ask_claim_id;
     struct { float d; char what[24]; } rlog[8];   /* 最近 8 个事件（环形） */
     size_t rhead;
     /* §6.627 **"因为"只记不推**（会话内）：`因为 C ，A R B` ⇒ 记住 C 是 A R B 的原因。
