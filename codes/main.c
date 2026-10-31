@@ -4556,8 +4556,14 @@ int main(int argc, char **argv) {
                     for (size_t i = 0; i < n; ++i) {
                         Token *h = rule_head(a->brain, rs[i]);
                         size_t np = rule_npremise(a->brain, rs[i]);
-                        printf("  %s  ←  %s   （%zu 条前提）\n", rs[i]->name ? rs[i]->name : "?",
-                               h && h->name ? h->name : "?", np);
+                        printf("  %s  %s\n", rs[i]->name ? rs[i]->name : "?",
+                               h && h->name ? h->name : "?");
+                        for (size_t k = 1; k <= np; ++k) {
+                            Token *pp = rule_part(a->brain, rs[i], "前提", k);
+                            if (!pp || !pp->name) continue;
+                            /* 否定前提在谓词名里带「不」前缀：显示时照原样，读者看得出是 NAF */
+                            printf("     %s %s\n", k == 1 ? "←" : " ", pp->name);
+                        }
                     }
                 } else if (!strncmp(r, "apply", 5)) {
                     RuleForward fs;

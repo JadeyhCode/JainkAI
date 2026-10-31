@@ -93,6 +93,11 @@
 - 判据：tokenop **305 项**、整包 **49/49**、`probematrix` diff 为空、selfcheck/asan(90) 全 PASS。
 - 边界：只比条数（内容改动看不出来）；不查 delta 与 base 的语义冲突；overlay 读放大未优化（43 段/489KB）。
 
+## 4z247. `::rule list` 列前提（§6.659）
+- 原来只显示"头 + 条数"，现在逐条列出前提（否定前提显示 `[谓词:不企鹅($x)]`）。
+- 判据：CLI 实测 + 整包 62/62。
+- 边界：显示内部节点名（不美化）；顺序是写入顺序；无截断（前提 ≤4）。
+
 ## 4z246. `::lang setorder`（§6.652）
 - 归纳"猜不准"时手动定词序：`::lang setorder SOV|SVO` 改内存并写回当前包 `meta.txt`（覆盖式）。
 - 判据：CLI 实测（load→setorder→current 显示 SOV）；`langprobe` 13 → 16 项（其中两条是弱检查，如实标注）。
