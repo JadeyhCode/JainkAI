@@ -190,7 +190,7 @@ grep -qaF 'sfok.c：编过、**测试全绿**' c13 \
     && ok "sfok.c：闭环编过 + 产物 rc=0 ⇒ 测试全绿" \
     || bad "test-单文件-绿" "$(grep -a '测试' c13 | head -1)"
 run '::code test sfbad.c\n' c14
-grep -qaF '测试不过**（rc=3）' c14 \
+grep -qaF 'rc=3；断言' c14 \
     && ok "sfbad.c：编过但产物 rc=3 ⇒ 测试不过" \
     || bad "test-单文件-红" "$(grep -a '测试' c14 | head -1)"
 cat > _t/work/nc.c <<'EOF'
@@ -200,6 +200,20 @@ run '::code test nc.c\n' c15
 grep -qaF '**没编过**' c15 \
     && ok "nc.c：编不过 ⇒ **不跑**（先编过才跑）" \
     || bad "test-单文件-没编过" "$(grep -a '测试' c15 | head -1)"
+
+echo "== ⑪ 断言计数（§6.660）：产物输出里 ok/FAIL 行各算一条 =="
+run '::code test tgreen\n' c16
+grep -qaF '断言 1 ok / 0 FAIL' c16 \
+    && ok "tgreen 打印 1 个 ok ⇒ 计数「1 ok / 0 FAIL」" \
+    || bad "assert-计数" "$(grep -a '测试' c16 | head -1)"
+cat > _t/work/twofail.c <<'EOF'
+#include <stdio.h>
+int main(void) { printf("FAIL a\n"); printf("FAIL b\n"); return 1; }
+EOF
+run '::code test twofail.c\n' c17
+grep -qaF '2 FAIL' c17 \
+    && ok "两条 FAIL ⇒ 计数「2 FAIL」" \
+    || bad "assert-红计数" "$(grep -a '测试' c17 | head -1)"
 
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \

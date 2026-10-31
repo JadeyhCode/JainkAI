@@ -314,6 +314,25 @@ static inline int code_build_dir(AI *ai, const char *dir, char *note, size_t cap
 
 static inline int code_round(AI *ai, const char *rel);   /* §6.646：单文件测试要先走它 */
 
+/* §6.660 **断言计数（约定，不是框架）**：产物输出里以 `ok` / `FAIL` 起头的行各算一条断言。
+ * 这样"测试全绿"不只靠退出码，还能看到"跑了几条、几条红"。
+ * ⚠ 只是**约定**：没有断言库、没有注册、没有覆盖率；产物仍然只看 rc + 这两类行。 */
+static inline void code_count_asserts(const char *out, size_t *n_ok, size_t *n_fail) {
+    if (n_ok) *n_ok = 0;
+    if (n_fail) *n_fail = 0;
+    if (!out) return;
+    const char *p = out;
+    while (*p) {
+        const char *line = p;
+        while (*p && *p != '\n') p++;
+        size_t l = (size_t)(p - line);
+        if (line[0] == 'o' && line[1] == 'k' && (l == 2 || line[2] == ' ' || line[2] == ':') && n_ok)
+            (*n_ok)++;
+        else if (l >= 4 && !strncmp(line, "FAIL", 4) && n_fail) (*n_fail)++;
+        if (*p == '\n') p++;
+    }
+}
+
 /* §6.646 **单文件产物也能跑**：`::code test <文件.c>` —— 先走一遍"写-编-看错-改"闭环，
  * 然后跑 `<文件>.out`（单文件闭环的产物名）。判据同上：产物退出码。
  * 只跑 `.out`（和 §6.645 同一条窄入口）。 */
@@ -327,13 +346,17 @@ static inline int code_test_file(AI *ai, const char *rel, char *note, size_t cap
     char prog[ACTION_PATH_CAP + 32];
     snprintf(prog, sizeof prog, "%s%s", rel, CODE_OUT_NAME);   /* <文件>.out */
     int trc = action_run_product(ai, prog);
+    size_t nok2 = 0, nbad2 = 0;
+    code_count_asserts(action_book()->last_out, &nok2, &nbad2);
     if (note && cap) {
-        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（%s.out rc=0）", rel, rel);
+        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（%s.out rc=0；断言 %zu ok / %zu FAIL）",
+                               rel, rel, nok2, nbad2);
         else {
             const char *o = action_book()->last_out;
             size_t ol = o ? strlen(o) : 0;
             if (ol > 200) o += ol - 200;
-            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d）：%.200s", rel, trc, o ? o : "");
+            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d；断言 %zu ok / %zu FAIL）：%.200s",
+                     rel, trc, nok2, nbad2, o ? o : "");
         }
     }
     return trc;
@@ -349,8 +372,11 @@ static inline int code_test_dir(AI *ai, const char *dir, char *note, size_t cap)
     char prog[ACTION_PATH_CAP + 32];
     snprintf(prog, sizeof prog, "%s/a.out", dir);
     int trc = action_run_product(ai, prog);
+    size_t nok = 0, nbad = 0;
+    code_count_asserts(action_book()->last_out, &nok, &nbad);
     if (note && cap) {
-        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（a.out rc=0）", dir);
+        if (trc == 0) snprintf(note, cap, "%s：编过、**测试全绿**（a.out rc=0；断言 %zu ok / %zu FAIL）",
+                               dir, nok, nbad);
         else {
             char tail[256] = {0};
             const char *o = action_book()->last_out;
