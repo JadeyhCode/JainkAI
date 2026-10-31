@@ -46,53 +46,58 @@ static inline int paper_word_ok(const char *w) {
     return 1;
 }
 
-/* 从句子 [s, s+len) 里抽一条断言：词序形如 `A R B`（关系词必须已在关系表里）。
- * 成功返回 1，并填 out。**只认"恰好三段"**：多了就不猜（宁可漏，不要编）。 */
+/* §6.651 **切分**单独成函数（上轮的教训：切分与抽取混在一起，改坏了查不出根因）。
+ * 按空格/制表符切，最多 8 段、每段 ≤63 字节；空段跳过。返回段数。 */
+static inline size_t paper_segments(const char *s, size_t len, char seg[][64], size_t max) {
+    if (!s || !seg || max == 0 || len == 0) return 0;
+    size_t n = 0, i = 0;
+    while (i < len && n < max) {
+        while (i < len && (s[i] == ' ' || s[i] == '\t')) i++;
+        if (i >= len) break;
+        size_t o = 0;
+        while (i < len && s[i] != ' ' && s[i] != '\t') {
+            if (o + 1 < sizeof seg[0]) seg[n][o++] = s[i];
+            i++;
+        }
+        seg[n][o] = 0;
+        if (o) n++;
+    }
+    return n;
+}
+
+/* 从句子 [s, s+len) 里抽一条断言：**段数 3–6**、中间择一个关系词、两边各拼成主语/宾语（各 ≤2 段）。
+ * 判据全在 `paper_segments` 的结果上做（切分与抽取分开，便于单测）。 */
 static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperClaim *out) {
     if (!ai || !s || len == 0 || !out) return 0;
-    char buf[256];
-    if (len >= sizeof buf) return 0;
-    memcpy(buf, s, len); buf[len] = 0;
-    /* ⚠ **先按空格切**：论文样本里的断言是"人写好的短句"（`企鹅 属于 鸟类`）。
-     * 先分词的话，没进过词池的 `企鹅` 会被切成 企/鹅 ⇒ 三段变五段 ⇒ 一条都抽不到（第一版就是 0 条）。
-     * 空格切不出三段时再退回分词器（真论文没有空格，这条路径基本抽不到 —— 照实说）。 */
-    char *sp[8]; size_t sn = 0;
-    {
-        char *t = buf;
-        while (*t && sn < 8) {
-            while (*t == ' ' || *t == '\t') t++;
-            if (!*t) break;
-            sp[sn++] = t;
-            while (*t && *t != ' ' && *t != '\t') t++;
-            if (*t) { *t = 0; t++; }
-        }
+    char seg[8][64];
+    size_t sn = paper_segments(s, len, seg, 8);
+    if (sn < 3 || sn > 6) return 0;
+    /* ⚠ 只检查**主/宾**段，不检查关系词段：`在/对/从` 这些在 `paper_word_ok` 的虚词表里
+     * （它们不该当主语），但它们**正当关系词** —— 上一轮把整句一刀切掉，四段句一条都抽不到。 */
+    /* 候选关系词（从右往左找第一个"两边都不超过 2 段"的） */
+    int ri = -1;
+    for (int i = (int)sn - 2; i >= 1; --i) {
+        if (!rel_id_of(ai, seg[i], 0)) continue;
+        if ((size_t)i <= 2 && (sn - (size_t)i - 1) <= 2) { ri = i; break; }
     }
-    char words[8][64]; size_t wn = 0;
-    if (sn == 3) {
-        for (size_t i = 0; i < 3; ++i) {
-            if (!paper_word_ok(sp[i])) return 0;
-            snprintf(words[wn], sizeof words[0], "%s", sp[i]);
-            wn++;
-        }
-    } else {
-        size_t n = 0;
-        char **w = ai_tokenize(ai, buf, &n);
-        if (!w) return 0;
-        for (size_t i = 0; i < n && wn < 8; ++i) {
-            if (!paper_word_ok(w[i])) continue;
-            snprintf(words[wn], sizeof words[0], "%s", w[i]);
-            wn++;
-        }
-        ai_free_words(w, n);
+    if (ri < 1) return 0;
+    char a[64] = {0}, b[64] = {0};
+    size_t ao = 0, bo = 0;
+    for (int i = 0; i < ri; ++i) {
+        size_t l = strlen(seg[i]);
+        if (ao + l + 1 >= sizeof a) return 0;
+        memcpy(a + ao, seg[i], l); ao += l;
     }
-    if (wn != 3) return 0;                       /* 恰好 A R B，否则不猜 */
-    uint8_t rid = rel_id_of(ai, words[1], 0);
-    if (!rid) return 0;                          /* 中间那个必须是已知关系词 */
-    /* 主语/宾语不能是虚词（`paper_word_ok` 已经滤过） */
-    if (strlen(words[0]) < 3 || strlen(words[2]) < 3) return 0;   /* 单字太容易误抽 */
-    snprintf(out->a, sizeof out->a, "%.39s", words[0]);
-    snprintf(out->r, sizeof out->r, "%.23s", words[1]);
-    snprintf(out->b, sizeof out->b, "%.39s", words[2]);
+    for (size_t i = (size_t)ri + 1; i < sn; ++i) {
+        size_t l = strlen(seg[i]);
+        if (bo + l + 1 >= sizeof b) return 0;
+        memcpy(b + bo, seg[i], l); bo += l;
+    }
+    if (ao < 3 || bo < 3) return 0;                    /* 单字主/宾太容易误抽 */
+    if (!paper_word_ok(a) || !paper_word_ok(b)) return 0;   /* 主/宾里不许混虚词/标点 */
+    snprintf(out->a, sizeof out->a, "%.39s", a);
+    snprintf(out->r, sizeof out->r, "%.23s", seg[ri]);
+    snprintf(out->b, sizeof out->b, "%.39s", b);
     return 1;
 }
 

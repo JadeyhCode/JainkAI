@@ -33,12 +33,28 @@ int main(void) {
     /* 不该抽的：四段、两段、没有关系词 */
     {
         PaperClaim t[8];
-        ok(paper_extract(a, "企鹅 会 游泳 非常 厉害。", t, 8) == 0, "**四段** ⇒ 不抽（不猜）");
+        ok(paper_extract(a, "企鹅 会 游泳 非常 厉害。", t, 8) == 0,
+           "四段但关系词位置不合适（右边 3 段）⇒ 不抽");
         ok(paper_extract(a, "企鹅 游泳。", t, 8) == 0, "两段 ⇒ 不抽");
         ok(paper_extract(a, "企鹅 像 鸟类。", t, 8) == 0, "中间不是已知关系词 ⇒ 不抽");
         ok(paper_extract(a, "这个 属于 那个。", t, 8) == 0, "单字主/宾 ⇒ 不抽（太容易误抽）");
     }
 
+    /* §6.651 切分函数 + 3–6 段放宽 */
+    {
+        char seg[8][64];
+        const char *t = "企鹅 住 在 南极";
+        ok(paper_segments(t, strlen(t), seg, 8) == 4, "paper_segments：4 段（切分单独成函数）");
+        ok(!strcmp(seg[2], "在") && !strcmp(seg[3], "南极"), "段内容对（第 3/4 段）");
+        PaperClaim c;
+        ok(paper_sentence_claim(a, t, strlen(t), &c) == 1, "**四段句**也抽得出来（§6.651 放宽）");
+        ok(!strcmp(c.a, "企鹅住") && !strcmp(c.r, "在") && !strcmp(c.b, "南极"),
+           "四段句拼成 企鹅住|在|南极");
+        const char *bad = "南极 的 企鹅 属于 鸟类";
+        ok(paper_sentence_claim(a, bad, strlen(bad), &c) == 0, "主语里有虚词（的）⇒ 不抽");
+        const char *longer = "企鹅 属于 鸟类 而且 会 游泳";
+        ok(paper_sentence_claim(a, longer, strlen(longer), &c) == 0, "主/宾超过 2 段 ⇒ 不抽");
+    }
     /* 全部进待证，且**不写事实边** */
     size_t made = paper_to_claims(a, cs, n);
     ok(made == 3, "3 条都写成待证");
