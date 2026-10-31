@@ -28,6 +28,7 @@
 #define CODE_H
 
 #include "ai.h"
+#include <dirent.h>
 #include "lex.h"        /* ASCII 代码词法（::ascii on 时把"逐字保留"记进痕；见下） */
 
 #define CODE_MAX_FIX   1
@@ -262,6 +263,55 @@ static inline int code_first_error(const char *out, char *where, size_t wcap,
 
 /* 走一遍闭环：`rel` 是 `_t/work/` 里的相对路径。
  * 返回最终退出码（0 = 编过）/ -2 = 层关着或参数不合法（理由在 note 里）。 */
+/* §6.642 **多文件工程**：把 _t/work/<dir>/ 下所有 .c 一次编出来（还是走受审的 gcc）。
+ * 只做"编"，不做"改" —— 多文件的自动修法还没设计（照实说，见审计）。
+ * 返回 0 = 编过；非 0 = gcc 的 rc；-2 = 没跑成（没开 ::act / 目录里没 .c）。 */
+static inline int code_build_dir(AI *ai, const char *dir, char *note, size_t cap) {
+    if (!ai || !dir || !dir[0]) return -2;
+    if (!ai->act_on) {
+        if (note && cap) snprintf(note, cap, "外部执行层关着（::act on）—— 编不了");
+        return -2;
+    }
+    /* 自己列目录拼命令行（**不用通配符**）：受审执行层不保证过 shell，通配符可能原样传给 gcc
+     * ⇒ "no such file"、而错误提取又抓不到（实测：报 rc=1 但错误字段是空的）。 */
+    char cmd[ACTION_CMD_CAP];
+    snprintf(cmd, sizeof cmd, "gcc -std=c11 -Wall -o %s/a.out", dir);
+    char full[ACTION_PATH_CAP + 64];
+    snprintf(full, sizeof full, "%s/%s", ACTION_WORK_DIR, dir);
+    DIR *dp = opendir(full);
+    if (!dp) {
+        if (note && cap) snprintf(note, cap, "打不开目录 %s", full);
+        return -2;
+    }
+    size_t nsrc = 0;
+    struct dirent *de;
+    while ((de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if (l < 3 || strcmp(de->d_name + l - 2, ".c")) continue;
+        size_t cl = strlen(cmd);
+        int w = snprintf(cmd + cl, sizeof cmd - cl, " %s/%s", dir, de->d_name);
+        if (w < 0 || cl + (size_t)w >= sizeof cmd) break;
+        nsrc++;
+    }
+    closedir(dp);
+    if (nsrc == 0) {
+        if (note && cap) snprintf(note, cap, "%s 里没有 .c（编什么？）", dir);
+        return -2;
+    }
+    int rc = action_run(ai, cmd);
+    if (note && cap) {
+        if (rc == 0) snprintf(note, cap, "%s：%zu 个 .c 一次编过（产物 %s/a.out）", dir, nsrc, dir);
+        else {
+            char where[CODE_ERR_CAP], err[CODE_ERR_CAP];
+            int line = 0;
+            code_first_error(action_book()->last_out, where, sizeof where, err, sizeof err, &line);
+            snprintf(note, cap, "%s 编不过（rc=%d）：%s %s", dir, rc, where[0] ? where : "", err);
+        }
+    }
+    (void)code_observe(ai, rc);
+    return rc;
+}
+
 static inline int code_round(AI *ai, const char *rel) {
     CodeRun *cr = &g_code;
     cr->attempts = 0; cr->first_rc = cr->final_rc = -1; cr->rule = -1;

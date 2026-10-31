@@ -124,6 +124,35 @@ grep -qaF 'int x = 1' _t/work/two.c && ! grep -qaF 'int x = 1;' _t/work/two.c \
     && ok "**文件真的还原了**（补的分号没了 —— 不给你留半坏的源码）" \
     || bad "two.c-回滚" "$(sed -n 2p _t/work/two.c)"
 
+echo "== ⑧ 多文件工程（§6.642）：::code build 一次编整个目录 =="
+mkdir -p _t/work/proj
+cat > _t/work/proj/a.h <<'EOF'
+int add(int a, int b);
+EOF
+cat > _t/work/proj/a.c <<'EOF'
+#include "a.h"
+int add(int a, int b) { return a + b; }
+EOF
+cat > _t/work/proj/main.c <<'EOF'
+#include <stdio.h>
+#include "a.h"
+int main(void) { printf("%d\n", add(2, 3)); return 0; }
+EOF
+run '::code build proj\n' c8
+grep -qaF '2 个 .c 一次编过' c8 \
+    && ok "proj：2 个 .c 一次编过（自己列目录、不用通配符；a.h 不算）" \
+    || bad "proj-构建" "$(grep -a '多文件' c8 | head -1)"
+[ -x _t/work/proj/a.out ] && ok "产物 proj/a.out 出来了" \
+    || bad "proj-产物" "$(ls -1 _t/work/proj 2>/dev/null | tr '\n' ' ')"
+cat > _t/work/proj/bad.c <<'EOF'
+int broken(void) { return 不存在; }
+EOF
+run '::code build proj\n' c9
+grep -qaE '编不过（rc=1）' c9 \
+    && ok "坏文件 ⇒ 明确报 rc=1（不假装修好）" \
+    || bad "proj-坏" "$(grep -a '多文件' c9 | head -1)"
+rm -f _t/work/proj/bad.c
+
 echo "== ④ 沙箱边界：编译只发生在工作区 =="
 [ -f _t/work/ok.c.out ] && [ ! -f ./ok.c.out ] && [ ! -f ./noinc.c.out ] \
     && ok "产物只在「_t/work/」里（cwd 边界没破）" \
