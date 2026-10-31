@@ -55,6 +55,19 @@ int main(void) {
         const char *longer = "企鹅 属于 鸟类 而且 会 游泳";
         ok(paper_sentence_claim(a, longer, strlen(longer), &c) == 0, "主/宾超过 2 段 ⇒ 不抽");
     }
+    /* §6.674 **没有空格的句子**（真论文形状）：分词后按关系词拼回主/宾 */
+    {
+        PaperClaim c2;
+        const char *ns = "企鹅属于鸟类";
+        ok(paper_sentence_claim(a, ns, strlen(ns), &c2) == 1, "无空格句也能抽（企鹅属于鸟类）");
+        ok(!strcmp(c2.a, "企鹅") && !strcmp(c2.r, "属于") && !strcmp(c2.b, "鸟类"),
+           "无空格句拼成 企鹅|属于|鸟类");
+        const char *ns2 = "猫属于动物，狗属于宠物";
+        ok(paper_sentence_claim(a, ns2, strlen(ns2), &c2) == 1 && !strcmp(c2.b, "动物"),
+           "复合句只取**第一段**（猫属于动物）");
+        const char *ns3 = "今天天气很好没有关系词";
+        ok(paper_sentence_claim(a, ns3, strlen(ns3), &c2) == 0, "没有关系词 ⇒ 不抽");
+    }
     /* 全部进待证，且**不写事实边** */
     size_t made = paper_to_claims(a, cs, n);
     ok(made == 3, "3 条都写成待证");

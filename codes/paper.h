@@ -71,6 +71,66 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
     if (!ai || !s || len == 0 || !out) return 0;
     char seg[8][64];
     size_t sn = paper_segments(s, len, seg, 8);
+    /* §6.674 **没有空格的句子**（真论文那种）：退回**分词器**，但**按 token 拼回去**——
+     * `企鹅属于鸟类` 会被切成 企/鹅/属于/鸟/类，找出关系词那个 token，左右各自拼成主/宾。
+     * 这一步只处理"整句没有空格"的情形，不动上面 3–6 段的路径。 */
+    if (sn < 3) {
+        /* 先把"逗号/分号"当分句符，只取**第一段**（复合句只抽前半，照实说） */
+        char first[256];
+        size_t fl = 0;
+        for (size_t i = 0; i < len && fl + 1 < sizeof first; ++i) {
+            unsigned char c = (unsigned char)s[i];
+            if (c == 0xEF && (unsigned char)s[i + 1] == 0xBC &&
+                ((unsigned char)s[i + 2] == 0x8C || (unsigned char)s[i + 2] == 0x9B)) break; /* ，； */
+            if (c == 0xE3 && (unsigned char)s[i + 1] == 0x80 && (unsigned char)s[i + 2] == 0x81) break; /* 、 */
+            first[fl++] = s[i];
+        }
+        first[fl] = 0;
+        len = fl;
+        size_t tn = 0;
+        char **tw = ai_tokenize(ai, first, &tn);
+        if (!tw) return 0;
+        size_t ri2 = tn;
+        for (size_t i = 1; i + 1 < tn; ++i) {
+            if (rel_id_of(ai, tw[i], 0)) { ri2 = i; break; }
+        }
+        if (ri2 == tn) { ai_free_words(tw, tn); return 0; }
+        char a2[64] = {0}, b2[64] = {0};
+        size_t ao2 = 0, bo2 = 0;
+        for (size_t i = 0; i < ri2; ++i) {
+            size_t l = strlen(tw[i]);
+            if (ao2 + l + 1 >= sizeof a2) { ai_free_words(tw, tn); return 0; }
+            memcpy(a2 + ao2, tw[i], l); ao2 += l;
+        }
+        for (size_t i = ri2 + 1; i < tn; ++i) {
+            size_t l = strlen(tw[i]);
+            if (bo2 + l + 1 >= sizeof b2) { ai_free_words(tw, tn); return 0; }
+            memcpy(b2 + bo2, tw[i], l); bo2 += l;
+        }
+        a2[ao2] = 0;
+        b2[bo2] = 0;
+        /* 去掉宾语尾部的标点（`鸟类。` → `鸟类`） */
+        while (bo2 > 0) {
+            unsigned char c = (unsigned char)b2[bo2 - 1];
+            if (c == 0x82 && bo2 >= 3 && (unsigned char)b2[bo2 - 3] == 0xE3 &&
+                (unsigned char)b2[bo2 - 2] == 0x80) { bo2 -= 3; continue; }   /* 。 */
+            if (c == 0x81 && bo2 >= 3 && (unsigned char)b2[bo2 - 3] == 0xEF &&
+                (unsigned char)b2[bo2 - 2] == 0xBC) { bo2 -= 3; continue; }   /* ！ */
+            if (c == 0x9F && bo2 >= 3 && (unsigned char)b2[bo2 - 3] == 0xEF &&
+                (unsigned char)b2[bo2 - 2] == 0xBC) { bo2 -= 3; continue; }   /* ？ */
+            if (c == ' ' || c == '.') { bo2 -= 1; continue; }
+            break;
+        }
+        b2[bo2] = 0;
+        int okr = (ao2 >= 3 && bo2 >= 3);
+        if (okr) {
+            snprintf(out->a, sizeof out->a, "%.39s", a2);
+            snprintf(out->r, sizeof out->r, "%.23s", tw[ri2]);
+            snprintf(out->b, sizeof out->b, "%.39s", b2);
+        }
+        ai_free_words(tw, tn);
+        return okr;
+    }
     if (sn < 3 || sn > 6) return 0;
     /* ⚠ 只检查**主/宾**段，不检查关系词段：`在/对/从` 这些在 `paper_word_ok` 的虚词表里
      * （它们不该当主语），但它们**正当关系词** —— 上一轮把整句一刀切掉，四段句一条都抽不到。 */
