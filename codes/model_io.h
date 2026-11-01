@@ -51,16 +51,36 @@
 
 /* ---------------------------------------------------------------- 字节流 */
 
-typedef struct { uint8_t *buf; size_t len, cap; int err; } MWriter;
+/* §6.690 流式写：`out != NULL` 时缓冲区满了就 flush 到文件 —— 这样
+ * **不需要"先走一遍算长度、再走一遍填缓冲"**（L 档实测那两遍要 9.5 s，还额外占 1.2 GB 内存）。
+ * `len` 是"当前缓冲区里有多少"，`total` 是"总共写出多少"（ai_snapshot 返回它）。 */
+typedef struct { uint8_t *buf; size_t len, cap; size_t total; int err; FILE *out; } MWriter;
 typedef struct { const uint8_t *buf; size_t len, pos; int err; } MReader;
 
+static inline void mw_flush(MWriter *w) {
+    if (!w->out || w->len == 0) return;
+    if (fwrite(w->buf, 1, w->len, w->out) != w->len) w->err = 1;
+    w->len = 0;
+}
+
 static inline void mw_raw(MWriter *w, const void *src, size_t n) {
-    if (n == 0) return;
-    if (w->buf) {
+    if (n == 0 || w->err) return;
+    if (w->buf && w->out) {
+        if (n > w->cap) {                       /* 比缓冲还大：先把存货冲掉，再整块写 */
+            mw_flush(w);
+            if (fwrite(src, 1, n, w->out) != n) w->err = 1;
+            w->total += n;
+            return;
+        }
+        if (w->len + n > w->cap) mw_flush(w);
+        memcpy(w->buf + w->len, src, n);
+        w->len += n;
+    } else if (w->buf) {
         if (w->len + n > w->cap) { w->err = 1; return; }
         memcpy(w->buf + w->len, src, n);
+        w->len += n;
     }
-    w->len += n;
+    w->total += n;
 }
 static inline void mw_u8 (MWriter *w, uint8_t v)  { mw_raw(w, &v, 1); }
 static inline void mw_u16(MWriter *w, uint16_t v) { uint8_t b[2] = {
@@ -138,10 +158,13 @@ static inline int mio_edge_saved(const AssocEntry *e) {
 /* ------------------------------------------------------------ 存盘（两遍） */
 
 /* 第一遍：算出 model.bin 需要多少字节。cap/out 为 0/NULL 时只量长度。 */
-static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
+static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap, FILE *sink) {
     if (!ai || !ai->pool) return 0;
     const TokenPool *p = ai->pool;
-    MWriter w = { out, 0, cap, 0 };
+    MWriter w = { out, 0, cap, 0, 0, sink };
+    if (sink) {                                 /* 流式模式：缓冲区是固定 4 MB */
+        if (!out || cap < (1u << 20)) return 0;
+    }
 
     /* ---- 头 ---- */
     /* **临时符号节点（[临:…]）不存盘**：它是草稿纸（会话内的中间节点），
@@ -435,18 +458,47 @@ static inline size_t ai_snapshot(const AI *ai, uint8_t *out, size_t cap) {
     }
 
     if (w.err) return 0;
-    return w.len;
+    /* ⚠ 流式模式下**最后一块还在缓冲里**：不冲掉就是"存出来的档少一截"
+     *   —— 第一版漏了这句，整包 27 套红（存档读回来是残的）。 */
+    mw_flush(&w);
+    if (w.err) return 0;
+    return w.total;      /* §6.690 流式：total 才是逻辑总长（len 只剩缓冲里的） */
 }
 
 /* 写文件。返回写入字节数，0 表示失败。 */
+/* §6.683 **载入分阶段计时**（`AIP_LOADDBG=1` 才开）：扩图到 10^7 边时载入跑不完，
+ * 没有分阶段数字就只能猜是哪一段。默认关，零成本（一进函数读一次 getenv）。 */
+static inline long mio_dbg_enabled(void) {
+    /* ⚠ 不许用"函数内 static 缓存"：`ai_load_file` 会被**多线程**调用（conc_tsan 抓到了
+     * `model_io.h:531 in mio_dbg_enabled` 的 data race）。getenv 本身是线程安全读，
+     * 一次加载只问 8 次，成本可以忽略。 */
+    return getenv("AIP_LOADDBG") ? 1 : 0;
+}
+static inline long mio_dbg_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+static inline void mio_dbg_tick(const char *what) {
+    static long t0 = 0, last = 0;
+    if (!mio_dbg_enabled()) return;
+    long now = mio_dbg_ms();
+    if (t0 == 0) { t0 = now; last = now; }
+    fprintf(stderr, "[load] %-26s +%6ld ms（累计 %6ld ms）\n", what, now - last, now - t0);
+    last = now;
+}
+
 static inline size_t ai_save_file(const AI *ai, const char *path) {
     if (!ai || !path) return 0;
-    size_t sz = ai_snapshot(ai, NULL, 0);
-    if (sz == 0) return 0;
-    uint8_t *buf = (uint8_t *)malloc(sz);
+    /* §6.690 **流式写**（原来是"先走一遍算长度 → malloc 整份 → 再走一遍填空 → 写盘"）：
+     * L 档（1.2 GB）实测那两遍要 9.5 s、还要额外占 1.2 GB 内存（本来就 3.8 GB RSS）。
+     * 现在固定 4 MB 缓冲、写满即冲，**一遍走完**。
+     * ⚠ 分段计时的实测结论（改前）：
+     *   ① 算大小 4.35 s ② 序列化 5.18 s ③ fwrite 0.96 s ④ **fsync 35.5 s**
+     * ⇒ 真正的大头是**磁盘耐久写**（dd conv=fsync 同样 1.2 GB 要 46–53 s，本机 ~25 MB/s），
+     *   不是我们的代码。流式只能省掉①②（约 9.5 s），fsync 省不掉。 */
+    uint8_t *buf = (uint8_t *)malloc(4u << 20);
     if (!buf) return 0;
-    size_t got = ai_snapshot(ai, buf, sz);
-    if (got != sz) { free(buf); return 0; }
     /* **原子写**（借 §6.88 那条经验）：先写同目录的临时文件 → fsync 落盘 → rename 原子替换。
      * 为什么非改不可：原来直接 `fopen(path,"wb")` 写目标 —— 中途崩/满盘/断电，
      * 模型文件就**截断**了，而模型就是它的全部记忆（写坏 = 记忆清零，比丢一次快照严重得多）。
@@ -459,10 +511,12 @@ static inline size_t ai_save_file(const AI *ai, const char *path) {
     if (aip_tmp_name(path, tmp, sizeof tmp) != 0) { free(buf); return 0; }
     FILE *f = fopen(tmp, "wb");
     if (!f) { free(buf); return 0; }
-    size_t wrote = fwrite(buf, 1, sz, f);
-    int bad = (wrote != sz);
-    if (!bad && aip_sync_close(f) != 0) bad = 1;   /* fflush + fsync + fclose（先落盘再替换）*/
-    else if (bad) fclose(f);
+    size_t sz = ai_snapshot(ai, buf, 4u << 20, f);   /* 边算边写 */
+    mio_dbg_tick("①② 序列化 + fwrite（流式一遍）");
+    int bad = (sz == 0);
+    if (!bad && aip_sync_close(f) != 0) bad = 1;      /* fflush + fsync + fclose（先落盘再替换）*/
+    mio_dbg_tick("③ fsync + close（磁盘耐久写）");
+    if (bad && sz != 0) fclose(f);
     if (bad) { remove(tmp); free(buf); return 0; }
     if (aip_commit_rename(tmp, path) != 0) { remove(tmp); free(buf); return 0; }
     free(buf);
@@ -522,28 +576,6 @@ static inline void ai_recount_evidence(AI *ai) {
     ai->n_revised = revised;
     ai->n_cached = cached;
     ai->n_retracted = revoked;      /* 从图里数回来（§6.78） */
-}
-
-/* §6.683 **载入分阶段计时**（`AIP_LOADDBG=1` 才开）：扩图到 10^7 边时载入跑不完，
- * 没有分阶段数字就只能猜是哪一段。默认关，零成本（一进函数读一次 getenv）。 */
-static inline long mio_dbg_enabled(void) {
-    /* ⚠ 不许用"函数内 static 缓存"：`ai_load_file` 会被**多线程**调用（conc_tsan 抓到了
-     * `model_io.h:531 in mio_dbg_enabled` 的 data race）。getenv 本身是线程安全读，
-     * 一次加载只问 8 次，成本可以忽略。 */
-    return getenv("AIP_LOADDBG") ? 1 : 0;
-}
-static inline long mio_dbg_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-}
-static inline void mio_dbg_tick(const char *what) {
-    static long t0 = 0, last = 0;
-    if (!mio_dbg_enabled()) return;
-    long now = mio_dbg_ms();
-    if (t0 == 0) { t0 = now; last = now; }
-    fprintf(stderr, "[load] %-26s +%6ld ms（累计 %6ld ms）\n", what, now - last, now - t0);
-    last = now;
 }
 
 static inline AI *ai_load_file(const char *path) {
