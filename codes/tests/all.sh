@@ -136,6 +136,13 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
     # §6.680 联网白名单也是**数据入口**：沙箱里没有 net/ 就退回内置缺省（两处不一致会骗人）
     if [ -d "$ROOT/net" ]; then cp -a "$ROOT/net" "$SB/net"; fi
     cp -a "$ROOT/tools" "$SB/tools"
+    # §6.699 `code/` 里的**脚本和手写知识**要进沙箱（`codeknow` 靠它现场重建模型）；
+    # 生成物（13 MB 的 capi.triples、28 MB 的 code_model.bin）**不复制** —— 沙箱里现造。
+    if [ -d "$ROOT/code" ]; then
+        mkdir -p "$SB/code/knowledge"
+        [ -f "$ROOT/code/build_code_model.sh" ] && cp "$ROOT/code/build_code_model.sh" "$SB/code/"
+        [ -f "$ROOT/code/knowledge/skeletons.triples" ] && cp "$ROOT/code/knowledge/skeletons.triples" "$SB/code/knowledge/"
+    fi
     cp "$ROOT/model.bin" "$SB/model.bin"
     cp "$ROOT/build_aip" "$SB/build_aip"
     # 套件里 `sh "$ROOT/tests/prebuilt.sh" aip …` 复制的就是这一份（不再各编 16 s）

@@ -610,6 +610,7 @@ typedef enum {
     CMD_ASCII,              /* 把代码词法接进代码通道（默认关） */
     CMD_LEARN,
     CMD_TEACH,               /* §6.159 显式教学：教一条关系事实（允许新词，当场造词） */
+    CMD_INGEST,              /* §6.699 批量导入：每行 `主体\t关系\t客体`（TAB 分隔，客体里可以有空格）*/
     CMD_EDGES,
     CMD_QUIT,
     CMD_DELIB,
@@ -895,6 +896,10 @@ static const CmdDef CMDS[] = {
       "不带参数：**学习总览**（§6.596）—— 六个学习开关的当前值 + 这一会话学了几条关系事实、\n"
       "改口几次 / 冲突提示几次 / 教学留痕几个，并给出改开关的命令。\n"
       "带参数：按共现学一句普通文本（老行为）", CMD_LEARN },
+    { "ingest", "<相对路径>", CARG_REQ, "基本",
+      "**批量导入三元组**：每行 `主体<TAB>关系<TAB>客体`（客体里可以有空格/括号 ⇒ 代码片段能整段进图）；"
+      "`#` 开头是注释。跑完报：写进去 / 重复 / 坏行 / 新造词 / 新关系。\n"
+      "为什么要它：扩图到 10⁵–10⁶ 条边时，一条一条 `::teach` 是 O(n) 次交互；这是同一条写入路径的批处理", CMD_INGEST },
     { "teach", "<主语> <关系词> <宾语>", CARG_REQ, "基本",
       "**教它一条关系事实**（互动学习的显式入口）：`::teach 麒麟 属于 神兽`。\n"
       "和「直接说一句 `A R B`」的区别：那条路要求**每个词都已在词表里**（新词会被切开、学不到）；\n"
@@ -5365,6 +5370,73 @@ int main(int argc, char **argv) {
                 }
                 ai_learn_text(a->brain, src);
                 printf("[学了一句]\n");
+                continue;
+            }
+            case CMD_INGEST: {
+                /* §6.699 **批量导入**（阶段四 M1：代码知识进图）。
+                 * 格式：每行 `主体<TAB>关系<TAB>客体`；`#` 开头注释；空行跳过。
+                 * 走的是和 `::teach` **同一条写入路径**（`ai_write_rel`），所以反查表、独占判定、
+                 * 布隆、候选表都照旧维护 —— 批处理只是省掉 n 次交互，不改语义。
+                 * 客体允许含空格（代码片段必须允许），所以分隔符必须是 TAB 而不是空格。 */
+                const char *path = (cmd[6] == ' ') ? cmd + 7 : NULL;
+                while (path && *path == ' ') path++;
+                if (!path || !*path) { printf("[用法] ::ingest <相对路径>（每行：主体<TAB>关系<TAB>客体）\n"); continue; }
+                if (!a->brain) { printf("[导入] 没有脑子\n"); continue; }
+                FILE *in = fopen(path, "rb");
+                if (!in) { printf("[导入] 读不开 %s\n", path); continue; }
+                size_t n_ok = 0, n_dup = 0, n_bad = 0, n_newtok = 0, n_newrel = 0;
+                size_t tok0 = a->brain->pool->count, rel0 = a->brain->dynrel_n;
+                char *line = NULL;
+                size_t lcap = 0;
+                ssize_t got;
+                while ((got = getline(&line, &lcap, in)) > 0) {
+                    while (got > 0 && (line[got - 1] == '\n' || line[got - 1] == '\r')) line[--got] = 0;
+                    /* §6.699 **续行**：行尾一个 `\` ⇒ 和下一行拼起来（中间补一个换行）。
+                     * 代码片段是多行的，而记录是"一行一条" —— 没有续行就只能把代码压成一行，
+                     * 或者往字符串里塞转义（两种都容易写错；实测把 `'\n'` 转没了）。 */
+                    while (got > 0 && line[got - 1] == '\\') {
+                        line[got - 1] = '\n';
+                        char *more = NULL;
+                        size_t mcap = 0;
+                        ssize_t g2 = getline(&more, &mcap, in);
+                        if (g2 <= 0) { free(more); break; }
+                        while (g2 > 0 && (more[g2 - 1] == '\n' || more[g2 - 1] == '\r')) more[--g2] = 0;
+                        size_t need = (size_t)got + (size_t)g2 + 2;
+                        if (need > lcap) {
+                            char *nl = (char *)realloc(line, need);
+                            if (!nl) { free(more); n_bad++; break; }
+                            line = nl; lcap = need;
+                        }
+                        memcpy(line + got, more, (size_t)g2 + 1);
+                        got += g2;
+                        free(more);
+                    }
+                    if (got == 0 || line[0] == '#') continue;
+                    char *t1 = strchr(line, '\t');
+                    if (!t1) { n_bad++; continue; }
+                    *t1++ = 0;
+                    char *t2 = strchr(t1, '\t');
+                    if (!t2) { n_bad++; continue; }
+                    *t2++ = 0;
+                    if (!line[0] || !t1[0] || !t2[0]) { n_bad++; continue; }
+                    uint8_t rid = rel_id_of(a->brain, t1, 1);
+                    if (rid == 0) { n_bad++; continue; }
+                    Token *ta = pool_token_intern(a->brain->pool, line);
+                    Token *tb = pool_token_intern(a->brain->pool, t2);
+                    if (!ta || !tb) { n_bad++; continue; }
+                    int w = ai_write_rel(a->brain, ta, tb, rid, 0, AI_WSRC_RELATION);
+                    if (w != 0) { n_dup++; continue; }
+                    n_ok++;
+                }
+                free(line);
+                fclose(in);
+                n_newtok = a->brain->pool->count - tok0;
+                n_newrel = a->brain->dynrel_n - rel0;
+                a->brain->n_rel_learned += n_ok;
+                printf("[导入] %s：写进去 %zu 条；重复 %zu；坏行 %zu；新造词 %zu；新关系 %zu\n",
+                       path, n_ok, n_dup, n_bad, n_newtok, n_newrel);
+                printf("       现在：符号节点 %zu；动态关系 %zu\n",
+                       a->brain->pool->count, a->brain->dynrel_n);
                 continue;
             }
             case CMD_TEACH: {
