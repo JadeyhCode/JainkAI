@@ -1303,9 +1303,55 @@ static inline const Token *rel_sibling_with(const AI *ai, const Token *a, uint8_
  *   · 只报"互不包含"的成对值（`猫 属于 猫科` + `猫 属于 动物` **不算**：猫科 ⊂ 动物）；
  *   · 只诊断、不修：怎么裁决由用户决定（说「不对」走追问式改口，或显式说「X 不 R Y」）。
  */
+/* §6.687 `g_excl_proof`：允许用"有界证明"判包含吗？
+ * 代价差着几个数量级：直接沿 `属于` 往上走（下面那个 walk）是几十纳秒，
+ * `rel_solve_go` 一次是毫秒级 —— 两两比较时后者直接把命令变成小时级（§6.686）。
+ * 图上**没有以「属于」为结论的规则**时，传递闭包用 walk 就够（和证明等价），
+ * 这时由调用方（main.c 的 ::contradict）把它关掉。默认开（其它调用方行为不变）。 */
+static int g_excl_proof = 1;
+static inline void aip_excl_allow_proof(int on) { g_excl_proof = on ? 1 : 0; }
+
+/* 只沿**直接的** `属于` 边往上走。返回 1 = x 是 y（传递意义上）。
+ *
+ * ⚠ 第一版是**裸递归**（深度上限 8、没有 visited）——在出度 2 万的枢纽上分支爆炸
+ * （2 万^8 条路），`::contradict` 卡在头两千个词里 25 秒没动（§6.687 实测）。
+ * 现在：带 visited 去重 + **最多访问 4096 个节点**（超过就当"证不出来"，
+ * 宁可多报一条冲突，也不许把命令挂死）。 */
+static inline int aip_excl_contained_walk(const Token *x, const Token *y) {
+    if (!x || !y) return 0;
+    if (rel_direct(x, REL_IS_A, y)) return 1;
+    uint32_t seen[512];
+    size_t nseen = 0;
+    const Token *stack[64];
+    size_t sp = 0;
+    size_t scanned = 0;                 /* 扫过多少条边：**这是真正的成本** */
+    stack[sp++] = x;
+    seen[nseen++] = x->id;
+    while (sp) {
+        const Token *cur = stack[--sp];
+        for (size_t i = 0; i < cur->count; ++i) {
+            /* 每次判定最多扫 20000 条边。超了就说"证不出来"（可能多报一条冲突），
+             * 但**绝不允许**一次判定吃掉几百万次扫描 —— 两两比较会把它放大成小时级。 */
+            if (++scanned > 1024) return 0;
+            const AssocEntry *e = &token_assocs_ro(cur)[i];
+            if (!e->main || e->main == cur) continue;
+            if (!(e->rel & REL_BIT(REL_IS_A))) continue;
+            if (e->main == y) return 1;
+            int dup = 0;
+            for (size_t k = 0; k < nseen; ++k) if (seen[k] == e->main->id) { dup = 1; break; }
+            if (dup) continue;
+            if (nseen >= sizeof seen / sizeof seen[0]) return 0;   /* 预算用完：说"证不出来" */
+            seen[nseen++] = e->main->id;
+            if (sp < sizeof stack / sizeof stack[0]) stack[sp++] = e->main;
+        }
+    }
+    return 0;
+}
+
 static inline int aip_excl_contained(AI *ai, const Token *x, const Token *y) {
     if (!ai || !x || !y) return 0;
     if (rel_direct(x, REL_IS_A, y)) return 1;
+    if (!g_excl_proof) return aip_excl_contained_walk(x, y);
     Proof pf;
     memset(&pf, 0, sizeof pf);
     if (rel_solve_go(ai, x, REL_IS_A, y, 0, &pf, 0, NULL, 0) && pf.status > 0) return 1;
@@ -1319,25 +1365,83 @@ typedef struct {
 
 /* 返回矛盾条数；`first`/`cap` 里放前 `max_want` 条的可读描述；
  * `recs`/`rec_cap` 里追加前若干条的结构化记录（可为 NULL/0）。 */
+/* §6.687 **对数预算**：判一次"谁包含谁"要跑一次有界证明（`rel_solve_go`），而这条扫描是
+ * **两两比较**的 —— 10^7 边、出度 2 万的图上 Σ 对数能到 10^8 量级，单次命令跑成小时级
+ * （§6.686 实测 >300 s）。口径：**最多比较 30 万对、每次包含判定最多扫 1024 条边**，到顶就停，
+ * 并把"统计到上限"标出来 ——
+ * 报一个假的小数字比报"≥"更糟；完全不设上限 = 这条命令不可用。*/
+#define AIP_EXCL_PAIR_BUDGET 300000u
+#define AIP_EXCL_MAX_VALS    64u     /* 单个词在独占关系上的值超过这个数就整词跳过 */
+static int g_excl_trunc = 0;                 /* 上一次扫描是不是被预算截断 */
+static size_t g_excl_skipped = 0;            /* 有多少个词因为"独占值太多"被跳过 */
+static inline int aip_excl_truncated(void) { return g_excl_trunc; }
+static inline size_t aip_excl_skipped_words(void) { return g_excl_skipped; }
+
 static inline size_t aip_check_excl_conflicts_rec(AI *ai, char *first, size_t cap, size_t max_want,
                                                   AipExclConflict *recs, size_t rec_cap) {
     if (first && cap) first[0] = 0;
+    g_excl_trunc = 0;
+    g_excl_skipped = 0;
     if (!ai || !ai->pool) return 0;
     size_t n = 0;
+    size_t pairs = 0;
+    int _dbg = getenv("AIP_EXCLDBG") ? 1 : 0;
+    size_t _edges = 0, _excl = 0;
+    long _t0 = 0;
+    if (_dbg) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); _t0 = (long)ts.tv_sec; }
     for (size_t i = 0; i < ai->pool->count; ++i) {
+        if (_dbg && ((i % 2000) == 0 || _edges % 200000 == 0)) {
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            fprintf(stderr, "[excl] 词 %zu/%zu 边扫 %zu 独占边 %zu 对数 %zu 冲突 %zu %ld s\n",
+                    i, ai->pool->count, _edges, _excl, pairs, n, (long)ts.tv_sec - _t0);
+        }
         Token *A = ai->pool->tokens[i];
         if (!A || A->is_garbage || !token_assocs_resident(A)) continue;
+        /* §6.687 **先数一数**：这个词在某个独占关系上有多少个不同值？
+         * 超过 AIP_EXCL_MAX_VALS 就**整词跳过**（两两比较是 k²，k=20000 时 2 亿对，
+         * 而且每对还要判包含 —— 那样的词在合成图上遍地都是，命令会变成小时级）。
+         * 跳过要**明说**（返回的"跳过词数"），不能假装图上没矛盾。 */
+        {
+            size_t cnt[REL_TABLE_MAX + 2];
+            memset(cnt, 0, sizeof cnt);
+            int too_many = 0;
+            for (size_t j = 0; j < A->count && !too_many; ++j) {
+                _edges++;
+                if (_dbg && (_edges % 200000) == 0) {
+                    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                    fprintf(stderr, "[excl] 预扫 边 %zu 词 %zu/%zu A->count=%zu %ld s\n",
+                            _edges, i, ai->pool->count, A->count, (long)ts.tv_sec - _t0);
+                }
+                const AssocEntry *e1 = &token_assocs_ro(A)[j];
+                if (!e1->main || e1->main == A) continue;
+                uint8_t rid0 = 0;
+                for (uint8_t r = 1; r < REL_DYN_BASE; ++r)
+                    if (e1->rel & REL_BIT(r)) { rid0 = r; break; }
+                if (!rid0 || !rel_is_excl(ai, rid0)) continue;
+                if (rid0 <= REL_TABLE_MAX && ++cnt[rid0] > AIP_EXCL_MAX_VALS) too_many = 1;
+            }
+            if (too_many) { g_excl_skipped++; continue; }
+        }
         for (size_t j = 0; j < A->count; ++j) {
+            _edges++;
+            if (_dbg && (_edges % 100000) == 0) {
+                struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+                fprintf(stderr, "[excl] 边 %zu 独占 %zu 对 %zu 冲突 %zu 词 %zu %ld s\n",
+                        _edges, _excl, pairs, n, i, (long)ts.tv_sec - _t0);
+            }
             const AssocEntry *e1 = &token_assocs_ro(A)[j];
             if (!e1->main || e1->main == A) continue;
             uint8_t rid = 0;
             for (uint8_t r = 1; r < REL_DYN_BASE; ++r)
                 if (e1->rel & REL_BIT(r)) { rid = r; break; }
             if (!rid || !rel_is_excl(ai, rid)) continue;
+            _excl++;
             for (size_t k = j + 1; k < A->count; ++k) {
                 const AssocEntry *e2 = &token_assocs_ro(A)[k];
                 if (!e2->main || e2->main == A || e2->main == e1->main) continue;
                 if (!(e2->rel & REL_BIT(rid))) continue;
+                /* §6.687 预算：到顶就整段停（返回值仍是"已数到的条数"，另给一个截断标志） */
+                if (++pairs > AIP_EXCL_PAIR_BUDGET) { g_excl_trunc = 1; return n; }
                 if (aip_excl_contained(ai, e1->main, e2->main)) continue;
                 if (aip_excl_contained(ai, e2->main, e1->main)) continue;
                 n++;

@@ -5284,10 +5284,33 @@ int main(int argc, char **argv) {
                 AipExclConflict recs[8];
                 memset(recs, 0, sizeof recs);
                 /* 一次扫描：既要条数，也要前 8 条的结构化记录（§6.603 的裁决建议要用）*/
+                /* §6.687 图上有没有"以属于为结论"的规则？没有就关掉证明式判定，
+                 * 用沿直接 属于 边上溯的 walk（等价、便宜几个数量级）。 */
+                {
+                    Token *rs[64];
+                    size_t nr = rule_list(a->brain, rs, 64);
+                    int is_a_rule = 0;
+                    for (size_t ri = 0; ri < nr && !is_a_rule; ++ri) {
+                        Token *hd = rule_head(a->brain, rs[ri]);
+                        RuleAtom ha;
+                        if (!hd || !rule_node_to_atom(a->brain, hd, &ha)) continue;
+                        if (!strcmp(ha.name, "属于")) is_a_rule = 1;
+                    }
+                    aip_excl_allow_proof(is_a_rule);
+                }
+                long _tt = (long)time(NULL);
                 size_t n = aip_check_excl_conflicts_rec(a->brain, first, sizeof first, 8, recs, 8);
-                if (n == 0) printf("[独占矛盾] 0 条 —— 图上没有「同时属于两个互不包含的类」的词\n");
+                if (getenv("AIP_EXCLDBG")) fprintf(stderr, "[contradict] 扫描完成 n=%zu 跳过词=%zu 用时 %ld s\n",
+                                                   n, aip_excl_skipped_words(), (long)time(NULL) - _tt);
+                if (n == 0 && !aip_excl_truncated())
+                    printf("[独占矛盾] 0 条 —— 图上没有「同时属于两个互不包含的类」的词\n");
+                else if (n == 0)
+                    printf("[独占矛盾] 0 条（但**比较到 30 万对就停了**，真值可能更多，见 §6.687）\n");
                 else {
-                    printf("[独占矛盾] %zu 条%s\n", n, n > 8 ? "（只列前 8 条）" : "");
+                    printf("[独占矛盾] %zu 条%s%s\n", n, n > 8 ? "（只列前 8 条）" : "",
+                           aip_excl_truncated() ? "  ⚠ **统计到上限就停了**（30 万对，见 §6.687）" : "");
+                    size_t sk = aip_excl_skipped_words();
+                    if (sk) printf("  （另有 %zu 个词的独占值 >64 个，没两两比较 —— 见 §6.687）\n", sk);
                     /* §6.603 逐条给**裁决建议**（只建议，不下手）*/
                     for (size_t i = 0; i < 8 && i < n; ++i) {
                         if (!recs[i].a_id) break;
