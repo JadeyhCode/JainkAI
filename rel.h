@@ -1383,6 +1383,18 @@ static inline size_t aip_check_excl_conflicts_rec(AI *ai, char *first, size_t ca
     g_excl_trunc = 0;
     g_excl_skipped = 0;
     if (!ai || !ai->pool) return 0;
+    /* §6.697 **精确早退**：图上一条独占关系都没有 ⇒ "独占矛盾"在定义上就不可能有，
+     * 直接返回 0（不是近似、不是抽样）。M 档合成图正是这种（属于/有/会/在…全是多值）：
+     * 原来要全扫 200 万边（45 ms），现在一次表查询就结束（<1 ms）。
+     * 有独占关系时**仍然走原来的全扫**（K10 上 怕=独占，52 s，一字不改）——
+     * 试过"只扫候选词"的版本：M 档确实到 0.5 ms，但 K10 的冲突数从 212 648 变成 298 733
+     * （且截断），语义变了就不算优化，整段回滚。 */
+    {
+        int any_excl = 0;
+        for (uint8_t r = 1; r <= REL_TABLE_MAX && r < REL_DYN_BASE; ++r)
+            if (rel_is_excl(ai, r)) { any_excl = 1; break; }
+        if (!any_excl) return 0;
+    }
     size_t n = 0;
     size_t pairs = 0;
     int _dbg = getenv("AIP_EXCLDBG") ? 1 : 0;
