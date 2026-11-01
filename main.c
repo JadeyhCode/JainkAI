@@ -4106,6 +4106,18 @@ int main(int argc, char **argv) {
                            a->brain->code_strict ? "产物 rc=0 但打了 FAIL 行 ⇒ 也算红" : "FAIL 行只报数、不参与判定");
                     continue;
                 }
+                if (arg && strncmp(arg, "synth", 5) == 0) {
+                    /* §6.700 合成器 v1：中文描述 → 图里查任务/骨架/代码 → 落地 → 闭环 */
+                    const char *d = arg + 5;
+                    while (*d == ' ') d++;
+                    if (!*d) { printf("[用法] ::code synth <中文任务描述>\n"); continue; }
+                    char nb[512] = {0};
+                    int sr = code_synth(a->brain, d, nb, sizeof nb);
+                    printf("[合成] %s\n", nb[0] ? nb : "（没做成）");
+                    if (sr == 0) printf("       ⇒ **写出来了，而且测试全绿**（%s）\n", "::code 看痕");
+                    else printf("       ⇒ 没过（rc=%d）；产物在 _t/work/ 下，源码不会替你编造\n", sr);
+                    continue;
+                }
                 if (arg && strncmp(arg, "test", 4) == 0) {
                     const char *t = arg + 4;
                     while (*t == ' ') t++;

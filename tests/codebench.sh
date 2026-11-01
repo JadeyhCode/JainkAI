@@ -20,7 +20,9 @@ cp "$ROOT/build_aip" .
 cp "$ROOT/model.bin" m.bin 2>/dev/null || { echo "FAIL: 缺 model.bin"; exit 1; }
 cp "$ROOT/relations.txt" . 2>/dev/null || true
 
-A_PASS=0; A_TOTAL=0; B_PASS=0; B_TOTAL=0
+A_PASS=0; A_TOTAL=0; B_PASS=0; B_TOTAL=0; C_OK=0
+ok() { printf '  [OK]   %s\n' "$1"; }
+bad() { printf '  [FAIL] %s\n        证据: %s\n' "$1" "${2:-}"; }
 
 # ---------- A 段：修复 ----------
 # 每份源码自带测试（输出里 `FAIL` 行 ⇒ 不过），所以"跑绿"是**行为判据**不是"编过"。
@@ -77,9 +79,9 @@ for spec in "a1.c semi" "a2.c include" "a3.c undecl"; do
 done
 
 # ---------- B 段：从中文任务描述合成 ----------
-# 只给一句话。判据：目录里多出一个能编、能跑绿、且**自带测试**的 .c。
-# 现在没有任何合成通道 ⇒ 预期 0；等阶段四把它做出来，这里的数字就是进度。
-echo "== B 段：中文描述 → 可跑的 C 程序（阶段四目标；现在没有实现） =="
+# 走**真正的入口** `::code synth <中文描述>`（图里查任务/骨架/代码 → 落地 → 闭环）。
+# 判据：产物能编、能跑、自带断言全绿（不是"看起来像代码"）。
+echo "== B 段：中文描述 → 可跑的 C 程序（::code synth） =="
 cat > tasks.txt <<'EOF'
 写一个程序：读入 N（命令行参数），输出 1..N 里所有素数，每行一个。
 写一个程序：读入一行字符串（stdin，≤200 字符），倒序输出。
@@ -88,34 +90,51 @@ cat > tasks.txt <<'EOF'
 写一个程序：实现二分查找，读入一个有序数组和一个 key，输出下标（没有输出 -1）并自带测试。
 写一个程序：读入一个文件名，统计行数、单词数、字符数（类似 wc）。
 EOF
+MODEL=${CMODEL:-$ROOT/code/code_model.bin}
+if [ ! -s "$MODEL" ]; then       # 生成物不进仓库：缺了就现场造（和 codeknow 一样）
+    [ -s "$ROOT/code/knowledge/capi.triples" ] || sh "$ROOT/tools/headers2triples.sh" "$ROOT/code/knowledge/capi.triples" 100000 > /dev/null 2>&1
+    sh "$ROOT/code/build_code_model.sh" > /dev/null 2>&1
+fi
+[ -s "$MODEL" ] || { echo "FAIL: 缺 $MODEL（先跑 sh code/build_code_model.sh）"; exit 1; }
 i=0
 while IFS= read -r task; do
     i=$((i + 1))
     B_TOTAL=$((B_TOTAL + 1))
-    d="synth$i"
-    mkdir -p "$d"
-    # 走"人怎么说它就怎么做"的入口：直接把任务描述交给它（现在只会答话，不会产文件）
-    printf '::act on\n%s\n::quit\n' "$task" > "$d/ask.in"
-    ( cd "$d" && ../build_aip --model ../m.bin < ask.in > out.txt 2>&1 )
-    made=$(ls "$d"/*.c 2>/dev/null | wc -l || true)
-    green=0
-    for f in "$d"/*.c; do
-        [ -f "$f" ] || continue
-        base=$(basename "$f")
-        printf '::act on\n::code test %s\n::quit\n' "$base" > "$d/t.in"
-        ( cd "$d" && ../build_aip --model ../m.bin < t.in > tout.txt 2>&1 ) && grep -qa '测试全绿' "$d/tout.txt" && green=1
-    done
-    if [ "${made:-0}" -gt 0 ] && [ "$green" -eq 1 ]; then
-        B_PASS=$((B_PASS + 1)); printf '  [OK]   任务 %d：产出了 %s 并跑绿\n' "$i" "$(ls "$d"/*.c | head -1)"
+    printf '::act on\n::code synth %s\n::quit\n' "$task" > ask.in
+    ( cd "$ROOT" && _t/codebench/build_aip --model "$MODEL" < _t/codebench/ask.in > _t/codebench/synth.txt 2>&1 )
+    if grep -qa '测试全绿' synth.txt; then
+        B_PASS=$((B_PASS + 1))
+        printf '  [OK]   任务 %d：%s\n' "$i" "$(grep -a '\[合成\]' synth.txt | head -1 | sed 's/.*\[合成\] //' | cut -c1-120)"
     else
-        printf '  [FAIL] 任务 %d：没有产出可运行的 .c（现有产物 .c 数=%s）—— %s\n' "$i" "${made:-0}" "$task"
+        printf '  [FAIL] 任务 %d：%s —— %s\n' "$i" "$task" "$(grep -a '\[合成\]' synth.txt | head -1 | sed 's/.*\[合成\] //' | cut -c1-110)"
     fi
 done < tasks.txt
 
+# ---------- C 段：消融（证明知识真的在用） ----------
+# 把 `骨架:* 代码` 这些边**删掉**（只灌不带代码的知识）⇒ 合成器必须**写不出来**。
+# 如果删了还能"通过"，那说明代码是硬编码在程序里的 —— 那这条判据就是假的。
+echo "== C 段：消融（删掉「骨架→代码」的边，必须写不出来） =="
+# 只留**一个**骨架的代码边（这样 `代码` 这个关系仍然在图上 ⇒ 消融验的是"边没了"，
+# 而不是"关系没登记"——后者是更弱的失败，会把"知识真的在用"这件事验偏）
+awk -F'\t' 'BEGIN{OFS="\t"} { if ($2 == "代码" && $1 != "骨架:单词计数") next; print }' \
+    "$ROOT/code/knowledge/skeletons.triples" > abl.triples
+cp "$ROOT/model.bin" abl.bin
+printf '::ingest %s\n::save %s/abl_model.bin\n::quit\n' "$WORK/abl.triples" "$WORK" > abl.in
+( cd "$WORK" && "$ROOT/build_aip" --model abl.bin < abl.in > abl.log 2>&1 )
+printf '::act on\n::code synth 写一个程序：输出 1..N 里的素数\n::quit\n' > abl2.in
+( cd "$ROOT" && _t/codebench/build_aip --model "$WORK/abl_model.bin" < _t/codebench/abl2.in > _t/codebench/abl_out.txt 2>&1 )
+if grep -qa '测试全绿' abl_out.txt; then
+    bad "消融之后**居然还能写出来** —— 说明代码不是从图里来的" "$(grep -a '\[合成\]' abl_out.txt | head -1)"
+elif grep -qa '没有它的 代码 边' abl_out.txt; then
+    C_OK=1; ok "消融之后写不出来，而且**说清了原因**：$(grep -a '\[合成\]' abl_out.txt | head -1 | sed 's/.*\[合成\] //' | cut -c1-90)"
+else
+    bad "消融之后失败原因不对（应为「没有 代码 边」）" "$(grep -a '\[合成\]' abl_out.txt | head -1)"
+fi
+
 echo
 printf 'A 修复段：%d / %d\n' "$A_PASS" "$A_TOTAL"
-printf 'B 合成段：%d / %d（阶段四目标；现在是基线）\n' "$B_PASS" "$B_TOTAL"
+printf 'B 合成段：%d / %d（阶段四 M2 目标 ≥3/6）\n' "$B_PASS" "$B_TOTAL"
 [ -n "${1:-}" ] && [ "$1" = "--keep" ] || rm -rf "$WORK/src" "$WORK"/synth* "$WORK"/run.in "$WORK"/out.txt
 # A 段必须全绿（这是已实现的能力）；B 段是**尺子**，不绿不算失败
-[ "$A_PASS" -eq "$A_TOTAL" ] && printf 'PASS codebench（A 段全绿；B 段基线 %d / %d）\n' "$B_PASS" "$B_TOTAL" || printf 'FAIL codebench（A 段 %d / %d）\n' "$A_PASS" "$A_TOTAL"
+[ "$A_PASS" -eq "$A_TOTAL" ] && [ "$C_OK" -eq 1 ] && printf 'PASS codebench（A 修复 %d/%d；B 合成 %d/%d；C 消融通过）\n' "$A_PASS" "$A_TOTAL" "$B_PASS" "$B_TOTAL" || printf 'FAIL codebench（A %d/%d）\n' "$A_PASS" "$A_TOTAL"
 [ "$A_PASS" -eq "$A_TOTAL" ]

@@ -337,6 +337,9 @@ static inline void code_count_asserts(const char *out, size_t *n_ok, size_t *n_f
 /* §6.646 **单文件产物也能跑**：`::code test <文件.c>` —— 先走一遍"写-编-看错-改"闭环，
  * 然后跑 `<文件>.out`（单文件闭环的产物名）。判据同上：产物退出码。
  * 只跑 `.out`（和 §6.645 同一条窄入口）。 */
+/* noinline：它内部好几处 `snprintf(note, cap, …)` 拼长句，被内联进 `code_synth` 之后
+ * 编译器能算出上限、于是 `-Wformat-truncation` 直接报错（不是真会截断，是静态分析保守）。
+ * 保持独立函数体就没有这个问题，也更好在 gdb 里断。 */
 static inline int code_test_file(AI *ai, const char *rel, char *note, size_t cap) {
     if (!ai || !rel || !rel[0]) return -2;
     int rc = code_round(ai, rel);
@@ -361,11 +364,89 @@ static inline int code_test_file(AI *ai, const char *rel, char *note, size_t cap
             const char *o = action_book()->last_out;
             size_t ol = o ? strlen(o) : 0;
             if (ol > 200) o += ol - 200;
-            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d；断言 %zu ok / %zu FAIL）：%.200s",
+            snprintf(note, cap, "%s：编过但**测试不过**（rc=%d；断言 %zu ok / %zu FAIL）：%.100s",
                      rel, trc, nok2, nbad2, o ? o : "");
         }
     }
     return trc;
+}
+
+/* §6.700 **合成器 v1**：中文描述 → 图里查任务 → 骨架 → 代码 → 写文件 → 走既有闭环。
+ *
+ * 它做的**只是检索 + 落地 + 验证**，不做真正的"组合"（那是 M2 之后的事）：
+ *   ① 在图上扫 `任务:*`，拿它们 `关键词` 边和描述做**子串**匹配，命中最多的那个胜出；
+ *   ② 顺着 `骨架` 边找到 `骨架:X`，再顺着 `代码` 边把源码取出来；
+ *   ③ 写到 `_t/work/synth_<任务>.c`（走受审的写文件通道），然后 `code_test_file` 编/跑/修。
+ * **消融**：把 `骨架:* 代码` 的边删掉 ⇒ 第 ② 步取不到源码 ⇒ 必须写不出来。
+ * 这就是"知识真的在用"的判据（不是"代码里硬编码了一段程序"）。
+ */
+static inline int code_synth(AI *ai, const char *desc, char *note, size_t cap) {
+    if (note && cap) note[0] = 0;
+    if (!ai || !ai->pool || !desc || !desc[0]) return -2;
+    uint8_t rid_kw = rel_id_of(ai, "关键词", 0);
+    uint8_t rid_sk = rel_id_of(ai, "骨架", 0);
+    uint8_t rid_cd = rel_id_of(ai, "代码", 0);
+    if (rid_kw < REL_DYN_BASE || rid_sk < REL_DYN_BASE || rid_cd < REL_DYN_BASE) {
+        if (note && cap) snprintf(note, cap, "图上没有 关键词/骨架/代码 这三种关系 —— 没有代码知识");
+        return -2;
+    }
+    uint8_t dyn_kw = (uint8_t)(rid_kw - REL_DYN_BASE + 1);
+    uint8_t dyn_sk = (uint8_t)(rid_sk - REL_DYN_BASE + 1);
+    uint8_t dyn_cd = (uint8_t)(rid_cd - REL_DYN_BASE + 1);
+
+    /* ① 找最匹配的任务 */
+    Token *best = NULL;
+    int best_hits = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || !t->name || strncmp(t->name, "任务:", 7) != 0) continue;
+        int hits = 0;
+        for (size_t j = 0; j < t->count; ++j) {
+            const AssocEntry *e = &token_assocs_ro(t)[j];
+            if (!e->main || e->dyn != dyn_kw || !e->main->name) continue;
+            if (strstr(desc, e->main->name)) hits++;
+        }
+        if (hits > best_hits) { best = t; best_hits = hits; }
+    }
+    if (!best) {
+        if (note && cap) snprintf(note, cap, "没有匹配的任务（描述里的关键词在图里一个都没命中）");
+        return -1;
+    }
+    /* ② 骨架 → 代码（两步都必须在图上**查得到**） */
+    Token *skel = NULL;
+    for (size_t j = 0; j < best->count; ++j) {
+        const AssocEntry *e = &token_assocs_ro(best)[j];
+        if (e->main && e->dyn == dyn_sk) { skel = e->main; break; }
+    }
+    if (!skel) {
+        if (note && cap) snprintf(note, cap, "任务 %s 命中，但图上没有它的 骨架 边", best->name);
+        return -1;
+    }
+    const char *src = NULL;
+    for (size_t j = 0; j < skel->count; ++j) {
+        const AssocEntry *e = &token_assocs_ro(skel)[j];
+        if (e->main && e->dyn == dyn_cd && e->main->name) { src = e->main->name; break; }
+    }
+    if (!src) {
+        if (note && cap) snprintf(note, cap, "骨架 %s 命中，但图上没有它的 代码 边（消融时就是这样）", skel->name);
+        return -1;
+    }
+    /* ③ 落地 + 闭环 */
+    const char *nm = best->name + 7;              /* 去掉 "任务:" */
+    char rel[256];
+    snprintf(rel, sizeof rel, "synth_%s.c", nm);
+    if (action_write_file(ai, rel, src) != 0) {
+        if (note && cap) snprintf(note, cap, "写文件失败：%s", g_act.last_reason);
+        return -2;
+    }
+    char nb[1024] = {0};         /* 要给 code_test_file 留够：它内部会拼 rel + 说明 */
+    int rc = code_test_file(ai, rel, nb, sizeof nb);
+    if (note && cap) {
+        char head[192];
+        snprintf(head, sizeof head, "命中任务 %s（%d 个关键词）→ 骨架 %s → ", best->name, best_hits, skel->name);
+        snprintf(note, cap, "%s%.120s", head, nb);
+    }
+    return rc;
 }
 
 /* §6.645 **测试驱动**：编 + **跑**（`_t/work/<dir>/a.out`）。

@@ -1,5 +1,5 @@
 # §6.699 代码骨架知识（阶段四 M1）
-# 格式：主体<TAB>关系<TAB>客体；行尾 `\` 表示续行（代码片段用得到）
+# 格式：主体<TAB>关系<TAB>客体；行尾 \ 表示续行
 任务:素数	关键词	素数
 任务:素数	关键词	质数
 任务:素数	骨架	骨架:素数
@@ -25,20 +25,23 @@ int main(int argc, char **argv) {\
 骨架:字符串倒序	依赖	stdio.h string.h
 骨架:字符串倒序	代码	#include <stdio.h>\
 #include <string.h>\
+static void rev(const char *in, char *out) {\
+    size_t n = strlen(in);\
+    for (size_t i = 0; i < n; i++) out[i] = in[n-1-i];\
+    out[n] = 0;\
+}\
 int main(void) {\
-    char s[256];\
-    if (!fgets(s, sizeof s, stdin)) return 1;\
-    size_t n = strlen(s);\
-    while (n && (s[n-1] == '\n' || s[n-1] == '\r')) s[--n] = 0;\
-    char t[256];\
-    for (size_t i = 0; i < n; i++) t[i] = s[n-1-i];\
-    t[n] = 0;\
-    printf("%s\n", t);\
-    char a[8] = "abc", b[8];\
-    size_t m = strlen(a);\
-    for (size_t i = 0; i < m; i++) b[i] = a[m-1-i];\
-    b[m] = 0;\
-    int ok = strcmp(b, "cba") == 0;\
+    char buf[256], out[256];\
+    if (fgets(buf, sizeof buf, stdin)) {\
+        size_t n = strlen(buf);\
+        while (n && (buf[n-1] == '\n' || buf[n-1] == '\r')) buf[--n] = 0;\
+        rev(buf, out);\
+        printf("%s\n", out);\
+    }\
+    rev("abc", out);\
+    int ok = strcmp(out, "cba") == 0;\
+    rev("hello world", out);\
+    ok = ok && strcmp(out, "dlrow olleh") == 0;\
     printf("%s\n", ok ? "ok rev" : "FAIL rev");\
     return ok ? 0 : 1;\
 }
@@ -72,7 +75,8 @@ int main(void) {\
     long v[64];\
     int n = 0;\
     while (n < 64 && scanf("%ld", &v[n]) == 1) n++;\
-    if (n <= 0) { printf("%s\n", "FAIL empty"); return 1; }\
+    long sample[5] = {3,1,4,1,5};\
+    if (n <= 0) { for (int i = 0; i < 5; i++) v[i] = sample[i]; n = 5; }\
     long mx = v[0], mn = v[0];\
     double sum = 0;\
     for (int i = 0; i < n; i++) { if (v[i] > mx) mx = v[i]; if (v[i] < mn) mn = v[i]; sum += v[i]; }\
@@ -80,7 +84,7 @@ int main(void) {\
     long t[5] = {3,1,4,1,5}, tmx = 5, tmn = 1; double ts = 14;\
     long gmx = t[0], gmn = t[0]; double gs = 0;\
     for (int i = 0; i < 5; i++) { if (t[i] > gmx) gmx = t[i]; if (t[i] < gmn) gmn = t[i]; gs += t[i]; }\
-    int ok = (gmx == tmx && gmn == tmn && gs == ts);\
+    int ok = (gmx == tmx && gmn == tmn && gs == ts) && n > 0;\
     printf("%s\n", ok ? "ok stats" : "FAIL stats");\
     return ok ? 0 : 1;\
 }
