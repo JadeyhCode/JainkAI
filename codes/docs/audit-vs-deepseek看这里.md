@@ -24422,9 +24422,11 @@ Attention Is All You Need / Ashish Vaswani / Google Brain / …（标题页完�
 - 其它门：`asan_check` **101 条元命令 × 3 种参数**干净（PDF/联网的拒绝路径也进去了）、
   `patcount` 19 桶、`bucketload` 19 桶、`assocaudit` 260 处、`conc_tsan` 0 处竞争；
 - 真论文：`sh tests/pdf_real.sh <pdf>` ⇒ 召回 96.0%、0.20 s（数字与 §6.679 一致）；
-- **备份到 500G 机械盘**：`sh tools/backup_to_drive.sh` ⇒ `/mnt/models/aipoject-backup-20261101`，
-  2310 个文件 / 224 MB，**源清单 md5 与备份清单 md5 相同**（`ecf1473ae72822c929a04fb8d33db909`），
-  另加 `aipoject-backup-20261101.git-bundle`（8.2 MB，`--all`，含全部历史）。
+- **备份到 500G 机械盘**：`sh tools/backup_to_drive.sh` ⇒ 自动认到 `/dev/sda1`（WD 500G 机械盘）
+  → `/mnt/models/aipoject-backup-<日期>`，rsync 全量（含 `.git`），最后打印**源清单 md5 与备份清单 md5**
+  并要求两边相同；另加 `git bundle --all`（8.2 MB，含全部历史）。
+  ⚠ 那两个 md5 **每轮都会变**（源码一改就变），所以这里不抄具体值 —— 抄了就是给自己留一条
+  "文档里的数字对不上"的账。要核对就重跑脚本，看它最后那两行是否相同（本机当场：相同）。
 
 ### 三、踩的坑
 
