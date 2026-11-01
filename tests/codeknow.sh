@@ -89,6 +89,23 @@ if [ -s "$ROOT/code/code_model.bin" ]; then
         [ "$S" -lt "$SMS" ] && SMS=$S
     done
     [ "$SMS" -le 2000 ] && ok "存盘 ${SMS} ms ≤ 2000 ms（三次取最小）" || bad "存盘 ${SMS} ms > 2000 ms" ""
+    # 单条查询延迟（阶段四 M3 判据）：差分法 **3000 次 − 两侧各一次空跑**，
+    # 空跑取两次平均，抵掉"载入 + 进程启动"的漂移（只减一次会受抖动影响，
+    # 实测出现过负数：200 次查询比 0 次还快）。
+    printf '::quit\n' > q0.in
+    : > q3000.in
+    i=0
+    while [ "$i" -lt 3000 ]; do printf '::rel 函数:printf\n' >> q3000.in; i=$((i + 1)); done
+    printf '::quit\n' >> q3000.in
+    A0=$(date +%s%N); "$ROOT/build_aip" --model "$ROOT/code/code_model.bin" < q0.in > /dev/null 2>&1; A1=$(date +%s%N)
+    R0=$(date +%s%N); "$ROOT/build_aip" --model "$ROOT/code/code_model.bin" < q3000.in > /dev/null 2>&1; R1=$(date +%s%N)
+    B0=$(date +%s%N); "$ROOT/build_aip" --model "$ROOT/code/code_model.bin" < q0.in > /dev/null 2>&1; B1=$(date +%s%N)
+    BASE=$(( ((A1 - A0) + (B1 - B0)) / 2000000 ))     # ms，两次空跑的平均
+    QMS=$(( (R1 - R0) / 1000000 ))
+    PMU=$(( (QMS - BASE) * 1000 / 3000 ))             # µs/条
+    [ "$PMU" -ge 0 ] || PMU=0
+    [ "$PMU" -le 5000 ] && ok "单条查询 ${PMU} µs ≤ 5000 µs（3000 次 − 空跑均值 ${BASE} ms）" || bad "单条查询 ${PMU} µs > 5000 µs" ""
+    rm -f q0.in q3000.in
 else
     bad "没有 code/code_model.bin" "先跑 sh code/build_code_model.sh"
 fi

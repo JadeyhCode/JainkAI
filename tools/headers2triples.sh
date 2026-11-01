@@ -45,6 +45,49 @@ find "$INC" -name '*.h' -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r 
             print "函数:" name "\t头\t" hdr
             print "函数:" name "\t原型\t" line
             print "头:" hdr "\t声明\t" name
+            # 返回类型（`extern int printf (...)` 里 `int`）与参数个数 —— 写代码时要用
+            rt = parts[1]
+            if (rt != "extern" && rt != "static" && rt != "void" && rt != "inline")
+                print "函数:" name "\t返回\t" rt
+            else if (parts[2] != "" && parts[2] != "int" && parts[2] != "char")
+                print "函数:" name "\t返回\t" parts[2]
+            np = 0
+            body = substr(line, p)
+            if (body !~ /\([ \t]*void[ \t]*\)/) {
+                np = 1
+                for (q = 2; q <= length(body); q++) if (substr(body, q, 1) == ",") np++
+            } else np = 0
+            print "函数:" name "\t参数\t" np
+        }
+        # 枚举成员（缩进 + 全大写/驼峰常量 + `=` 或 `,`）—— 头文件里大量真实常量
+        /^[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*(=[ \t]*[^,]*)?[,]?[ \t]*$/ && !/;/ && !/^[ \t]*#/ {
+            line = $0
+            sub(/^[ \t]+/, "", line)
+            sub(/[ \t]*,?[ \t]*$/, "", line)
+            eq = index(line, "=")
+            if (eq > 0) { name = substr(line, 1, eq - 1); val = substr(line, eq + 1) }
+            else { name = line; val = "" }
+            gsub(/[ \t]+$/, "", name)
+            if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
+            if (toupper(name) != name && name !~ /^[a-z]/) next
+            if (length(val) > 40) val = substr(val, 1, 40)
+            print "枚举值:" name "\t定义\t" val
+            print "枚举值:" name "\t声明\t" hdr
+        }
+        # 结构体字段（缩进 + 类型... + 名字 + 可选数组 + ;）
+        /^[ \t][ \t]+[A-Za-z_][A-Za-z0-9_ \t\*]*[ \t\*]+[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?[ \t]*;[ \t]*$/ {
+            line = $0
+            sub(/^[ \t]+/, "", line)
+            sub(/[ \t]*;[ \t]*$/, "", line)
+            if (line ~ /\(/) next
+            n = split(line, parts, /[ \t]+/)
+            fname = parts[n]
+            sub(/\[.*\]/, "", fname)
+            if (fname !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
+            ftype = parts[1]
+            if (length(ftype) > 24) ftype = substr(ftype, 1, 24)
+            print "字段:" fname "\t类型\t" ftype
+            print "字段:" fname "\t声明\t" hdr
         }
         # 宏：`#define NAME 体...`（体太长就截断 —— 知识要的是"有这个宏、大致干什么"）
         /^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_]*/ {
