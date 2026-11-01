@@ -339,6 +339,18 @@ struct TokenPool {
      * 只有 attach 过段文件时才非空 ⇒ 平时这条路径只多一次判空。 */
     void      (*part_touch)(void *ctx, Token *t);
 
+    /* §6.685 **边存在性布隆过滤器**（不进存档，运行期加速）。
+     * 为什么要它：`token_tag_rel` 判"这条边在不在"是**线性扫这个词的所有出边**，
+     * 于是一条出度 2000 的枢纽词每写一条新边就扫 2000 次 ⇒ 造 10^7 条边的代价是 Σdeg²/2
+     * （实测 17.8 s，而且逼得生成器把出度上限压到 2000）。
+     * 布隆过滤器只答"**一定没有**"（没有假阴性），命中"可能有"时才回去线性扫 ——
+     * 语义一模一样，代价从 O(出度) 掉到 O(1)（绝大多数写入都是新边）。
+     * 删除安全：布隆位永不清，删过的边只会让"可能有"多一点点（多扫一次，结果仍然对）。 */
+    uint64_t         *ebloom;
+    size_t            ebloom_bits;    /* 位数（2 的幂） */
+    size_t            ebloom_items;   /* 已塞进去多少条边（用来决定要不要扩） */
+    int               ebloom_off;     /* AIP_NO_EDGEBLOOM=1 时置位（热路径只查这个，不查环境） */
+
     PerspectiveNode  *perspective_root;
     PerspectiveNode  *perspective_cur;
     PerspectiveNode **perspective_pool;
@@ -976,6 +988,7 @@ static inline TokenPool *pool_new(void) {
 #else
     p->serial = ++g_pool_serial;
 #endif
+    p->ebloom_off = getenv("AIP_NO_EDGEBLOOM") ? 1 : 0;   /* §6.685 只在这里读一次环境 */
     p->perspective_root = (PerspectiveNode *)calloc(1, sizeof(PerspectiveNode));
     if (!p->perspective_root) { free(p); return NULL; }
     p->perspective_root->who = NULL;
@@ -1001,6 +1014,7 @@ static inline void pool_free(TokenPool *p) {
     }
     free(p->tokens);
     free(p->rev_src); free(p->rev_meta); free(p->rev_next);   /* §6.214 反查表 */
+    free(p->ebloom);                                          /* §6.685 布隆（运行期，不进存档） */
     if (p->buckets) {
         for (size_t i = 0; i < p->n_buckets; ++i) {
             NameEntry *e = p->buckets[i];
@@ -1182,6 +1196,74 @@ static inline void token_touch_entry(Token *t, AssocEntry *e) {
 
 /* ============================ 关联编辑 ============================ */
 
+/* ---- §6.685 边存在性布隆：哈希 / 查 / 记 ---- */
+static inline uint64_t edge_bloom_key(uint32_t a, uint32_t b) {
+    uint64_t x = ((uint64_t)a << 32) | (uint64_t)b;
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 29;
+    return x;
+}
+static inline void edge_bloom_put(TokenPool *p, uint32_t a, uint32_t b);
+
+/* 返回 1 = "**可能有**"（要么布隆没建，要么位脏了）；0 = **一定没有** */
+static inline int edge_bloom_maybe(TokenPool *p, uint32_t a, uint32_t b) {
+    if (!p || !p->ebloom || p->ebloom_off) return 1;   /* 没建/关掉就别乱说"没有" */
+    uint64_t k = edge_bloom_key(a, b);
+    uint64_t m = (uint64_t)p->ebloom_bits - 1;
+    uint64_t i1 = (k & m);
+    uint64_t i2 = ((k >> 32) & m) | 1;           /* 奇数步长，保证能走遍 */
+    uint64_t i3 = ((k >> 17) & m);
+    uint64_t w1 = p->ebloom[i1 >> 6];
+    uint64_t w2 = p->ebloom[(i2 >> 6) & (m >> 6)];
+    uint64_t w3 = p->ebloom[i3 >> 6];
+    if (!((w1 >> (i1 & 63)) & 1u)) return 0;
+    if (!((w2 >> (i2 & 63)) & 1u)) return 0;
+    if (!((w3 >> (i3 & 63)) & 1u)) return 0;
+    return 1;
+}
+
+static inline void edge_bloom_put(TokenPool *p, uint32_t a, uint32_t b) {
+    if (!p || p->ebloom_off) return;
+    /* 8 bit/边；满了就翻倍重建（重建=把所有边重新塞一遍，摊还到每次写入是常数） */
+    if (p->ebloom && (p->ebloom_items + 1) * 8 <= p->ebloom_bits) {
+        /* 有位可放 */
+    } else {
+        size_t want = 1024;
+        if (p->ebloom) want = p->ebloom_bits * 2;
+        while (want < (p->ebloom_items + 1) * 8) want *= 2;
+        uint64_t *nb = (uint64_t *)calloc(want / 64, sizeof(uint64_t));
+        if (!nb) return;                          /* 分配失败：布隆就当没建（只是变慢，语义不变） */
+        free(p->ebloom);
+        p->ebloom = nb;
+        p->ebloom_bits = want;
+        /* 重塞已有边（旧位作废） */
+        for (size_t ti = 0; ti < p->count; ++ti) {
+            Token *t = p->tokens[ti];
+            if (!t || !t->count) continue;
+            for (size_t ei = 0; ei < t->count; ++ei) {
+                const AssocEntry *e = &token_assocs_ro(t)[ei];
+                if (!e->main) continue;
+                uint64_t k = edge_bloom_key(t->id, e->main->id);
+                uint64_t m = (uint64_t)p->ebloom_bits - 1;
+                uint64_t i1 = (k & m), i2 = ((k >> 32) & m) | 1, i3 = ((k >> 17) & m);
+                p->ebloom[i1 >> 6] |= (uint64_t)1 << (i1 & 63);
+                p->ebloom[(i2 >> 6) & (m >> 6)] |= (uint64_t)1 << (i2 & 63);
+                p->ebloom[i3 >> 6] |= (uint64_t)1 << (i3 & 63);
+            }
+        }
+    }
+    {
+        uint64_t k = edge_bloom_key(a, b);
+        uint64_t m = (uint64_t)p->ebloom_bits - 1;
+        uint64_t i1 = (k & m), i2 = ((k >> 32) & m) | 1, i3 = ((k >> 17) & m);
+        p->ebloom[i1 >> 6] |= (uint64_t)1 << (i1 & 63);
+        p->ebloom[(i2 >> 6) & (m >> 6)] |= (uint64_t)1 << (i2 & 63);
+        p->ebloom[i3 >> 6] |= (uint64_t)1 << (i3 & 63);
+    }
+    p->ebloom_items++;
+}
+
 static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     if (!t) return -1;
     /* §6.584 **自环边在这里就挡住**：这是所有"建边"的唯一原语（共现/关系/猜测/
@@ -1221,6 +1303,7 @@ static inline int token_add_assoc_ex(Token *t, Token *main, Token *action) {
     e->n_tset = 0;
     memset(e->tset, 0, sizeof e->tset);
     t->count++;
+    if (t->owner) edge_bloom_put(t->owner, t->id, main->id);
     return 0;
 }
 /* §6.588 这条边是不是**知识**（关系/否定/动态谓语位）—— 它和"共现"的维护规则不同：
@@ -1373,6 +1456,8 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
     if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
+    /* §6.685 布隆说"一定没有"⇒ 直接去建边，不扫（否则枢纽词每写一条边扫上千次） */
+    if (a->owner && !edge_bloom_maybe(a->owner, a->id, b->id)) goto l_create_rel;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b) continue;
@@ -1407,6 +1492,7 @@ static inline int token_tag_rel(Token *a, Token *b, uint8_t rel_id, uint32_t bum
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
+l_create_rel:
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->rel = bit;
@@ -1421,6 +1507,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
     if (!a || !b || a == b || rel_id == 0 || rel_id >= REL_DYN_BASE) return -1;   /* §6.584 自环不写 */
     g_obs_revised = 0;
     uint16_t bit = (uint16_t)(1u << (rel_id - 1));
+    if (a->owner && !edge_bloom_maybe(a->owner, a->id, b->id)) goto l_create_nrel;
     for (size_t i = 0; i < a->count; ++i) {
         AssocEntry *e = &token_assocs(a)[i];
         if (e->main != b) continue;
@@ -1444,6 +1531,7 @@ static inline int token_tag_nrel(Token *a, Token *b, uint8_t rel_id, uint32_t bu
         e->mem_state = MEM_ACTIVE;
         return 0;
     }
+l_create_nrel:
     if (token_add_assoc_ex(a, b, NULL) != 0) return -1;
     AssocEntry *e = &token_assocs(a)[a->count - 1];
     e->nrel = bit;

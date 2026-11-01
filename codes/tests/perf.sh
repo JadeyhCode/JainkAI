@@ -30,7 +30,9 @@ esac
 # 便宜的多跑几次（把噪声摊薄），贵的少跑；K10/L 光载入就要几十秒，只能少跑
 case "$TIER" in
     S|M)   N_REL=50; N_CON=50; N_REV=2; N_SAV=2 ;;
-    K10|L) N_REL=10; N_CON=5;  N_REV=1; N_SAV=1 ;;
+    # K10/L 的枢纽词出度上万 ⇒ 一次 ::rel 就打几万行，次数必须压到个位数，
+    # 否则量到的是**磁盘写**不是查询（§6.685 实测：100 次把 4 秒的会话拖成 5 分钟）
+    K10|L) N_REL=2;  N_CON=3;  N_REV=1; N_SAV=1 ;;
 esac
 WORK="$ROOT/_t/perf"
 mkdir -p "$WORK"
@@ -46,27 +48,31 @@ sh "$ROOT/tests/prebuilt.sh" aip "$ROOT/main.c" -std=c11 -O2 -Wall -Wextra -Wped
 BIG="$WORK/big_$TIER.bin"
 if [ ! -f "$BIG" ]; then
     if [ "$GEN" = "mkcorpus" ]; then
-        # 出度上限 2000：`ai_write_rel` 每写一条边要扫该词已有边 ⇒ 造图代价 Σdeg²/2，
-        # 不设上限时枢纽词会把 10^7 边的生成拖成小时级（§6.683）
-        ./mkcorpus "$BIG" "$NW" "$NF" zipf tail 7 2000 || { echo "FAIL: 造图失败"; exit 1; }
+        # 出度上限：§6.683 时是 2000（写入路径 O(出度)，Σdeg²/2 撑不住）；
+        # §6.685 加了边存在性布隆之后放到 20000（更接近真语料的头，造价 27.7 s / 10^7 边）
+        ./mkcorpus "$BIG" "$NW" "$NF" zipf tail 7 20000 || { echo "FAIL: 造图失败"; exit 1; }
     else
         ./mkbig "$BIG" "$NW" "$NF" 7 > /dev/null || { echo "FAIL: 造图失败"; exit 1; }
     fi
 fi
 
-# 跑一段会话：$1=命令文件 $2=输出前缀；回显 "<毫秒> <RSS_KB>"
+MAXS=${MAXS:-120}          # 单次会话硬超时：超过就判该指标 TIMEOUT（基准脚本不许挂住）
+[ "$TIER" = "K10" ] || [ "$TIER" = "L" ] && MAXS=${MAXS_OVERRIDE:-300}
+# 跑一段会话：$1=命令文件 $2=输出前缀；回显 "<毫秒> <RSS_KB> <rc>"
 runsess() {
     _in=$1; _pfx=$2
     _t0=$(date +%s%N)
     if command -v /usr/bin/time > /dev/null 2>&1; then
-        /usr/bin/time -f '%M' -o "$_pfx.rss" ./aip --model "$BIG" < "$_in" > "$_pfx.out" 2>&1
+        timeout "$MAXS" /usr/bin/time -f '%M' -o "$_pfx.rss" ./aip --model "$BIG" < "$_in" > "$_pfx.out" 2>&1
+        _rc=$?
     else
-        ./aip --model "$BIG" < "$_in" > "$_pfx.out" 2>&1
+        timeout "$MAXS" ./aip --model "$BIG" < "$_in" > "$_pfx.out" 2>&1
+        _rc=$?
         echo 0 > "$_pfx.rss"
     fi
     _t1=$(date +%s%N)
     _rss=$(cat "$_pfx.rss" 2>/dev/null || echo 0)
-    echo "$(( (_t1 - _t0) / 1000000 )) ${_rss:-0}"
+    echo "$(( (_t1 - _t0) / 1000000 )) ${_rss:-0} $_rc"
 }
 
 stat3() {  # 从一行空白分隔的数里报 min / 中位 / max
@@ -89,6 +95,8 @@ while [ "$i" -le "$R" ]; do
     o=$(runsess q.in "load.$i")
     ms=$(printf '%s\n' "$o" | cut -d' ' -f1)
     LRSS=$(printf '%s\n' "$o" | cut -d' ' -f2)
+    _lrc=$(printf '%s\n' "$o" | cut -d' ' -f3)
+    [ "${_lrc:-0}" -eq 124 ] && { echo "  [FAIL] 载入超过 ${MAXS}s（TIMEOUT）"; exit 1; }
     LOADS="$LOADS $ms"
     i=$((i + 1))
 done
@@ -132,7 +140,13 @@ measure() {  # $1=标签（也是命令） $2=每组小会话的次数 n（大�
         while [ "$_k" -le $((_n * 2)) ]; do printf '%s\n' "$_cmd" >> "$_f2"; _k=$((_k + 1)); done
         printf '::quit\n' >> "$_f2"
         _o1=$(runsess "$_f1" "b1.$_j"); _t1=$(printf '%s\n' "$_o1" | cut -d' ' -f1)
+        _rc1=$(printf '%s\n' "$_o1" | cut -d' ' -f3)
         _o2=$(runsess "$_f2" "b2.$_j"); _t2=$(printf '%s\n' "$_o2" | cut -d' ' -f1)
+        _rc2=$(printf '%s\n' "$_o2" | cut -d' ' -f3)
+        if [ "${_rc1:-0}" -eq 124 ] || [ "${_rc2:-0}" -eq 124 ]; then
+            printf '| %-46s | %5s | %5s | %5s | %3s |\n' "$_cmd" "-" ">${MAXS}s" "-" "超时"
+            return 0
+        fi
         _per=$(( (_t2 - _t1) / _n ))
         [ "$_per" -lt 0 ] && _per=0
         _vals="$_vals $_per"
