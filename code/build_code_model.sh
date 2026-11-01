@@ -17,12 +17,13 @@ OUT=code/code_model.bin
 
 [ -s code/knowledge/skeletons.triples ] || { echo "FAIL: 缺 skeletons.triples"; exit 1; }
 [ -s code/knowledge/capi.triples ] || { echo "FAIL: 缺 capi.triples（先跑 tools/headers2triples.sh）"; exit 1; }
+[ -s code/knowledge/compose.triples ] || { echo "FAIL: 缺 compose.triples（组合知识）"; exit 1; }
 
 mkdir -p _t
 cp model.bin "$OUT.work"
 # 两个文件按顺序灌（骨架在前：它是合成器最先要查的）
 cp "$OUT.work" "$OUT.tmp.bin"
-printf '::ingest code/knowledge/skeletons.triples\n::ingest code/knowledge/capi.triples\n::save %s\n::quit\n' "$OUT" > _t/codebuild.in
+printf '::ingest code/knowledge/skeletons.triples\n::ingest code/knowledge/compose.triples\n::ingest code/knowledge/capi.triples\n::save %s\n::quit\n' "$OUT" > _t/codebuild.in
 /usr/bin/time -f '  灌图+存盘墙钟 %e s（峰值 RSS %M KB）' ./build_aip --model "$OUT.tmp.bin" < _t/codebuild.in 2>&1 | grep -aE '导入|现在：|已保存|墙钟'
 rm -f "$OUT.tmp.bin"
 

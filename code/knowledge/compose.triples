@@ -1,0 +1,42 @@
+# §6.703 组合知识：片段（函数）+ 模板（main 骨架）+ 主体（任务特有的那几行）
+# 组合器把三类片段按图上的边拼起来 —— 消融时删掉片段代码，程序就编不过
+片段:is_prime	代码	static int is_prime(long n) {\
+    if (n < 2) return 0;\
+    for (long i = 2; i * i <= n; i++) if (n % i == 0) return 0;\
+    return 1;\
+}
+片段:bubble	代码	static void bubble(int *a, int n) {\
+    for (int i = 0; i < n - 1; i++)\
+        for (int j = 0; j < n - 1 - i; j++)\
+            if (a[j] > a[j+1]) { int t = a[j]; a[j] = a[j+1]; a[j+1] = t; }\
+}
+模板:命令行整数	代码	#include <stdio.h>\
+#include <stdlib.h>\
+int main(int argc, char **argv) {\
+    long N = argc > 1 ? atol(argv[1]) : 30;\
+    int ok = 1;\
+<SLOTS>\
+    printf("%s\n", ok ? "ok" : "FAIL");\
+    return ok ? 0 : 1;\
+}
+任务:素数统计	关键词	素数个数
+任务:素数统计	关键词	素数的个数
+任务:素数统计	关键词	统计素数
+任务:素数统计	模板	模板:命令行整数
+任务:素数统计	用	片段:is_prime
+任务:素数统计	用途	统计 2..N 里素数的个数（复用 片段:is_prime）
+任务:素数统计	主体	    long cnt = 0;\
+    for (long i = 2; i <= N; i++) if (is_prime(i)) cnt++;\
+    printf("%ld\n", cnt);\
+    if (cnt != 10) ok = 0;
+任务:排序取中位数	关键词	中位数
+任务:排序取中位数	关键词	排序后取中间
+任务:排序取中位数	模板	模板:命令行整数
+任务:排序取中位数	用	片段:bubble
+任务:排序取中位数	用途	排序后取中位数（复用 片段:bubble）
+任务:排序取中位数	主体	    int a[7] = {9, 3, 7, 1, 5, 8, 2};\
+    int n = 7;\
+    bubble(a, n);\
+    int mid = a[n / 2];\
+    printf("%d\n", mid);\
+    if (mid != 5) ok = 0;

@@ -397,20 +397,101 @@ static inline int code_synth(AI *ai, const char *desc, char *note, size_t cap) {
     /* ① 找最匹配的任务 */
     Token *best = NULL;
     int best_hits = 0;
+    size_t best_len = 0;      /* 命中关键词里**最长**的那个的长度（打平手时更具体的胜出）*/
     for (size_t i = 0; i < ai->pool->count; ++i) {
         Token *t = ai->pool->tokens[i];
         if (!t || !t->name || strncmp(t->name, "任务:", 7) != 0) continue;
         int hits = 0;
+        size_t longest = 0;
         for (size_t j = 0; j < t->count; ++j) {
             const AssocEntry *e = &token_assocs_ro(t)[j];
             if (!e->main || e->dyn != dyn_kw || !e->main->name) continue;
-            if (strstr(desc, e->main->name)) hits++;
+            if (strstr(desc, e->main->name)) {
+                hits++;
+                size_t l = strlen(e->main->name);
+                if (l > longest) longest = l;
+            }
         }
-        if (hits > best_hits) { best = t; best_hits = hits; }
+        /* §6.703 打平手时**关键词更长的胜出**：否则"统计素数的个数"会命中更泛的 任务:素数，
+         * 而不是更具体的 任务:素数统计（两边都只命中 1 个词）。 */
+        if (hits > best_hits || (hits == best_hits && hits > 0 && longest > best_len)) {
+            best = t; best_hits = hits; best_len = longest;
+        }
     }
     if (!best) {
         if (note && cap) snprintf(note, cap, "没有匹配的任务（描述里的关键词在图里一个都没命中）");
         return -1;
+    }
+    /* ①b §6.703 **组合**：任务若挂 `模板` 边，就从"片段 + 模板 + 主体"三条知识拼出来，
+     * 而不是取一份整程序。拼装规则（都在图的边上）：
+     *   任务 --模板--> 模板:X        （main 骨架，含 `<SLOTS>` 占位）
+     *   任务 --用-->   片段:A …      （按边序拼接的辅助函数）
+     *   任务 --主体--> 一段代码       （任务特有的那几行，填进 `<SLOTS>`）
+     * 消融：删掉 `片段:* 代码` ⇒ 拼出来的程序缺函数 ⇒ 编不过 ⇒ 合成失败。*/
+    uint8_t rid_tp = rel_id_of(ai, "模板", 0);
+    uint8_t rid_use = rel_id_of(ai, "用", 0);
+    uint8_t rid_body = rel_id_of(ai, "主体", 0);
+    if (rid_tp >= REL_DYN_BASE && rid_use >= REL_DYN_BASE && rid_body >= REL_DYN_BASE) {
+        uint8_t d_tp = (uint8_t)(rid_tp - REL_DYN_BASE + 1);
+        uint8_t d_use = (uint8_t)(rid_use - REL_DYN_BASE + 1);
+        uint8_t d_body = (uint8_t)(rid_body - REL_DYN_BASE + 1);
+        Token *tmpl = NULL, *body = NULL;
+        for (size_t j = 0; j < best->count; ++j) {
+            const AssocEntry *e = &token_assocs_ro(best)[j];
+            if (!e->main) continue;
+            if (e->dyn == d_tp) tmpl = e->main;
+            else if (e->dyn == d_body) body = e->main;
+        }
+        if (tmpl && body && body->name) {
+            const char *tcode = NULL;
+            for (size_t j = 0; j < tmpl->count; ++j) {
+                const AssocEntry *e = &token_assocs_ro(tmpl)[j];
+                if (e->main && e->dyn == dyn_cd && e->main->name) { tcode = e->main->name; break; }
+            }
+            char *buf = (char *)malloc(CODE_SRC_CAP);
+            if (!buf) { if (note && cap) snprintf(note, cap, "内存不够"); return -2; }
+            size_t len = 0;
+            int pieces = 0;
+            for (size_t j = 0; j < best->count; ++j) {      /* 片段：按边序 */
+                const AssocEntry *e = &token_assocs_ro(best)[j];
+                if (!e->main || e->dyn != d_use) continue;
+                const char *fc = NULL;
+                for (size_t k = 0; k < e->main->count; ++k) {
+                    const AssocEntry *f = &token_assocs_ro(e->main)[k];
+                    if (f->main && f->dyn == dyn_cd && f->main->name) { fc = f->main->name; break; }
+                }
+                if (!fc) continue;
+                int n = snprintf(buf + len, CODE_SRC_CAP - len, "%s\n", fc);
+                if (n < 0 || (size_t)n >= CODE_SRC_CAP - len) break;
+                len += (size_t)n; pieces++;
+            }
+            if (tcode && len < CODE_SRC_CAP) {
+                const char *sl = strstr(tcode, "<SLOTS>");
+                if (sl) {
+                    size_t head = (size_t)(sl - tcode);
+                    memcpy(buf + len, tcode, head); len += head;
+                    int n = snprintf(buf + len, CODE_SRC_CAP - len, "%s", body->name);
+                    if (n > 0) len += (size_t)n;
+                    const char *tail = sl + 7;
+                    n = snprintf(buf + len, CODE_SRC_CAP - len, "%s\n", tail);
+                    if (n > 0) len += (size_t)n;
+                }
+            }
+            const char *nm2 = best->name + 7;
+            char rel2[256]; snprintf(rel2, sizeof rel2, "synth_%s.c", nm2);
+            int w = action_write_file(ai, rel2, buf);
+            free(buf);
+            if (w != 0) { if (note && cap) snprintf(note, cap, "写文件失败：%s", g_act.last_reason); return -2; }
+            char nb2[1024] = {0};
+            int rc2 = code_test_file(ai, rel2, nb2, sizeof nb2);
+            if (note && cap) {
+                char hd[192];
+                snprintf(hd, sizeof hd, "组合：%d 个片段 + 模板 %s + 主体（任务 %s）→ ", pieces,
+                         tmpl->name ? tmpl->name : "?", best->name);
+                snprintf(note, cap, "%s%.120s", hd, nb2);
+            }
+            return rc2;
+        }
     }
     /* ② 骨架 → 代码（两步都必须在图上**查得到**） */
     Token *skel = NULL;

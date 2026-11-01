@@ -142,6 +142,7 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
         mkdir -p "$SB/code/knowledge"
         [ -f "$ROOT/code/build_code_model.sh" ] && cp "$ROOT/code/build_code_model.sh" "$SB/code/"
         [ -f "$ROOT/code/knowledge/skeletons.triples" ] && cp "$ROOT/code/knowledge/skeletons.triples" "$SB/code/knowledge/"
+        [ -f "$ROOT/code/knowledge/compose.triples" ] && cp "$ROOT/code/knowledge/compose.triples" "$SB/code/knowledge/"
     fi
     cp "$ROOT/model.bin" "$SB/model.bin"
     cp "$ROOT/build_aip" "$SB/build_aip"

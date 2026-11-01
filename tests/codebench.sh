@@ -95,6 +95,8 @@ cat > tasks.txt <<'EOF'
 写一个程序：把十进制数转成二进制和十六进制输出。
 写一个程序：求两个数的最大公约数。
 写一个程序：统计字符串里的字母、数字、空格和其他字符个数。
+写一个程序：统计 2..N 里素数的个数（复用已有的素数判断）。
+写一个程序：把数组排序后取中位数。
 EOF
 MODEL=${CMODEL:-$ROOT/code/code_model.bin}
 if [ ! -s "$MODEL" ]; then       # 生成物不进仓库：缺了就现场造（和 codeknow 一样）
@@ -124,14 +126,19 @@ echo "== C 段：消融（删掉「骨架→代码」的边，必须写不出来
 # 而不是"关系没登记"——后者是更弱的失败，会把"知识真的在用"这件事验偏）
 awk -F'\t' 'BEGIN{OFS="\t"} { if ($2 == "代码" && $1 != "骨架:单词计数") next; print }' \
     "$ROOT/code/knowledge/skeletons.triples" > abl.triples
+# 组合知识这一侧：把 `片段:* 代码` 删掉（模板留着）⇒ 拼出来的程序缺函数 ⇒ 编不过
+if [ -s "$ROOT/code/knowledge/compose.triples" ]; then
+    awk -F'\t' 'BEGIN{OFS="\t"} { if ($2 == "代码" && $1 ~ /^片段:/) next; print }' \
+        "$ROOT/code/knowledge/compose.triples" >> abl.triples
+fi
 cp "$ROOT/model.bin" abl.bin
 printf '::ingest %s\n::save %s/abl_model.bin\n::quit\n' "$WORK/abl.triples" "$WORK" > abl.in
 ( cd "$WORK" && "$ROOT/build_aip" --model abl.bin < abl.in > abl.log 2>&1 )
-printf '::act on\n::code synth 写一个程序：输出 1..N 里的素数\n::quit\n' > abl2.in
+printf '::act on\n::code synth 写一个程序：统计 2..N 里素数的个数\n::quit\n' > abl2.in
 ( cd "$ROOT" && _t/codebench/build_aip --model "$WORK/abl_model.bin" < _t/codebench/abl2.in > _t/codebench/abl_out.txt 2>&1 )
 if grep -qa '测试全绿' abl_out.txt; then
     bad "消融之后**居然还能写出来** —— 说明代码不是从图里来的" "$(grep -a '\[合成\]' abl_out.txt | head -1)"
-elif grep -qa '没有它的 代码 边' abl_out.txt; then
+elif grep -qa '没编过\|没有它的 代码 边\|缺' abl_out.txt; then
     C_OK=1; ok "消融之后写不出来，而且**说清了原因**：$(grep -a '\[合成\]' abl_out.txt | head -1 | sed 's/.*\[合成\] //' | cut -c1-90)"
 else
     bad "消融之后失败原因不对（应为「没有 代码 边」）" "$(grep -a '\[合成\]' abl_out.txt | head -1)"
