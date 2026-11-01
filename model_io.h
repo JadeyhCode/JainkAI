@@ -524,6 +524,28 @@ static inline void ai_recount_evidence(AI *ai) {
     ai->n_retracted = revoked;      /* 从图里数回来（§6.78） */
 }
 
+/* §6.683 **载入分阶段计时**（`AIP_LOADDBG=1` 才开）：扩图到 10^7 边时载入跑不完，
+ * 没有分阶段数字就只能猜是哪一段。默认关，零成本（一进函数读一次 getenv）。 */
+static inline long mio_dbg_enabled(void) {
+    /* ⚠ 不许用"函数内 static 缓存"：`ai_load_file` 会被**多线程**调用（conc_tsan 抓到了
+     * `model_io.h:531 in mio_dbg_enabled` 的 data race）。getenv 本身是线程安全读，
+     * 一次加载只问 8 次，成本可以忽略。 */
+    return getenv("AIP_LOADDBG") ? 1 : 0;
+}
+static inline long mio_dbg_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+static inline void mio_dbg_tick(const char *what) {
+    static long t0 = 0, last = 0;
+    if (!mio_dbg_enabled()) return;
+    long now = mio_dbg_ms();
+    if (t0 == 0) { t0 = now; last = now; }
+    fprintf(stderr, "[load] %-26s +%6ld ms（累计 %6ld ms）\n", what, now - last, now - t0);
+    last = now;
+}
+
 static inline AI *ai_load_file(const char *path) {
     if (!path) return NULL;
     FILE *f = fopen(path, "rb");
@@ -537,6 +559,7 @@ static inline AI *ai_load_file(const char *path) {
     size_t rd = fread(buf, 1, (size_t)flen, f);
     fclose(f);
     if (rd != (size_t)flen) { free(buf); return NULL; }
+    mio_dbg_tick("① 读文件（+malloc）");
 
     /* 关键：这里不能用 ai_new()。ai_new() 会先建一个自己的池，并把该池的符号节点
      * 写进表达池的边（ai_init_expr_pools）。如果之后把 ai->pool 换成快照池，那些边
@@ -1106,6 +1129,7 @@ static inline AI *ai_load_file(const char *path) {
             }
         }
     }
+    mio_dbg_tick("② 反序列化（词/边/标记）");
     np->loading = 1;                      /* §6.111：下面这段重建里的 touch 不算"观测" */
     rel_names_intern(ai);                 /* 关系词先进词池，否则会被切碎 */
     relations_load(ai, "relations.txt");  /* 静态关系知识（像 frames.txt 一样现读） */
@@ -1115,6 +1139,7 @@ static inline AI *ai_load_file(const char *path) {
      *   （`::frames` 报「没有帧库」）→ 帧层与检索块里的思维链步骤全部消失。
      *   tests/all.sh 的冒烟现在会硬断言这三层加载后都在（见 tests/all.sh）。 */
     frames_load(ai, "frames.txt");   /* 结构化帧库同理（从文件现读） */
+    mio_dbg_tick("③ 关系/帧库加载");
     /* ⚠ 三个派生层必须排在**所有会造词/加边的步骤之后**，而且与 main.c 的
      *   训练收尾顺序完全一致（frames_load → stabilize → emb → 槽类 → idf）。
      *   它们都是「从最终的图现算」：早算一步就等于算在旧的图上，
@@ -1146,15 +1171,20 @@ static inline AI *ai_load_file(const char *path) {
             }
         }
     }
+    mio_dbg_tick("④ 反查倒排表重建");
     /* §6.584 老数据里的"死的自环边"（a→a、无角色/关系/命中）**读盘时清掉**：
      * 留着的话，用户问 `A R A` 会让强化/答复路径把它 touch 成"带语义的自环"，
      * 之后不变式就抓不干净了。清完"图里没有自环"是硬不变式（`aicheck.h`）。
      * 放在 `ai_embed_build` **之前**：那些死边 hits=0，本来就不进 emb，顺序只为让语义清楚。 */
     { size_t dead = pool_drop_dead_self_loops(ai->pool);
       if (dead && getenv("AIP_PATDBG")) fprintf(stderr, "[load] 清掉死的自环边 %zu 条\n", dead); }
+    mio_dbg_tick("⑤ 清死自环");
     ai_embed_build(ai);       /* 分布式表示（PPMI 随机索引）也现算，不进快照 */
+    mio_dbg_tick("⑥ emb 重建");
     ai_slots_build(ai);       /* 同位槽类同理 */
+    mio_dbg_tick("⑦ 槽类重建");
     ai_idf_rebuild(ai);       /* IDF 从整句库现算，不进快照 */
+    mio_dbg_tick("⑧ idf 重建");
 
     if (r.err) goto fail_ai;
 

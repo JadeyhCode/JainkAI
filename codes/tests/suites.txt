@@ -106,6 +106,8 @@ pdf|sh tests/pdf.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 pdf_real|sh tests/pdf_real.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.680 联网检索：默认关 / 白名单精确匹配 / 只认 https / 被拒也记账（**离线**；真抓要 AIP_NET_LIVE=1）
 net|sh tests/net.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.682 性能量尺（阶段三 M0）：五指标 min/中位/max + 机器指纹 + **图真的载入了**的语义看护
+perf|sh tests/perf.sh S 3 0 > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.632 规模门槛：合成大图（**S 档 3 秒**；M 档约 100 秒，只在手动跑时用 M/L）
 scale|sh tests/scale.sh S > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.617 写-跑-看错-改 的机械闭环（真机跑 gcc；要 ::act on，只在 _t/work 里发生）

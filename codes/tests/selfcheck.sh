@@ -341,12 +341,15 @@ _tmp2=$(mktemp -d)
 #   delo            —— §6.198 记录里**引用过这个错拼**（真命令是 ::delib）；记录本身不改
 #   lease / prune / relx / x / xxx —— 文档里明确说"没有这个命令"或纯示例
 #   drift           —— §6.299 删掉了 `::drift`（hv_prev 恒等 ⇒ 漂移恒 0）；文档里是**历史记录**，不改
+#   ingest          —— **计划命令**：docs/阶段三-计划.md §3 WP1 里写的（结构性导入），还没实现；
+#                      那边明写「（计划）」，这里放行是为了让"计划书"能写具体的命令形状（§6.682）
 cat > "$_tmp2/ok" <<'OK'
 affect
 aidump
 delo
 drift
 forget
+ingest
 lease
 note
 pron
