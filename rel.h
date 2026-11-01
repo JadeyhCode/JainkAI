@@ -1401,7 +1401,7 @@ static inline size_t aip_check_excl_conflicts_rec(AI *ai, char *first, size_t ca
          * 超过 AIP_EXCL_MAX_VALS 就**整词跳过**（两两比较是 k²，k=20000 时 2 亿对，
          * 而且每对还要判包含 —— 那样的词在合成图上遍地都是，命令会变成小时级）。
          * 跳过要**明说**（返回的"跳过词数"），不能假装图上没矛盾。 */
-        {
+        if (A->count > AIP_EXCL_MAX_VALS) {     /* 出度小的词不用先数（两两比较本来就够快） */
             size_t cnt[REL_TABLE_MAX + 2];
             memset(cnt, 0, sizeof cnt);
             int too_many = 0;
