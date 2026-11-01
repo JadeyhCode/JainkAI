@@ -1,5 +1,7 @@
 # 编译产物
 build_*
+# 例外：这个是**脚本**不是编译产物（否则 `build_*` 会把它一起忽略）
+!code/build_code_model.sh
 *.o
 # 临时/测量目录（每次跑测试都会重建）
 _t/
@@ -22,3 +24,9 @@ aip_t
 
 # §6.680 联网抓回来的正文/账本：正文多半有版权（arXiv 也有各自的许可），账本是本机的
 papers/cache/
+
+# 阶段四：生成物（可重建，别进仓库 —— capi.triples 13 MB、code_model.bin 28 MB）
+code/knowledge/capi.triples
+code/code_model.bin
+code/code_model.bin.work
+code/code_model.bin.tmp.bin

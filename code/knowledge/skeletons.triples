@@ -1,0 +1,136 @@
+# §6.699 代码骨架知识（阶段四 M1）
+# 格式：主体<TAB>关系<TAB>客体；行尾 `\` 表示续行（代码片段用得到）
+任务:素数	关键词	素数
+任务:素数	关键词	质数
+任务:素数	骨架	骨架:素数
+任务:素数	用途	命令行给上限 N，逐行输出 2..N 的素数
+骨架:素数	语言	C11
+骨架:素数	依赖	stdio.h stdlib.h
+骨架:素数	代码	#include <stdio.h>\
+#include <stdlib.h>\
+static int is_prime(long n) { if (n < 2) return 0; for (long i = 2; i * i <= n; i++) if (n % i == 0) return 0; return 1; }\
+int main(int argc, char **argv) {\
+    long N = argc > 1 ? atol(argv[1]) : 30, cnt = 0;\
+    for (long i = 2; i <= N; i++) if (is_prime(i)) { printf("%ld\n", i); cnt++; }\
+    printf("%s\n", is_prime(97) && !is_prime(91) ? "ok prime" : "FAIL prime");\
+    printf("%s\n", cnt == 10 ? "ok count" : "FAIL count");\
+    return (is_prime(97) && !is_prime(91) && cnt == 10) ? 0 : 1;\
+}
+任务:字符串倒序	关键词	倒序
+任务:字符串倒序	关键词	反转
+任务:字符串倒序	关键词	逆序
+任务:字符串倒序	骨架	骨架:字符串倒序
+任务:字符串倒序	用途	读一行字符串（stdin），倒序输出
+骨架:字符串倒序	语言	C11
+骨架:字符串倒序	依赖	stdio.h string.h
+骨架:字符串倒序	代码	#include <stdio.h>\
+#include <string.h>\
+int main(void) {\
+    char s[256];\
+    if (!fgets(s, sizeof s, stdin)) return 1;\
+    size_t n = strlen(s);\
+    while (n && (s[n-1] == '\n' || s[n-1] == '\r')) s[--n] = 0;\
+    char t[256];\
+    for (size_t i = 0; i < n; i++) t[i] = s[n-1-i];\
+    t[n] = 0;\
+    printf("%s\n", t);\
+    char a[8] = "abc", b[8];\
+    size_t m = strlen(a);\
+    for (size_t i = 0; i < m; i++) b[i] = a[m-1-i];\
+    b[m] = 0;\
+    int ok = strcmp(b, "cba") == 0;\
+    printf("%s\n", ok ? "ok rev" : "FAIL rev");\
+    return ok ? 0 : 1;\
+}
+任务:斐波那契	关键词	斐波那契
+任务:斐波那契	关键词	fib
+任务:斐波那契	骨架	骨架:斐波那契
+任务:斐波那契	用途	读 N，输出前 N 项，空格分隔
+骨架:斐波那契	语言	C11
+骨架:斐波那契	依赖	stdio.h stdlib.h
+骨架:斐波那契	代码	#include <stdio.h>\
+#include <stdlib.h>\
+int main(int argc, char **argv) {\
+    long n = argc > 1 ? atol(argv[1]) : 10, a = 0, b = 1;\
+    for (long i = 0; i < n; i++) { printf("%ld%s", a, i + 1 < n ? " " : "\n"); long c = a + b; a = b; b = c; }\
+    long want[10] = {0,1,1,2,3,5,8,13,21,34}, x = 0, y = 1;\
+    int ok = 1;\
+    for (int i = 0; i < 10; i++) { if (i) { long z = x + y; x = y; y = z; } if (x != want[i]) ok = 0; }\
+    printf("%s\n", ok ? "ok fib" : "FAIL fib");\
+    return ok ? 0 : 1;\
+}
+任务:最值平均	关键词	最大值
+任务:最值平均	关键词	最小值
+任务:最值平均	关键词	平均值
+任务:最值平均	关键词	平均
+任务:最值平均	骨架	骨架:最值平均
+任务:最值平均	用途	读 N 个整数（stdin），输出 max/min/avg
+骨架:最值平均	语言	C11
+骨架:最值平均	依赖	stdio.h
+骨架:最值平均	代码	#include <stdio.h>\
+int main(void) {\
+    long v[64];\
+    int n = 0;\
+    while (n < 64 && scanf("%ld", &v[n]) == 1) n++;\
+    if (n <= 0) { printf("%s\n", "FAIL empty"); return 1; }\
+    long mx = v[0], mn = v[0];\
+    double sum = 0;\
+    for (int i = 0; i < n; i++) { if (v[i] > mx) mx = v[i]; if (v[i] < mn) mn = v[i]; sum += v[i]; }\
+    printf("max=%ld min=%ld avg=%.2f\n", mx, mn, sum / n);\
+    long t[5] = {3,1,4,1,5}, tmx = 5, tmn = 1; double ts = 14;\
+    long gmx = t[0], gmn = t[0]; double gs = 0;\
+    for (int i = 0; i < 5; i++) { if (t[i] > gmx) gmx = t[i]; if (t[i] < gmn) gmn = t[i]; gs += t[i]; }\
+    int ok = (gmx == tmx && gmn == tmn && gs == ts);\
+    printf("%s\n", ok ? "ok stats" : "FAIL stats");\
+    return ok ? 0 : 1;\
+}
+任务:二分查找	关键词	二分
+任务:二分查找	关键词	查找
+任务:二分查找	骨架	骨架:二分查找
+任务:二分查找	用途	有序数组里找 key，输出下标或 -1
+骨架:二分查找	语言	C11
+骨架:二分查找	依赖	stdio.h
+骨架:二分查找	代码	#include <stdio.h>\
+static int bsearch_int(const int *a, int n, int key) {\
+    int lo = 0, hi = n - 1;\
+    while (lo <= hi) { int mid = lo + (hi - lo) / 2; if (a[mid] == key) return mid; if (a[mid] < key) lo = mid + 1; else hi = mid - 1; }\
+    return -1;\
+}\
+int main(void) {\
+    int a[6] = {1,3,5,7,9,11}, n = 6, k;\
+    if (scanf("%d", &k) != 1) k = 7;\
+    printf("%d\n", bsearch_int(a, n, k));\
+    int ok = bsearch_int(a, n, 7) == 3 && bsearch_int(a, n, 4) == -1 && bsearch_int(a, n, 1) == 0;\
+    printf("%s\n", ok ? "ok bsearch" : "FAIL bsearch");\
+    return ok ? 0 : 1;\
+}
+任务:单词计数	关键词	单词
+任务:单词计数	关键词	行数
+任务:单词计数	关键词	字符数
+任务:单词计数	关键词	wc
+任务:单词计数	骨架	骨架:单词计数
+任务:单词计数	用途	统计文件的行/词/字符数（类似 wc）
+骨架:单词计数	语言	C11
+骨架:单词计数	依赖	stdio.h
+骨架:单词计数	代码	#include <stdio.h>\
+int main(int argc, char **argv) {\
+    const char *fn = argc > 1 ? argv[1] : "/etc/hostname";\
+    FILE *f = fopen(fn, "rb");\
+    if (!f) { printf("%s\n", "FAIL open"); return 1; }\
+    long lines = 0, words = 0, chars = 0;\
+    int c, inw = 0;\
+    while ((c = fgetc(f)) != EOF) {\
+        chars++;\
+        if (c == '\n') lines++;\
+        if (c == ' ' || c == '\n' || c == '\t') inw = 0;\
+        else if (!inw) { inw = 1; words++; }\
+    }\
+    fclose(f);\
+    printf("%ld %ld %ld\n", lines, words, chars);\
+    FILE *g = fopen(fn, "rb");\
+    long self_lines = 0;\
+    if (g) { int d; while ((d = fgetc(g)) != EOF) if (d == '\n') self_lines++; fclose(g); }\
+    int ok = lines == self_lines && chars > 0 && words > 0;\
+    printf("%s\n", ok ? "ok wc" : "FAIL wc");\
+    return ok ? 0 : 1;\
+}
