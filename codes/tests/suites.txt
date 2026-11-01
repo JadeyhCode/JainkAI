@@ -119,7 +119,11 @@ codetry|sh tests/codetry.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" 
 # §6.606 真实用户会话验收：教→问→改口→冲突→存读→切脑（一段像人说话的剧本走完）
 e2e_session|sh tests/e2e_session.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.600 命令面随机会话：切脑 / 存读 / 局部加载 / op 组合（固定种子，跑完必须 revcheck 缺 0 条）
-cmdfuzz|sh tests/cmdfuzz.sh 6 40 > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.691 **加量到 20×200**（原来 6×40）：扩量之后当场抓到 `::brain save N` 顺着空槽解引用的 segfault；
+# 种子 10/12/17 是当时崩过的三个 —— 留在整包里当回归看护。重活（bughunt 3000 步）在 tests/fuzz_long.sh。
+cmdfuzz|sh tests/cmdfuzz.sh 20 200 > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.691 加量模糊的**入口自检**（整包里只跑小参数：确认脚本本身能用；重活在 `tests/fuzz_long.sh` 手动跑）
+fuzz_long|sh tests/fuzz_long.sh 60 6 40 > ctest.log 2>&1; rc=$?; tail -5 ctest.log; [ "$rc" -eq 0 ]
 # §6.583 跨进程并发写同一份文件：唯一临时名 + 原子替换（旧实现会失败/写坏；本套抓得到）
 concfiles|sh tests/concfiles.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.582 并发看护（TSan）：数据竞争必须 0（约 50s；机器 ASLR 让 TSan 起不来时显式 SKIP）

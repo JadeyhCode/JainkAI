@@ -2040,8 +2040,13 @@ int main(int argc, char **argv) {
                         if (sp3) { *sp3 = 0; ia = (size_t)strtoul(tmp, NULL, 10); ib = (size_t)strtoul(sp3 + 1, NULL, 10); }
                         else ia = (size_t)strtoul(tmp, NULL, 10);
                     }
-                    if (ia == (size_t)-1 || ib == (size_t)-1 || ia >= g_nbrains || ib >= g_nbrains) {
-                        printf("[多脑] 说「::brain diff A B」（两个都写，0..%zu）\n", g_nbrains ? g_nbrains - 1 : 0);
+                    if (ia == (size_t)-1 || ib == (size_t)-1 || ia >= g_nbrains || ib >= g_nbrains ||
+                        !g_brains[ia] || !g_brains[ib]) {
+                        /* §6.691 **空槽不是"没有这个号"**：`::brain drop` 会把槽置空、号还在
+                         * （`brain_alloc_slot` 专门复用空槽）⇒ 这里必须判 NULL，
+                         * 否则 `::brain diff` 顺着空指针解引用（扩量 fuzz 抓到过 segfault）*/
+                        printf("[多脑] 说「::brain diff A B」（两个都写，0..%zu；空槽=已 drop）\n",
+                               g_nbrains ? g_nbrains - 1 : 0);
                     } else {
                         AI *ba = g_brains[ia]->brain, *bb = g_brains[ib]->brain;
                         size_t only_a = 0, only_b = 0, shown = 0;
@@ -2129,7 +2134,7 @@ int main(int argc, char **argv) {
                         else if (tmp[0] >= '0' && tmp[0] <= '9') k = (size_t)strtoul(tmp, NULL, 10);
                         else snprintf(fn, sizeof fn, "%s", tmp);
                     }
-                    if (k >= g_nbrains) printf("[多脑] 没有 #%zu\n", k);
+                    if (k >= g_nbrains || !g_brains[k]) printf("[多脑] 没有 #%zu（空槽=已 drop）\n", k);
                     else {
                         char def[64];
                         if (!fn[0]) { snprintf(def, sizeof def, "brain%zu.bin", k); snprintf(fn, sizeof fn, "%s", def); }
