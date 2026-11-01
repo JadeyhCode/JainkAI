@@ -122,6 +122,9 @@ e2e_session|sh tests/e2e_session.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; 
 # §6.691 **加量到 20×200**（原来 6×40）：扩量之后当场抓到 `::brain save N` 顺着空槽解引用的 segfault；
 # 种子 10/12/17 是当时崩过的三个 —— 留在整包里当回归看护。重活（bughunt 3000 步）在 tests/fuzz_long.sh。
 cmdfuzz|sh tests/cmdfuzz.sh 20 200 > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.692/§6.693 并发 + **大图**：造 5 万词/20 万边的合成图，再跑同一套并发看护
+# （TSan 在 10⁷ 边上会跑到几十分钟 ⇒ 这里只到 20 万边；图更大时的并发靠 ASan 手动验，见 §6.693）
+conc_big|sh tests/conc_big.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.691 加量模糊的**入口自检**（整包里只跑小参数：确认脚本本身能用；重活在 `tests/fuzz_long.sh` 手动跑）
 fuzz_long|sh tests/fuzz_long.sh 60 6 40 > ctest.log 2>&1; rc=$?; tail -5 ctest.log; [ "$rc" -eq 0 ]
 # §6.583 跨进程并发写同一份文件：唯一临时名 + 原子替换（旧实现会失败/写坏；本套抓得到）

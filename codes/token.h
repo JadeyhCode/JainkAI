@@ -1057,8 +1057,20 @@ static inline size_t pool_share_emb(TokenPool *dst, const TokenPool *src) {
         Token *b = src->tokens[i];
         if (!a->emb || !b->emb) continue;
         if (a->emb == b->emb) { n++; continue; }       /* 已经共享过 */
+        /* §6.693 先问"能不能共享"，成功才放旧的；不能共享就**复制一份**（各持一份）。
+         * 老写法是"先 release 再 share"，share 失败（表满）时两个池会指着同一块却没计数
+         * ⇒ double free。 */
+        int8_t *sp = (int8_t *)aip_buf_share(b->emb);
+        if (!sp) {
+            int8_t *cp = (int8_t *)malloc(EMB_DIM);
+            if (!cp) continue;                          /* 分配不出来：这一块不共享也不复制 */
+            memcpy(cp, b->emb, EMB_DIM);
+            aip_buf_release(a->emb);
+            a->emb = cp;
+            continue;
+        }
         aip_buf_release(a->emb);                       /* 丢掉自己那份（可能是私有的）*/
-        a->emb = (int8_t *)aip_buf_share(b->emb);
+        a->emb = sp;
         n++;
     }
     return n;

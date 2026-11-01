@@ -29,10 +29,15 @@
 #include <stdint.h>
 #include "conc.h"      /* §6.582 自旋锁：共享表必须锁（多线程并发释放会双释放）*/
 
-/* 最多同时共享多少块。出厂图 1469 词 ⇒ 全共享也只有 1469 块；8192 够 5 个脑。
- * 满了就返回"没共享成"，调用方照旧各持一份（正确性不受影响）。 */
-#ifndef AIP_BUF_MAX
-#define AIP_BUF_MAX 8192u
+/* 表**动态增长**（§6.693）。原来是静态 8192 条，注释写着"满了就返回没共享成，
+ * 调用方照旧各持一份（正确性不受影响）"—— 那句话是**错的**：`aip_buf_share` 满了
+ * 返回的还是**同一个指针**，于是两个池都以为自己独占，各自释放 ⇒ **double free**。
+ * 实测（`tests/conc_big.sh` 的 5 万词合成图，ASan）：
+ *   attempting double-free ... aip_buf_release ← pool_free ← ai_free ← free_worker
+ * 现在：① 表按需翻倍（上限 AIP_BUF_MAX_HARD，只受内存限制）；
+ *       ② 增长失败时 `aip_buf_share` 返回 **NULL**（"没共享成"），调用方退回**复制**。 */
+#ifndef AIP_BUF_MAX_HARD
+#define AIP_BUF_MAX_HARD (1u << 22)     /* 400 万块 ≈ 64 MB 表；够 400 万个词的图 */
 #endif
 
 typedef struct {
@@ -40,8 +45,21 @@ typedef struct {
     uint32_t n;      /* 有几个人指着（≥2 才在表里）*/
 } AipBufRef;
 
-static AipBufRef g_bufref[AIP_BUF_MAX];
+static AipBufRef *g_bufref = NULL;
+static size_t    g_bufref_cap = 0;
 static size_t    g_bufref_n = 0;
+
+/* 扩容（**必须在锁里调**）。失败返回 -1（表保持原样，调用方当"没共享成"处理）。 */
+static inline int aip_buf_grow(void) {
+    size_t ncap = g_bufref_cap ? g_bufref_cap * 2 : 1024;
+    if (ncap > AIP_BUF_MAX_HARD) ncap = AIP_BUF_MAX_HARD;
+    if (ncap <= g_bufref_cap) return -1;
+    AipBufRef *nb = (AipBufRef *)realloc(g_bufref, ncap * sizeof *nb);
+    if (!nb) return -1;
+    g_bufref = nb;
+    g_bufref_cap = ncap;
+    return 0;
+}
 /* §6.582 这张表是**跨线程共享的可变结构**（`::brain fork` 出来的脑可能在不同线程里
  * 读/写前复制/释放）。没有锁的时候 TSan 报 `g_bufref`/`g_bufref_n` 竞争，
  * 而且真的会双释放：两个线程都看到"计数=2"，各自以为"对方是唯一所有者"。
@@ -77,12 +95,17 @@ static inline uint32_t aip_buf_refs(const void *p) {
 
 /* 共享一块：返回同一个指针（方便写 `t->x = aip_buf_share(t->x)`）。
  * 表满 / p 为空 ⇒ 原样返回（调用方**不会**因此变错，只是没省到内存）。 */
+/* 共享一块。**返回 NULL = 没共享成**（表满了/分配失败）——调用方必须退回"各持一份"。
+ * ⚠ 返回同一个指针却**没进表**是最坏的结果：两边都以为独占 ⇒ 释放时 double free。 */
 static inline void *aip_buf_share(void *p) {
     if (!p) return NULL;
     aip_lock(&g_bufref_lk);
     AipBufRef *e = aip_buf_slot(p);
     if (e) { e->n++; aip_unlock(&g_bufref_lk); return p; }
-    if (g_bufref_n >= AIP_BUF_MAX) { aip_unlock(&g_bufref_lk); return p; }
+    if (g_bufref_n >= g_bufref_cap && aip_buf_grow() != 0) {
+        aip_unlock(&g_bufref_lk);
+        return NULL;                 /* 没共享成：调用方退回复制 */
+    }
     g_bufref[g_bufref_n].p = p;
     g_bufref[g_bufref_n].n = 2;      /* 我 + 原来那个人 */
     g_bufref_n++;
