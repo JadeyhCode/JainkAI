@@ -3607,6 +3607,9 @@ int main(int argc, char **argv) {
             }
             case CMD_DERIVEDUMP: {
                 AI *B = a->brain;
+                /* §6.684 这个观察面 dump 的"规范状态"**包含 emb** —— 惰性化之后
+                 * 读盘态先没有 emb，不补建就会和训练态差一大堆行（model_roundtrip 抓到）。 */
+                ai_embed_ensure(B);
                 for (size_t i = 0; i < B->pool->count; ++i) {
                     Token *t = B->pool->tokens[i];
                     if (!t || !t->name) continue;
@@ -3709,6 +3712,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             case CMD_POOLDUMP: {
+                ai_embed_ensure(a->brain);   /* §6.684 dump 行里有 emb 摘要（同 derivedump） */
                 TokenPool *P = a->brain->pool;
                 for (size_t i = 0; i < P->count; ++i) {
                     Token *t = P->tokens[i];
@@ -3878,6 +3882,7 @@ int main(int argc, char **argv) {
                 if (!arg || !*arg) { printf("[用法] ::near <词>\n"); continue; }
                 Token *t = pool_token_intern(a->brain->pool, arg);
                 if (!t) { printf("[取不到这个词]\n"); continue; }
+                ai_embed_ensure(a->brain);           /* §6.684 惰性：::near 要读 emb */
                 int nz = 0;
                 if (t->emb) for (size_t d = 0; d < EMB_DIM; ++d) if (t->emb[d]) { nz = 1; break; }
                 if (!nz) {

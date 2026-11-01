@@ -1422,8 +1422,9 @@ static inline int think_mech_need_process(AI *ai, Think *t, const ThinkGoal *g, 
 /* ---- 机制③：借最近邻 ----
  * 适用性：**表示层在不在**（两端都有 emb 才有这条路）。 */
 static inline int think_mech_ana_applicable(AI *ai, const ThinkGoal *g) {
-    (void)ai;
-    return g && g->a && g->b && g->a->emb && g->b->emb;
+    if (!g || !g->a || !g->b) return 0;
+    ai_embed_ensure(ai);                     /* §6.684 惰性：判"表示层在不在"就得先建 */
+    return ai && g->a->emb && g->b->emb;
 }
 static inline int think_mech_ana_process(AI *ai, Think *t, const ThinkGoal *g, int *cls,
                                          int *cache, char *note, size_t note_cap) {

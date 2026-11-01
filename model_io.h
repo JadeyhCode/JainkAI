@@ -1179,7 +1179,10 @@ static inline AI *ai_load_file(const char *path) {
     { size_t dead = pool_drop_dead_self_loops(ai->pool);
       if (dead && getenv("AIP_PATDBG")) fprintf(stderr, "[load] 清掉死的自环边 %zu 条\n", dead); }
     mio_dbg_tick("⑤ 清死自环");
-    ai_embed_build(ai);       /* 分布式表示（PPMI 随机索引）也现算，不进快照 */
+    /* §6.684 分布式表示改成**惰性**：读盘时只清标志，第一次真要读 emb 时才建。
+     * `AIP_EMB_EAGER=1` 回到旧行为（A/B 对照与逃生口）。 */
+    if (getenv("AIP_EMB_EAGER")) ai_embed_build(ai);
+    else { ai->emb_deferred = 1; ai->emb_ready = 0; ai->emb_building = 0; }
     mio_dbg_tick("⑥ emb 重建");
     ai_slots_build(ai);       /* 同位槽类同理 */
     mio_dbg_tick("⑦ 槽类重建");

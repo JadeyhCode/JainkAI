@@ -1441,6 +1441,7 @@ static inline int rel_struct_sim(const Token *a, const Token *s, size_t *out_com
 
 static inline int rel_guess(AI *ai, const Token *a, uint8_t rid, const Token *b,
                             Proof *pf) {
+    ai_embed_ensure(ai);                     /* §6.684 惰性：这一路要用 emb 余弦 */
     /* ⚠ 原来这里硬性要求 `a->emb && b->emb` ⇒ **对话里现学的新词没有 emb**（emb 只在装载/训练时
      * 构建）⇒ 联想引擎对新词直接罢工（症状：学了 `乙熊 属于 熊类`、`乙熊 会 冬眠` 之后，
      * 问 `甲熊 会 冬眠 吗` 永远"不确定"）。结构/兄弟这类证据**本来就不需要 emb**：

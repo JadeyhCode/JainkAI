@@ -1301,6 +1301,15 @@ typedef struct {
      * 它也不进存档：未解问题是**会话内**的东西（想通了就没了），
      * 想通之后落地的只有那些经安全内核审查过的符号节点/边。 */
     void  *think;
+
+    /* ---- §6.684 分布式表示的**惰性构建**标志（运行时，不进存档）----
+     * 扩图到 10^7 边后，载入 42.6 s 里有 39 s 花在 `ai_embed_build`（22 s 累积 + 12.6 s 后处理）。
+     * 而绝大多数会话（`::rel`/`::stats`/`::save`/问答里没有类比和近邻）**根本用不到 emb**。
+     * 所以：读盘后**不建**，第一次真正要读 emb 的地方（`::near`/`::analogy`/近邻候选/借最近邻）
+     * 调 `ai_embed_ensure()` 现建。**值完全一样**（同一个函数算出来的），只是时间点挪了。 */
+    int emb_ready;
+    int emb_building;
+    int emb_deferred;   /* 只有"读盘时本该建、我们推迟了"才置 1（见 ai_embed_ensure） */
 } AI;
 
 /* ---- §6.135 分段计时（默认关；`AIP_SEGTIME=1` 才真的读表）----
@@ -3041,15 +3050,56 @@ static inline int ai_same_slot(const AI *ai, const Token *a, const Token *b) {
  *
  * emb **不写进模型文件**：它是 (边 + hits + 稳定 id) 的确定性函数，
  * 现算即可 —— 格式保持 v5 不变。 */
+/* §6.684 emb 内部三段计时（`AIP_LOADDBG=1` 才开）：扩图到 10^7 边后
+ * 载入 42.6 s 里 38.3 s 花在这一个函数，必须先看清是哪一段。 */
+static inline long _emb_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+static inline void _emb_tick(const char *what, long *last) {
+    if (!getenv("AIP_LOADDBG")) return;
+    long now = _emb_ms();
+    fprintf(stderr, "[emb] %-18s +%6ld ms\n", what, now - *last);
+    *last = now;
+}
+
+static inline void ai_embed_build_impl(AI *ai);
+
+/* 对外入口：管"在建/建好了"两个标志。⚠ 就算中途 OOM 也认"算过了"——
+ * 否则每次查询都会重试 39 s（OOM 时 emb 是 NULL，读的人本来就会跳过）。 */
 static inline void ai_embed_build(AI *ai) {
+    if (!ai || !ai->pool) return;
+    ai->emb_building = 1;
+    ai_embed_build_impl(ai);
+    ai->emb_building = 0;
+    ai->emb_ready = 1;
+}
+
+/* §6.684 惰性入口：要读 emb 的地方**先调它**。
+ *
+ * ⚠ 只对 `emb_deferred` 的脑生效（= 读盘时本该建、我们推迟了）。
+ * 为什么不能无条件建（第一版就无条件，被 optest 抓了）：有的机制把"**表示层在不在**"
+ * 当成信号（`think_mech_ana_applicable` 判 `g->a->emb`；递归迁移那套也看它）。
+ * 在 `ai_new()` 出来的**新脑**上顺手建 emb，等于把这些机制从"关"变成"开"，
+ * 答案就悄悄变了（实测：`rel_remember=0` 那条"迁移不了"变成了能迁移）。
+ * 所以：新脑永远不建；只有"本来就有"的（读盘的）才补。 */
+static inline void ai_embed_ensure(AI *ai) {
+    if (!ai || !ai->emb_deferred || ai->emb_ready || ai->emb_building) return;
+    ai_embed_build(ai);
+}
+
+static inline void ai_embed_build_impl(AI *ai) {
     if (!ai || !ai->pool) return;
     TokenPool *p = ai->pool;
     size_t n = p->count;
     if (n == 0) return;
 
+    long _t0 = _emb_ms();
     int32_t *acc = (int32_t *)calloc(n * EMB_DIM, sizeof(int32_t));
     int64_t *marg = (int64_t *)calloc(n, sizeof(int64_t));
     int8_t  *rv = (int8_t *)malloc(EMB_DIM);
+
     if (!acc || !marg || !rv) { free(acc); free(marg); free(rv); return; }
 
     /* ⓪ df：一个上下文被多少个**不同的**词指向。
@@ -3100,6 +3150,7 @@ static inline void ai_embed_build(AI *ai) {
         }
     }
     if (tot == 0) { free(acc); free(marg); free(rv); free(df); return; }
+    _emb_tick("⓪ df（df/marg 全表扫）", &_t0);
 
     /* ② 两遍累积：正向（t 的上下文）+ 反向（谁把 t 当上下文）
      *    PPMI = max(0, log( p(c|t) / p(c) )) */
@@ -3123,6 +3174,9 @@ static inline void ai_embed_build(AI *ai) {
                     emb_randvec(m->id, rv);
                     int32_t *a = acc + i * EMB_DIM;
                     int32_t w = (int32_t)(pmi * 1024.0);
+                    /* §6.684 试过把上面 `emb_randvec(t->id, …)` 提到 j 循环外（看起来省几百次哈希），
+                     * 实测 **K10 反而更慢**（② 22 s → 32 s）：多一个 1 KB 缓冲轮换把内层循环的
+                     * 访存模式搞坏了。按"收益 <5% 就回滚"的规矩撤掉，留这行记录免得再试。 */
                     for (size_t d = 0; d < EMB_DIM; ++d) a[d] += w * rv[d];
                 }
             }
@@ -3144,6 +3198,7 @@ static inline void ai_embed_build(AI *ai) {
         }
     }
 
+    _emb_tick("② 累积（边×1024×2）", &_t0);
     #undef EMB_CTX_OK
 
     /* ③ all-but-the-top：去均值 + 去掉前 3 个主成分。
@@ -3245,6 +3300,7 @@ static inline void ai_embed_build(AI *ai) {
             }
         }
     }
+    _emb_tick("③ all-but-the-top", &_t0);
     /* ④ 量化进 int8：每个词按自己的峰值归一（余弦只看方向） */
     for (size_t i = 0; i < n; ++i) {
         Token *t = p->tokens[i];
@@ -3267,6 +3323,7 @@ static inline void ai_embed_build(AI *ai) {
             t->emb[d] = (int8_t)q4;
         }
     }
+    _emb_tick("④ 量化", &_t0);
     free(acc); free(marg); free(rv); free(E); free(mu); free(v); free(u); free(df);
 }
 
@@ -5049,6 +5106,7 @@ static inline void ai_imagine(AI *ai) {
 static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
                                Token *item_c, float *out_sim) {
     if (!ai || !item_a || !pair_ab || !item_c) return NULL;
+    ai_embed_ensure(ai);                     /* §6.684 惰性：要读 emb 了才建 */
     if (!item_a->emb || !pair_ab->emb || !item_c->emb) return NULL;
     /* 查询向量用 float 累加（emb 是 int8，直接相加会溢出） */
     int16_t q[EMB_DIM];
@@ -5081,7 +5139,9 @@ static inline Token *ai_analogy(AI *ai, Token *item_a, Token *pair_ab,
 
 /* 按 emb 找最近的词（语义邻居，不要求有边） */
 static inline Token *ai_nearest_emb(AI *ai, const Token *t, float *out_sim) {
-    if (!ai || !t || !t->emb) return NULL;
+    if (!ai || !t) return NULL;
+    ai_embed_ensure(ai);                     /* §6.684 */
+    if (!t->emb) return NULL;
     Token *best = NULL;
     double best_sim = -2.0;
     for (size_t i = 0; i < ai->pool->count; ++i) {
