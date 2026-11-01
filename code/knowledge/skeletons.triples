@@ -138,3 +138,128 @@ int main(int argc, char **argv) {\
     printf("%s\n", ok ? "ok wc" : "FAIL wc");\
     return ok ? 0 : 1;\
 }
+任务:冒泡排序	关键词	排序
+任务:冒泡排序	关键词	冒泡
+任务:冒泡排序	关键词	从小到大
+任务:冒泡排序	骨架	骨架:冒泡排序
+任务:冒泡排序	用途	读 N 个整数（或用样例），从小到大排序后输出
+骨架:冒泡排序	语言	C11
+骨架:冒泡排序	依赖	stdio.h
+骨架:冒泡排序	代码	#include <stdio.h>\
+static void bubble(int *a, int n) {\
+    for (int i = 0; i < n - 1; i++)\
+        for (int j = 0; j < n - 1 - i; j++)\
+            if (a[j] > a[j+1]) { int t = a[j]; a[j] = a[j+1]; a[j+1] = t; }\
+}\
+int main(void) {\
+    int a[6] = {5,2,9,1,5,6}, n = 6;\
+    bubble(a, n);\
+    for (int i = 0; i < n; i++) printf("%d%s", a[i], i + 1 < n ? " " : "\n");\
+    int want[6] = {1,2,5,5,6,9}, ok = 1;\
+    for (int i = 0; i < n; i++) if (a[i] != want[i]) ok = 0;\
+    printf("%s\n", ok ? "ok sort" : "FAIL sort");\
+    return ok ? 0 : 1;\
+}
+任务:矩阵乘法	关键词	矩阵
+任务:矩阵乘法	关键词	乘法
+任务:矩阵乘法	骨架	骨架:矩阵乘法
+任务:矩阵乘法	用途	两个 2x2 矩阵相乘并输出结果
+骨架:矩阵乘法	语言	C11
+骨架:矩阵乘法	依赖	stdio.h
+骨架:矩阵乘法	代码	#include <stdio.h>\
+int main(void) {\
+    int a[2][2] = {{1,2},{3,4}}, b[2][2] = {{5,6},{7,8}}, c[2][2];\
+    for (int i = 0; i < 2; i++)\
+        for (int j = 0; j < 2; j++) {\
+            c[i][j] = 0;\
+            for (int k = 0; k < 2; k++) c[i][j] += a[i][k] * b[k][j];\
+        }\
+    for (int i = 0; i < 2; i++) printf("%d %d\n", c[i][0], c[i][1]);\
+    int ok = c[0][0] == 19 && c[0][1] == 22 && c[1][0] == 43 && c[1][1] == 50;\
+    printf("%s\n", ok ? "ok matmul" : "FAIL matmul");\
+    return ok ? 0 : 1;\
+}
+任务:回文判断	关键词	回文
+任务:回文判断	关键词	对称
+任务:回文判断	骨架	骨架:回文判断
+任务:回文判断	用途	判断字符串是不是回文
+骨架:回文判断	语言	C11
+骨架:回文判断	依赖	stdio.h string.h
+骨架:回文判断	代码	#include <stdio.h>\
+#include <string.h>\
+static int is_pal(const char *s) {\
+    size_t n = strlen(s);\
+    for (size_t i = 0; i < n / 2; i++) if (s[i] != s[n-1-i]) return 0;\
+    return 1;\
+}\
+int main(void) {\
+    printf("%s\n", is_pal("racecar") ? "yes" : "no");\
+    int ok = is_pal("racecar") && is_pal("abba") && !is_pal("abc") && is_pal("");\
+    printf("%s\n", ok ? "ok pal" : "FAIL pal");\
+    return ok ? 0 : 1;\
+}
+任务:进制转换	关键词	进制
+任务:进制转换	关键词	二进制
+任务:进制转换	关键词	十六进制
+任务:进制转换	骨架	骨架:进制转换
+任务:进制转换	用途	十进制转二/十六进制
+骨架:进制转换	语言	C11
+骨架:进制转换	依赖	stdio.h string.h
+骨架:进制转换	代码	#include <stdio.h>\
+#include <string.h>\
+static void to_base(long n, int base, char *out) {\
+    const char *digits = "0123456789abcdef";\
+    char tmp[65];\
+    int i = 0;\
+    if (n == 0) tmp[i++] = '0';\
+    while (n > 0) { tmp[i++] = digits[n % base]; n /= base; }\
+    for (int j = 0; j < i; j++) out[j] = tmp[i-1-j];\
+    out[i] = 0;\
+}\
+int main(void) {\
+    char b[65];\
+    to_base(13, 2, b); printf("%s\n", b);\
+    int ok = 1;\
+    to_base(13, 2, b); if (strcmp(b, "1101")) ok = 0;\
+    to_base(255, 16, b); if (strcmp(b, "ff")) ok = 0;\
+    to_base(0, 2, b); if (strcmp(b, "0")) ok = 0;\
+    printf("%s\n", ok ? "ok base" : "FAIL base");\
+    return ok ? 0 : 1;\
+}
+任务:最大公约数	关键词	最大公约数
+任务:最大公约数	关键词	gcd
+任务:最大公约数	关键词	约数
+任务:最大公约数	骨架	骨架:最大公约数
+任务:最大公约数	用途	求两个数的最大公约数
+骨架:最大公约数	语言	C11
+骨架:最大公约数	依赖	stdio.h
+骨架:最大公约数	代码	#include <stdio.h>\
+static long gcd(long a, long b) { while (b) { long t = a % b; a = b; b = t; } return a < 0 ? -a : a; }\
+int main(void) {\
+    printf("%ld\n", gcd(48, 18));\
+    int ok = gcd(48,18) == 6 && gcd(17,5) == 1 && gcd(0,9) == 9 && gcd(100,75) == 25;\
+    printf("%s\n", ok ? "ok gcd" : "FAIL gcd");\
+    return ok ? 0 : 1;\
+}
+任务:字符统计	关键词	字符统计
+任务:字符统计	关键词	字母
+任务:字符统计	关键词	数字个数
+任务:字符统计	骨架	骨架:字符统计
+任务:字符统计	用途	统计字符串里的字母/数字/空格/其他字符个数
+骨架:字符统计	语言	C11
+骨架:字符统计	依赖	stdio.h
+骨架:字符统计	代码	#include <stdio.h>\
+int main(void) {\
+    const char *s = "Hello 42 world!";\
+    int letters = 0, digits = 0, spaces = 0, other = 0;\
+    for (const char *p = s; *p; p++) {\
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')) letters++;\
+        else if (*p >= '0' && *p <= '9') digits++;\
+        else if (*p == ' ') spaces++;\
+        else other++;\
+    }\
+    printf("letters=%d digits=%d spaces=%d other=%d\n", letters, digits, spaces, other);\
+    int ok = letters == 10 && digits == 2 && spaces == 2 && other == 1;\
+    printf("%s\n", ok ? "ok chars" : "FAIL chars");\
+    return ok ? 0 : 1;\
+}
