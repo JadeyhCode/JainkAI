@@ -68,9 +68,10 @@ typedef struct {
     char err[CODE_ERR_CAP];        /* 第一条错误原文（截断） */
     char note[CODE_ERR_CAP];       /* 改了什么 / 为什么没改 */
     char lex[CODE_ERR_CAP];        /* 词法往返（只在 `::ascii on` 时算；空 = 这一层关着） */
+    int  rule_line;                /* §6.698 规则实际改的是第几行（0 = 没改） */
 } CodeRun;
 
-static CodeRun g_code = { 0, -1, -1, -1, {0}, {0}, {0}, {0}, {0} };
+static CodeRun g_code = { 0, -1, -1, -1, {0}, {0}, {0}, {0}, {0}, 0 };
 static int g_code_auto_done = 0;   /* `AIP_CODE` 那条路只走一次（别每轮都编译） */
 static inline CodeRun *code_last(void) { return &g_code; }
 
@@ -401,7 +402,7 @@ static inline int code_test_dir(AI *ai, const char *dir, char *note, size_t cap)
 
 static inline int code_round(AI *ai, const char *rel) {
     CodeRun *cr = &g_code;
-    cr->attempts = 0; cr->first_rc = cr->final_rc = -1; cr->rule = -1;
+    cr->attempts = 0; cr->first_rc = cr->final_rc = -1; cr->rule = -1; cr->rule_line = 0;
     cr->where[0] = cr->err[0] = cr->note[0] = cr->lex[0] = 0;
     snprintf(cr->path, sizeof cr->path, "%s", rel ? rel : "");
     if (!ai || !rel || !rel[0]) { snprintf(cr->note, sizeof cr->note, "没给源文件"); return -2; }
@@ -468,9 +469,16 @@ static inline int code_round(AI *ai, const char *rel) {
     cr->rule = (int)(rule - CODE_FIXES);
     int fixed = -1;
     if (cr->rule == 0) {
-        /* 「expected … ;」→ 补在报错位置的**上一行**（gcc 报的是缺分号之后的第一处） */
-        fixed = code_fix_semicolon(src, CODE_SRC_CAP, line > 1 ? line - 1 : line);
-        if (fixed != 0) snprintf(cr->note, sizeof cr->note, "认出了「补分号」但那一行补不进去（第 %d 行）", line > 1 ? line - 1 : line);
+        /* 「expected … ;」→ 补在**报错那一行**；那一行本来就以 `;`/`{`/`}` 结尾时再试上一行。
+         * ⚠ 原来固定补"上一行"：`printf("%d\n", x)` 缺分号时 gcc 报的是**下一行**的列
+         * （`4:22: expected ‘;’ before ‘return’`），上一行是 `int x = 3;` —— 补不进去，
+         * 于是最常见的错（缺分号）**一次都修不成功**（§6.698 实测）。 */
+        int l0 = (line > 0) ? line : 1;
+        fixed = code_fix_semicolon(src, CODE_SRC_CAP, l0);
+        int used = l0;
+        if (fixed != 0 && l0 > 1) { fixed = code_fix_semicolon(src, CODE_SRC_CAP, l0 - 1); used = l0 - 1; }
+        if (fixed != 0) snprintf(cr->note, sizeof cr->note, "认出了「补分号」但第 %d / %d 行都补不进去", l0, l0 > 1 ? l0 - 1 : l0);
+        else cr->rule_line = used;
     } else if (cr->rule == 2) {
         /* §6.97 第三条修法：**补声明**（在出错行前插 `int <名字>;`）—— 与另两条同构：
          * 只改 `src`，后面统一写回/再编；改不动就把 `fixed` 留成非 0，走"停在这"那条。 */
@@ -493,8 +501,7 @@ static inline int code_round(AI *ai, const char *rel) {
         return rc;
     }
     if (cr->rule == 0)
-        snprintf(cr->note, sizeof cr->note, "按规则在**上一行**末尾补了一个 `;`（第 %d 行）",
-                 line > 1 ? line - 1 : line);
+        snprintf(cr->note, sizeof cr->note, "按规则补了一个 `;`（第 %d 行）", cr->rule_line);
     /* 写回去（还是走受审的写文件通道）→ 再跑一次 */
     if (action_write_file(ai, rel, src) != 0) {
         code_cat(cr->note, sizeof cr->note, "改完写不回去：", action_book()->last_reason, NULL);
