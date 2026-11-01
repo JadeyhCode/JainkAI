@@ -1,0 +1,14 @@
+# net/allow.txt — 联网白名单（一行一个主机名；`#` 开头是注释）
+#
+# 规则（写死在 net.h 里，别指望这里能放宽）：
+#   · **精确匹配**：写了 `arxiv.org` 就只认 `arxiv.org`，`evil.arxiv.org` 不行；
+#   · 只走 https；不跟重定向；每次 ≤ 2 MB / ≤ 15 s / 每次会话 ≤ 8 次；
+#   · 没写进这个文件的主机**一律拒**，并且拒绝也会记进 papers/cache/_net.log。
+#
+# 现在只开 arXiv（它的 `/api/query` 是公开、无需 key 的检索接口，`/pdf/<id>` 是正文）：
+export.arxiv.org
+arxiv.org
+#
+# 想加别的站点就往下写（自己判断风险）。例如：
+#   en.wikipedia.org       —— 但 HTML 正文抽取这一版**没做**，抓下来只有原始 HTML
+#   www.nature.com         —— 多半要订阅/带反爬，抓回来是登录页，抽不出东西

@@ -17,7 +17,8 @@
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
 #include "claim.h"      /* §6.636 待证：::claim */
 #include <dirent.h>
-#include "paper.h"      /* §6.638 读论文（离线）：::paper */
+#include "paper.h"      /* §6.638/§6.678 读论文：::paper（纯文本 + PDF） */
+#include "net.h"        /* §6.680 联网检索（默认关）：::net */
 #include "lang.h"       /* §6.639 语言包：::lang */
 #include <stdio.h>
 #include <string.h>
@@ -585,6 +586,7 @@ typedef enum {
     CMD_CLAIM,              /* §6.636 待证：list / accept N / reject N */
     CMD_PAPER,              /* §6.638 读论文（离线）：read <文件> / list */
     CMD_LANG,               /* §6.639 语言包：list / load <code> / current / off */
+    CMD_NET,                /* §6.680 联网检索（默认关）：status/on/off/search/get/log */
     CMD_PREMHOLD,           /* 前提成立的判据档：说到的（默认）/ 够得着 / 有据 */
     CMD_WGATE,              /* 写入分级闸门：情境层的随口一说要不要落库 */
     CMD_DRIVE,              /* 驱动参与决策：耦合表 + 当前生效的修正 */
@@ -785,12 +787,22 @@ static const CmdDef CMDS[] = {
       "`::lang setorder SOV|SVO`（猜不准时手动定）│`::lang off` 卸。\n装好之后**输入先逐词翻译 + 按词序重排**再走中文流水线（词表 lang/<code>/words.txt，"
       "词序 meta.txt 的 order=SVO|SOV）。\n⚠ 不是翻译器：不认的词原样留着；不做语法/形态", CMD_LANG },
     { "paper", "<子命令>", 1, "基本",
-      "**读论文（离线）**：只处理工作区里的纯文本（≤256 KB），抽『恰好三段』的断言。\n"
-      "::paper read <文件>   抽断言 ⇒ **全部进待证**（不写事实层）\n"
+      "**读论文**：纯文本（≤256 KB）与 **PDF**（≤6 MB，自带解析：FlateDecode + ToUnicode）都认，\n"
+      "抽『三段式』断言（A 关系 B）⇒ **全部进待证**（不写事实层）。\n"
+      "::paper read <文件>   抽断言（.pdf 自动取文字）\n"
+      "::paper text <文件> [字节数]  只把取到的文字打出来（默认前 1500，看它到底读到了什么）\n"
       "::paper list         看 papers/ 下有什么样本\n"
-      "::paper fetch <名字>  从 **papers/cache/** 取本地缓存（**这一版不联网**）\n"
-      "::paper search <关键词> 在 papers/ 与 papers/cache/ 里**本地检索**（不联网）\n"
-      "⚠ 不会读 PDF、不联网、不做指代消解；抽不到的就不抽（宁可漏，不要编）", CMD_PAPER },
+      "::paper fetch <名字>  从 **papers/cache/** 取本地缓存\n"
+      "::paper search <关键词> 在 papers/ 与 papers/cache/ 里**本地检索**\n"
+      "⚠ 断言的抽取用的是**中文关系词表**：英文论文取得到文字，但抽不出待证（照实说）", CMD_PAPER },
+    { "net", "<子命令>", 1, "基本",
+      "**联网检索**（默认**关**）：`::net on` 才出去。只有一个入口：arXiv 的公开 API + 正文 PDF。\n"
+      "::net status         看开关/白名单/上限/本次抓了几次\n"
+      "::net search <关键词> 在 arXiv 上搜（≤5 条，编号 + 标题）\n"
+      "::net get <1-5|网址>  抓正文存 papers/cache/，PDF 自动取文字 ⇒ 待证\n"
+      "::net log            看账（每次抓取/被拒都有一行）\n"
+      "⚠ 只认 https、主机名**精确**在白名单（net/allow.txt）里、每次 ≤2 MB / ≤15 s / ≤8 次；\n"
+      "不跟重定向、不碰 Cookie、不做 HTML 正文抽取；网上一律**待证**", CMD_NET },
     { "claim", "<子命令>", 1, "基本",
       "**待证**（不轻信）：带「听说/据说/论文/书上/网上」的话只记成待证，**不进事实层**。\n"
       "::claim            列出待证（编号/来源/内容）\n"
@@ -4576,6 +4588,40 @@ int main(int argc, char **argv) {
                     printf("%s\n", nb2[0] ? nb2 : "（没抽到）");
                     continue;
                 }
+                if (!strncmp(r, "text", 4)) {
+                    /* §6.678 `::paper text <文件>`：**只把取到的文字打出来**（不抽断言、不改图）。
+                     * 这是"它到底读到了什么"的观察口 —— 读论文出问题时先看这个。 */
+                    const char *p = r + 4;
+                    while (*p == ' ' || *p == '\t') p++;
+                    char fn[256];
+                    snprintf(fn, sizeof fn, "%s", p);
+                    if (!fn[0]) { printf("[用法] ::paper text <文件> [字节数]（.pdf 也行；不给字节数就只打前 1500）\n"); continue; }
+                    /* 末尾可选一个纯数字 = 要打多少字节（`tests/pdf_real.sh` 用它整份 dump） */
+                    size_t want = 1500;
+                    {
+                        char *sp2 = strrchr(fn, ' ');
+                        if (sp2 && sp2[1]) {
+                            int allnum = 1;
+                            for (const char *q2 = sp2 + 1; *q2; ++q2) if (*q2 < '0' || *q2 > '9') allnum = 0;
+                            if (allnum) { want = (size_t)strtoul(sp2 + 1, NULL, 10); *sp2 = 0; }
+                        }
+                        if (want > (1024u * 1024u)) want = 1024u * 1024u;
+                    }
+                    char *tb = (char *)malloc(1024u * 1024u);
+                    if (!tb) { printf("[论文] 内存不够（1 MB 缓冲）\n"); continue; }
+                    char tnote[256] = {0};
+                    size_t tdec = 0, tskip = 0;
+                    size_t tn = pdf_extract_file(fn, tb, 1024u * 1024u, &tdec, &tskip, tnote, sizeof tnote);
+                    printf("[论文] %.200s\n", tnote[0] ? tnote : "（无）");
+                    if (tn == 0) { free(tb); continue; }
+                    size_t show = tn < want ? tn : want;
+                    printf("---- 取到的文字（前 %zu / 共 %zu 字节）----\n", show, tn);
+                    fwrite(tb, 1, show, stdout);
+                    if (show < tn) printf("\n…（还有 %zu 字节，用 ::paper read 走断言那条路）\n", tn - show);
+                    printf("\n---- 完 ----\n");
+                    free(tb);
+                    continue;
+                }
                 if (!strncmp(r, "read", 4)) {
                     const char *p = r + 4;
                     while (*p == ' ' || *p == '\t') p++;
@@ -4592,6 +4638,120 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 printf("[用法] ::paper read <文件> | ::paper list\n");
+                continue;
+            }
+            case CMD_NET: {
+                /* §6.680 联网检索（默认关）。命令面只有四件事：看状态 / 开关 / 搜 / 抓。
+                 * 抓回来的东西**不进知识**：先落 papers/cache/，再走 paper_ingest ⇒ 待证。 */
+                const char *r = carg ? carg : "";
+                while (*r == ' ' || *r == '\t') r++;
+                if (!*r || !strncmp(r, "status", 6)) {
+                    if (g_net.nhost == 0) net_load_allow();
+                    printf("[联网] 现在是 **%s**%s\n", g_net.on ? "开" : "关",
+                           g_net.on ? "" : "（默认就是关：::net on 才出去）");
+                    printf("  白名单 %zu 个主机（%s）：", g_net.nhost, NET_ALLOW_FILE);
+                    for (size_t i = 0; i < g_net.nhost; ++i) printf(" %s", g_net.host[i]);
+                    printf("\n");
+                    printf("  上限：每次 ≤ %u KB、≤ %d s、每次会话 ≤ %d 次；只走 https、不跟重定向\n",
+                           NET_MAX_BYTES / 1024, NET_TIMEOUT_S, NET_MAX_FETCH);
+                    printf("  本次：抓 %d 次（成功 %d / 失败 %d / 被拒 %d），共 %zu KB\n",
+                           g_net.n_fetch, g_net.n_ok, g_net.n_fail, g_net.n_refused, g_net.bytes / 1024);
+                    printf("  账本：%s（每次抓取/被拒一行，含理由）\n", NET_AUDIT);
+                    printf("  用法：::net on|off ｜ ::net search <关键词> ｜ ::net get <1-5|网址> ｜ ::net log\n");
+                    continue;
+                }
+                if (!strncmp(r, "on", 2) && (r[2] == 0 || r[2] == ' ')) {
+                    g_net.on = 1;
+                    net_load_allow();
+                    printf("[联网] 打开。白名单 %zu 个主机；一次 ≤%u KB / ≤%ds / ≤%d 次。\n",
+                           g_net.nhost, NET_MAX_BYTES / 1024, NET_TIMEOUT_S, NET_MAX_FETCH);
+                    printf("  ⚠ 网上说的**一律算待证**（::claim 里确认过才算数）\n");
+                    continue;
+                }
+                if (!strncmp(r, "off", 3)) {
+                    g_net.on = 0;
+                    printf("[联网] 关掉（已经抓到的东西还在 papers/cache/ 里）\n");
+                    continue;
+                }
+                if (!strncmp(r, "log", 3)) {
+                    /* 只留最后 10 行（账本可能很长；全量自己看文件） */
+                    FILE *lf = fopen(NET_AUDIT, "rb");
+                    if (!lf) { printf("[联网] 还没有账（一次都没抓过）\n"); continue; }
+                    char ring[10][256];
+                    int nr = 0;
+                    char line[256];
+                    while (fgets(line, sizeof line, lf)) {
+                        size_t ll = strlen(line);
+                        while (ll && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) line[--ll] = 0;
+                        snprintf(ring[nr % 10], sizeof ring[0], "%s", line);
+                        nr++;
+                    }
+                    fclose(lf);
+                    printf("[联网] 账本最后 %d 行（%s）：\n", nr < 10 ? nr : 10, NET_AUDIT);
+                    int from = nr > 10 ? nr - 10 : 0;
+                    for (int i = from; i < nr; ++i) printf("   %s\n", ring[i % 10]);
+                    continue;
+                }
+                if (!strncmp(r, "search", 6)) {
+                    const char *q = r + 6;
+                    while (*q == ' ' || *q == '\t') q++;
+                    if (!*q) { printf("[联网] 用法：::net search <关键词>\n"); continue; }
+                    if (!g_net.on) {
+                        printf("[联网] 关着（这一层默认关）—— 先 ::net on，不然一步都不往外走\n");
+                        continue;
+                    }
+                    printf("[联网] 在 arXiv 上搜「%.80s」…\n", q);
+                    int n = net_search_arxiv(q);
+                    if (n <= 0) {
+                        printf("[联网] 没搜到/没抓成：%s\n", g_net.last_reason);
+                        continue;
+                    }
+                    for (int i = 0; i < n; ++i)
+                        printf("   %d) %s  %s\n", i + 1, g_net.hit_id[i], g_net.hit_title[i]);
+                    printf("[联网] 抓正文：::net get <1-%d>（抓下来先进 papers/cache/ ⇒ 抽断言 ⇒ 待证）\n", n);
+                    continue;
+                }
+                if (!strncmp(r, "get", 3)) {
+                    const char *arg = r + 3;
+                    while (*arg == ' ' || *arg == '\t') arg++;
+                    char url[512], name[256];
+                    if (net_resolve_target(arg, url, sizeof url, name, sizeof name) != 0) {
+                        printf("[联网] 用法：::net get <1-5|https://…>（1-5 是上次 ::net search 的编号）\n");
+                        if (g_net.n_hit == 0) printf("       现在没有检索结果：先 ::net search <关键词>\n");
+                        continue;
+                    }
+                    if (!g_net.on) {
+                        printf("[联网] 关着（这一层默认关）—— 先 ::net on\n");
+                        continue;
+                    }
+                    printf("[联网] 抓 %.200s …\n", url);
+                    unsigned char *buf = NULL;
+                    size_t nb = 0;
+                    if (net_fetch(url, &buf, &nb) != 0) {
+                        printf("[联网] 没抓成：%s\n", g_net.last_reason);
+                        continue;
+                    }
+                    mkdir(NET_CACHE_DIR, 0755);
+                    char path[512];
+                    snprintf(path, sizeof path, "%s/%s", NET_CACHE_DIR, name);
+                    FILE *of = fopen(path, "wb");
+                    if (!of) {
+                        printf("[联网] 存不下去：%s（写不开）\n", path);
+                        free(buf);
+                        continue;
+                    }
+                    size_t wr = fwrite(buf, 1, nb, of);
+                    fclose(of);
+                    printf("[联网] 存到 %s（%zu 字节，写进去 %zu）\n", path, nb, wr);
+                    free(buf);
+                    char nb2[2048] = {0};
+                    size_t made = 0;
+                    (void)paper_ingest(a ? a->brain : NULL, path, &made, nb2, sizeof nb2);
+                    printf("%s\n", nb2[0] ? nb2 : "（没抽到）");
+                    printf("  确认：::claim accept N    丢掉：::claim reject N\n");
+                    continue;
+                }
+                printf("[联网] 用法：::net status | on | off | search <关键词> | get <1-5|网址> | log\n");
                 continue;
             }
             case CMD_CLAIM: {

@@ -133,6 +133,8 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
         if [ -e "$f" ]; then ln -s "$f" "$SB/"; fi
     done
     cp -a "$ROOT/tests" "$SB/tests"
+    # §6.680 联网白名单也是**数据入口**：沙箱里没有 net/ 就退回内置缺省（两处不一致会骗人）
+    if [ -d "$ROOT/net" ]; then cp -a "$ROOT/net" "$SB/net"; fi
     cp -a "$ROOT/tools" "$SB/tools"
     cp "$ROOT/model.bin" "$SB/model.bin"
     cp "$ROOT/build_aip" "$SB/build_aip"

@@ -7,7 +7,8 @@
 #   CC=clang sh tools/asan_check.sh   # 换编译器
 #
 # 会跑三组输入：
-#   ① 生命周期：load → 开开关 → 教/问/纠正 → 各种 :: 命令 → save → load 回来 → 再问
+#   ① 生命周期：load → 开开关 → 教/问/纠正 → 各种 :: 命令（含 §6.678 PDF / §6.680 联网的**拒绝**路径）
+#      → save → load 回来 → 再问
 #   ② 确定性随机句 120 条（和 tests/fuzz.sh 同一个种子/词表）
 #   ③ 病态输入：空行 / 空白 / 裸括号 / 保留记号 / 600 词长句 / 300 字长词 / 连串不
 #
@@ -65,6 +66,15 @@ cat > "$TMP/life.txt" <<'EOF'
 ::hypo
 ::prims
 ::lex 你好
+::paper text tests/fixtures/pdf/flate.pdf
+::paper read tests/fixtures/pdf/unicode.pdf
+::paper read tests/fixtures/pdf/broken.pdf
+::net
+::net on
+::net get https://evil.example.com/x
+::net get http://arxiv.org/abs/1
+::net log
+::net off
 ::help
 ::quit
 EOF

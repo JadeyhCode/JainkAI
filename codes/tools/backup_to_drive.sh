@@ -68,9 +68,11 @@ fi
 # ⚠ 校验的**排除口径必须和 rsync 完全一致**：第一版只排除了 `_t/`，而 rsync 还排除了
 #   `build_*`/`*.o` ⇒ 源侧清单多算了几个编译产物，两边 md5 永远对不上（第一次跑就撞上：
 #   "两边不一致"其实是**校验错了**，不是拷贝错了）。
+# ⚠ 两处 2>/dev/null 都要有：`_t/` 里有些目录不可读，`find` 的报错会插在中间，
+#   看着像"备份失败"（其实是权限噪音，和校验无关）。
 man() { (cd "$1" && find . -type f -not -path './_t/*' -not -name 'build_*' -not -name '*.o' \
-         -print0 | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
-NF=$(cd "$DEST" && find . -type f -not -name 'build_*' -not -name '*.o' | wc -l)
+         -print0 2>/dev/null | sort -z | xargs -0 md5sum 2>/dev/null | md5sum | cut -d' ' -f1); }
+NF=$(cd "$DEST" && find . -type f -not -name 'build_*' -not -name '*.o' 2>/dev/null | wc -l)
 SZ=$(du -sh "$DEST" | cut -f1)
 H1=$(man "$ROOT"); H2=$(man "$DEST")
 say ""
@@ -79,10 +81,10 @@ say "  文件数 $NF    体积 $SZ"
 say "  源清单 md5   $H1"
 say "  备份清单 md5 $H2"
 if [ "$H1" = "$H2" ]; then
-    say "  → **两边一致**（备份可核对；`_t/` 临时件按设计没备）"
+    say "  → **两边一致**（备份可核对；「_t/」临时件按设计没备）"
 else
     say "  → ⚠ 两边**不一致**：别删源！重跑一次，或看 rsync 报错。"
     exit 4
 fi
 say ""
-say "以后恢复：把 $DEST 拷回任意目录即可（含 .git，`git log` 就在）。"
+say "以后恢复：把 $DEST 拷回任意目录即可（含 .git，「git log」就在）。"

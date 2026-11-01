@@ -15,9 +15,11 @@
 #define PAPER_H
 
 #include "claim.h"
+#include "pdf.h"        /* §6.678 读 PDF：`::paper read x.pdf` 走这里，不再只认纯文本 */
 
 #define PAPER_MAX_BYTES  (256u * 1024u)
 #define PAPER_MAX_CLAIMS 64
+#define PAPER_PDF_TEXT   (1024u * 1024u)   /* PDF 抽出来的文字缓冲（1 MB ≈ 十多万词） */
 
 typedef struct {
     char a[40];
@@ -211,6 +213,48 @@ static inline size_t paper_to_claims(AI *ai, const PaperClaim *cs, size_t n) {
     return made;
 }
 
+/* §6.678 **PDF 入口**：先取文字（pdf.h），再走同一条"抽断言 ⇒ 待证"的路。
+ * 这样 `::paper read x.pdf` 与 `::net get`（下载回来的 PDF）共用一份实现。 */
+static inline size_t paper_ingest_pdf(AI *ai, const char *path, size_t *made, char *note, size_t cap) {
+    if (made) *made = 0;
+    char *txt = (char *)malloc(PAPER_PDF_TEXT);
+    if (!txt) {
+        if (note && cap) snprintf(note, cap, "内存不够（PDF 文字缓冲要 %u KB）", PAPER_PDF_TEXT / 1024);
+        return 0;
+    }
+    char pnote[256] = {0};
+    size_t dec = 0, skip = 0;
+    size_t n = pdf_extract_file(path, txt, PAPER_PDF_TEXT, &dec, &skip, pnote, sizeof pnote);
+    if (n == 0) {
+        if (note && cap)
+            snprintf(note, cap, "%s —— 一个字都没读出来（我不猜，也不编）",
+                     pnote[0] ? pnote : "PDF 里没抽出文字");
+        free(txt);
+        return 0;
+    }
+    PaperClaim cs[PAPER_MAX_CLAIMS];
+    size_t k = paper_extract(ai, txt, cs, PAPER_MAX_CLAIMS);
+    free(txt);
+    if (k == 0) {
+        if (note && cap)
+            snprintf(note, cap, "%s —— 但一个三段式断言都没抽到（共 %zu 字节文字；中文/英文都要"
+                                "「主 关系 宾」形状）", pnote, n);
+        return 0;
+    }
+    size_t m = paper_to_claims(ai, cs, k);
+    if (made) *made = m;
+    if (note && cap) {
+        snprintf(note, cap, "%s；抽出 %zu 字节文字 ⇒ 断言 %zu 条，记为待证 %zu 条（**都不算数**）",
+                 pnote, n, k, m);
+        for (size_t i = 0; i < k && i < 6; ++i) {
+            size_t o = strlen(note);
+            if (o + 96 < cap)
+                snprintf(note + o, cap - o, "\n  · %.39s %.23s %.39s", cs[i].a, cs[i].r, cs[i].b);
+        }
+    }
+    return k;
+}
+
 /* §6.663 **一条入口**：读文件 → 抽断言 → 写待证。`::paper read` 与 `::paper fetch` 共用，
  * 不再各自复制一遍（上一轮的重复代码就是两次实现开始漂移的起点）。
  * 返回抽到的断言数；`*made` 是真正写进待证的条数；note 里是给人看的说明。 */
@@ -219,6 +263,17 @@ static inline size_t paper_ingest(AI *ai, const char *path, size_t *made, char *
     if (!ai || !path || !path[0]) {
         if (note && cap) snprintf(note, cap, "没给文件");
         return 0;
+    }
+    /* 先嗅文件头：PDF 走另一条路（PDF 允许到 6 MB，纯文本只到 256 KB） */
+    {
+        FILE *hf = fopen(path, "rb");
+        if (hf) {
+            char hd[8] = {0};
+            size_t hg = fread(hd, 1, 5, hf);
+            fclose(hf);
+            if (hg == 5 && memcmp(hd, "%PDF-", 5) == 0)
+                return paper_ingest_pdf(ai, path, made, note, cap);
+        }
     }
     FILE *f = fopen(path, "rb");
     if (!f) {

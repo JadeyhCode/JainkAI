@@ -24205,3 +24205,242 @@ codetry 28/0 · e2e_paper 7/0 · tokenop 414 项
 1. "结项"指的是**计划书里 M0–M5 的离线范围**，不是"六条目标都达到通用"（第四节逐条列了边界）；
 2. **联网搜索没有**：`::paper search` 是本地子串检索，不是网络检索；
 3. 断言框架/覆盖率、PDF、真论文从句抽取仍是缺口，都不是这一轮能顺手做完的。
+
+---
+
+## §6.677 自带 `inflate.h`：DEFLATE/zlib 解码（不引 `-lz`）
+
+### 一、做了什么
+
+- 新文件 `inflate.h`（~330 行）：块类型 0/1/2、规范 Huffman 构造与解码、zlib 外壳
+  （`%31` 头校验、`FDICT` 拒绝、**尾部 Adler-32 必须核对**）、输出上限 8 MB；
+- 契约写死：**返回 0 ⇔ Adler-32 核对过**（尾部不全就报错，不拿"解出来一半"当成功）；
+- 新探针 `tools/inflateprobe.c`（19 项）+ 夹具 `tests/fixtures/inflate/*.z`
+  （生成脚本 `tests/fixtures/mkfix.py`，产物入库 ⇒ 套件离线可重复）。
+
+### 二、证据
+
+```
+$ gcc -std=c11 -O2 -Wall -Wextra -Werror -o build_inflateprobe tools/inflateprobe.c -lm
+$ ./build_inflateprobe
+  small.z 解开 / 内容逐字节相同 / 消费掉整条流（头+块+Adler 一字节不差）
+  text2k.z（动态 Huffman）解开 / text2k 明文逐字节相同
+  long.z（近 10 KB 长回指）长度对 / zeros.z 全零 256 KB 解出来
+  zeros.z 给 4 KB 输出缓冲 ⇒ 拒绝 / 拒绝理由写明是**输出上限**
+  badadler.z ⇒ 拒绝 / 理由写明 Adler-32 对不上；fdict.z ⇒ 拒绝 / 理由写明 FDICT
+  存块往返：100 KB 随机数据（2 个块）逐字节相同
+  截断 3 字节 / 只有 5 字节 / 空输入 ⇒ 全部拒绝
+  200 组随机字节全部跑完（没崩），其中 200 组被拒
+结果：19 项通过，0 项失败
+```
+
+### 三、踩的坑（值得单独立一条）
+
+`inf_inflate_ex` 的循环第一版写的是 `if (r <= 0) break;` —— **语义正好反了**：
+`r == 0` 是"还有块"，`r == 1` 才是"最后一块"。于是单块流跑去解析"第二块"
+（此时读指针已经停在 Adler 上）⇒ 报"存块 LEN/NLEN 被截断"；多块流只解第一块。
+探针第一条就红了，从 `(inpos=30, inlen=33)` 这个数看出来是"多跑了一轮"，不是位序错。
+
+### 四、照实说
+
+- 没做压缩、gzip 外壳、流式解码、预置字典（`FDICT` 直接拒，不猜字典）；
+- 向量是 python `zlib` 压出来的（不是"任意 zlib 实现都验过"）；明文逐字节比只覆盖了两个向量，
+  其余靠 Adler-32 自证（这是 32 位校验，理论上能碰撞，工程上够用 —— 但不能说"证明"）；
+- 逐位解码（一次一位）比表驱动慢，实测解 2.2 MB PDF 里的流总共 0.2 s，够用就没优化。
+
+---
+
+## §6.678 PDF 取文字（第一版）：xref-free 扫描 + 内容流文本算子
+
+### 一、做了什么
+
+- 新文件 `pdf.h`：扫 `N G obj` 与 `stream…endstream`（**不解析 xref**）、只认 `FlateDecode`
+  与不压缩、`BT/ET` 区间内认 `Tj/TJ/'/"` 与 `Td/TD/T*/Tm`、`(字面串)` 转义、`<十六进制串>`、
+  `ToUnicode` 的 `beginbfchar`/`beginbfrange`；
+- `paper.h` 新增 `paper_ingest_pdf()`：`::paper read x.pdf` 先取文字再走**同一条**"抽断言 ⇒ 待证"；
+- 新命令 `::paper text <文件> [字节数]`：只把取到的文字打出来（"它到底读到了什么"的观察口）；
+- 夹具 `tests/fixtures/pdf/{simple,flate,broken,encrypted,unicode}.pdf`（自己造的，字节入库）；
+- 新探针 `tools/pdfprobe.c`（16 项）+ 套件 `tests/pdf.sh`（12 项）+ 手动 `tests/pdf_real.sh`。
+
+### 二、证据
+
+```
+$ ./build_pdfprobe
+  simple.pdf：1 个内容流解出来 / 整行文字对 / Tj+Td 的 dx>0 ⇒ 出空格（不是换行）
+  flate.pdf（FlateDecode）抽出来与不压缩版**逐字节相同**
+  unicode.pdf：ToUnicode 把码位映回**中文**（企鹅 属于 鸟类。/ 企鹅 会 游泳。）
+  broken.pdf：流解不开 ⇒ 0 文字，跳过计数=1，note 明说
+  encrypted.pdf：明说加密了我不读
+  现造的 PDF（布局与夹具不同）也抽出整行 / 第二行（0 -14 Td ⇒ 换行）
+  ASCII85Decode 的流：跳过计数=1（不静默）/ 纯文本：明说不是 PDF
+  100 组随机垃圾（带 PDF 头）全跑完（没崩）
+结果：16 项通过，0 项失败
+```
+
+`tests/pdf.sh` 12 项全过（含 CLI 长链：PDF ⇒ 2 条待证 ⇒ `::claim accept 1` ⇒ 问答真答对；
+以及"pdftotext 抽出的 10 个词一个不少地出现在我这边"——**外部裁判**认这两份夹具是真 PDF）。
+
+### 三、踩的坑
+
+1. 夹具第一版把对象体写成裸字典（没有 `<< >>`），poppler 直接报
+   `Catalog object is wrong type (name)` —— 拿它当裁判就等于自己跟自己比；
+2. `Td` 一律当换行 ⇒ TeX 论文被切成"一行一个词"，下游一句断言都抽不到（见 §6.679 的根因）；
+3. `pdf_lit_string`/`pdf_hex_string` 都要返回**下一个位置**，第一版忘了算，第二个参数永远是空。
+
+### 四、照实说
+
+- 只认 `FlateDecode`；`LZW/ASCII85/RunLength/DCTDecode` 计数上报，不静默跳过也不硬猜；
+- 版面不还原（分栏/表格/公式），扫描件抽 0 字节并明说，不做 OCR；
+- 这一版把全文的 CMap **合并**成一张表 —— 下一节就是它在真论文上翻车。
+
+---
+
+## §6.679 按字体的 `ToUnicode`（第一版在真论文上翻车的修复）
+
+### 一、做了什么
+
+- 对象表 `pdf_obj_table()` + `pdf_obj_find()`：对象号 → 对象体区间；
+- `pdf_build_fonts()`：`/Type /Font`（含 Type0/TrueType/Type1）对象 → 它的 `/ToUnicode`
+  → 解出 CMap（最多 48 个字体）；再把 `/Font << /F1 12 0 R … >>` 收成"资源名 → 字体对象"；
+- 内容流里用 `Tf` 切当前字体：只有**这个字体自己的** CMap 参与译码；
+  名字解不出来时**不猜**，退回 Latin-1 直译，并统计"N 段文字没有字体映射"；
+- 对象表上限 4096 → 8192（真论文有 5957 个对象，第一版把后面的字体截掉了）。
+
+### 二、证据（真论文，arXiv 1706.03762v7，2 215 244 字节）
+
+修复前（合并 CMap）：
+
+```
+Ashish → shish        arXiv:1706.03762v7 → arXiv.←←[cs.L]←←←ug←
+Google Brain → Google rain        firmly → rmly（连字丢）
+```
+
+修复后：
+
+```
+PDF：20 个内容流（FlateDecode 141），跳过 6 个流；字体映射 23 个；1 段文字没有字体映射（1 个流）
+Attention Is All You Need / Ashish Vaswani / Google Brain / …（标题页完整）
+抽出 38 816 字节；耗时 0.20 s
+词种：我 1 383 ／ pdftotext 1 417 ⇒ **召回 96.0%**
+```
+
+`sh tests/pdf_real.sh 1706.03762v7.pdf` 的输出就是上面这组数（差的前几个是
+`attentionbased/dmodel/headi/eos` 这类上下标，以及 `transduc-`+`tion` 这种跨行断词）。
+
+### 三、踩的坑
+
+对象头是 **`N G obj` 两个数**（对象号 + 代号）。第一版只往回读了一个数 ⇒ 所有对象号都成 0，
+`pdf_obj_find()` 全错，**一张字体表都建不起来**，中文 PDF 直接退化成 Latin-1。
+症状是"字体映射 0 个（一个都没认出来 ⇒ 全靠 Latin-1 直译）"—— 这条 note 就是为了这种情况写的。
+
+### 四、照实说
+
+- 资源名同名（`/F1`）在不同页指向不同字体时，只登记**第一个**；跨页同名不同字体会错字；
+- `/Differences` 编码表没做；CID 字库缺 `ToUnicode` 时读出来是乱码（不是崩，是错字）；
+- 96% 是"词种召回"，不是"逐字节相同"；断词、上下标、数学体都在差的那 4% 里；
+- 只测了 **1 篇**真论文（英文、pdfTeX 产出）。别的生成器（Word/LibreOffice/扫描件）没测过。
+
+---
+
+## §6.680 联网检索（`::net`）：默认关 + 白名单 + 硬上限 + 账本
+
+### 一、做了什么
+
+- 新文件 `net.h`：`fork`+`execv` 调 `curl`（**不用 shell**）、只认 https、
+  主机名**精确**匹配白名单、每次 ≤ 2 MB / ≤ 15 s（到点 SIGKILL）/ 每次会话 ≤ 8 次、
+  `--max-redirs 0` 且再核一遍 `url_effective` 的主机、每次抓取/被拒/失败都追加一行账
+  （`papers/cache/_net.log`）；
+- 白名单是数据：`net/allow.txt`（缺省 `export.arxiv.org` / `arxiv.org`）；
+- 检索只用 arXiv 的公开 API（`/api/query`，无需 key），`::net get` 抓 `/pdf/<id>`；
+- 新命令 `::net status|on|off|search|get|log`；默认**关**（`::net on` 才出去）；
+- 抓回来的正文落 `papers/cache/`（`.gitignore`），若 `%PDF-` 开头就直接走 `pdf.h` 取文字，
+  再走"抽断言 ⇒ 待证"——网上的东西**一律先待证**。
+
+### 二、证据（现场，2026-11-01）
+
+离线（`sh tests/net.sh`，12 项全过）：
+
+```
+默认关：::net 报关 + 列白名单；关着时 search/get 都直接拒（账本都没写）
+打开后：http:// 被拒（只走 https）／ evil.example.com 被拒 ／ arxiv.org.evil.com 被拒（精确匹配）
+        带端口的被拒 ／ 裸字符串 ⇒ 用法提示（不当网址猜）
+        被拒的**也记账**（新增 5 行）／ 账本里有 REFUSE 行 ／ ::net log 能看账
+关回去：::net off 之后又拒（开关是活的）
+```
+
+真联网（`AIP_NET_LIVE=1 sh tests/net.sh`，16 项全过）：
+
+```
+::net search attention is all you need → 5 条（Atom 9 711 字节）
+   1) 2105.02723v1  Do You Even Need Attention? …  2) 2512.19700v1  "All You Need" is Not All You Need …
+::net get 2 → papers/cache/2512.19700v1.pdf（1 121 039 字节）
+   PDF：13 个内容流（FlateDecode 46），字体映射 18 个 ⇒ 抽出 22 672 字节文字
+账本：papers/cache/_net.log 里有 OK 行（字节数可查）
+```
+
+### 三、踩的坑
+
+`net_resolve_target()` 第一版只放行 `https://`，于是 `http://` 走到 CLI 时被"用法提示"吃掉，
+**精确的拒绝理由**（"只认 https"）反而永远打不出来 —— 安全代码在 CLI 后面就成了死代码。
+现在的口径：只有"连 `://` 都没有"才算参数错，其余一律往下传给 `net_fetch` 拒，理由才看得见。
+
+### 四、照实说
+
+- **英文论文抽不出待证**：断言抽取只认中文关系词表（`relations.txt`）。真联网抓的那篇
+  22 672 字节文字，一条待证都没产生 —— 这是功能缺口，不是 bug（下一步第 1 条）；
+- 没有通用搜索引擎、没有 HTML 正文抽取（`::net get` 一个 HTML 页面只会存原始 HTML）；
+- 不跟重定向（刻意的）；没有 Cookie/登录/代理；不做并发；
+- 账本是**进程级**计数器 + 追加文件，重开会话计数清零（文件不清）；
+- `curl` 是外部依赖（找不到就明说用不了）；PDF 那条路没有外部依赖。
+
+---
+
+## §6.681 本轮收尾：接线、套件、A/B、备份（把 §6.677–§6.680 钉进流程）
+
+### 一、做了什么
+
+- **接线**：`paper.h` 的 `paper_ingest()` 先嗅 `%PDF-` 头 ⇒ 走 `paper_ingest_pdf()`
+  ⇒ 再回同一条"抽断言 ⇒ 待证"；`::paper text <文件> [字节数]` 是"它到底读到了什么"的观察口；
+- **套件**：新增 `tests/pdf.sh`（12 项）、`tests/net.sh`（离线 12 项 / 真联网 16 项）、
+  手动 `tests/pdf_real.sh`；两套都进 `tests/suites.txt`；`tests/all.sh` 的沙箱多带一个 `net/`
+  （白名单是数据入口，沙箱里缺了它，两处行为会不一致还看不出来）；
+- **探针**：`tools/inflateprobe.c`、`tools/pdfprobe.c`（都被 `tests/probes_build.sh` 的
+  `tools/*.c` 全量编译门覆盖，`-Werror`）；
+- **asan**：`tools/asan_check.sh` 的生命周期脚本里加了 PDF / 联网的**拒绝路径**
+  （`::paper text`、`::paper read` 两份 PDF、`::net on/get(被拒)/log/off`）；
+- **文档**：`docs/联网与PDF.md`（做法 / 边界 / 复现 / 十条局限）、`docs/阶段二-验收.md` 第八节、
+  本文件 §6.677–§6.681、交接文件顶块 + "下一步"。
+
+### 二、证据
+
+- **A/B 逐字节相同**：`git worktree` 取本轮起点 `2998e0c` 编 `build_old`，
+  `BIN=… sh tools/probematrix.sh session.bin` 两边各跑一次，33 行表 **`diff` 为空**
+  ⇒ 新增的两个入口没有改动任何既有行为（新命令 + 新文件，旧路径字节级不变）；
+- 探针：`inflateprobe` 19/19、`pdfprobe` 16/16（两者都 `-Wall -Wextra -Werror` 编过）；
+- 套件：**整包 65 套 65 过（107 s，JOBS=8）**——比上一轮多 3 套（`pdf` / `net` / `pdf_real`）；
+  单独跑：`tests/pdf.sh` 12/12、`tests/net.sh` 离线 12/12、`AIP_NET_LIVE=1` 16/16、`tests/pdf_real.sh` 3 项；
+- 其它门：`asan_check` **101 条元命令 × 3 种参数**干净（PDF/联网的拒绝路径也进去了）、
+  `patcount` 19 桶、`bucketload` 19 桶、`assocaudit` 260 处、`conc_tsan` 0 处竞争；
+- 真论文：`sh tests/pdf_real.sh <pdf>` ⇒ 召回 96.0%、0.20 s（数字与 §6.679 一致）；
+- **备份到 500G 机械盘**：`sh tools/backup_to_drive.sh` ⇒ `/mnt/models/aipoject-backup-20261101`，
+  2310 个文件 / 224 MB，**源清单 md5 与备份清单 md5 相同**（`ecf1473ae72822c929a04fb8d33db909`），
+  另加 `aipoject-backup-20261101.git-bundle`（8.2 MB，`--all`，含全部历史）。
+
+### 三、踩的坑
+
+1. `.gitignore` 得加 `papers/cache/`：抓回来的 PDF 和账本不该进公开仓库（正文有版权）；
+2. 套件是**离线**的，所以 `tests/net.sh` 默认只跑"该拒的"（这些路径在 `fork` 之前返回）；
+   真联网那一段要显式 `AIP_NET_LIVE=1`（默认不联网，避免整包在没网时红、也避免每轮都去打 arXiv）；
+3. 文档里一写 `§6.681`，`tests/selfcheck.sh` 的 ⑦ 就会去审计里找它 —— **先写审计再写引用**，
+   否则整包直接红在自检上（本轮就撞了一次）。
+
+### 四、照实说
+
+- 这一轮加的是**能力面**，不是"更聪明"：PDF 只做"取文字"，联网只做"arXiv 检索 + 抓正文"；
+- 英文论文依旧抽不出待证（中文关系词表），所以 `::net get` 的实际产物是"缓存里的 PDF + 取到的文字"，
+  不是知识 —— 这条写在验收文档第八节与 `docs/联网与PDF.md` 第六节第 1 条；
+- `tests/net.sh` 的真联网分支**没有**进常规整包（要手动 `AIP_NET_LIVE=1`），
+  所以"联网能用"这件事每轮不会自动复核，只有这一轮的现场证据；
+- `tools/backup_to_drive.sh` 里原来有两个反引号（`` `git log` `` / `` `_t/` ``）会被 sh 当命令替换执行，
+  每次备份都去跑一次 `git log`、并报一行 `_t/: Permission denied`（不影响拷贝，但"校验脚本自己
+  在报错"最容易让人误判）。已改成「」，现在输出干净 —— 这就是项目里那条老规矩：sh 字符串里别用反引号。
