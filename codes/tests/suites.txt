@@ -104,6 +104,10 @@ e2e_paper|sh tests/e2e_paper.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$
 pdf|sh tests/pdf.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.679 真 PDF 与 pdftotext 的**逐词**对照（不给参数就跑夹具，召回必须 100%；对外部裁判缺席则 SKIP）
 pdf_real|sh tests/pdf_real.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
+# §6.688 故障注入：截断档/位翻转/只读目录/配额耗尽/SIGKILL 半路/并发写同一路径（六类都要"明说"）
+faults|sh tests/faults.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.689 长跑不涨：只读循环跑 N 与 2N 两段，RSS 差 ≤5%、图计数完全相同、答复不漂
+soak|sh tests/soak.sh > ctest.log 2>&1; rc=$?; tail -6 ctest.log; [ "$rc" -eq 0 ]
 # §6.680 联网检索：默认关 / 白名单精确匹配 / 只认 https / 被拒也记账（**离线**；真抓要 AIP_NET_LIVE=1）
 net|sh tests/net.sh > ctest.log 2>&1; rc=$?; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.682 性能量尺（阶段三 M0）：五指标 min/中位/max + 机器指纹 + **图真的载入了**的语义看护
