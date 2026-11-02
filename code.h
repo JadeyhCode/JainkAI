@@ -32,6 +32,7 @@
 #include "lex.h"        /* ASCII 代码词法（::ascii on 时把"逐字保留"记进痕；见下） */
 
 #define CODE_MAX_FIX   1
+#define CODE_MAX_PIECES 16        /* 一次组合最多拼几个片段（§6.708 依赖排序的数组上限） */
 #define CODE_SRC_CAP   16384      /* 源文件读进来的上限（够写个小程序） */
 #define CODE_ERR_CAP   192
 #define CODE_OUT_NAME  ".out"
@@ -452,7 +453,15 @@ static inline int code_synth(AI *ai, const char *desc, char *note, size_t cap) {
             if (!buf) { if (note && cap) snprintf(note, cap, "内存不够"); return -2; }
             size_t len = 0;
             int pieces = 0;
-            for (size_t j = 0; j < best->count; ++j) {      /* 片段：按边序 */
+            /* §6.708 **片段依赖排序**：被调用的片段必须排在调用者**前面**。
+             * 以前是按 `用` 边的写入顺序拼的，知识里顺序写反了就 `invalid storage class for
+             * function`（§6.704 试过两版都失败）；根因是拿 `片段:is_prime` 这种**带前缀的**名字
+             * 去代码里 `strstr`，永远命中不了 ⇒ 这里先剥掉前缀再比。
+             * 判据只看"代码里出现了另一个片段的名字"；排序用冒泡式松弛（最多 nf 趟，成环就放弃）。*/
+            const char *fcodes[CODE_MAX_PIECES];
+            const char *fnames[CODE_MAX_PIECES];
+            int nf = 0;
+            for (size_t j = 0; j < best->count && nf < CODE_MAX_PIECES; ++j) {
                 const AssocEntry *e = &token_assocs_ro(best)[j];
                 if (!e->main || e->dyn != d_use) continue;
                 const char *fc = NULL;
@@ -461,7 +470,26 @@ static inline int code_synth(AI *ai, const char *desc, char *note, size_t cap) {
                     if (f->main && f->dyn == dyn_cd && f->main->name) { fc = f->main->name; break; }
                 }
                 if (!fc) continue;
-                int n = snprintf(buf + len, CODE_SRC_CAP - len, "%s\n", fc);
+                fcodes[nf] = fc;
+                fnames[nf] = e->main->name ? e->main->name : "";
+                nf++;
+            }
+            for (int pass = 0; pass < nf; ++pass) {          /* i 调用了 i+1 ⇒ 换位 */
+                int moved = 0;
+                for (int i = 0; i + 1 < nf; ++i) {
+                    const char *need = fnames[i + 1];
+                    const char *colon = strrchr(need, ':');
+                    if (colon && colon[1]) need = colon + 1;    /* "片段:is_prime" → "is_prime" */
+                    if (need[0] && strstr(fcodes[i], need)) {
+                        const char *tc = fcodes[i]; fcodes[i] = fcodes[i + 1]; fcodes[i + 1] = tc;
+                        const char *tn = fnames[i]; fnames[i] = fnames[i + 1]; fnames[i + 1] = tn;
+                        moved = 1;
+                    }
+                }
+                if (!moved) break;
+            }
+            for (int i = 0; i < nf; ++i) {
+                int n = snprintf(buf + len, CODE_SRC_CAP - len, "%s\n", fcodes[i]);
                 if (n < 0 || (size_t)n >= CODE_SRC_CAP - len) break;
                 len += (size_t)n; pieces++;
             }

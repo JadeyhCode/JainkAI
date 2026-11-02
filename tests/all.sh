@@ -107,6 +107,11 @@ export AIP_PREBUILT_HASH
 if ! sh tests/selfcheck.sh > "$PAR/selfcheck.log" 2>&1; then
     echo "SELFCHECK FAIL（清单/脚本写法有坑，整包汇总不可信 —— 详见 _t/par/selfcheck.log）"
     tail -20 "$PAR/selfcheck.log"
+    # ⚠ 探针是**后台**起的：这里直接 exit 会把它留在后台继续跑，而它和下一次整包
+    # 共用 `_t/probes/q`（`rm -rf` + 同一个调度目录）⇒ 下一次报"结果文件数（49）≠ 探针数（51）"，
+    # 看起来像探针坏了，其实是两次编译互相踩（§6.707 实测）。
+    kill "$probes_pid" 2>/dev/null || true
+    wait "$probes_pid" 2>/dev/null || true
     exit 1
 fi
 echo "SELFCHECK OK（清单与脚本写法自检过）"
