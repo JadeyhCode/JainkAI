@@ -21,8 +21,15 @@ shard_edges() {   # $1 = 语料目录
 text_lines() { [ -d "$1" ] || { echo 0; return; }; cat "$1"/facts*.triples 2>/dev/null | wc -l; }
 pkg_count() { [ -d "$1" ] || { echo 0; return; }; cat "$1"/done*.txt 2>/dev/null | wc -l; }
 
-d_edges=$(shard_edges "$M/codecorpus")
-u_edges=$(shard_edges "$M/ubucorpus")
+CORPORA=$(ls -d "$M"/*corpus* "$M"/ubumain 2>/dev/null | sort -u)
+d_edges=0; u_edges=0
+for c in $CORPORA; do
+  e=$(shard_edges "$c")
+  case "$c" in
+  */codecorpus) d_edges=$e ;;
+  *) u_edges=$((u_edges + e)) ;;
+  esac
+done
 pypi=$(text_lines "$M/pycorpus")
 gems=$(text_lines "$M/gemcorpus")
 npm=$(text_lines "$M/npmcorpus")
@@ -36,9 +43,9 @@ now=$(date +%s)
 echo "== 7B 真知识进度（$(date '+%F %T')）=="
 printf '  Debian  分片 %6s 片 / %12s 条边（文本待转 %s 行）\n' \
     "$(ls "$M"/codecorpus/shards/*.gz 2>/dev/null | wc -l)" "$d_edges" "$debian_pend"
-printf '  Ubuntu  分片 %6s 片 / %12s 条边（文本待转 %s 行）\n' \
-    "$(ls "$M"/ubucorpus/shards/*.gz 2>/dev/null | wc -l)" "$u_edges" \
-    "$(cat "$M"/ubucorpus/facts.*.triples 2>/dev/null | wc -l)"
+printf '  其它源  分片 %6s 片 / %12s 条边（Ubuntu main/universe 等；文本待转 %s 行）\n' \
+    "$(ls "$M"/*corpus*/shards/*.gz "$M"/ubumain/shards/*.gz 2>/dev/null | wc -l)" "$u_edges" \
+    "$(cat "$M"/*corpus*/facts.*.triples "$M"/ubumain/facts.*.triples 2>/dev/null | wc -l)"
 printf '  PyPI    %6s 包 / %12s 条\n' "$(pkg_count "$M/pycorpus")" "$pypi"
 printf '  gems    %6s 个 / %12s 条\n' "$(pkg_count "$M/gemcorpus")" "$gems"
 printf '  npm     %6s 包 / %12s 条\n' "$(pkg_count "$M/npmcorpus")" "$npm"
