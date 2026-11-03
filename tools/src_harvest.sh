@@ -20,6 +20,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:?用法: sh tools/src_harvest.sh <输出目录> [最多包数]}
 MAXPKG=${2:-5}
 SUITE_DIR="main"
+DIST=${DIST:-bookworm}      # 发行版代号：Debian bookworm / Ubuntu noble、jammy…
 MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
 SLICE_K=0
 SLICE_N=1
@@ -35,6 +36,7 @@ ROTATE_MB=${ROTATE_MB:-40}  # 单个 facts 文件到这么大就**轮转**成"�
 shift 2 2>/dev/null || true
 while [ $# -gt 0 ]; do
     case "$1" in
+    --dist) DIST=$2; shift 2 ;;
     --suite) SUITE_DIR=$2; shift 2 ;;
     --mirror) MIRROR=$2; shift 2 ;;
     --slice) SLICE_K=${2%%/*}; SLICE_N=${2##*/}; shift 2 ;;
@@ -50,7 +52,7 @@ DONE="$OUT/done.$SLICE_K.txt"
 IDX="$OUT/Sources.gz"
 if [ ! -s "$IDX" ]; then
     echo "== 取源码索引 =="
-    curl -k -s -o "$IDX" "$MIRROR/dists/bookworm/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
+    curl -k -s -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
 fi
 # Debian pool 布局：pool/<section>/<首字母或 lib+首字母>/<包名>/
 zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="$SLICE_N" '
@@ -72,7 +74,7 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
     }
     inf && /^[^ ]/ { inf = 0 }
 ' > "$OUT/index.$SLICE_K.txt"
-NIDX=$(wc -l < "$OUT/index.txt")
+NIDX=$(wc -l < "$OUT/index.$SLICE_K.txt")
 echo "== 索引里 $(wc -l < "$OUT/index.$SLICE_K.txt") 个源码包（分片 $SLICE_K/$SLICE_N）；这次最多做 $MAXPKG 个 =="
 
 did=0; tried=0; lines=0; bytes=0; t0=$(date +%s)
