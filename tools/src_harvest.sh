@@ -24,7 +24,9 @@ MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
 SLICE_K=0
 SLICE_N=1
 MAXMB=${MAXMB:-60}          # 单个 orig 包上限（MB）：超大的多半是数据/美术资源，不是代码
-CAPGB=${CAPGB:-40}          # 本目录事实文本的上限（GB）：超了**停下**，等转成 v2 二进制（~10 B/条）再继续
+CAPGB=${CAPGB:-40}          # 事实**文本**上限（GB）：超了停下（等 facts2shards 转成分片再续）
+ROTATE_MB=${ROTATE_MB:-400} # 单个 facts 文件到这么大就**轮转**成"已完成块"（facts.k.<序号>.triples），
+                            # 交给 facts2shards 去转 —— 转换器只碰**没人写**的文件，不会和抓取抢
                             # ⚠ 不设护栏的话：7e9 × ~54 B = 378 GB 文本，本机只剩 274 GB（会被写爆）
 shift 2 2>/dev/null || true
 while [ $# -gt 0 ]; do
@@ -91,6 +93,13 @@ while IFS='	' read -r pkg path; do
     lines=$((lines + n)); bytes=$((bytes + sz))
     rm -rf "$src" "$tb" "$OUT"/tmp/*.triples
     did=$((did + 1))
+    # 文件轮转：到 ROTATE_MB 就改名成"已完成块"，转换器只处理这种（并发安全）
+    fsz=$(stat -c %s "$FACTS" 2>/dev/null || echo 0)
+    if [ "$fsz" -ge $((ROTATE_MB * 1048576)) ]; then
+        seq=$(ls "$OUT"/facts.$SLICE_K.[0-9]*.triples 2>/dev/null | wc -l)
+        mv "$FACTS" "$OUT/facts.$SLICE_K.$(printf '%04d' "$seq").triples"
+        echo "  ↻ 轮转：facts.$SLICE_K.$seq.triples（$((fsz / 1048576)) MB）"
+    fi
     # 磁盘护栏（每次包级检查，4 路并行最多超出一个包的量）
     used=$(du -sm "$OUT" 2>/dev/null | cut -f1)
     if [ "${used:-0}" -ge $((CAPGB * 1024)) ]; then
