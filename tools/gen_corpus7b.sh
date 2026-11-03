@@ -23,9 +23,16 @@ cd "$ROOT"
 if [ "${1:-}" = "--verify-only" ]; then
     OUT=${2:-/mnt/models/aip-corpus-7B}
     VERIFY_ONLY=1
-    TOTAL=0; PER=0; NW=0; SEED=0
-    # 目标从清单里读回来（否则汇总里会打"目标 0"，像没设目标 —— 实测踩过）
-    [ -f "$OUT/manifest.txt" ] && TOTAL=$(sed -n 's/^total_target //p' "$OUT/manifest.txt" | head -1)
+    TOTAL=0; PER=0; NW=0; SEED=0; CAP=""
+    # 参数从清单里读回来（否则汇总里会打"目标 0"，而且**重写清单会把参数冲成 0** —— 实测踩过）
+    if [ -f "$OUT/manifest.txt" ]; then
+        TOTAL=$(sed -n 's/^total_target //p' "$OUT/manifest.txt" | head -1)
+        PER=$(sed -n 's/^per_shard //p' "$OUT/manifest.txt" | head -1)
+        NW=$(sed -n 's/^words //p' "$OUT/manifest.txt" | head -1)
+        SEED=$(sed -n 's/^seed //p' "$OUT/manifest.txt" | head -1)
+        CAP=$(sed -n 's/^cap //p' "$OUT/manifest.txt" | head -1)
+    fi
+    TOTAL=${TOTAL:-0}; PER=${PER:-0}; NW=${NW:-0}; SEED=${SEED:-0}
 else
     VERIFY_ONLY=0
     TOTAL=${1:-7000000000}
@@ -34,7 +41,7 @@ else
     OUT=${4:-/mnt/models/aip-corpus-7B}
     SEED=${5:-7}
 fi
-CAP=${C7B_CAP:-2000}
+CAP=${CAP:-${C7B_CAP:-2000}}
 
 mkdir -p "$OUT" || { echo "FAIL: 建不了输出目录 $OUT"; exit 1; }
 BIN="$ROOT/_t/c7b/mkcorpus7b"
@@ -122,12 +129,10 @@ done
 printf 'shards %d\n' "$nf" >> "$MAN"
 printf 'total_edges %d\n' "$sum" >> "$MAN"
 printf 'total_bytes %d\n' "$bytes" >> "$MAN"
-if [ "$VERIFY_ONLY" = 0 ]; then
-    if [ "$sum" -eq "$TOTAL" ]; then
-        printf 'status COMPLETE\n' >> "$MAN"
-    else
-        printf 'status PARTIAL\n' >> "$MAN"
-    fi
+if [ "${TOTAL:-0}" -gt 0 ] && [ "$sum" -eq "$TOTAL" ]; then
+    printf 'status COMPLETE\n' >> "$MAN"
+else
+    printf 'status PARTIAL\n' >> "$MAN"
 fi
 
 echo

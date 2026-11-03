@@ -25963,7 +25963,7 @@ $ ::parts corpus attach …/shard_350.c7b ; ::rel w000042    # 真片、挂到�
 | 查一个词（reader） | **512 字节**（64 条边；166.4 MB 的片读回 0.0003%） | 同上 |
 | 挂到脑上 | 索引 6.4 MB + 2 段；**0.96–1.98 s / RSS 596 MB** | `/usr/bin/time` |
 | 段内重复边 | **0**（抽查 3 片） | `--probe` |
-| 套件 | **corpus7b 12/12**；整包 **75 套 75 过**（123 s） | `tests/corpus7b.sh` / `sh tests/all.sh` |
+| 套件 | **corpus7b 14/14**；整包 **75 套 75 过**（123 s） | `tests/corpus7b.sh` / `sh tests/all.sh` |
 
 ### 五、踩的坑（六个，都是真 bug）
 
@@ -25979,6 +25979,10 @@ $ ::parts corpus attach …/shard_350.c7b ; ::rel w000042    # 真片、挂到�
 7. **`assocaudit` 把行内注释里的 `->assocs` 也当代码**：`if (…) continue;  /* …摸 ->assocs… */`
    这行以代码开头、`->assocs` 在注释里 ⇒ 审计算 1 处直接访问（整套红）。改成"摸边数组"这种说法。
    这条规矩本身是对的（注释里出现 `->assocs` 说明那段代码曾经绕过收口），所以**改注释、不改审计**。
+8. **`--verify-only` 把清单参数冲成 0**：校验模式不解析参数（`PER/NW/SEED=0`），却**重写清单**
+   ⇒ `per_shard 0 / words 0 / seed 0`（正确的 7B 清单被我第一次校验就冲了）。
+   修：校验模式从**原清单**读回 `per_shard/words/seed/cap/total_target` 再写；并加进套件
+   （`③b`：verify-only 之后参数还在 + `status` 照样判）。**教训：只读模式不许丢元数据。**
 
 顺带修了一处**上一轮带进来的违规**：`tools/c2triples.sh` 里写死了 `/home/jadeth/llama-cpp`，
 被 `selfcheck ⑥`（对外文件不许有本机绝对路径）抓到 ⇒ 改成 `$HOME/llama-cpp`。

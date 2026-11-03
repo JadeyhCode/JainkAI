@@ -59,6 +59,22 @@ else
     bad "重跑失败" "$(tail -3 "$WORK/gen_a2.log" | tr '\n' ' ')"
 fi
 
+echo "== ③b verify-only 不许把清单参数冲成 0（实测踩过：per_shard/words/seed 全变 0）=="
+sh "$ROOT/tools/gen_corpus7b.sh" --verify-only "$WORK/a" > "$WORK/verify.log" 2>&1
+_ps=$(sed -n 's/^per_shard //p' "$WORK/a/manifest.txt" | head -1)
+_nw2=$(sed -n 's/^words //p' "$WORK/a/manifest.txt" | head -1)
+_sd=$(sed -n 's/^seed //p' "$WORK/a/manifest.txt" | head -1)
+if [ "${_ps:-0}" = "$NE" ] && [ "${_nw2:-0}" = "$NW" ] && [ "${_sd:-0}" = "7" ]; then
+    ok "verify-only 之后清单参数还在（per_shard=$_ps / words=$_nw2 / seed=$_sd）"
+else
+    bad "verify-only 把清单参数冲掉了" "per_shard=${_ps:-?} words=${_nw2:-?} seed=${_sd:-?}"
+fi
+if grep -q '^status COMPLETE' "$WORK/a/manifest.txt"; then
+    ok "verify-only 也判了 status COMPLETE（总边数与目标一致）"
+else
+    bad "verify-only 之后清单没有 status" "$(tail -2 "$WORK/a/manifest.txt" | tr '\n' ' ')"
+fi
+
 echo "== ④ 引擎挂上并查（只读头 + 按需读段）=="
 printf '::parts corpus %s\n::parts corpus rel w000042\n::parts corpus stats\n::quit\n' "$A" > q.in
 ./build_aip --model m.bin < q.in > q.out 2>&1
