@@ -80,8 +80,11 @@ if [ -s "$ROOT/code/code_model.bin" ]; then
         [ "$M" -lt "$MS" ] && MS=$M
     done
     [ "$MS" -le 2000 ] && ok "惰性载入 ${MS} ms ≤ 2000 ms（三次取最小）" || bad "载入 ${MS} ms > 2000 ms" ""
+    # ⚠ **五次**取最小：机器上还常驻着 30+ 个抓取/转换进程（扩图期间），磁盘一忙
+    # 三次最小值也会被压在 3 s 以上（实测 3160 ms）。五次最小值仍能抓住真实退化
+    # （真退化是每次都 5 s 以上，取最小也没用）。
     SMS=999999
-    for i in 1 2 3; do
+    for i in 1 2 3 4 5; do
         S0=$(date +%s%N)
         printf '::save %s/rt.bin\n::quit\n' "$WORK" | "$ROOT/build_aip" --model "$ROOT/code/code_model.bin" > /dev/null 2>&1
         S1=$(date +%s%N)
@@ -91,7 +94,7 @@ if [ -s "$ROOT/code/code_model.bin" ]; then
     # 阈值 3000 ms 而不是 2000：**单独跑**时存盘 ~1.0 s（`code/build_code_model.sh` 会打这个数），
     # 但整包是 8 套并行 + 各自在写盘，实测能到 2.3 s。这里的门看的是"没有数量级退化"，
     # 精确的 1 s 口径以 build_code_model.sh 的单跑输出为准（审计里记的就是那个数）。
-    [ "$SMS" -le 3000 ] && ok "存盘 ${SMS} ms ≤ 3000 ms（三次取最小；单跑约 1.0 s）" || bad "存盘 ${SMS} ms > 3000 ms" ""
+    [ "$SMS" -le 3000 ] && ok "存盘 ${SMS} ms ≤ 3000 ms（五次取最小；单跑约 1.0 s）" || bad "存盘 ${SMS} ms > 3000 ms" ""
     # 单条查询延迟（阶段四 M3 判据）：差分法 **3000 次 − 两侧各一次空跑**，
     # 空跑取两次平均，抵掉"载入 + 进程启动"的漂移（只减一次会受抖动影响，
     # 实测出现过负数：200 次查询比 0 次还快）。
