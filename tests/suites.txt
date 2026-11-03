@@ -182,3 +182,5 @@ corpus7b|sh tests/corpus7b.sh > ctest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat ct
 wdcorpus|sh tests/wdcorpus.sh > wtest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat wtest.log; tail -6 wtest.log; [ "$rc" -eq 0 ]
 # §6.713 **扩完的图有没有用**：真知识（Wikidata v2）+ 代码知识（418 749 边）+ 7B 语料分片，各出一组题
 usegraph|sh tests/usegraph.sh > utest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat utest.log; tail -8 utest.log; [ "$rc" -eq 0 ]
+# §6.714 可证明的展开：实例继承（P31+P279*）+ 部分传递（P361*），非层级不派生、证据链、深度上限
+closure|sh tests/closure.sh > cltest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat cltest.log; tail -6 cltest.log; [ "$rc" -eq 0 ]

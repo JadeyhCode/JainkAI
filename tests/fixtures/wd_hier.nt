@@ -1,0 +1,6 @@
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P31> <http://www.wikidata.org/entity/Q3624078> .
+<http://www.wikidata.org/entity/Q3624078> <http://www.wikidata.org/prop/direct/P279> <http://www.wikidata.org/entity/Q7275> .
+<http://www.wikidata.org/entity/Q7275> <http://www.wikidata.org/prop/direct/P279> <http://www.wikidata.org/entity/Q43229> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P361> <http://www.wikidata.org/entity/Q55> .
+<http://www.wikidata.org/entity/Q55> <http://www.wikidata.org/prop/direct/P361> <http://www.wikidata.org/entity/Q46> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P17> <http://www.wikidata.org/entity/Q55> .
