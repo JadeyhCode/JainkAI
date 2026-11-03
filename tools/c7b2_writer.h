@@ -51,7 +51,27 @@ static inline int c7b2w_tab_init(C7B2Tab *t, size_t cap) {
     t->id = (uint32_t *)calloc(t->cap, sizeof(uint32_t));
     return t->name && t->hash && t->id ? 0 : -1;
 }
+/* ⚠ 哈希表**必须能长**：固定 1M 槽、装到 100% 时 `for(;;)` 永远找不到空槽 ⇒ **死循环**
+ * （实测：400 MB 文本块里几百万个唯一名字，转换进程挂 10 分钟不动，看着像"慢"，其实卡死）。 */
+static inline int c7b2w_tab_grow(C7B2Tab *t) {
+    size_t ncap = t->cap * 2;
+    char **nn = (char **)calloc(ncap, sizeof(char *));
+    size_t *nh = (size_t *)calloc(ncap, sizeof(size_t));
+    uint32_t *ni = (uint32_t *)calloc(ncap, sizeof(uint32_t));
+    if (!nn || !nh || !ni) { free(nn); free(nh); free(ni); return -1; }
+    size_t m = ncap - 1;
+    for (size_t k = 0; k < t->cap; ++k) {
+        if (!t->name[k]) continue;
+        size_t h = t->hash[k], i = h & m;
+        while (nn[i]) i = (i + 1) & m;
+        nn[i] = t->name[k]; nh[i] = h; ni[i] = t->id[k];
+    }
+    free(t->name); free(t->hash); free(t->id);
+    t->name = nn; t->hash = nh; t->id = ni; t->cap = ncap;
+    return 0;
+}
 static inline uint32_t c7b2w_intern(C7B2Tab *t, const char *s) {
+    if (t->n * 10 >= t->cap * 7) { if (c7b2w_tab_grow(t) != 0) return 0; }
     size_t m = t->cap - 1, h = c7b2w_hash(s), i = h & m;
     for (;;) {
         if (!t->name[i]) { t->name[i] = strdup(s); t->hash[i] = h; t->id[i] = (uint32_t)t->n; return (uint32_t)(t->n++); }

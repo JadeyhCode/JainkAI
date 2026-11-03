@@ -99,7 +99,12 @@ while IFS='	' read -r pkg path; do
     # 文件轮转：到 ROTATE_MB 就改名成"已完成块"，转换器只处理这种（并发安全）
     fsz=$(stat -c %s "$FACTS" 2>/dev/null || echo 0)
     if [ "$fsz" -ge $((ROTATE_MB * 1048576)) ]; then
-        seq=$(ls "$OUT"/facts.$SLICE_K.[0-9]*.triples 2>/dev/null | wc -l)
+        # ⚠ 序号必须**持久化**：用"已存在文件个数"当序号，转换完删掉后会**重用同一个名字**
+        #   ⇒ 新块撞上旧块的 .done 标记，转换器永远跳过它（实测：两个 400 MB 块卡在那儿）
+        ctr="$OUT/.rot.$SLICE_K"
+        seq=$(cat "$ctr" 2>/dev/null || echo 0)
+        seq=$((seq + 1))
+        printf '%d\n' "$seq" > "$ctr"
         mv "$FACTS" "$OUT/facts.$SLICE_K.$(printf '%04d' "$seq").triples"
         echo "  ↻ 轮转：facts.$SLICE_K.$seq.triples（$((fsz / 1048576)) MB）"
     fi

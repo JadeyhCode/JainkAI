@@ -21,10 +21,14 @@ one_round() {
         [ -f "$blk" ] || continue
         base=$(basename "$blk" .triples)
         [ -f "$DIR/shards/$base.done" ] && continue
+        # 互斥锁：转换循环和手工跑会撞上同一块（实测：两个 triples2c7b 同时写同一个分片 ⇒ 内容互相覆盖）
+        if ! mkdir "$DIR/shards/$base.lock" 2>/dev/null; then continue; fi
         printf '  转换 %s（%s MB）… ' "$base" "$(awk -v b="$(stat -c %s "$blk")" 'BEGIN{printf "%.0f", b/1048576}')"
         # 分片前缀用块名（一个块可能出多个分片）
-        if ! "$BIN" "$blk" "$DIR/shards/$base" --max-edges 5000000 >> "$DIR/convert.log" 2>&1; then
-            echo "失败（见 convert.log）"; continue
+        # ⚠ 跳过 `代码` 记录：多行函数体在 v2 里会被当成**节点名**（KB 级字符串）⇒ 转换 10 分钟/400 MB、
+        #   分片也大。签名/头/原型/宏/字段这些"短事实"才是 7B 的主体（要代码体可以另存一份）。
+        if ! "$BIN" "$blk" "$DIR/shards/$base" --max-edges 2000000 --skip-rel 代码 >> "$DIR/convert.log" 2>&1; then
+            echo "失败（见 convert.log）"; rmdir "$DIR/shards/$base.lock" 2>/dev/null || true; continue
         fi
         gz=0; raw=0
         for sh in "$DIR/shards/$base".*.c7b2; do
@@ -35,6 +39,7 @@ one_round() {
         done
         rm -f "$blk"
         : > "$DIR/shards/$base.done"
+        rmdir "$DIR/shards/$base.lock" 2>/dev/null || true
         n=$((n + 1))
         printf 'OK（裸 %d MB ⇒ gz %d MB）\n' "$((raw / 1048576))" "$((gz / 1048576))"
     done
