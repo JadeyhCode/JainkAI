@@ -64,7 +64,11 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
         # 只留"像代码"的包：跳过数据/文档/字体/图标/主题/声音/样例
         if (pkg ~ /(-data$|-docs?$|-fonts?$|-icons?$|-themes?$|-sounds?$|-wallpapers?$|-assets$|-examples?$|-tests?$|-common$)/) next
         # 语言包/文档/数据包：抽不出 C 事实，白花下载时间（实测踩过）
-        if (pkg ~ /^(apertium-|texlive-|fonts-|libjs-|libreoffice-|gcc-|linux-|nvidia-|python3?-|libghc-|libocaml-|libmono-|libjava|libcommons-|libperl|bioperl|liblingua-|node-|ruby-|php-|libapt-pkg-doc)/) next
+        # 语言包/文档/数据包：抽不出 C 事实，纯烧带宽（实测 Ubuntu universe 里一屏幕的 "⇒ 0 行"）
+        if (pkg ~ /^(apertium-|texlive-|tex-|fonts-|libjs-|libreoffice-|gcc-|linux-|nvidia-|python3?-|libghc-|libocaml-|libmono-|libjava|libcommons-|libperl|perl|bioperl|liblingua-|node-|nodejs|ruby|ruby-|php-|libphp|golang-|golang|rust-|rustc|librust|r-cran-|r-bioc-|swi-prolog|raku-|ocaml|mono-|jekyll|libapt-pkg-doc)/) next
+        # 后缀型（Ubuntu universe 里占比极大）：libfoo-perl / libbar-java / python3-xxx 之类
+        if (pkg ~ /-(perl|java|python|python3|ruby|ocaml|ghc|php|julia|lua|tcl|mono|js|node|font|fonts|data|doc|docs|dbg|dbgsym|theme|icon|icons|sound|sounds|wallpaper|wallpapers|example|examples|test|tests|common|all|kde|gnome)$/) next
+        if (pkg ~ /(-doc$|-docs$|-dbg$|-dbgsym$|-dev-doc$)/) next
         if (sz > maxmb * 1048576) next
         c = substr(pkg, 1, 1); if (substr(pkg,1,3) == "lib") c = "lib" substr(pkg, 4, 1)
         line = pkg "\tpool/" sec "/" c "/" pkg "/" f

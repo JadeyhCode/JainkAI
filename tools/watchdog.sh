@@ -26,13 +26,13 @@ done
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 mkdir -p "$M" || exit 1
 
-edges() {
-    for f in "$M"/codecorpus/shards/*.gz; do
+edges() {   # Debian + Ubuntu 两个语料目录的边数（只看 codecorpus 会一直显示"不涨"）
+    for f in "$M"/codecorpus/shards/*.gz "$M"/ubucorpus/shards/*.gz; do
         [ -f "$f" ] || continue
         gunzip -c "$f" 2>/dev/null | head -c 64 | od -An -tu8 -j 16 -N 8 | tr -d ' '
     done | awk '{s += $1} END {print s + 0}'
 }
-pend_mb() { du -sm "$M"/codecorpus/facts.*.[0-9]*.triples "$M"/codecorpus/facts.[0-9]*.triples 2>/dev/null | awk '{s += $1} END {print s + 0}'; }
+pend_mb() { du -sm "$M"/codecorpus/facts*.[0-9]*.triples "$M"/ubucorpus/facts*.[0-9]*.triples 2>/dev/null | awk '{s += $1} END {print s + 0}'; }
 nproc_src() { [ -n "$1" ] && ps -eo args 2>/dev/null | grep -c "^sh tools/$1" || echo 0; }
 
 prev_e=0; stale=0; round=0
@@ -54,6 +54,7 @@ while :; do
     if [ "$stale" -ge 2 ] && [ "$p" -ge 200 ]; then
         printf '[%s] ⚠ 边数 %d 轮不涨但积压 %s MB ⇒ 触发 facts2shards\n' "$(date '+%H:%M:%S')" "$stale" "$p" >> "$LOG"
         sh "$ROOT/tools/facts2shards.sh" "$M/codecorpus" >> "$LOG" 2>&1
+        sh "$ROOT/tools/facts2shards.sh" "$M/ubucorpus" >> "$LOG" 2>&1
         stale=0
     fi
     # 某个源进程数为 0 ⇒ 记 WARN（人工/目标轮决定是否重启）

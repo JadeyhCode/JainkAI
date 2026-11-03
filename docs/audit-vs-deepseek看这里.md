@@ -26813,3 +26813,44 @@ Ubuntu 的密度实测 **≈2 870 条/MB**（4 386 MB 下载 ⇒ 约 1 260 万�
 - 现在的瓶颈**不是带宽（3.7 MB/s 已满），也不是 CPU**，而是**"抽出来→成边"的节奏**；
   60 s 一次转换已经把它压到接近理论值（9 941 vs 10 600）。
 - 按 9 941 边/秒，7B 还要 **8 天**左右；若 Ubuntu 抓空，再接 Debian contrib / Ubuntu main。
+
+---
+
+## §6.730 Ubuntu universe 的"空包海"：加后缀过滤 ⇒ 830 → **8 049 边/秒**
+
+### 一、现象
+
+Ubuntu 跑起来后实测只有 **830 边/秒**（ETA 98 天），但网络是满的（3.56 MB/s）。看日志：
+
+```
+[370] gdspy                    0.7 MB 源码 ⇒ 0 行
+[361] ganeti-os-noop           0.0 MB 源码 ⇒ 0 行
+[963] libfcgi-client-perl      0.0 MB 源码 ⇒ 0 行
+```
+
+**Ubuntu universe 里绝大多数包是 Perl/Java/Python/Ruby 的库**——我们的 C 抽取器对它们产出 0 条，
+带宽全烧在水里。Debian main 里这类占比小得多，所以之前没暴露。
+
+### 二、修：后缀过滤（一条正则）
+
+`src_harvest.sh` 的选包加了一条后缀规则：
+`-(perl|java|python|python3|ruby|ocaml|ghc|php|julia|lua|tcl|mono|js|node|font|data|doc|dbg|theme|icon|sound|wallpaper|example|test|common|all|kde|gnome)$`
+
+### 三、实测（同条件，5 分钟窗口）
+
+| | 边/秒 | ETA |
+|---|---|---|
+| 过滤前 | **830** | 98 天 |
+| **过滤后** | **8 049** | **~10 天** |
+
+### 四、顺带修的
+
+- `watchdog.sh` 现在把 `codecorpus` 和 `ubucorpus` 的边**一起算**（之前只看 Debian，
+  抓空后一直显示"边数不涨"，会误触发转换）。
+- 转换节奏改成 `--watch 60`（上一轮已改），Ubuntu 侧另起一个循环。
+
+### 五、照实说
+
+- 这轮是**纯效率修复**：边数总量 109.96 M → 120.71 M，但关键是"空烧带宽"止住了。
+- Ubuntu universe 过滤后剩余约 **1.5 万个包**，按当前速率还够跑一阵。
+- 到 7B 的 ETA 重新回到 **~10 天**量级（取决于过滤后还能不能持续找到 C 味包）。
