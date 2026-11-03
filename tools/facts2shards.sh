@@ -27,7 +27,8 @@ one_round() {
         # 分片前缀用块名（一个块可能出多个分片）
         # ⚠ 跳过 `代码` 记录：多行函数体在 v2 里会被当成**节点名**（KB 级字符串）⇒ 转换 10 分钟/400 MB、
         #   分片也大。签名/头/原型/宏/字段这些"短事实"才是 7B 的主体（要代码体可以另存一份）。
-        if ! "$BIN" "$blk" "$DIR/shards/$base" --max-edges 2000000 --skip-rel 代码 >> "$DIR/convert.log" 2>&1; then
+        # 加超时：转换卡住（比如旧版哈希表死循环）会**永久占着锁**，把后面所有块都堵死
+        if ! timeout 900 "$BIN" "$blk" "$DIR/shards/$base" --max-edges 2000000 --skip-rel 代码 >> "$DIR/convert.log" 2>&1; then
             echo "失败（见 convert.log）"; rmdir "$DIR/shards/$base.lock" 2>/dev/null || true; continue
         fi
         gz=0; raw=0

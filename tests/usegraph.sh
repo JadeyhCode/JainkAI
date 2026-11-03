@@ -98,6 +98,28 @@ if [ -n "${readb:-}" ] && [ "$readb" -lt $((fsz / 20)) ]; then hit "读 ${readb}
 elif [ -n "${readb:-}" ]; then wrong "读了 ${readb} / ${fsz}（太多）"
 else miss ""; fi
 
+echo "== ④ 真实代码语料（Debian 分片，28 M 量级；有就测，没有就 SKIP）=="
+REAL=${REAL_SHARD:-$(ls /mnt/models/codecorpus/shards/*.gz 2>/dev/null | head -1)}
+if [ -n "${REAL:-}" ] && [ -s "$REAL" ]; then
+    ask "函数:printf 的原型/头（真实 Debian 源码）"
+    printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::parts corpus stats\n::quit\n' "$REAL" | ./build_aip --model m.bin > r1.txt 2>&1
+    if grep -qa -- '函数:printf --\[头\]-->' r1.txt && grep -qa -- '函数:printf --\[原型\]-->' r1.txt; then
+        hit "头 + 原型（$(grep -ac -- '函数:printf --\[' r1.txt) 条）"
+    elif grep -qa '挂上\|v2 真 KG' r1.txt; then miss "分片里没有 函数:printf"
+    else wrong "$(grep -a '\[语料\]' r1.txt | tail -1 | cut -c1-60)"; fi
+
+    ask "宏:HAVE_CONFIG_H 的声明出处"
+    printf '::parts corpus %s\n::parts corpus rel 宏:HAVE_CONFIG_H\n::quit\n' "$REAL" | ./build_aip --model m.bin > r2.txt 2>&1
+    if grep -qa -- '宏:HAVE_CONFIG_H --\[声明\]-->' r2.txt; then hit "$(grep -a -- '宏:HAVE_CONFIG_H --' r2.txt | head -1 | sed 's/.*--> //' | cut -c1-40)"
+    else miss "这条分片里没有"; fi
+
+    ask "局部加载：一次查询只读少量字节"
+    readb=$(printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::parts corpus stats\n::quit\n' "$REAL" | ./build_aip --model m.bin 2>&1 | grep -a '共 [0-9]* 字节' | tail -1 | sed 's/.*共 \([0-9]*\) 字节.*/\1/')
+    if [ -n "${readb:-}" ]; then hit "读 ${readb} 字节"; else miss ""; fi
+else
+    ask "真实代码语料（缺分片）"; miss "SKIP（/mnt/models/codecorpus/shards 为空）"
+fi
+
 echo
 printf '有用性：**答对 %d / 共 %d**（答错 %d / 没答 %d）\n' "$ok_n" "$total" "$bad_n" "$miss_n"
 [ "$bad_n" -eq 0 ] && [ "$miss_n" -eq 0 ] && printf 'PASS usegraph（三类图都答对了：真知识 / 代码知识 / 7B 语料）\n' || printf 'FAIL usegraph（答错 %d / 没答 %d）\n' "$bad_n" "$miss_n"
