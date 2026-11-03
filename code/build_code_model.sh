@@ -24,6 +24,10 @@ cp model.bin "$OUT.work"
 # 两个文件按顺序灌（骨架在前：它是合成器最先要查的）
 cp "$OUT.work" "$OUT.tmp.bin"
 printf '::ingest code/knowledge/skeletons.triples\n::ingest code/knowledge/compose.triples\n::ingest code/knowledge/capi.triples\n::save %s\n::quit\n' "$OUT" > _t/codebuild.in
+# §6.712 有片段知识（`tools/c2triples.sh` 抽的真实函数体）就一起灌：默认图里也能 `::code frag` 查到
+if [ -s code/knowledge/c2.triples ]; then
+    sed -i '1i ::ingest code/knowledge/c2.triples' _t/codebuild.in
+fi
 /usr/bin/time -f '  灌图+存盘墙钟 %e s（峰值 RSS %M KB）' ./build_aip --model "$OUT.tmp.bin" < _t/codebuild.in 2>&1 | grep -aE '导入|现在：|已保存|墙钟'
 rm -f "$OUT.tmp.bin"
 

@@ -180,3 +180,5 @@ fragknow|sh tests/fragknow.sh > ftest.log 2>&1; rc=$?; tail -6 ftest.log; [ "$rc
 corpus7b|sh tests/corpus7b.sh > ctest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat ctest.log; tail -8 ctest.log; [ "$rc" -eq 0 ]
 # §6.712 公开语料（Wikidata NT）：转换/字面量跳过/进图可查 + v2（片内属性表，绕开 64 关系上限）
 wdcorpus|sh tests/wdcorpus.sh > wtest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat wtest.log; tail -6 wtest.log; [ "$rc" -eq 0 ]
+# §6.713 **扩完的图有没有用**：真知识（Wikidata v2）+ 代码知识（418 749 边）+ 7B 语料分片，各出一组题
+usegraph|sh tests/usegraph.sh > utest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat utest.log; tail -8 utest.log; [ "$rc" -eq 0 ]

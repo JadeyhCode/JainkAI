@@ -148,6 +148,8 @@ pool_task_setup() {   # $1=套件名（没用上） $2=worker 号
         [ -f "$ROOT/code/build_code_model.sh" ] && cp "$ROOT/code/build_code_model.sh" "$SB/code/"
         [ -f "$ROOT/code/knowledge/skeletons.triples" ] && cp "$ROOT/code/knowledge/skeletons.triples" "$SB/code/knowledge/"
         [ -f "$ROOT/code/knowledge/compose.triples" ] && cp "$ROOT/code/knowledge/compose.triples" "$SB/code/knowledge/"
+        # §6.712 片段知识（1 MB 量级）：带上，否则沙箱里默认图没有 ::code frag
+        [ -f "$ROOT/code/knowledge/c2.triples" ] && cp "$ROOT/code/knowledge/c2.triples" "$SB/code/knowledge/"
     fi
     cp "$ROOT/model.bin" "$SB/model.bin"
     cp "$ROOT/build_aip" "$SB/build_aip"

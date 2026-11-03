@@ -1849,6 +1849,11 @@ int main(int argc, char **argv) {
                         }
                         continue;
                     }
+                    if (!strcmp(act, "attach") && g_c7b && g_c7b->ver == 2) {
+                        printf("[语料] v2 分片（真 KG）只支持单查：::parts corpus rel Q31\n");
+                        printf("       接进脑要定「16 位属性号 → 引擎 ≤64 个关系」的映射策略（下一轮）\n");
+                        continue;
+                    }
                     if (!strcmp(act, "attach")) {
                         /* `::parts corpus attach <文件.c7b>`：**挂到脑上** ——
                          * 之后 `::rel w000042` / 求解器 / `::contradict` 都走正常读边路径（按需读段）。*/
@@ -1873,6 +1878,10 @@ int main(int argc, char **argv) {
                     if (!strcmp(act, "stats") || act[0] == 0) {
                         if (!g_c7b) { printf("[语料] 没开着分片（::parts corpus <文件.c7b>）\n"); continue; }
                         printf("[语料] %s\n", g_c7b->path);
+                        if (g_c7b->ver == 2)
+                            printf("       v2：节点 %u / 属性 %u（**片内属性表**）/ 边 %llu / 文件 %.1f MB（真 KG 用）\n",
+                                   g_c7b->n_words, g_c7b->n_props, (unsigned long long)g_c7b->n_edges,
+                                   (double)g_c7b->size / 1000000.0);
                         printf("       词 %u / 有边的词 %u / 边 %llu / 文件 %.1f MB / 种子 %llu\n",
                                g_c7b->n_words, g_c7b->n_seg, (unsigned long long)g_c7b->n_edges,
                                (double)g_c7b->size / 1000000.0, (unsigned long long)g_c7b->seed);
@@ -1882,6 +1891,20 @@ int main(int argc, char **argv) {
                     }
                     if (!strcmp(act, "rel")) {
                         if (!g_c7b) { printf("[语料] 没开着分片（::parts corpus <文件.c7b>）\n"); continue; }
+                        if (g_c7b->ver == 2) {
+                            /* §6.712 v2（真 KG）：按**节点名**查（Q31 / P31） */
+                            uint32_t nid = 0;
+                            int r2 = c7b2_find_node(g_c7b, arg, &nid);
+                            if (r2 == 1) { printf("[语料] %s：这个分片里没有它\n", arg); continue; }
+                            if (r2 < 0) { printf("[语料] 查失败（%d）\n", r2); continue; }
+                            C7B2Fact fs[32];
+                            int got2 = c7b2_facts(g_c7b, nid, fs, 32);
+                            if (got2 <= 0) { printf("[语料] %s：没有事实（%d）\n", arg, got2); continue; }
+                            printf("[语料] %s 的事实 %d 条%s：\n", arg, got2, got2 >= 32 ? "（只列前 32）" : "");
+                            for (int z = 0; z < got2; ++z)
+                                printf("       %s --[%s]--> %s\n", arg, fs[z].prop, fs[z].obj);
+                            continue;
+                        }
                         unsigned wid = 0;
                         if (!arg[0] || sscanf(arg, "w%u", &wid) != 1 || wid >= g_c7b->n_words) {
                             printf("[用法] ::parts corpus rel w%%06u（词名形如 w000042；本片词数 %u）\n", g_c7b->n_words);
@@ -1905,9 +1928,14 @@ int main(int argc, char **argv) {
                     if (!nc) { printf("[语料] 打不开：%s\n", cerr[0] ? cerr : act); continue; }
                     if (g_c7b) c7b_close(g_c7b);
                     g_c7b = nc;
-                    printf("[语料] 挂上 %s：词 %u / 边 %llu / 文件 %.1f MB（只读了头，边按需读）\n",
-                           nc->path, nc->n_words, (unsigned long long)nc->n_edges,
-                           (double)nc->size / 1000000.0);
+                    if (nc->ver == 2)
+                        printf("[语料] 挂上 %s：**v2 真 KG**，节点 %u / 属性 %u / 边 %llu / 文件 %.1f MB（只读了头）\n",
+                               nc->path, nc->n_words, nc->n_props, (unsigned long long)nc->n_edges,
+                               (double)nc->size / 1000000.0);
+                    else
+                        printf("[语料] 挂上 %s：词 %u / 边 %llu / 文件 %.1f MB（只读了头，边按需读）\n",
+                               nc->path, nc->n_words, (unsigned long long)nc->n_edges,
+                               (double)nc->size / 1000000.0);
                     continue;
                 }
                 if (!strncmp(sub, "save", 4)) {
