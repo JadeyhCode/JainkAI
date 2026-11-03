@@ -30,3 +30,11 @@ code/knowledge/capi.triples
 code/code_model.bin
 code/code_model.bin.work
 code/code_model.bin.tmp.bin
+# §6.709 扩图：扩展版知识模型与它吃进来的两份生成物（内核头文件 45 万行、man 手册 2 万行）
+code/knowledge/capi_kern.triples
+code/knowledge/capi_kern.raw.triples
+code/knowledge/man.triples
+code/code_model_full.bin
+code/code_model_full.bin.work
+# 例外：扩展版构建**脚本**（`build_*` 会把 `build_code_model_full.sh` 一起忽略掉）
+!code/build_code_model_full.sh

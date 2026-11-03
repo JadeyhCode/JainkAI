@@ -68,10 +68,14 @@ find "$INC" -name '*.h' -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r 
             if (eq > 0) { name = substr(line, 1, eq - 1); val = substr(line, eq + 1) }
             else { name = line; val = "" }
             gsub(/[ \t]+$/, "", name)
+            sub(/^[ \t]+/, "", val)          # `NAME =<TAB>0x02` 的 `=` 后面是 TAB ⇒ 不修就成空客体
             if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
             if (toupper(name) != name && name !~ /^[a-z]/) next
             if (length(val) > 40) val = substr(val, 1, 40)
-            print "枚举值:" name "\t定义\t" val
+            # ⚠ 没有 `=` 的枚举值（内核头文件里一大片）val 是空的 —— 空客体那行 `::ingest` 会记成
+            #   "坏行"（实测内核那份 39 641 行、/usr/include 16 272 行）。**不打印**而不是打空串：
+            #   这个枚举值仍然有 `声明 <头>` 那条边，知识没丢（§6.709）。
+            if (val != "") print "枚举值:" name "\t定义\t" val
             print "枚举值:" name "\t声明\t" hdr
         }
         # 结构体字段（缩进 + 类型... + 名字 + 可选数组 + ;）
@@ -93,17 +97,20 @@ find "$INC" -name '*.h' -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r 
         /^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_]*/ {
             line = $0
             sub(/^[ \t]*#[ \t]*define[ \t]+/, "", line)
-            p = index(line, " ")
-            if (p > 0) { name = substr(line, 1, p - 1); body = substr(line, p + 1) }
+            # ⚠ 分隔符是**任意空白**，不是空格：`#define FOO<TAB>bar` 很常见（实测 425 例），
+            #   按空格切会把名字切成 `FOO<TAB>bar` 或让 body 以 TAB 开头 ⇒ 客体变成空串。
+            p = match(line, /[ \t]/)
+            if (p > 0) { name = substr(line, 1, p - 1); body = substr(line, p + 1); sub(/^[ \t]+/, "", body) }
             else { name = line; body = "" }
             if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
             if (length(body) > 60) body = substr(body, 1, 60)
-            print "宏:" name "\t定义\t" body
+            if (body != "") print "宏:" name "\t定义\t" body   # 空体的宏（`#define FOO`）同理不打了
             print "宏:" name "\t声明\t" hdr
         }
         # 类型：`typedef ... NAME;`
         /^[ \t]*typedef[ \t]/ && /;[ \t]*$/ {
             line = $0
+            sub(/^[ \t]+/, "", line)     # 缩进的 typedef（C++ 头里很多）不剥前导空白 ⇒ 客体是空的
             p = index(line, ";")
             if (p > 0) line = substr(line, 1, p - 1)
             n = split(line, parts, /[ \t]+/)
