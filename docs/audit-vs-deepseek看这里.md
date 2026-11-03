@@ -26481,7 +26481,7 @@ Debian 源码索引（12 MB，一次）
 
 ---
 
-## §6.721–§6.722 第三/第四个源：RubyGems 与 npm；以及"每包开销"这个真瓶颈
+## §6.721 第三/第四个源：RubyGems 与 npm（含 npm 名单）；"每包开销"成了真瓶颈
 
 ### 一、RubyGems（`tools/src_gems.sh`）
 
