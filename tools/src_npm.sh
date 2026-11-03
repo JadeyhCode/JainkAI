@@ -65,6 +65,19 @@ jsfacts() {   # $1=源码根 $2=包名 $3=输出
                 s = substr(line, RSTART, RLENGTH); sub(/.*interface[ \t]+/, "", s)
                 print "接口:" s "\t定义于\t文件:" file
             }
+            # exports.foo = function(...) / module.exports.foo = ... / foo: function(...)
+            if (match(line, /(exports|module\.exports|this)\.[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[ \t]*(async[ \t]+)?function/)) {
+                s = substr(line, RSTART, RLENGTH)
+                sub(/^(exports|module\.exports|this)\./, "", s); sub(/[ \t]*=.*$/, "", s)
+                print "函数:" s "\t定义于\t文件:" file
+            }
+            # 方法简写：`  name(args) {`（行首缩进 + 标识符 + 括号 + 花括号）
+            if (match(line, /^[ \t]+(async[ \t]+)?[A-Za-z_$][A-Za-z0-9_$]*[ \t]*\([^)]*\)[ \t]*\{/)) {
+                s = substr(line, RSTART, RLENGTH)
+                sub(/^[ \t]*(async[ \t]+)?/, "", s); sub(/[ \t(].*$/, "", s)
+                if (s != "if" && s != "for" && s != "while" && s != "switch" && s != "catch" && s != "function")
+                    print "方法:" s "\t定义于\t文件:" file
+            }
             # const name = ( ... ) => | function
             if (match(line, /(const|let|var)[ \t]+[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=[ \t]*(async[ \t]+)?(function|\(|[A-Za-z_$][A-Za-z0-9_$]*[ \t]*=>)/)) {
                 s = substr(line, RSTART, RLENGTH)

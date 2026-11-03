@@ -26,7 +26,9 @@ pypi=$(text_lines "$M/pycorpus")
 gems=$(text_lines "$M/gemcorpus")
 npm=$(text_lines "$M/npmcorpus")
 debian_pend=$(cat "$M"/codecorpus/facts.*.triples 2>/dev/null | wc -l)
-total=$((d_edges + pypi + gems + npm + debian_pend))
+# ⚠ **待转文本行不算进总账**：行和边不是同一量纲（一次转换会让"合计"倒退，速率变负）。
+#   积压单独报，总账只算**已经成边**的（分片）与其它源的文本条数。
+total=$((d_edges + pypi + gems + npm))
 target=7000000000
 now=$(date +%s)
 
