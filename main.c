@@ -12,6 +12,7 @@
 #include "lex.h"          /* ASCII 代码词法（线 A ③；`::lex` / `::ascii`） */
 #include "model_io.h"
 #include "parts.h"      /* §6.569 局部加载：::parts 命令 */
+#include "corpus7b.h"   /* §6.711 7B 边分片语料（.c7b）：::parts corpus */
 #include "xbrain.h"     /* §6.580 跨脑知识语义：照抄 / 冲突可见 / force */
 #include "pred.h"       /* §6.633 谓词（多元关系）：::pred */
 #include "rule.h"       /* §6.635 规则即数据 + 有界后向链：::rule / ::prove */
@@ -670,7 +671,7 @@ static const CmdDef CMDS[] = {
     { "mods", NULL, 1, "基本",
       "这个脑自己的改动记账（只记本脑，不串别的脑）", CMD_MODS },
     { "parts", NULL, 1, "基本",
-      "局部加载：save/attach/delta/journal/replay/detach/stats/verify/evict（边可暂放磁盘，按需读回）", CMD_PARTS },
+      "局部加载：save/attach/delta/journal/replay/detach/stats/verify/evict（边可暂放磁盘，按需读回）；corpus <文件.c7b>|attach <文件>|rel w000042|stats|close（7B 分片语料，8 B/边；attach 后 ::rel 直接能查）", CMD_PARTS },
     { "brain", NULL, 1, "基本",
       "多智能体：new/list/use/drop/save/mods/diff（每个脑各记各的改，互不串台）", CMD_BRAIN },
     { "save", NULL, 1, "基本",
@@ -1681,6 +1682,9 @@ static int lang_rel_word_cb(const char *zh) {
     return g_lang_ai && zh && rel_id_of(g_lang_ai, zh, 0) != 0;
 }
 
+/* §6.711 打开着的语料分片（CLI 级状态）*/
+static C7B *g_c7b = NULL;
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -1817,6 +1821,95 @@ int main(int argc, char **argv) {
                     snprintf(ovl, sizeof ovl, "%s", *pe ? pe : "");
                 }
                 AIParts *pt = (AIParts *)a->parts;
+                if (!strncmp(sub, "corpus", 6) && (sub[6] == 0 || sub[6] == ' ')) {
+                    /* §6.711 **7B 边分片语料**：`.c7b`（8 B/边）只读头 + 索引就能挂上，
+                     * 要某个词的边才读那一段。子命令：
+                     *   ::parts corpus <文件.c7b>   打开（只读索引，不读边）
+                     *   ::parts corpus rel w000042   查一个词的邻居（按需读它那一段）
+                     *   ::parts corpus stats         报头信息 + 读了多少字节
+                     *   ::parts corpus close         关掉 */
+                    const char *q = sub + 6;
+                    while (*q == ' ') q++;
+                    /* ⚠ act 要能放**整条路径**（第一版只有 64 字节：沙箱里路径 78 字节被截成
+                     * `…/a/sha` ⇒ fopen 失败，"打不开"看着像文件坏了，其实是命令缓冲截断）*/
+                    char act[512] = {0}, arg[256] = {0};
+                    size_t k = 0;
+                    while (*q && *q != ' ' && k + 1 < sizeof act) act[k++] = *q++;
+                    act[k] = 0;
+                    while (*q == ' ') q++;
+                    k = 0;
+                    while (*q && *q != ' ' && k + 1 < sizeof arg) arg[k++] = *q++;
+                    arg[k] = 0;
+                    if (!strcmp(act, "close")) {
+                        if (!g_c7b) printf("[语料] 现在没开着分片\n");
+                        else {
+                            c7b_detach(a->brain, g_c7b);       /* 先把词上的 DISK 标签清掉 */
+                            printf("[语料] 关掉 %s\n", g_c7b->path);
+                            c7b_close(g_c7b); g_c7b = NULL;
+                        }
+                        continue;
+                    }
+                    if (!strcmp(act, "attach")) {
+                        /* `::parts corpus attach <文件.c7b>`：**挂到脑上** ——
+                         * 之后 `::rel w000042` / 求解器 / `::contradict` 都走正常读边路径（按需读段）。*/
+                        char cerr2[192] = {0};
+                        if (!arg[0]) { printf("[用法] ::parts corpus attach <文件.c7b>\n"); continue; }
+                        C7B *nc2 = c7b_open(arg, cerr2, sizeof cerr2);
+                        if (!nc2) { printf("[语料] 打不开：%s\n", cerr2[0] ? cerr2 : arg); continue; }
+                        if (g_c7b) { c7b_detach(a->brain, g_c7b); c7b_close(g_c7b); g_c7b = NULL; }
+                        int ntag = c7b_attach(a->brain, nc2, cerr2, sizeof cerr2);
+                        if (ntag < 0) { printf("[语料] 挂不上：%s\n", cerr2[0] ? cerr2 : "?"); c7b_close(nc2); continue; }
+                        g_c7b = nc2;
+                        printf("[语料] 挂到脑上：%s（词 %u / 边 %llu / %d 个词有边；查 ::rel w000042）\n",
+                               nc2->path, nc2->n_words, (unsigned long long)nc2->n_edges, ntag);
+                        continue;
+                    }
+                    if (g_c7b && g_c7b->pool && g_c7b->pool != (void *)a->brain->pool) {
+                        printf("[语料] 这句之前换过脑/脑被重建了 ⇒ 语料要重新 attach（旧池上的边已失效）\n");
+                        c7b_detach(NULL, g_c7b);
+                        g_c7b = NULL;
+                        continue;
+                    }
+                    if (!strcmp(act, "stats") || act[0] == 0) {
+                        if (!g_c7b) { printf("[语料] 没开着分片（::parts corpus <文件.c7b>）\n"); continue; }
+                        printf("[语料] %s\n", g_c7b->path);
+                        printf("       词 %u / 有边的词 %u / 边 %llu / 文件 %.1f MB / 种子 %llu\n",
+                               g_c7b->n_words, g_c7b->n_seg, (unsigned long long)g_c7b->n_edges,
+                               (double)g_c7b->size / 1000000.0, (unsigned long long)g_c7b->seed);
+                        printf("       本次查了 %zu 次、读了 %zu 段、共 %zu 字节（%.1f KB）\n",
+                               g_c7b->n_lookups, g_c7b->n_reads, g_c7b->n_bytes, (double)g_c7b->n_bytes / 1024.0);
+                        continue;
+                    }
+                    if (!strcmp(act, "rel")) {
+                        if (!g_c7b) { printf("[语料] 没开着分片（::parts corpus <文件.c7b>）\n"); continue; }
+                        unsigned wid = 0;
+                        if (!arg[0] || sscanf(arg, "w%u", &wid) != 1 || wid >= g_c7b->n_words) {
+                            printf("[用法] ::parts corpus rel w%%06u（词名形如 w000042；本片词数 %u）\n", g_c7b->n_words);
+                            continue;
+                        }
+                        uint64_t off = 0; uint32_t cnt = 0;
+                        int r = c7b_find(g_c7b, wid, &off, &cnt);
+                        if (r == 1) { printf("[语料] w%06u：这个分片里没有边\n", wid); continue; }
+                        if (r < 0) { printf("[语料] 查失败（%d）\n", r); continue; }
+                        C7BEdge eb[64];
+                        int got = c7b_read(g_c7b, off, cnt, eb, 64);
+                        printf("[语料] w%06u 的边 %u 条%s（段偏移 %llu，本次读回 %d 条=%d 字节）：\n",
+                               wid, cnt, cnt > 64 ? "（只列前 64 条）" : "", (unsigned long long)off, got, got * 8);
+                        for (int z = 0; z < got; ++z)
+                            printf("       w%06u --[%s]--> w%06u\n", wid, c7b_rel_name(eb[z].rel), eb[z].b_id);
+                        continue;
+                    }
+                    /* 其它一律当文件名：打开（先关旧的） */
+                    char cerr[192] = {0};
+                    C7B *nc = c7b_open(act, cerr, sizeof cerr);
+                    if (!nc) { printf("[语料] 打不开：%s\n", cerr[0] ? cerr : act); continue; }
+                    if (g_c7b) c7b_close(g_c7b);
+                    g_c7b = nc;
+                    printf("[语料] 挂上 %s：词 %u / 边 %llu / 文件 %.1f MB（只读了头，边按需读）\n",
+                           nc->path, nc->n_words, (unsigned long long)nc->n_edges,
+                           (double)nc->size / 1000000.0);
+                    continue;
+                }
                 if (!strncmp(sub, "save", 4)) {
                     int n = aip_parts_save(a->brain, parch);
                     if (n < 0) printf("[分段保存] 写不进去：%s\n", parch);

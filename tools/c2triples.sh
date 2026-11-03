@@ -20,7 +20,7 @@
 # `main` 不收：模板（`模板:命令行整数`）负责 main，片段只提供辅助函数。
 #
 # 用法：sh tools/c2triples.sh <输出文件> [根目录…] [--ngate]
-#   默认根：/usr/share/doc /usr/lib/python3/dist-packages /usr/src /home/jadeth/llama-cpp
+#   默认根：/usr/share/doc /usr/lib/python3/dist-packages /usr/src $HOME/llama-cpp
 #   `--ngate` 只抽不编（量产量用；**正常建知识不要用**）
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,7 +34,7 @@ for a in "$@"; do
     *) DIRS="$DIRS $a" ;;
     esac
 done
-[ -n "$DIRS" ] || DIRS="/usr/share/doc /usr/lib/python3/dist-packages /usr/src /home/jadeth/llama-cpp"
+[ -n "$DIRS" ] || DIRS="/usr/share/doc /usr/lib/python3/dist-packages /usr/src $HOME/llama-cpp"
 
 # ⚠ 工作目录必须**每次唯一**：两个实例共用 `_t/c2` 会互相清掉（实测：一个后台抽全量、
 #   一个跑夹具测试 ⇒ `awk: cannot open idx_g.txt` / `chunk_am 不存在`，看起来像脚本坏了）。
