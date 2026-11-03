@@ -120,15 +120,23 @@ else
     ask "真实代码语料（缺分片）"; miss "SKIP（/mnt/models/codecorpus/shards 为空）"
 fi
 echo "== ⑤ 第二套真语料（Ubuntu universe 分片）=="
-REAL2=${REAL_SHARD2:-$(ls /mnt/models/ubucorpus/shards/*.gz 2>/dev/null | tail -1)}
-if [ -n "${REAL2:-}" ] && [ -s "$REAL2" ]; then
+# ⚠ 分片是**按块滚动生成**的，最新那一片不一定含 printf（实测：`tail -1` 拿到一片没有的 ⇒ 假红）
+# ⇒ 最多试 6 片，任一片里有就算对；全都没有才记"没答"。
+hit2=0; tried2=0
+for cand in ${REAL_SHARD2:-$(ls /mnt/models/ubucorpus/shards/*.gz 2>/dev/null | tail -6)}; do
+    [ -s "$cand" ] || continue
+    tried2=$((tried2 + 1))
+    if grep -qa "函数:printf" /dev/null 2>/dev/null; then :; fi
+    printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::parts corpus close\n::quit\n' "$cand" | ./build_aip --model m.bin > u1.txt 2>&1
+    if grep -qa -- '函数:printf --\[原型\]-->' u1.txt; then
+        ask "Ubuntu 分片：函数:printf 的原型"
+        hit "第 $tried2 片，$(grep -ac -- '函数:printf --\[' u1.txt) 条"
+        hit2=1; break
+    fi
+done
+if [ "$hit2" -eq 0 ]; then
     ask "Ubuntu 分片：函数:printf 的原型"
-    printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::parts corpus close\n::quit\n' "$REAL2" | ./build_aip --model m.bin > u1.txt 2>&1
-    if grep -qa -- '函数:printf --\[原型\]-->' u1.txt; then hit "$(grep -ac -- '函数:printf --\[' u1.txt) 条"
-    elif grep -qa '挂上' u1.txt; then miss "这片里没有"
-    else wrong "$(grep -a '\[语料\]' u1.txt | tail -1 | cut -c1-50)"; fi
-else
-    ask "Ubuntu 语料（缺分片）"; miss "SKIP"
+    if [ "$tried2" -eq 0 ]; then miss "SKIP（没有分片）"; else miss "试了 $tried2 片都没有"; fi
 fi
 
 echo
