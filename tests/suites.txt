@@ -178,3 +178,5 @@ bucketload|sh tests/bucketload.sh
 fragknow|sh tests/fragknow.sh > ftest.log 2>&1; rc=$?; tail -6 ftest.log; [ "$rc" -eq 0 ]
 # §6.711 7B 分片语料（.c7b）：生成器确定性 + 每片自洽 + 断点续跑 + ::parts corpus 能挂能查 + 坏文件拒
 corpus7b|sh tests/corpus7b.sh > ctest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat ctest.log; tail -8 ctest.log; [ "$rc" -eq 0 ]
+# §6.712 公开语料（Wikidata NT）：转换/字面量跳过/进图可查 + v2（片内属性表，绕开 64 关系上限）
+wdcorpus|sh tests/wdcorpus.sh > wtest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat wtest.log; tail -6 wtest.log; [ "$rc" -eq 0 ]

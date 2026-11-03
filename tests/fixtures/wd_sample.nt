@@ -1,0 +1,5 @@
+<http://wikiba.se/ontology#Dump> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://schema.org/Dataset> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P31> <http://www.wikidata.org/entity/Q3624078> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P17> <http://www.wikidata.org/entity/Q55> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P1082> "11763983"^^<http://www.w3.org/2001/XMLSchema#decimal> .
+<http://www.wikidata.org/entity/Q31> <http://www.wikidata.org/prop/direct/P106> <http://www.wikidata.org/entity/Q1069370> .
