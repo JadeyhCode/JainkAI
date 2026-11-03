@@ -25,6 +25,8 @@ SLICE_N=1
 REG=${REG:-https://registry.npmmirror.com}
 ROTATE_MB=${ROTATE_MB:-400}
 NAMES=${NAMES:-$OUT/npm_names.txt}
+MIN_KB=${MIN_KB:-100}       # 只看 unpackedSize ≥ 这个值的包（**垃圾包占大多数**：实测前 1345 个包只出 6 947 条）
+MIN_FILES=${MIN_FILES:-5}   # 文件数太少的一律跳过（一个包里连 5 个源文件都没有，抽不出什么）
 shift 2 2>/dev/null || true
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -90,15 +92,28 @@ while IFS= read -r name; do
     if [ "$SLICE_N" -gt 1 ]; then k=$((n % SLICE_N)); [ "$k" -ne "$SLICE_K" ] && continue; fi
     grep -q "^$name	" "$DONE" 2>/dev/null && continue
     [ "$did" -ge "$MAXPKG" ] && break
+    # ⚠ 用 `/<name>/latest`（**只含最新版**的清单，3–29 KB / ~0.5 s），
+    #   不要用 `/<name>`（整包历史：typescript 那个 **15 MB / 19 s** —— 这才是"4.5 s/包"的真凶）
     meta="$OUT/ntmp/m.json"
-    curl -k -sL -o "$meta" "$REG/$name" || { rm -f "$meta"; continue; }
-    ver=$(grep -o '"latest":"[^"]*"' "$meta" | head -1 | sed 's/.*:"//; s/"$//')
+    curl -k -sL -o "$meta" "$REG/$name/latest" || { rm -f "$meta"; continue; }
+    ver=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$meta" | head -1)
+    tburl=$(sed -n 's/.*"tarball":"\([^"]*\)".*/\1/p' "$meta" | head -1)
+    usize=$(sed -n 's/.*"unpackedSize":[ ]*\([0-9]*\).*/\1/p' "$meta" | head -1)
+    fcount=$(sed -n 's/.*"fileCount":[ ]*\([0-9]*\).*/\1/p' "$meta" | head -1)
     rm -f "$meta"
+    # 小包/垃圾包：只记账不下载（元数据已经付过钱了，别再花带宽和解压时间）
+    if [ -n "${usize:-}" ] && [ "$usize" -lt $((MIN_KB * 1024)) ]; then
+        printf '%s\t%s\tsmall\n' "$name" "${ver:-}" >> "$DONE"; continue
+    fi
+    if [ -n "${fcount:-}" ] && [ "$fcount" -lt "$MIN_FILES" ]; then
+        printf '%s\t%s\tfewfiles\n' "$name" "${ver:-}" >> "$DONE"; continue
+    fi
     [ -n "${ver:-}" ] || { printf '%s\t\n' "$name" >> "$DONE"; continue; }
     base=${name##*/}
+    [ -n "${tburl:-}" ] || tburl="$REG/$name/-/$base-$ver.tgz"
     tb="$OUT/ntmp/p.tgz"
     # ⚠ npmmirror 的 tgz 是 **302 跳转**（不带 -L 只会拿到 80 字节的跳转页 ⇒ 看着像"包坏了"）
-    curl -k -sL -o "$tb" "$REG/$name/-/$base-$ver.tgz" || { rm -f "$tb"; continue; }
+    curl -k -sL -o "$tb" "$tburl" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     if [ "$sz" -lt 500 ] || [ "$(head -c 2 "$tb" | od -An -tx1 | tr -d ' \n')" != "1f8b" ]; then
         rm -f "$tb"; continue;                       # 不是 tgz：不记 done
