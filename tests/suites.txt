@@ -174,3 +174,5 @@ patcount|sh tests/patcount.sh
 patlong|sh tests/patlong.sh
 # §6.378 每个数据桶都要"关掉就变"：死桶/探针没走它，套件当场红
 bucketload|sh tests/bucketload.sh
+# §6.710 .c 片段知识：抽得出来 + 编译门挡得住坏的 + ::code frag 查得到 + 代码单独编得过
+fragknow|sh tests/fragknow.sh > ftest.log 2>&1; rc=$?; tail -6 ftest.log; [ "$rc" -eq 0 ]

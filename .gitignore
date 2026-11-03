@@ -34,6 +34,8 @@ code/code_model.bin.tmp.bin
 code/knowledge/capi_kern.triples
 code/knowledge/capi_kern.raw.triples
 code/knowledge/man.triples
+# §6.710 .c 片段知识（从本机源码抽，7 MB 量级；可重建）
+code/knowledge/c2.triples
 code/code_model_full.bin
 code/code_model_full.bin.work
 # 例外：扩展版构建**脚本**（`build_*` 会把 `build_code_model_full.sh` 一起忽略掉）

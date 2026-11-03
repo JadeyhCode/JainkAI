@@ -558,6 +558,60 @@ static inline int code_synth(AI *ai, const char *desc, char *note, size_t cap) {
     return rc;
 }
 
+/* §6.710 **片段检索**（`::code frag [关键词]`）：把图里 `片段:*` 的知识查出来。
+ *
+ * 为什么要有：§6.710 给图里灌了几千个**真实函数体**（`tools/c2triples.sh` 抽 + 过编译门），
+ * 但它们以前只有"被任务边点中"这一种用法 —— 人查不到、也没法复用。
+ * 这个口**只读**：不改图、不写文件；关键词按**子串**比（片段名 + 签名），最多列 5 个。
+ * 不带关键词 ⇒ 报总量（多少片段 / 多少带签名）。 */
+static inline void code_frag_search(AI *ai, const char *kw) {
+    if (!ai || !ai->pool) { printf("[片段] 没有脑子\n"); return; }
+    uint8_t rid_cd = rel_id_of(ai, "代码", 0);
+    if (rid_cd < REL_DYN_BASE) { printf("[片段] 图上没有 `代码` 这种关系 —— 没有片段知识\n"); return; }
+    uint8_t d_cd = (uint8_t)(rid_cd - REL_DYN_BASE + 1);
+    uint8_t rid_sig = rel_id_of(ai, "签名", 0);
+    uint8_t d_sig = (rid_sig >= REL_DYN_BASE) ? (uint8_t)(rid_sig - REL_DYN_BASE + 1) : 0;
+    size_t n_frag = 0, n_sig = 0, n_hit = 0;
+    for (size_t i = 0; i < ai->pool->count; ++i) {
+        Token *t = ai->pool->tokens[i];
+        if (!t || !t->name || t->is_garbage || strncmp(t->name, "片段:", 7) != 0) continue;
+        const char *code = NULL, *sig = NULL;
+        for (size_t j = 0; j < t->count; ++j) {
+            const AssocEntry *e = &token_assocs_ro(t)[j];
+            if (!e->main || !e->main->name) continue;
+            if (e->dyn == d_cd) code = e->main->name;
+            else if (d_sig && e->dyn == d_sig) sig = e->main->name;
+        }
+        if (!code) continue;                       /* 没有函数体的不算片段（比如只登记了名字的） */
+        n_frag++;
+        if (sig) n_sig++;
+        if (kw && kw[0] && !strstr(t->name, kw) && !(sig && strstr(sig, kw))) continue;
+        n_hit++;
+        if (n_hit > 5) continue;
+        printf("[片段] %s\n", t->name);
+        if (sig) printf("       签名：%.160s\n", sig);
+        /* 代码只打前 3 行（够看清是什么）：全文用 `::code synth` 拼出来，或者直接看 triples */
+        const char *p = code;
+        size_t total = 1, shown = 0;
+        for (const char *q = code; *q; ++q) if (*q == '\n') total++;
+        while (p && *p && shown < 3) {
+            const char *nl = strchr(p, '\n');
+            size_t l = nl ? (size_t)(nl - p) : strlen(p);
+            printf("       %.*s\n", (int)(l > 120 ? 120 : l), p);
+            shown++;
+            p = nl ? nl + 1 : NULL;
+        }
+        printf("       （共 %zu 行）\n", total);
+    }
+    if (kw && kw[0]) {
+        if (n_hit == 0) printf("[片段] 没有匹配「%s」的片段（图里共 %zu 个）\n", kw, n_frag);
+        else printf("[片段] 命中 %zu 个（列出前 %zu 个）；图里共 %zu 个片段，其中 %zu 个带签名\n",
+                    n_hit, n_hit > 5 ? (size_t)5 : n_hit, n_frag, n_sig);
+    } else {
+        printf("[片段] 图里共 %zu 个片段（带签名 %zu 个）。查法：::code frag <关键词>\n", n_frag, n_sig);
+    }
+}
+
 /* §6.645 **测试驱动**：编 + **跑**（`_t/work/<dir>/a.out`）。
  * 判据是**产物退出码**：0 = 绿；非 0 = 红（把输出尾巴带出来）。
  * 只跑 `.out` 产物（`action_run_product` 那条窄入口），不碰别的命令。 */

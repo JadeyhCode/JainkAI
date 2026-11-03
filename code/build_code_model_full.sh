@@ -6,6 +6,7 @@
 #   · `code/knowledge/capi.triples`       `/usr/include` 的 C API（同默认；「头」关系 = 公共 API）
 #   · `code/knowledge/capi_kern.triples`  内核头文件（**只用最新一版**；「声明于」关系，不冒充公共 API）
 #   · `code/knowledge/man.triples`        man 手册（**用途** 一句话 + 第二来源的原型/头）
+#   · `code/knowledge/c2.triples`      **真实函数体片段**（`tools/c2triples.sh` 抽 + 两道编译门）
 #
 # 为什么单有一份、不直接改默认模型：默认模型是回归基线（73 套 + codebench 的门都按它的规模定的），
 # 扩到 1.5×10⁶ 边以后载入 **2.6 s** / RSS **1.1 GB** —— 已经超过 M3 的 ≤2 s / ≤1 GB，
@@ -64,6 +65,15 @@ if [ "$REBUILD" = 1 ] || [ ! -s code/knowledge/man.triples ]; then
     sh tools/man2triples.sh code/knowledge/man.triples
 fi
 
+# ---- 3b. .c 片段（真实函数体；要用就先跑 `sh tools/c2triples.sh code/knowledge/c2.triples`） ----
+if [ -s code/knowledge/c2.triples ]; then
+    printf '  片段知识：%s 个（独立 %s 个）\n' \
+        "$(grep -c '	签名	' code/knowledge/c2.triples || true)" \
+        "$(grep -c '	独立	是' code/knowledge/c2.triples || true)"
+else
+    echo "== 3b 跳过（没有 code/knowledge/c2.triples；先跑 sh tools/c2triples.sh）=="
+fi
+
 # ---- 4. 灌图 + 存盘 ----
 echo "== 4/4 灌图 + 存盘 =="
 mkdir -p _t
@@ -71,6 +81,7 @@ cp model.bin "$OUT.work"
 printf '::ingest code/knowledge/skeletons.triples\n::ingest code/knowledge/compose.triples\n::ingest code/knowledge/capi.triples\n' > _t/fullbuild.in
 [ -s code/knowledge/capi_kern.triples ] && printf '::ingest code/knowledge/capi_kern.triples\n' >> _t/fullbuild.in
 [ -s code/knowledge/man.triples ] && printf '::ingest code/knowledge/man.triples\n' >> _t/fullbuild.in
+[ -s code/knowledge/c2.triples ] && printf '::ingest code/knowledge/c2.triples\n' >> _t/fullbuild.in
 printf '::save %s\n::stats\n::quit\n' "$OUT" >> _t/fullbuild.in
 /usr/bin/time -f '  灌图+存盘墙钟 %e s（峰值 RSS %M KB）' ./build_aip --model "$OUT.work" < _t/fullbuild.in 2>&1 \
     | grep -aE '导入|符号节点|墙钟|已保存'
