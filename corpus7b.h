@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>     /* getpid（.gz 临时文件名）*/
 
 #define C7B_HDR 48u      /* 头长度：magic(4) + ver(4) + n_words(4) + n_seg(4) + n_edges(8) + payload(8) + seed(8) + rel_tail(4) + rsv(4) */
 #define C7B_IDX 16u      /* 索引一条：id(4) + off(8) + cnt(4) */
@@ -46,6 +47,7 @@ typedef struct {
     uint64_t seed;
     uint64_t size;
     char     path[256];
+    char     tmp_path[256];   /* .gz 解出来的临时分片（close 时删掉）*/
     /* 索引读进内存（n_seg × 16 ≈ 6.4 MB）：挂上以后每次查词只做一次 RAM 二分 */
     uint32_t *iid;
     uint64_t *ioff;
@@ -81,14 +83,48 @@ static inline const char *c7b_rel_name(uint16_t rel) {
 static inline void c7b_close(C7B *c) {
     if (!c) return;
     if (c->f) fclose(c->f);
+    if (c->tmp_path[0]) remove(c->tmp_path);       /* .gz 解出来的临时文件，关掉就删 */
     free(c->iid); free(c->ioff); free(c->icnt); free(c->map); free(c->names);
     free(c);
 }
 
 /* 打开 = 只读头（+ 记下文件长度，用来核对"头+索引+边×8"）
  * 失败时把原因写进 err（有界）。 */
+/* .gz 解出来的临时文件要**进程退出也清**（不然不开 close 就漏一堆 /tmp 文件 —— 实测漏了）。
+ * 只记前 8 个（一个进程正常只开一两个分片）。*/
+#define C7B_TMPMAX 8
+static char g_c7b_tmp[C7B_TMPMAX][256];
+static int  g_c7b_ntmp = 0;
+static int  g_c7b_atexit_set = 0;
+static inline void c7b_cleanup_tmp(void) {
+    for (int i = 0; i < g_c7b_ntmp; ++i) remove(g_c7b_tmp[i]);
+    g_c7b_ntmp = 0;
+}
+
 static inline C7B *c7b_open(const char *path, char *err, size_t cap) {
     if (err && cap) err[0] = 0;
+    /* §6.716 分片在磁盘上是 **gzip 存档态**（13.9 B/边 vs 34 B/边裸）。
+     * 查询前解到临时文件：`gunzip -c` 一次，关分片时删掉。
+     * ⚠ 用的是外部 `gunzip`（本机有；和 `::code` 调 gcc 同一类"受控外部工具"）；
+     *   没有 gunzip 时**照实报错**，不静默返回空图。 */
+    if (path && strlen(path) > 3 && !strcmp(path + strlen(path) - 3, ".gz")) {
+        static unsigned seq = 0;
+        char tmp[256];
+        snprintf(tmp, sizeof tmp, "/tmp/aip_c7b_%ld_%u.c7b2", (long)getpid(), seq++);
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "gunzip -c '%s' > '%s' 2>/dev/null", path, tmp);
+        if (!g_c7b_atexit_set) { atexit(c7b_cleanup_tmp); g_c7b_atexit_set = 1; }
+        if (g_c7b_ntmp < C7B_TMPMAX) snprintf(g_c7b_tmp[g_c7b_ntmp++], 256, "%s", tmp);
+        if (system(cmd) != 0) {
+            if (err && cap) snprintf(err, cap, "解不开 .gz（缺 gunzip？）：%s", path);
+            return NULL;
+        }
+        C7B *c = c7b_open(tmp, err, cap);
+        if (!c) { remove(tmp); return NULL; }
+        snprintf(c->tmp_path, sizeof c->tmp_path, "%s", tmp);
+        snprintf(c->path, sizeof c->path, "%s", path);   /* 对外仍报 .gz 的名字 */
+        return c;
+    }
     FILE *f = fopen(path, "rb");
     if (!f) { if (err && cap) snprintf(err, cap, "读不开 %s", path ? path : "(空)"); return NULL; }
     char m[4];

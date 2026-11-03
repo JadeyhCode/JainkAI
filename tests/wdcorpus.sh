@@ -53,6 +53,21 @@ if [ -x "$WORK/wd2c7b" ]; then
     fi
 fi
 
+echo "== ②c 文本事实 → v2 分片 → gzip → 引擎能直接查（§6.716 存档态）=="
+gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -o "$WORK/triples2c7b" "$ROOT/tools/triples2c7b.c" -lm 2> t2c.err \
+    || bad "triples2c7b 编不过" "$(head -2 t2c.err | tr '\n' ' ')"
+if [ -x "$WORK/triples2c7b" ]; then
+    printf '函数:printf\t头\tstdio.h\n函数:printf\t原型\tint printf(const char *, ...);\n函数:printf\t参数\t2\n' > tf.triples
+    ./triples2c7b tf.triples tfshard --max-edges 1000 > t2c.log 2>&1 \
+        && gzip -c tfshard.000.c7b2 > tfshard.c7b2.gz && ok "转换 + gzip（$(ls -l tfshard.c7b2.gz | awk '{printf "%.1f KB", $5/1024}')）" \
+        || bad "转换/gzip 失败" "$(tail -2 t2c.log | tr '\n' ' ')"
+    printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::quit\n' "$WORK/tfshard.c7b2.gz" | ./build_aip --model m.bin > gzq.txt 2>&1
+    grep -qa '函数:printf --\[头\]--> stdio.h' gzq.txt && ok "::parts corpus <.gz> 直接查得到（自动解压）" \
+        || bad ".gz 分片查不到" "$(grep -a '\[语料\]' gzq.txt | tail -2 | tr '\n' ' ')"
+    _tmpn=$(ls /tmp/aip_c7b_*.c7b2 2>/dev/null | wc -l)
+    [ "${_tmpn:-1}" -eq 0 ] && ok "退出后不留 /tmp 解压临时文件" || bad "留下 $_tmpn 个临时文件" ""
+fi
+
 echo "== ③ 空输入必须报 FAIL =="
 : > empty.nt
 if sh "$ROOT/tools/wikidata2triples.sh" "$WORK/empty.nt" "$WORK/empty.triples" > empty.log 2>&1; then

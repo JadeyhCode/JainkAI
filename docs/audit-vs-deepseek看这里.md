@@ -26306,3 +26306,42 @@ Debian 源码索引（12 MB，一次）
 - 3.18 M 条边离 7B 还差 **2 200 倍**；速度换算下来 **12 天**，这轮只是把"存储与流水线"打通。
 - 这些是**代码真知识**（函数/头/宏/字段/函数体），不是世界知识；世界知识仍卡在 wikimedia 的速度上。
 - 抓取和转换都在**后台常驻**（4 个抓取进程 + 1 个转换循环），峰段会被电费看护冻结。
+
+---
+
+## §6.717 压缩分片**直接可查**（自动解压）+ 两个并行抓取的坑
+
+### 一、做了什么
+
+1. **`.gz` 分片在 `::parts corpus` 里自动解压**（`corpus7b.h`）：
+   `::parts corpus xxx.c7b2.gz` → `gunzip -c` 解到 `/tmp` → 按普通 v2 打开 → **close 时删**；
+   还加了 `atexit` 兜底（**不开 close 直接退出也不留临时文件** —— 实测第一版漏了一堆）。
+   真数据实测：`::parts corpus facts.0.0000.000.c7b2.gz` → `rel 函数:printf` ⇒
+   ```
+   函数:printf --[原型]--> int printf(const char *, ...);
+   函数:printf --[头]--> arpwatch-2.1a15/lbl/os-sunos3.h
+   函数:printf --[返回]--> int
+   ```
+2. **选包收紧**（`src_harvest.sh`）：`MAXMB 60 → 20`，并跳过语言包/数据包
+   （apertium/texlive/fonts/libjs/libreoffice/gcc-/linux-/nvidia-/python3-/libghc/libperl/bioperl/node-/ruby-/php-）。
+   实测 27 443 个可用包、平均 0.8 MB、合计 **20.7 GB**（⇒ 约 45 M 条 C 事实）。
+3. **套件**：`tests/wdcorpus.sh` 加 ②c（文本→v2→gzip→`::parts corpus` 直接查 + 不留临时文件），13 项全过；整包 **78 套 78 过**（136 s）。
+
+### 二、两个坑（都是并行抓取里踩的）
+
+1. **4 路抓取共写同一个 `index.txt`**：索引文件名没按分片区分 ⇒ 各自把对方的包列表覆盖掉，
+   表现是"包在跑、事实几乎为 0"（实测：改选包后 4 路几乎抽不到东西，一度以为是选包写坏了）。
+   修：`index.$SLICE_K.txt`。
+2. **反复误杀自己**：`ps | awk '/src_harvest/ {print $1}'` 会匹配到**正在执行这条命令的 shell 自己**
+   （它的命令行里就含 `src_harvest.sh`）⇒ `kill` 把当前 shell 干掉（两次 SIGTERM）。
+   修：按 `^ *[0-9]+ sh tools/src_harvest\.sh` 精确匹配行首，并排除 `$$`。
+
+### 三、当前真知识进度（后台常驻）
+
+| 项 | 数值 |
+|---|---|
+| 已完成包 | 1 692（4 个 worker 合计） |
+| 已压缩分片 | 5 个 / 44 MB（**3 181 950 条边**） |
+| 待转文本 | 11 113 355 行（4 个 worker 的 `facts.*.triples`） |
+| 转换循环 | 活着（`--watch 180`），等 400 MB 轮转 |
+| 回归 | 78 套 78 过（136 s） |

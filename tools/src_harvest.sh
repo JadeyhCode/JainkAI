@@ -23,7 +23,8 @@ SUITE_DIR="main"
 MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"
 SLICE_K=0
 SLICE_N=1
-MAXMB=${MAXMB:-60}          # 单个 orig 包上限（MB）：超大的多半是数据/美术资源，不是代码
+MAXMB=${MAXMB:-20}          # 单个 orig 包上限（MB）：C 库/工具一般 1–10 MB；再大多半是数据/美术资源
+                            # （实测：60 MB 上限时撞上 apertium 语言包/Java 包，速度从 11.8k 掉到 1.7k 行/秒）
 CAPGB=${CAPGB:-40}          # 事实**文本**上限（GB）：超了停下（等 facts2shards 转成分片再续）
 ROTATE_MB=${ROTATE_MB:-400} # 单个 facts 文件到这么大就**轮转**成"已完成块"（facts.k.<序号>.triples），
                             # 交给 facts2shards 去转 —— 转换器只碰**没人写**的文件，不会和抓取抢
@@ -57,6 +58,8 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
         inf = 0
         # 只留"像代码"的包：跳过数据/文档/字体/图标/主题/声音/样例
         if (pkg ~ /(-data$|-docs?$|-fonts?$|-icons?$|-themes?$|-sounds?$|-wallpapers?$|-assets$|-examples?$|-tests?$|-common$)/) next
+        # 语言包/文档/数据包：抽不出 C 事实，白花下载时间（实测踩过）
+        if (pkg ~ /^(apertium-|texlive-|fonts-|libjs-|libreoffice-|gcc-|linux-|nvidia-|python3?-|libghc-|libocaml-|libmono-|libjava|libcommons-|libperl|bioperl|liblingua-|node-|ruby-|php-|libapt-pkg-doc)/) next
         if (sz > maxmb * 1048576) next
         c = substr(pkg, 1, 1); if (substr(pkg,1,3) == "lib") c = "lib" substr(pkg, 4, 1)
         line = pkg "\tpool/" sec "/" c "/" pkg "/" f
@@ -65,9 +68,9 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
         next
     }
     inf && /^[^ ]/ { inf = 0 }
-' > "$OUT/index.txt"
+' > "$OUT/index.$SLICE_K.txt"
 NIDX=$(wc -l < "$OUT/index.txt")
-echo "== 索引里 $(wc -l < "$OUT/index.txt") 个源码包；这次最多做 $MAXPKG 个 =="
+echo "== 索引里 $(wc -l < "$OUT/index.$SLICE_K.txt") 个源码包（分片 $SLICE_K/$SLICE_N）；这次最多做 $MAXPKG 个 =="
 
 did=0; tried=0; lines=0; bytes=0; t0=$(date +%s)
 while IFS='	' read -r pkg path; do
@@ -112,7 +115,7 @@ while IFS='	' read -r pkg path; do
         "$did" "$pkg" "$(awk -v b="$sz" 'BEGIN{printf "%.1f", b/1048576}')" "$n" "$lines" \
         "$(awk -v a="$lines" -v t="$el" 'BEGIN{printf "%.0f", a/t}')" \
         "$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')"
-done < "$OUT/index.txt"
+done < "$OUT/index.$SLICE_K.txt"
 
 echo
 printf '== 本批：%d 个包 / 下载 %.1f MB / 事实 %d 行 / %.0f 行每秒 ==\n' \
