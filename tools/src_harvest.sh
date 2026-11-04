@@ -115,7 +115,7 @@ while IFS='	' read -r pkg path; do
     tried=$((tried + 1))
     url="$MIRROR/$path"
     tb="$OUT/tmp/$(basename "$path")"
-    curl -k -s --connect-timeout 15 --max-time 240 -o "$tb" "$url" || { rm -f "$tb"; continue; }
+    curl -k -s --connect-timeout 20 --max-time 900 -o "$tb" "$url" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     [ "$sz" -gt 1000 ] || { rm -f "$tb"; continue; }
     src="$OUT/tmp/src_$pkg"; rm -rf "$src"; mkdir -p "$src"
