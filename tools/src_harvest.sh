@@ -47,7 +47,8 @@ done
 mkdir -p "$OUT" "$OUT/tmp" || exit 1
 FACTS="$OUT/facts.$SLICE_K.triples"
 DONE="$OUT/done.$SLICE_K.txt"
-: >> "$FACTS"; : >> "$DONE"
+DONE_ALL="$OUT/done.all.txt"   # 全局去重表：换分片数 N 重跑时不会重复处理同一个包
+: >> "$FACTS"; : >> "$DONE"; : >> "$DONE_ALL"
 
 # 索引（12 MB，一次）：包名 + orig tar 路径
 IDX="$OUT/Sources.gz"
@@ -85,7 +86,7 @@ echo "== 索引里 $(wc -l < "$OUT/index.$SLICE_K.txt") 个源码包（分片 $S
 did=0; tried=0; lines=0; bytes=0; t0=$(date +%s)
 while IFS='	' read -r pkg path; do
     [ -n "${pkg:-}" ] || continue
-    grep -q "^$pkg	" "$DONE" 2>/dev/null && continue
+    grep -q "^$pkg	" "$DONE_ALL" 2>/dev/null && continue
     [ "$did" -ge "$MAXPKG" ] && break
     tried=$((tried + 1))
     url="$MIRROR/$path"
@@ -103,6 +104,7 @@ while IFS='	' read -r pkg path; do
     n=$(wc -l < "$OUT/tmp/f.triples" 2>/dev/null || echo 0)
     cat "$OUT/tmp/f.triples" >> "$FACTS"
     printf '%s\t%s\t%s\n' "$pkg" "$n" "$sz" >> "$DONE"
+    printf '%s\t%s\n' "$pkg" "$n" >> "$DONE_ALL"
     lines=$((lines + n)); bytes=$((bytes + sz))
     rm -rf "$src" "$tb" "$OUT"/tmp/*.triples
     did=$((did + 1))
