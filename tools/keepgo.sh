@@ -13,10 +13,9 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 N=$N0
 while :; do
     LOG="$OUT/log.$K.txt"
-    # ⚠ 分片数要**递减**：N 变大 ⇒ 每片更小（N=689 时每片只剩 20 个包且都已做过 ⇒ 空转，
-    #   实测就是这样把速率打到 0 的）。N 逐次 -1 让每片变大、覆盖更多没做过的包。
-    N=$((N - 1))
-    [ "$N" -lt 8 ] && N=$N0
+    # ⚠ N 固定：换 N 会重建索引（14 MB zcat+awk），36 个续跑器频繁换 N 会把 IO/CPU 吃光
+    #   （实测 85 worker 只产出 971 边/秒）。去重靠全局 done.all.txt，不靠换 N 覆盖。
+    :
     # 每一轮先探一次镜像：被限流（403）就自动换下一个可用的（§6.737）
     case "$MIRROR" in
     *huaweicloud*) DISTRO=debian ;; *nju*|*163*|*aliyun*) DISTRO=debian ;;

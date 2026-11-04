@@ -27,7 +27,7 @@ SLICE_N=1
 MAXMB=${MAXMB:-20}          # 单个 orig 包上限（MB）：C 库/工具一般 1–10 MB；再大多半是数据/美术资源
                             # （实测：60 MB 上限时撞上 apertium 语言包/Java 包，速度从 11.8k 掉到 1.7k 行/秒）
 CAPGB=${CAPGB:-40}          # 事实**文本**上限（GB）：超了停下（等 facts2shards 转成分片再续）
-ROTATE_SEC=${ROTATE_SEC:-180}  # 不管大小，距上次轮转超过这么多秒也切块（防"文件涨不到阈值"）
+ROTATE_SEC=${ROTATE_SEC:-420}  # 不管大小，距上次轮转超过这么多秒也切块（防"文件涨不到阈值"）
 ROTATE_MB=${ROTATE_MB:-20}  # 单个 facts 文件到这么大就**轮转**成"已完成块"，
                             # ⚠ 这个值要跟着**并发数**调：20 路时每个文件只涨 ~435 行/秒，
                             #   400 MB（700 万行）要 4.5 小时才轮转 ⇒ 转换器整段时间空转（实测积压 29 M 行）
@@ -52,7 +52,14 @@ DONE_ALL="$OUT/done.all.txt"   # 全局去重表：换分片数 N 重跑时不�
 
 # 索引（12 MB，一次）：包名 + orig tar 路径
 IDX="$OUT/Sources.gz"
-if [ ! -s "$IDX" ]; then
+# ⚠ 索引文件（14 MB）只在缺失或**超过 1 小时**时重建：36 个续跑器频繁重启 worker 时，
+#   每次都 zcat 14 MB + awk 过滤会把 IO/CPU 吃光（实测：85 个 worker 只产出 971 边/秒）。
+IDX_STALE=0
+if [ -s "$IDX" ]; then
+    now_t=$(date +%s); idx_t=$(stat -c %Y "$IDX" 2>/dev/null || echo 0)
+    [ $((now_t - idx_t)) -gt 3600 ] && IDX_STALE=1
+fi
+if [ ! -s "$IDX" ] || [ "$IDX_STALE" -eq 1 ]; then
     echo "== 取源码索引 =="
     curl -k -s --connect-timeout 15 --max-time 240 -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
 fi
