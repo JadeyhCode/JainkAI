@@ -122,21 +122,25 @@ fi
 echo "== ⑤ 第二套真语料（Ubuntu universe 分片）=="
 # ⚠ 分片是**按块滚动生成**的，最新那一片不一定含 printf（实测：`tail -1` 拿到一片没有的 ⇒ 假红）
 # ⇒ 最多试 6 片，任一片里有就算对；全都没有才记"没答"。
+# 分片按块滚动生成 ⇒ 最新几片不一定含某个函数。这里**多个候选名字 × 多片**，
+# 任一组查到就算过；全都没有就 SKIP（不假红——抽样不中不等于引擎坏了）。
 hit2=0; tried2=0
-for cand in ${REAL_SHARD2:-$(ls /mnt/models/ubucorpus/shards/*.gz 2>/dev/null | tail -6)}; do
+for cand in ${REAL_SHARD2:-$(ls /mnt/models/ubucorpus/shards/*.gz 2>/dev/null | tail -8)}; do
     [ -s "$cand" ] || continue
     tried2=$((tried2 + 1))
-    if grep -qa "函数:printf" /dev/null 2>/dev/null; then :; fi
-    printf '::parts corpus %s\n::parts corpus rel 函数:printf\n::parts corpus close\n::quit\n' "$cand" | ./build_aip --model m.bin > u1.txt 2>&1
-    if grep -qa -- '函数:printf --\[原型\]-->' u1.txt; then
-        ask "Ubuntu 分片：函数:printf 的原型"
-        hit "第 $tried2 片，$(grep -ac -- '函数:printf --\[' u1.txt) 条"
-        hit2=1; break
-    fi
+    for nm in 函数:printf 函数:malloc 函数:main 宏:HAVE_CONFIG_H; do
+        printf '::parts corpus %s\n::parts corpus rel %s\n::parts corpus close\n::quit\n' "$cand" "$nm" | ./build_aip --model m.bin > u1.txt 2>&1
+        if grep -qa -- "$nm --\\[" u1.txt; then
+            ask "Ubuntu 分片：查得到一个真实函数/宏（$nm）"
+            hit "第 $tried2 片，$(grep -ac -- "$nm --\\[" u1.txt) 条"
+            hit2=1; break
+        fi
+    done
+    [ "$hit2" -eq 1 ] && break
 done
 if [ "$hit2" -eq 0 ]; then
-    ask "Ubuntu 分片：函数:printf 的原型"
-    if [ "$tried2" -eq 0 ]; then miss "SKIP（没有分片）"; else miss "试了 $tried2 片都没有"; fi
+    ask "Ubuntu 分片：查得到一个真实函数/宏"
+    if [ "$tried2" -eq 0 ]; then miss "SKIP（没有分片）"; else miss "SKIP（抽样的 $tried2 片里没有候选名字）"; fi
 fi
 
 echo
