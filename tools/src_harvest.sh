@@ -27,6 +27,7 @@ SLICE_N=1
 MAXMB=${MAXMB:-20}          # 单个 orig 包上限（MB）：C 库/工具一般 1–10 MB；再大多半是数据/美术资源
                             # （实测：60 MB 上限时撞上 apertium 语言包/Java 包，速度从 11.8k 掉到 1.7k 行/秒）
 CAPGB=${CAPGB:-40}          # 事实**文本**上限（GB）：超了停下（等 facts2shards 转成分片再续）
+ROTATE_SEC=${ROTATE_SEC:-180}  # 不管大小，距上次轮转超过这么多秒也切块（防"文件涨不到阈值"）
 ROTATE_MB=${ROTATE_MB:-20}  # 单个 facts 文件到这么大就**轮转**成"已完成块"，
                             # ⚠ 这个值要跟着**并发数**调：20 路时每个文件只涨 ~435 行/秒，
                             #   400 MB（700 万行）要 4.5 小时才轮转 ⇒ 转换器整段时间空转（实测积压 29 M 行）
@@ -105,8 +106,14 @@ while IFS='	' read -r pkg path; do
     lines=$((lines + n)); bytes=$((bytes + sz))
     rm -rf "$src" "$tb" "$OUT"/tmp/*.triples
     did=$((did + 1))
-    # 文件轮转：到 ROTATE_MB 就改名成"已完成块"，转换器只处理这种（并发安全）
+    # 文件轮转：到 ROTATE_MB **或** 距上次轮转超过 ROTATE_SEC 就切成"已完成块"
+    # （只按大小会出事：worker 多、包小时每个文件涨得慢，块迟迟不生成 ⇒ 转换器空转，实测卡过 4 次）
+    last=$(cat "$OUT/.rt.$SLICE_K" 2>/dev/null || echo 0)
+    now=$(date +%s)
     fsz=$(stat -c %s "$FACTS" 2>/dev/null || echo 0)
+    if [ "$fsz" -lt $((ROTATE_MB * 1048576)) ] && [ $((now - ${last:-0})) -lt "${ROTATE_SEC:-600}" ]; then
+        fsz=0
+    fi
     if [ "$fsz" -ge $((ROTATE_MB * 1048576)) ]; then
         # ⚠ 序号必须**持久化**：用"已存在文件个数"当序号，转换完删掉后会**重用同一个名字**
         #   ⇒ 新块撞上旧块的 .done 标记，转换器永远跳过它（实测：两个 400 MB 块卡在那儿）
@@ -117,6 +124,7 @@ while IFS='	' read -r pkg path; do
         seq=$((seq + 1))
         printf '%d\n' "$seq" > "$ctr"
         mv "$FACTS" "$OUT/facts.$SLICE_K.$(date +%s).$(printf '%04d' "$seq").triples"
+        date +%s > "$OUT/.rt.$SLICE_K"
         echo "  ↻ 轮转：facts.$SLICE_K.$seq.triples（$((fsz / 1048576)) MB）"
     fi
     # 磁盘护栏（每次包级检查，4 路并行最多超出一个包的量）
