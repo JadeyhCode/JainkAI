@@ -17,6 +17,15 @@ while :; do
     #   实测就是这样把速率打到 0 的）。N 逐次 -1 让每片变大、覆盖更多没做过的包。
     N=$((N - 1))
     [ "$N" -lt 8 ] && N=$N0
+    # 每一轮先探一次镜像：被限流（403）就自动换下一个可用的（§6.737）
+    case "$MIRROR" in
+    *huaweicloud*) DISTRO=debian ;; *nju*|*163*|*aliyun*) DISTRO=debian ;;
+    *) DISTRO=debian ;;
+    esac
+    case "$DIST" in noble|jammy) DISTRO=ubuntu ;; esac
+    M=$(sh "$ROOT/tools/bestmirror.sh" "$DISTRO" "$DIST" "$SUITE" 2>/dev/null)
+    [ -n "${M:-}" ] || M=$MIRROR
+    MIRROR=$M
     if sh "$ROOT/tools/src_harvest.sh" "$OUT" 5000 --slice "$K/$N" \
         --mirror "$MIRROR" --dist "$DIST" --suite "$SUITE" >> "$LOG" 2>&1; then
         :
