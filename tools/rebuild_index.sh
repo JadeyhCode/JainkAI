@@ -22,7 +22,8 @@ while [ "$k" -le "$SN" ]; do
         print prio "\t" pkg "\tpool/" sec "/" c "/" pkg "/" f; next }
     inf && /^[^ ]/ { inf = 0 }' \
       | LC_ALL=C sort -t"	" -k1,1n -s | cut -f2- \
-      | awk -F'\t' 'NR==FNR { d[$1]=1; next } !($1 in d)' "$D/done.all.txt" - > "$D/index.$k.txt"
+      | awk -F'\t' 'NR==FNR { d[$1]=1; next } !($1 in d)' "$D/done.all.txt" - > "$D/index.$k.txt.new" \
+      && mv "$D/index.$k.txt.new" "$D/index.$k.txt"   # ⚠ 原子替换：否则 worker 会看到"正在写的空文件"
     k=$((k + 1))
 done
 echo "== $D：索引 $(( SN )) 片 / 合计 $(cat "$D"/index.*.txt 2>/dev/null | wc -l) 行 =="

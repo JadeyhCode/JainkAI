@@ -57,7 +57,7 @@ IDX="$OUT/Sources.gz"
 IDX_STALE=0
 if [ -s "$IDX" ]; then
     now_t=$(date +%s); idx_t=$(stat -c %Y "$IDX" 2>/dev/null || echo 0)
-    [ $((now_t - idx_t)) -gt 3600 ] && IDX_STALE=1
+    [ $((now_t - idx_t)) -gt 86400 ] && IDX_STALE=1
 fi
 # ⚠ 索引文件可能是**半截**的：下载被打断（curl 超时/峰段冻结）会留下截断的 .gz，
 #   而脚本只在"缺失"时才重下 ⇒ 永远用着坏索引、worker 一个包都找不到（实测：ubucorpus 的
@@ -101,7 +101,8 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
         next
     }
     inf && /^[^ ]/ { inf = 0 }
-' | LC_ALL=C sort -t"	" -k1,1n -s | cut -f2- > "$OUT/index.$SLICE_K.txt"
+' | LC_ALL=C sort -t"	" -k1,1n -s | cut -f2- > "$OUT/index.$SLICE_K.txt.new"
+    mv "$OUT/index.$SLICE_K.txt.new" "$OUT/index.$SLICE_K.txt"   # 原子替换，别让别的进程读到半截
 # （已做过的包改由**预生成的索引**剔除：脚本内过滤实测会把 676 行的片压成 0 行，原因未明；
 #   `tools/rebuild_index.sh` 手工流水线验证可用。）
 NIDX=$(wc -l < "$OUT/index.$SLICE_K.txt")
