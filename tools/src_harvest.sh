@@ -59,9 +59,20 @@ if [ -s "$IDX" ]; then
     now_t=$(date +%s); idx_t=$(stat -c %Y "$IDX" 2>/dev/null || echo 0)
     [ $((now_t - idx_t)) -gt 3600 ] && IDX_STALE=1
 fi
+# ⚠ 索引文件可能是**半截**的：下载被打断（curl 超时/峰段冻结）会留下截断的 .gz，
+#   而脚本只在"缺失"时才重下 ⇒ 永远用着坏索引、worker 一个包都找不到（实测：ubucorpus 的
+#   Sources.gz 截断，索引建出来是 0 行，日志一片"本批：0 个包"）。
+if [ -s "$IDX" ] && ! gzip -t "$IDX" 2>/dev/null; then
+    echo "  ⚠ 索引文件损坏（截断）⇒ 重下"
+    rm -f "$IDX"
+fi
 if [ ! -s "$IDX" ] || [ "$IDX_STALE" -eq 1 ]; then
     echo "== 取源码索引 =="
-    curl -k -s --connect-timeout 15 --max-time 240 -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
+    # ⚠ 索引 14–24 MB，慢速下 240 s 下不完 ⇒ 被截断（实测 ubucorpus 连续两次坏索引，
+        #   导致索引建出 0 行、worker 一个包都找不到）。索引单独给 1800 s + gzip -t 校验。
+    curl -k -s --connect-timeout 20 --max-time 1800 -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" \
+        || { echo "FAIL: 索引下不来"; exit 1; }
+    gzip -t "$IDX" 2>/dev/null || { echo "FAIL: 索引下载不完整（gzip -t 失败）"; rm -f "$IDX"; exit 1; }
 fi
 # Debian pool 布局：pool/<section>/<首字母或 lib+首字母>/<包名>/
 zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="$SLICE_N" '
@@ -91,6 +102,8 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
     }
     inf && /^[^ ]/ { inf = 0 }
 ' | LC_ALL=C sort -t"	" -k1,1n -s | cut -f2- > "$OUT/index.$SLICE_K.txt"
+# （已做过的包改由**预生成的索引**剔除：脚本内过滤实测会把 676 行的片压成 0 行，原因未明；
+#   `tools/rebuild_index.sh` 手工流水线验证可用。）
 NIDX=$(wc -l < "$OUT/index.$SLICE_K.txt")
 echo "== 索引里 $(wc -l < "$OUT/index.$SLICE_K.txt") 个源码包（分片 $SLICE_K/$SLICE_N）；这次最多做 $MAXPKG 个 =="
 
