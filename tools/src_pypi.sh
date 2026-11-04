@@ -40,7 +40,7 @@ IDX="$OUT/pypi_index.txt"
 
 if [ ! -s "$IDX" ]; then
     echo "== 取 PyPI 索引（47 MB，一次）=="
-    curl -k -s -o "$OUT/pypi_simple.html" "$MIRROR/simple/" || { echo "FAIL: 索引下不来"; exit 1; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$OUT/pypi_simple.html" "$MIRROR/simple/" || { echo "FAIL: 索引下不来"; exit 1; }
     # ⚠ 名字提取：`href="<name>/"`，名字里不会有 `/`；旧写法把结尾的 `/"` 留进了包名
     #   （实测：前 1 843 个包全部 404、0 条事实，查了半小时才看出包名尾巴多了两个字符）
     grep -o 'href="[^"/]*/"' "$OUT/pypi_simple.html" | sed 's|^href="||; s|/"$||' | grep -v '^$' > "$IDX"
@@ -92,7 +92,7 @@ while IFS= read -r pkg; do
     [ "$did" -ge "$MAXPKG" ] && break
     # 包页：取最后一个 .tar.gz（通常是最新版本）
     pg="$OUT/ptmp/pg.html"
-    curl -k -s -o "$pg" "$MIRROR/simple/$pkg/" || { rm -f "$pg"; continue; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$pg" "$MIRROR/simple/$pkg/" || { rm -f "$pg"; continue; }
     # ⚠ 包页里的链接**不是**按版本排的（`tail -1` 拿到过 requests-2.9.2 这种老版本）⇒ sort -V 取最新
     href=$(grep -o 'href="[^"]*\.tar\.gz[^"]*"' "$pg" | sed 's/^href="//; s/#.*//; s/"$//' | sort -V | tail -1)
     rm -f "$pg"
@@ -104,7 +104,7 @@ while IFS= read -r pkg; do
     *)       url="$MIRROR/$href" ;;
     esac
     tb="$OUT/ptmp/p.tgz"
-    curl -k -sL -o "$tb" "$url" || { rm -f "$tb"; continue; }
+    curl -k -sL --connect-timeout 15 --max-time 240 -o "$tb" "$url" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     if [ "$sz" -lt 1000 ] || [ "$(head -c 2 "$tb" | od -An -tx1 | tr -d ' \n')" != "1f8b" ]; then
         rm -f "$tb"; continue;          # 404/HTML/空包：**不记 done**，下次还试

@@ -54,7 +54,7 @@ DONE_ALL="$OUT/done.all.txt"   # 全局去重表：换分片数 N 重跑时不�
 IDX="$OUT/Sources.gz"
 if [ ! -s "$IDX" ]; then
     echo "== 取源码索引 =="
-    curl -k -s -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$IDX" "$MIRROR/dists/$DIST/$SUITE_DIR/source/Sources.gz" || { echo "FAIL: 索引下不来"; exit 1; }
 fi
 # Debian pool 布局：pool/<section>/<首字母或 lib+首字母>/<包名>/
 zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="$SLICE_N" '
@@ -91,7 +91,7 @@ while IFS='	' read -r pkg path; do
     tried=$((tried + 1))
     url="$MIRROR/$path"
     tb="$OUT/tmp/$(basename "$path")"
-    curl -k -s -o "$tb" "$url" || { rm -f "$tb"; continue; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$tb" "$url" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     [ "$sz" -gt 1000 ] || { rm -f "$tb"; continue; }
     src="$OUT/tmp/src_$pkg"; rm -rf "$src"; mkdir -p "$src"

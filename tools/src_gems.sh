@@ -38,7 +38,7 @@ IDX="$OUT/gems_index.txt"
 
 if [ ! -s "$IDX" ]; then
     echo "== 取 RubyGems 索引（versions，约 24 MB）=="
-    curl -k -s -o "$IDX.raw" "$MIRROR/versions" || { echo "FAIL: 索引下不来"; exit 1; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$IDX.raw" "$MIRROR/versions" || { echo "FAIL: 索引下不来"; exit 1; }
     # 每行：<名字> <版本> <校验/平台>；跳过头两行与空行
     awk 'NR > 2 && NF >= 2 && $1 != "" { print $1 "\t" $2 }' "$IDX.raw" > "$IDX"
     rm -f "$IDX.raw"
@@ -94,7 +94,7 @@ while IFS='	' read -r name ver; do
     [ "$did" -ge "$MAXPKG" ] && break
     url="$MIRROR/gems/$key.gem"
     tb="$OUT/gtmp/p.gem"
-    curl -k -s -o "$tb" "$url" || { rm -f "$tb"; continue; }
+    curl -k -s --connect-timeout 15 --max-time 240 -o "$tb" "$url" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     if [ "$sz" -lt 500 ] || [ "$(file -b "$tb" 2>/dev/null | cut -c1-3)" != "POS" ]; then
         rm -f "$tb"; continue;                    # 404/不是 tar：不记 done

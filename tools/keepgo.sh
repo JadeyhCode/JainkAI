@@ -13,9 +13,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 N=$N0
 while :; do
     LOG="$OUT/log.$K.txt"
-    # 换分片数：N -> N*2-1（奇数序列，逐步覆盖更多包）
-    N=$((N * 2 - 1))
-    [ "$N" -gt 4096 ] && N=$((N0 + 2))          # 别让 N 无限涨
+    # ⚠ 分片数要**递减**：N 变大 ⇒ 每片更小（N=689 时每片只剩 20 个包且都已做过 ⇒ 空转，
+    #   实测就是这样把速率打到 0 的）。N 逐次 -1 让每片变大、覆盖更多没做过的包。
+    N=$((N - 1))
+    [ "$N" -lt 8 ] && N=$N0
     if sh "$ROOT/tools/src_harvest.sh" "$OUT" 5000 --slice "$K/$N" \
         --mirror "$MIRROR" --dist "$DIST" --suite "$SUITE" >> "$LOG" 2>&1; then
         :

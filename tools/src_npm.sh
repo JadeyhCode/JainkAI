@@ -108,7 +108,7 @@ while IFS= read -r name; do
     # ⚠ 用 `/<name>/latest`（**只含最新版**的清单，3–29 KB / ~0.5 s），
     #   不要用 `/<name>`（整包历史：typescript 那个 **15 MB / 19 s** —— 这才是"4.5 s/包"的真凶）
     meta="$OUT/ntmp/m.json"
-    curl -k -sL -o "$meta" "$REG/$name/latest" || { rm -f "$meta"; continue; }
+    curl -k -sL --connect-timeout 15 --max-time 240 -o "$meta" "$REG/$name/latest" || { rm -f "$meta"; continue; }
     ver=$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$meta" | head -1)
     tburl=$(sed -n 's/.*"tarball":"\([^"]*\)".*/\1/p' "$meta" | head -1)
     usize=$(sed -n 's/.*"unpackedSize":[ ]*\([0-9]*\).*/\1/p' "$meta" | head -1)
@@ -126,7 +126,7 @@ while IFS= read -r name; do
     [ -n "${tburl:-}" ] || tburl="$REG/$name/-/$base-$ver.tgz"
     tb="$OUT/ntmp/p.tgz"
     # ⚠ npmmirror 的 tgz 是 **302 跳转**（不带 -L 只会拿到 80 字节的跳转页 ⇒ 看着像"包坏了"）
-    curl -k -sL -o "$tb" "$tburl" || { rm -f "$tb"; continue; }
+    curl -k -sL --connect-timeout 15 --max-time 240 -o "$tb" "$tburl" || { rm -f "$tb"; continue; }
     sz=$(stat -c %s "$tb" 2>/dev/null || echo 0)
     if [ "$sz" -lt 500 ] || [ "$(head -c 2 "$tb" | od -An -tx1 | tr -d ' \n')" != "1f8b" ]; then
         rm -f "$tb"; continue;                       # 不是 tgz：不记 done
