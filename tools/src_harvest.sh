@@ -80,13 +80,17 @@ zcat "$IDX" | awk -v sec="$SUITE_DIR" -v maxmb="$MAXMB" -v sk="$SLICE_K" -v sn="
         if (pkg ~ /(-doc$|-docs$|-dbg$|-dbgsym$|-dev-doc$)/) next
         if (sz > maxmb * 1048576) next
         c = substr(pkg, 1, 1); if (substr(pkg,1,3) == "lib") c = "lib" substr(pkg, 4, 1)
-        line = pkg "\tpool/" sec "/" c "/" pkg "/" f
+        # **按预期密度排序**：lib* / *-dev 包带大量头文件（实测 noble main 18 384 行/MB vs universe 7 516）
+        # 排在最前面 ⇒ 同样带宽下先吃到"密"的包。0 = 高密度，1 = 其它。
+        prio = 1
+        if (pkg ~ /^lib/ || pkg ~ /-dev$/) prio = 0
+        line = prio "\t" pkg "\tpool/" sec "/" c "/" pkg "/" f
         if (sn > 1) { k = NR % sn; if (k != sk) next }
         print line
         next
     }
     inf && /^[^ ]/ { inf = 0 }
-' > "$OUT/index.$SLICE_K.txt"
+' | LC_ALL=C sort -t"	" -k1,1n -s | cut -f2- > "$OUT/index.$SLICE_K.txt"
 NIDX=$(wc -l < "$OUT/index.$SLICE_K.txt")
 echo "== 索引里 $(wc -l < "$OUT/index.$SLICE_K.txt") 个源码包（分片 $SLICE_K/$SLICE_N）；这次最多做 $MAXPKG 个 =="
 
