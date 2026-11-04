@@ -13,9 +13,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 N=$N0
 while :; do
     LOG="$OUT/log.$K.txt"
-    # ⚠ N 固定：换 N 会重建索引（14 MB zcat+awk），36 个续跑器频繁换 N 会把 IO/CPU 吃光
-    #   （实测 85 worker 只产出 971 边/秒）。去重靠全局 done.all.txt，不靠换 N 覆盖。
-    :
+    # ⚠ 覆盖靠**轮转 k**，不是换 N：N 固定 ⇒ 索引文件 `index.<k>.txt` 可缓存（换 N 会重建 14 MB，
+    #   实测把速率打到 971 边/秒）；k 每次 +1（mod N）⇒ worker 每轮换一片新的包，不会永久饿死。
+    K=$(( (K + 1) % N ))
+    [ "$K" -eq 0 ] && K=1
     # 每一轮先探一次镜像：被限流（403）就自动换下一个可用的（§6.737）
     case "$MIRROR" in
     *huaweicloud*) DISTRO=debian ;; *nju*|*163*|*aliyun*) DISTRO=debian ;;
