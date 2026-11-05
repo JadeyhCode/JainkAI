@@ -12,6 +12,7 @@
 # 用法：sh tests/selfcheck.sh        （tests/all.sh 第 0 步会自动调它）
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$ROOT/_t/par"   # 干净克隆里单独跑 selfcheck 时目录还不存在（实测报 cannot create）
 cd "$ROOT"
 
 bad=0

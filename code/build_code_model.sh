@@ -16,6 +16,12 @@ OUT=code/code_model.bin
 [ "${1:-}" = "--rebuild-api" ] && sh tools/headers2triples.sh > /dev/null
 
 [ -s code/knowledge/skeletons.triples ] || { echo "FAIL: 缺 skeletons.triples"; exit 1; }
+# ⚠ **干净克隆**里没有 capi.triples（它是由 /usr/include 现场抽的，gitignore）。
+# 缺就自动抽一次（约 1 分钟）——否则发布出去的仓库第一步就跑不通（实测踩过）。
+if [ ! -s code/knowledge/capi.triples ]; then
+    echo "  capi.triples 不在（干净克隆的常态）⇒ 现场抽 /usr/include"
+    sh tools/headers2triples.sh > /dev/null || { echo "FAIL: capi.triples 抽不出来（缺 /usr/include？）"; exit 1; }
+fi
 [ -s code/knowledge/capi.triples ] || { echo "FAIL: 缺 capi.triples（先跑 tools/headers2triples.sh）"; exit 1; }
 [ -s code/knowledge/compose.triples ] || { echo "FAIL: 缺 compose.triples（组合知识）"; exit 1; }
 
