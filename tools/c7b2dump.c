@@ -15,6 +15,8 @@
 int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "用法: %s <分片.c7b2> [最多条数]\n", argv[0]); return 2; }
     long maxn = (argc > 2) ? strtol(argv[2], NULL, 10) : 1000000;
+    int names_only = 0;
+    for (int i = 2; i < argc; ++i) if (!strcmp(argv[i], "--names")) names_only = 1;
     FILE *f = fopen(argv[1], "rb");
     if (!f) { fprintf(stderr, "打不开 %s\n", argv[1]); return 1; }
     char magic[4]; uint32_t ver, n_nodes, n_props, nseg, flags;
@@ -65,6 +67,11 @@ int main(int argc, char **argv) {
     }
 
     long emitted = 0;
+    if (names_only) {   /* 只列节点名（建跨片名字索引用） */
+        for (uint32_t i = 0; i < n_nodes; ++i) printf("%.*s\n", (int)nlen[i], pool + noff[i]);
+        fclose(f);
+        return 0;
+    }
     for (uint32_t i = 0; i < n_nodes && emitted < maxn; ++i) {
         if (!scnt[i]) continue;
         if (fseek(f, (long)soff[i], SEEK_SET) != 0) continue;
