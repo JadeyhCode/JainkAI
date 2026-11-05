@@ -1889,6 +1889,54 @@ int main(int argc, char **argv) {
                                g_c7b->n_lookups, g_c7b->n_reads, g_c7b->n_bytes, (double)g_c7b->n_bytes / 1024.0);
                         continue;
                     }
+                    if (!strcmp(act, "find")) {
+                        /* `::parts corpus find <名字> <分片目录>` —— **跨分片找名字**（§6.748）
+                         * 7B 语料是几百上千个分片，"这个名字在哪片有事实"是让它可用的关键一步。
+                         * 每片：开（.gz 自动解压）→ 在节点名表里找 → 有就取前几条事实 → 关。 */
+                        /* ⚠ 名字已经在 `arg` 里了（上面解析 act 时顺带取走了第一个词），
+                         * 这里只解析**目录**（第一版从 q 重新解析名字 ⇒ 拿到空串，命令永远只打印用法）*/
+                        char dirpath[256] = {0};
+                        const char *name = arg;
+                        size_t kk = 0;
+                        while (*q == ' ') q++;
+                        while (*q && *q != ' ' && kk + 1 < sizeof dirpath) dirpath[kk++] = *q++;
+                        dirpath[kk] = 0;
+                        if (!name[0] || !dirpath[0]) {
+                            printf("[用法] ::parts corpus find <名字> <分片目录>\n");
+                            continue;
+                        }
+                        DIR *dp = opendir(dirpath);
+                        if (!dp) { printf("[语料] 打不开目录：%s\n", dirpath); continue; }
+                        struct dirent *de;
+                        int nshard = 0, nhit = 0, nf = 0;
+                        while ((de = readdir(dp)) != NULL) {
+                            size_t L = strlen(de->d_name);
+                            if (L < 4 || strcmp(de->d_name + L - 3, ".gz") != 0) continue;
+                            char pp[512];
+                            snprintf(pp, sizeof pp, "%s/%s", dirpath, de->d_name);
+                            char e2[160] = {0};
+                            C7B *c2 = c7b_open(pp, e2, sizeof e2);
+                            if (!c2) continue;
+                            nshard++;
+                            if (c2->ver == 2) {
+                                uint32_t nid2 = 0;
+                                if (c7b2_find_node(c2, name, &nid2) == 0) {
+                                    C7B2Fact fs2[8];
+                                    int got = c7b2_facts(c2, nid2, fs2, 8);
+                                    nhit++;
+                                    if (got > 0) nf += got;
+                                    if (nhit <= 5)
+                                        printf("[语料] ✓ %s：%d 条（例：%s --[%s]--> %s）\n",
+                                               de->d_name, got > 0 ? got : 0, name,
+                                               got > 0 ? fs2[0].prop : "?", got > 0 ? fs2[0].obj : "?");
+                                }
+                            }
+                            c7b_close(c2);
+                        }
+                        closedir(dp);
+                        printf("[语料] 扫了 %d 片：%d 片有「%s」的事实（合计 %d 条）\n", nshard, nhit, name, nf);
+                        continue;
+                    }
                     if (!strcmp(act, "rel")) {
                         if (!g_c7b) { printf("[语料] 没开着分片（::parts corpus <文件.c7b>）\n"); continue; }
                         if (g_c7b->ver == 2) {

@@ -143,6 +143,18 @@ if [ "$hit2" -eq 0 ]; then
     if [ "$tried2" -eq 0 ]; then miss "SKIP（没有分片）"; else miss "SKIP（抽样的 $tried2 片里没有候选名字）"; fi
 fi
 
+echo "== ⑥ 跨分片查名字（::parts corpus find）：7B 语料可用的关键能力 =="
+FIND_DIR=/mnt/models/localcorpus/shards
+if [ -d "$FIND_DIR" ] && [ -n "$(ls "$FIND_DIR"/*.gz 2>/dev/null)" ]; then
+    ask "在 2 片里找 函数:printf / 类:*"
+    out=$(printf '::parts corpus find 函数:printf %s\n::parts corpus find 类:App %s\n::quit\n' "$FIND_DIR" "$FIND_DIR" | ./build_aip --model m.bin 2>&1)
+    n_scan=$(echo "$out" | grep -ac '扫了 [0-9]* 片' || true)
+    if [ "${n_scan:-0}" -ge 2 ]; then hit "$n_scan 次扫描都有结果行"
+    else wrong "没有扫描结果行"; fi
+else
+    ask "跨分片查（缺分片目录）"; miss "SKIP"
+fi
+
 echo
 printf '有用性：**答对 %d / 共 %d**（答错 %d / 没答 %d）\n' "$ok_n" "$total" "$bad_n" "$miss_n"
 [ "$bad_n" -eq 0 ] && [ "$miss_n" -eq 0 ] && printf 'PASS usegraph（三类图都答对了：真知识 / 代码知识 / 7B 语料）\n' || printf 'FAIL usegraph（答错 %d / 没答 %d）\n' "$bad_n" "$miss_n"
