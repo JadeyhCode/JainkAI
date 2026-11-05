@@ -40,3 +40,4 @@ code/code_model_full.bin
 code/code_model_full.bin.work
 # 例外：扩展版构建**脚本**（`build_*` 会把 `build_code_model_full.sh` 一起忽略掉）
 !code/build_code_model_full.sh
+model_post*.bin
