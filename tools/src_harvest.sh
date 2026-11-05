@@ -138,10 +138,15 @@ while IFS='	' read -r pkg path; do
     last=$(cat "$OUT/.rt.$SLICE_K" 2>/dev/null || echo 0)
     now=$(date +%s)
     fsz=$(stat -c %s "$FACTS" 2>/dev/null || echo 0)
+    # ⚠ 条件是 **或**：够大 **或** 够久就切。第一版写成"够久只是不清零 fsz"，
+    #   而下面仍然要求 fsz ≥ ROTATE_MB ⇒ 慢速时文件涨不到 20 MB 就**永远不轮转**
+    #   （实测：17 M 行积压、块 0 个、转换器空转、边数五天不动）。
     if [ "$fsz" -lt $((ROTATE_MB * 1048576)) ] && [ $((now - ${last:-0})) -lt "${ROTATE_SEC:-600}" ]; then
-        fsz=0
+        continue_rotate=0
+    else
+        continue_rotate=1
     fi
-    if [ "$fsz" -ge $((ROTATE_MB * 1048576)) ]; then
+    if [ "${continue_rotate:-0}" -eq 1 ] && [ "$fsz" -gt 1000 ]; then
         # ⚠ 序号必须**持久化**：用"已存在文件个数"当序号，转换完删掉后会**重用同一个名字**
         #   ⇒ 新块撞上旧块的 .done 标记，转换器永远跳过它（实测：两个 400 MB 块卡在那儿）
         # ⚠ 名字里必须带**时间戳**：只靠序号时，脚本改过/计数文件丢过之后序号会重用，

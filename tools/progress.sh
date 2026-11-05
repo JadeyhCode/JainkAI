@@ -37,7 +37,7 @@ debian_pend=$(cat "$M"/codecorpus/facts.*.triples 2>/dev/null | wc -l)
 # ⚠ **待转文本行不算进总账**：行和边不是同一量纲（一次转换会让"合计"倒退，速率变负）。
 #   积压单独报，总账只算**已经成边**的（分片）与其它源的文本条数。
 total=$((d_edges + u_edges + pypi + gems + npm))
-target=7000000000
+target=${TARGET_EDGES:-500000000}   # 目标：0.5B 真知识边（2026-11-04 用户改口径；原来是 7e9）
 now=$(date +%s)
 
 echo "== 7B 真知识进度（$(date '+%F %T')）=="
@@ -52,8 +52,9 @@ printf '  PyPI    %6s 包 / %12s 条\n' "$(pkg_count "$M/pycorpus")" "$pypi"
 printf '  gems    %6s 个 / %12s 条\n' "$(pkg_count "$M/gemcorpus")" "$gems"
 printf '  npm     %6s 包 / %12s 条\n' "$(pkg_count "$M/npmcorpus")" "$npm"
 printf '  ─────────────────────────────────────────────\n'
-printf '  合计 %12s 条 = %.2f%%（目标 %s）\n' "$total" \
-    "$(awk -v a="$total" -v b="$target" 'BEGIN{printf "%.2f", 100*a/b}')" "$target"
+printf '  合计 %12s 条 = %.2f%%（目标 %.1f 亿）\n' "$total" \
+    "$(awk -v a="$total" -v b="$target" 'BEGIN{printf "%.2f", 100*a/b}')" \
+    "$(awk -v b="$target" 'BEGIN{printf "%.1f", b/1e8}')"
 
 if [ -s "$BASE" ]; then
     read -r bt bv < "$BASE" 2>/dev/null || { bt=0; bv=0; }
