@@ -67,10 +67,113 @@ static inline size_t paper_segments(const char *s, size_t len, char seg[][64], s
     return n;
 }
 
+/* §6.757 **泛化：说法归一**（不是背事实表，而是加"同义说法 → 规范关系"的映射）
+ *
+ * 为什么需要：原来的抽取只认**图里已有的关系词**（属于/会/在/…）。同一件事换个说法就抽不到：
+ *   `企鹅是鸟类的一种`（关系词"是"）、`企鹅可以游泳`（"可以"）、`企鹅生活在南极`（"生活在"）、
+ *   `企鹅害怕北极熊`（"害怕"）—— 实测 16 句里只抽出 14 条，其中 4 条关系词是错的。
+ *
+ * 这里只做两件事，都是**说法层面**的，不碰事实：
+ *   ① 关系词归一：可以/能够/能 → 会；害怕/惧怕/恐惧 → 怕；喜爱/爱好 → 喜欢；拥有/具有 → 有；
+ *      生活在/住在/栖息于/分布于/位于 → 在；依赖 → 需要；是 → 属于；
+ *   ② 词的尾巴归一：宾语去掉「的一种/一类/之一」，主语去掉「生活/住」（`企鹅生活|在` → `企鹅|在`）。
+ * 教一次这种说法，**所有同形句**都能用 —— 这就是"泛化"在白箱里的做法。 */
+static inline const char *paper_canon_rel(const char *w) {
+    if (!w || !w[0]) return w;
+    if (!strcmp(w, "可以") || !strcmp(w, "能够") || !strcmp(w, "能") || !strcmp(w, "会")) return "会";
+    if (!strcmp(w, "害怕") || !strcmp(w, "惧怕") || !strcmp(w, "恐惧")) return "怕";
+    if (!strcmp(w, "喜爱") || !strcmp(w, "爱好")) return "喜欢";
+    if (!strcmp(w, "拥有") || !strcmp(w, "具有")) return "有";
+    if (!strcmp(w, "栖息") || !strcmp(w, "生活")) return "在";
+    if (!strcmp(w, "生活在") || !strcmp(w, "住在") || !strcmp(w, "栖息于") ||
+        !strcmp(w, "分布于") || !strcmp(w, "位于")) return "在";
+    if (!strcmp(w, "依赖")) return "需要";
+    if (!strcmp(w, "是")) return "属于";
+    return w;
+}
+
+/* 去掉宾语尾巴上的「的一种 / 一类 / 之一」 */
+static inline void paper_trim_obj(char *b) {
+    static const char *sfx[] = { "的一种之一", "的一种", "的一类之一", "的一类", "之一", "的一种之一" };
+    for (size_t k = 0; k < sizeof sfx / sizeof sfx[0]; ++k) {
+        size_t l = strlen(sfx[k]), bl = strlen(b);
+        if (bl > l && !strcmp(b + bl - l, sfx[k])) { b[bl - l] = 0; return; }
+    }
+}
+
+/* §6.757 ② 宾语里再包一层动词：`喜欢吃鱼` ⇒ 关系换成「吃」、宾语取「鱼」
+ * （"喜欢+动作"在中文里通常就是说这个动作；保留 喜欢/怕/会/需要 时宾语以动词开头才拆） */
+static inline const char *paper_split_verb(const char *rel, char *b) {
+    static const char *verbs[] = { "吃", "喝", "用", "住", "去", "做", "看", "听" };
+    if (!rel || !b || !b[0]) return rel;
+    if (strcmp(rel, "喜欢") && strcmp(rel, "怕") && strcmp(rel, "会") && strcmp(rel, "需要")) return rel;
+    for (size_t k = 0; k < sizeof verbs / sizeof verbs[0]; ++k) {
+        size_t l = strlen(verbs[k]);
+        if (!strncmp(b, verbs[k], l) && strlen(b) > l) { memmove(b, b + l, strlen(b + l) + 1); return verbs[k]; }
+    }
+    return rel;
+}
+
+/* §6.757 ③ 宾语前缀的虚字：分词器会把「能够」拆成 能+够、「栖息于」拆成 栖息+于，
+ * 归一后宾语会剩下「够奔跑」「于海洋」这类前缀 ⇒ 去掉。 */
+static inline void paper_trim_obj_prefix(char *b) {
+    static const char *pfx[] = { "够", "于", "在", "以", "和", "与", "了" };
+    for (size_t k = 0; k < sizeof pfx / sizeof pfx[0]; ++k) {
+        size_t l = strlen(pfx[k]);
+        if (!strncmp(b, pfx[k], l) && strlen(b) > l + 1) { memmove(b, b + l, strlen(b + l) + 1); return; }
+    }
+}
+
+/* 去掉主语尾巴上的「生活 / 住」（`企鹅生活` 是分词器切出来的整体） */
+static inline void paper_trim_subj(char *a) {
+    static const char *sfx[] = { "生活", "居住" };
+    for (size_t k = 0; k < sizeof sfx / sizeof sfx[0]; ++k) {
+        size_t l = strlen(sfx[k]), al = strlen(a);
+        if (al > l + 2 && !strcmp(a + al - l, sfx[k])) { a[al - l] = 0; return; }
+    }
+}
+
+/* §6.757 ④ **文本级归一**：分词器不认识的词（栖息于/依赖/能够…）先换成它认识的规范词，
+ * 再走分词。这是"说法层"的泛化：教一次替换，所有同形句都受益。 */
+static inline void paper_normalize_text(const char *in, char *out, size_t cap) {
+    static const struct { const char *from, *to; } R[] = {
+        { "栖息于", "在" }, { "栖息", "在" }, { "生活在", "在" }, { "住在", "在" },
+        { "分布于", "在" }, { "位于", "在" }, { "存在于", "在" },
+        { "能够", "会" }, { "可以", "会" }, { "能", "会" },
+        { "依赖", "需要" }, { "需要", "需要" },
+        { "害怕", "怕" }, { "惧怕", "怕" }, { "恐惧", "怕" },
+        { "喜爱", "喜欢" }, { "爱好", "喜欢" },
+        { "拥有", "有" }, { "具有", "有" },
+        { "是", "属于" },
+    };
+    size_t o = 0;
+    for (size_t i = 0; in[i] && o + 8 < cap; ) {
+        int hit = 0;
+        for (size_t k = 0; k < sizeof R / sizeof R[0]; ++k) {
+            size_t l = strlen(R[k].from);
+            if (!strncmp(in + i, R[k].from, l)) {
+                size_t tl = strlen(R[k].to);
+                if (o + tl + 1 >= cap) break;
+                memcpy(out + o, R[k].to, tl); o += tl; i += l; hit = 1; break;
+            }
+        }
+        if (!hit) out[o++] = in[i++];
+    }
+    out[o] = 0;
+}
+
 /* 从句子 [s, s+len) 里抽一条断言：**段数 3–6**、中间择一个关系词、两边各拼成主语/宾语（各 ≤2 段）。
  * 判据全在 `paper_segments` 的结果上做（切分与抽取分开，便于单测）。 */
 static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperClaim *out) {
     if (!ai || !s || len == 0 || !out) return 0;
+    /* §6.757 先把句子里的"说法"换成规范词（分词器不认识 栖息于/依赖 这类词，实测抽不到） */
+    char norm[512];
+    if (len < sizeof norm) {
+        char raw[512];
+        memcpy(raw, s, len); raw[len] = 0;
+        paper_normalize_text(raw, norm, sizeof norm);
+        s = norm; len = strlen(norm);
+    }
     char seg[8][64];
     size_t sn = paper_segments(s, len, seg, 8);
     /* §6.674 **没有空格的句子**（真论文那种）：退回**分词器**，但**按 token 拼回去**——
@@ -94,7 +197,8 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         if (!tw) return 0;
         size_t ri2 = tn;
         for (size_t i = 1; i + 1 < tn; ++i) {
-            if (rel_id_of(ai, tw[i], 0)) { ri2 = i; break; }
+            const char *cw = paper_canon_rel(tw[i]);        /* §6.757 说法归一 */
+            if (rel_id_of(ai, cw, 0)) { ri2 = i; break; }
         }
         if (ri2 == tn) { ai_free_words(tw, tn); return 0; }
         char a2[64] = {0}, b2[64] = {0};
@@ -126,8 +230,10 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         b2[bo2] = 0;
         int okr = (ao2 >= 3 && bo2 >= 3);
         if (okr) {
+            paper_trim_subj(a2); paper_trim_obj(b2); paper_trim_obj_prefix(b2);
+            const char *rr2 = paper_split_verb(paper_canon_rel(tw[ri2]), b2);
             snprintf(out->a, sizeof out->a, "%.39s", a2);
-            snprintf(out->r, sizeof out->r, "%.23s", tw[ri2]);
+            snprintf(out->r, sizeof out->r, "%.23s", rr2);
             snprintf(out->b, sizeof out->b, "%.39s", b2);
         }
         ai_free_words(tw, tn);
@@ -139,7 +245,7 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
     /* 候选关系词（从右往左找第一个"两边都不超过 2 段"的） */
     int ri = -1;
     for (int i = (int)sn - 2; i >= 1; --i) {
-        if (!rel_id_of(ai, seg[i], 0)) continue;
+        if (!rel_id_of(ai, paper_canon_rel(seg[i]), 0)) continue;
         if ((size_t)i <= 2 && (sn - (size_t)i - 1) <= 2) { ri = i; break; }
     }
     if (ri < 1) return 0;
@@ -157,8 +263,9 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
     }
     if (ao < 3 || bo < 3) return 0;                    /* 单字主/宾太容易误抽 */
     if (!paper_word_ok(a) || !paper_word_ok(b)) return 0;   /* 主/宾里不许混虚词/标点 */
+    paper_trim_subj(a); paper_trim_obj(b); paper_trim_obj_prefix(b);
     snprintf(out->a, sizeof out->a, "%.39s", a);
-    snprintf(out->r, sizeof out->r, "%.23s", seg[ri]);
+    snprintf(out->r, sizeof out->r, "%.23s", paper_canon_rel(seg[ri]));
     snprintf(out->b, sizeof out->b, "%.39s", b);
     return 1;
 }
