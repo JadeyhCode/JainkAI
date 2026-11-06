@@ -205,3 +205,6 @@ graphsink|sh tests/graphsink.sh > graphsink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || 
 
 # §6.768 帧定义完整进图 + ::framesync 校验（图 = 内存 FrameSet 的忠实镜像）
 framesink|sh tests/framesink.sh > framesink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat framesink.log; tail -3 framesink.log; [ "$rc" -eq 0 ]
+
+# §6.770 自由图符号（可命名/互连/临时挂知识/不污染/可回收/稀疏激活）
+freesym|sh tests/freesym.sh > freesym.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat freesym.log; tail -3 freesym.log; [ "$rc" -eq 0 ]
