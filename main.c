@@ -1819,6 +1819,24 @@ int main(int argc, char **argv) {
                 uint8_t rid = rel_id_of(a->brain, relname, 0);
                 if (!rid) { printf("[求解] 图里没有关系「%s」\n", relname); continue; }
                 TokenPool *pl = a->brain->pool;
+                /* §6.759 **规则从图里读**：关系名这个节点上如果有 `唯一` 这条事实
+                 *   （例如：`吃 唯一 是`），就表示"每个主体恰好一个值、每个值至多一个主体"。
+                 * 这样"解法"是**图里的通用逻辑律**，不是写死在命令里 —— 换一道题不用改代码。 */
+                int rule_unique = 0;
+                {
+                    Token *rt = pool_find(pl, relname);
+                    if (rt) {
+                        for (size_t j = 0; j < rt->count; ++j) {
+                            const AssocEntry *e = &token_assocs_ro(rt)[j];
+                            if (!e->dyn || !e->main || !e->main->name) continue;
+                            const char *dn = rel_dyn_name(a->brain, (uint8_t)(REL_DYN_BASE + e->dyn - 1));
+                            if (dn && !strcmp(dn, "唯一")) rule_unique = 1;
+                        }
+                    }
+                }
+                printf("[求解] 规则：%s\n", rule_unique
+                       ? "图里声明了「唯一」（每个主体恰好一个值、每个值至多一个主体）"
+                       : "没有声明「唯一」⇒ 只用事实做排除（可能推不出）");
                 /* 值域：显式给的优先；没给就取该关系"不"事实里出现过的值 */
                 Token *vals[32]; size_t nv = 0;
                 {
