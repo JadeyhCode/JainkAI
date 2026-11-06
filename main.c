@@ -573,6 +573,7 @@ typedef enum {
     CMD_ASKCONFLICT,        /* §6.594 学到冲突时问不问"要改吗"（默认问） */
     CMD_LOCATIVE,           /* §6.596 地点学习（A V 在 B ⇒ A 在 B）开关 */
     CMD_CONTRADICT,         /* §6.602 全图扫一遍：独占关系里"互不包含"的矛盾（只报不改） */
+    CMD_SOLVE,              /* §6.758 排除法求解（约束推理：糖果题这类） */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -666,6 +667,11 @@ typedef struct {
 static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
       "这份帮助", CMD_HELP },
+    { "solve", "[关系]", 1, "基本",
+      "**排除法求解**（约束推理）：`::solve 吃` —— 把该关系上的「不」事实和唯一性当约束，"
+      "推出没明说但必然成立的值（糖果题那种：小明/小红/小刚各吃一颗、颜色不重复）\n"
+      "               判据：某个主体在该关系上有 |域|-1 个「不」事实 ⇒ 剩下的那个必然成立；\n"
+      "               推出后用「每个值只被一个主体取」再消一轮（可选 second 阶段）", CMD_SOLVE },
     { "stats", NULL, 0, "基本",
       "统计（符号节点/边/状态/计数器）", CMD_STATS },
     { "mods", NULL, 1, "基本",
@@ -1795,6 +1801,144 @@ int main(int argc, char **argv) {
             }
             switch (cd->id) {
             case CMD_HELP: { cmd_help(); continue; }
+            case CMD_SOLVE: {
+                /* §6.758 **糖果推理（排除法/约束求解）**：`::solve <关系> [值1 值2 …]`
+                 * 模型：每个主体在该关系上**恰好取一个**值，每个值**至多被一个主体取**
+                 *      （糖果题的标准前提；不满足就报"约束不够"，不硬猜）。
+                 * 做法：把事实翻译成 主体×值 的三态表（真/假/未知），然后双向传播：
+                 *   · 行：某行只剩一个"未知" ⇒ 置真；其余置假
+                 *   · 列：某列只剩一个"未知" ⇒ 置真；其余置假
+                 * 到不动点为止；每一步打印理由。不写进图（要写用 ::learn）。 */
+                char relname[64] = {0};
+                {
+                    const char *q2 = carg ? carg : "";
+                    size_t l2 = 0;
+                    while (*q2 && *q2 != ' ' && l2 + 1 < sizeof relname) relname[l2++] = *q2++;
+                    relname[l2] = 0;
+                }
+                uint8_t rid = rel_id_of(a->brain, relname, 0);
+                if (!rid) { printf("[求解] 图里没有关系「%s」\n", relname); continue; }
+                TokenPool *pl = a->brain->pool;
+                /* 值域：显式给的优先；没给就取该关系"不"事实里出现过的值 */
+                Token *vals[32]; size_t nv = 0;
+                {
+                    const char *q2 = carg;
+                    while (*q2 && *q2 != ' ') q2++;
+                    while (*q2 == ' ') q2++;
+                    while (*q2 && nv < 32 && strncmp(q2, "--", 2) != 0) {
+                        const char *st = q2;
+                        while (*q2 && *q2 != ' ') q2++;
+                        char nm[64]; size_t l = (size_t)(q2 - st);
+                        if (l >= sizeof nm) l = sizeof nm - 1;
+                        memcpy(nm, st, l); nm[l] = 0;
+                        Token *t2 = pool_find(pl, nm);
+                        if (t2) vals[nv++] = t2;
+                        while (*q2 == ' ') q2++;
+                    }
+                }
+                /* 主体：`--` 之后显式给的优先（糖果题里"还没被提到的人"也是候选，
+                 * 不显式给就只收"在值域里有过事实"的主体 —— 实测漏掉没事实的人，
+                 * 导致两已知那种题解不出来） */
+                Token *subs[32]; size_t ns = 0;
+                {
+                    const char *q3 = strstr(carg ? carg : "", "--");
+                    if (q3) {
+                        const char *p3 = q3 + 2;
+                        while (*p3 == ' ') p3++;
+                        while (*p3 && ns < 32) {
+                            const char *st3 = p3;
+                            while (*p3 && *p3 != ' ') p3++;
+                            char nm3[64]; size_t l3 = (size_t)(p3 - st3);
+                            if (l3 >= sizeof nm3) l3 = sizeof nm3 - 1;
+                            memcpy(nm3, st3, l3); nm3[l3] = 0;
+                            Token *t3 = pool_find(pl, nm3);
+                            if (t3) subs[ns++] = t3;
+                            while (*p3 == ' ') p3++;
+                        }
+                    }
+                }
+                for (size_t i = 0; i < pl->count && ns < 32 && ns == 0; ++i) {
+                    Token *tk = pl->tokens[i];
+                    if (!tk || tk->is_garbage || !tk->name) continue;
+                    int mine = 0;
+                    for (size_t j = 0; j < tk->count; ++j) {
+                        const AssocEntry *e = &token_assocs_ro(tk)[j];
+                        if (!e->main || !((e->rel | e->nrel) & REL_BIT(rid))) continue;
+                        if (nv == 0) { if (nv < 32) vals[nv++] = e->main; mine = 1; continue; }
+                        /* ⚠ 只收"在这道题的值域里"的主体：基础模型里 猫/狗/老师 也有 吃 事实，
+                         *   全收进来会让求解器替它们硬派答案（实测：猫/狗 都被派了蓝糖果）。 */
+                        for (size_t k = 0; k < nv; ++k) if (vals[k] == e->main) { mine = 1; break; }
+                    }
+                    if (mine) subs[ns++] = tk;
+                }
+                if (nv < 2 || ns < 2) {
+                    printf("[求解] 值域 %zu / 主体 %zu —— 至少要 2×2；显式给值域：::solve %s 值1 值2 …\n", nv, ns, relname);
+                    continue;
+                }
+                signed char st[32][32];
+                memset(st, 0, sizeof st);   /* 0 未知 / 1 真 / -1 假 */
+                for (size_t i = 0; i < ns; ++i) {
+                    for (size_t j = 0; j < subs[i]->count; ++j) {
+                        const AssocEntry *e = &token_assocs_ro(subs[i])[j];
+                        if (!e->main) continue;
+                        for (size_t k = 0; k < nv; ++k) {
+                            if (vals[k] != e->main) continue;
+                            if (e->rel & REL_BIT(rid)) st[i][k] = 1;
+                            if (e->nrel & REL_BIT(rid)) st[i][k] = -1;
+                        }
+                    }
+                }
+                printf("[求解] 关系「%s」主体 %zu × 值域 %zu：", relname, ns, nv);
+                for (size_t k = 0; k < nv; ++k) printf(" %s", vals[k]->name);
+                printf("\n");
+                int changed = 1, rounds = 0, deduced = 0;
+                while (changed && rounds < 64) {
+                    changed = 0; rounds++;
+                    for (size_t i = 0; i < ns; ++i) {           /* 行：只剩一个未知 */
+                        int unk = 0, ui = -1, yes = 0;
+                        for (size_t k = 0; k < nv; ++k) {
+                            if (st[i][k] == 0) { unk++; ui = (int)k; }
+                            else if (st[i][k] == 1) yes++;
+                        }
+                        if (yes == 0 && unk == 1) {
+                            st[i][ui] = 1; changed = 1; deduced++;
+                            printf("  ⇒ %s %s %s（行排除：该行只剩这一个未知）\n",
+                                   subs[i]->name, relname, vals[ui]->name);
+                        }
+                    }
+                    for (size_t k = 0; k < nv; ++k) {           /* 列：只剩一个未知 */
+                        int unk = 0, ui = -1, yes = 0;
+                        for (size_t i = 0; i < ns; ++i) {
+                            if (st[i][k] == 0) { unk++; ui = (int)i; }
+                            else if (st[i][k] == 1) yes++;
+                        }
+                        if (yes == 0 && unk == 1) {
+                            st[ui][k] = 1; changed = 1; deduced++;
+                            printf("  ⇒ %s %s %s（列排除：该值只剩这一个主体可能）\n",
+                                   subs[ui]->name, relname, vals[k]->name);
+                        }
+                    }
+                    /* 真值传播：某格为真 ⇒ 同行/同列其它格为假 */
+                    for (size_t i = 0; i < ns; ++i) for (size_t k = 0; k < nv; ++k) {
+                        if (st[i][k] != 1) continue;
+                        for (size_t j = 0; j < nv; ++j) if (j != k && st[i][j] == 0) { st[i][j] = -1; changed = 1; }
+                        for (size_t q = 0; q < ns; ++q) if (q != i && st[q][k] == 0) { st[q][k] = -1; changed = 1; }
+                    }
+                }
+                if (!deduced) { printf("[求解] 没有能被排除法逼出来的结论（约束不够，不猜）\n"); }
+                else {
+                    printf("[求解] 推出 %d 条。答案表：\n", deduced);
+                    for (size_t i = 0; i < ns; ++i) {
+                        printf("  %s：", subs[i]->name);
+                        for (size_t k = 0; k < nv; ++k) if (st[i][k] == 1) printf("%s ", vals[k]->name);
+                        int any = 0;
+                        for (size_t k = 0; k < nv; ++k) if (st[i][k] == 1) any = 1;
+                        if (!any) printf("（定不下来）");
+                        printf("\n");
+                    }
+                }
+                continue;
+            }
             case CMD_STATS: {
                 ai_stats(a->brain);
                 (void)micro_of(a->brain); micro_stats(a->brain);

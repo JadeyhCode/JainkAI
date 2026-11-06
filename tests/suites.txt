@@ -187,3 +187,6 @@ closure|sh tests/closure.sh > cltest.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat clt
 
 # §6.757 中文资料→知识的泛化：说法归一（是…的一种/可以/生活在/害怕/喜爱/具有）后必须落到规范关系
 zhgen|sh tests/zhgen.sh > zhgen.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat zhgen.log; tail -3 zhgen.log; [ "$rc" -eq 0 ]
+
+# §6.758 糖果推理（排除法/约束求解）：::solve —— 3×3、两条已知、4×4 链式、约束不够不硬猜
+candy|sh tests/candy.sh > candy.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat candy.log; tail -3 candy.log; [ "$rc" -eq 0 ]
