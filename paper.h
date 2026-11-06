@@ -127,6 +127,17 @@ static inline int paper_graph_canon(AI *ai, const char *w, char *out, size_t cap
     return 0;
 }
 
+/* §6.765 **框式模式也从图里读**：模式名 = 前缀+后缀（`以`+`为生` = `以为生`），
+ * 图里存一条 `以为生 --[同义]--> 吃` 即可。`circumfix.map` 退化成"批量导入"的通道。 */
+static inline int paper_graph_cf(AI *ai, const char *pre, const char *suf, char *out, size_t cap) {
+    if (!ai || !ai->pool || !pre || !suf || !out || cap == 0) return 0;
+    char nm[64];
+    size_t pl = strlen(pre), sl = strlen(suf);
+    if (pl + sl + 1 >= sizeof nm) return 0;
+    memcpy(nm, pre, pl); memcpy(nm + pl, suf, sl); nm[pl + sl] = 0;
+    return paper_graph_canon(ai, nm, out, cap);
+}
+
 static inline const char *paper_canon_rel(const char *w) {
     if (!w || !w[0]) return w;
     for (int i = 0; i < g_pmap_n; ++i) if (!strcmp(w, g_pmap_from[i])) return g_pmap_to[i];
@@ -253,7 +264,7 @@ static inline void paper_cf_load(const char *path) {
     fclose(f);
 }
 
-static inline void paper_rewrite_yiwei(const char *in, char *out, size_t cap) {
+static inline void paper_rewrite_yiwei(AI *ai, const char *in, char *out, size_t cap) {
     /* 后缀表：`为X` ⇒ 规范关系词。⚠ **长后缀在前**（为主食 要先于 为食 匹配上）。
      * 内置只留最常见的几条；其余靠 `circumfix.map`（"为生"就是留给归纳演示的）。 */
     static const struct { const char *suf; const char *rel; } S[] = {
@@ -263,6 +274,29 @@ static inline void paper_rewrite_yiwei(const char *in, char *out, size_t cap) {
     size_t o = 0;
     for (size_t i = 0; in[i] && o + 8 < cap; ) {
         /* 找"以"（E4 BB A5）*/
+        /* §6.765 图里的框式模式优先：`以为生 --[同义]--> 吃` */
+        if (ai) {
+            char gcf[32];
+            static const char *sufs[] = { "为主食", "为食物", "为食", "为生", "为家", "为居", "为业" };
+            for (size_t k = 0; k < sizeof sufs / sizeof sufs[0]; ++k) {
+                const char *hit = strstr(in + i, sufs[k]);
+                if (!hit) continue;
+                size_t pos = (size_t)(hit - in);
+                if (pos <= i) continue;
+                /* 前缀 = in[i..pos) 的头一个字符（"以"），模式名 = 前缀+后缀 */
+                size_t pl = cjk_char_len((const unsigned char *)in + i);
+                char pre[16];
+                if (pl >= sizeof pre) continue;
+                memcpy(pre, in + i, pl); pre[pl] = 0;
+                if (paper_graph_cf(ai, pre, sufs[k], gcf, sizeof gcf)) {
+                    size_t rl = strlen(gcf);
+                    if (o + rl + 1 < cap) { memcpy(out + o, gcf, rl); o += rl; }
+                    for (size_t q = i + pl; q < pos && o + 1 < cap; ++q) out[o++] = in[q];
+                    i = pos + strlen(sufs[k]);
+                    goto next_iter;
+                }
+            }
+        }
         /* 外部表：前缀匹配（通常是"以"，也可以归纳出别的前缀） */
         int ext_hit = 0, ext_len = 0; const char *ext_rel = NULL; size_t ext_suflen = 0, ext_pos = 0;
         for (int q = 0; q < g_cf_n; ++q) {
@@ -302,6 +336,7 @@ static inline void paper_rewrite_yiwei(const char *in, char *out, size_t cap) {
             }
         }
         out[o++] = in[i++];
+    next_iter: ;
     }
     out[o] = 0;
 }
@@ -317,7 +352,7 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         memcpy(raw, s, len); raw[len] = 0;
         paper_normalize_text(raw, norm, sizeof norm);
         char fix[512];
-        paper_rewrite_yiwei(norm, fix, sizeof fix);   /* §6.762 以X为食 ⇒ 吃X */
+        paper_rewrite_yiwei(ai, norm, fix, sizeof fix);   /* §6.762/765 以X为食 ⇒ 吃X（图里的模式优先） */
         snprintf(norm, sizeof norm, "%s", fix);
         s = norm; len = strlen(norm);
     }

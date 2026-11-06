@@ -29,7 +29,7 @@ echo "== ③ 逻辑律 ::law unique ⇒ ::solve 从数据读律 =="
   printf '红糖果 是 糖果\n绿糖果 是 糖果\n蓝糖果 是 糖果\n小红 是 人\n小明 是 人\n小刚 是 人\n小红 吃 红糖果\n小明 不 吃 红糖果\n小刚 不 吃 蓝糖果\n::law unique 吃\n::solve 吃 红糖果 绿糖果 蓝糖果 -- 小红 小明 小刚\n::quit\n' > "$W/in.txt"
   "$ROOT/build_aip" --model "$W/m2.bin" < "$W/in.txt" > "$W/out2.txt" 2>&1
   rm -f laws.txt )
-if grep -qa '图里声明了' "$W/out2.txt"; then ok "::solve 说「图里声明了唯一」（从 laws.txt 读）"; else bad "没有从数据读律" "$(grep -a '\[求解\]' "$W/out2.txt" | head -1)"; fi
+if grep -qa '已声明「唯一」' "$W/out2.txt"; then ok "::solve 说「已声明唯一」（从 laws.txt 读）"; else bad "没有从数据读律" "$(grep -a '\[求解\]' "$W/out2.txt" | head -1)"; fi
 if grep -qa '小刚：绿糖果' "$W/out2.txt" && grep -qa '小明：蓝糖果' "$W/out2.txt"; then ok "糖果题解出完整答案"; else bad "糖果题没解出" "$(sed -n '/答案表/,$p' "$W/out2.txt" | head -4 | tr '\n' ' ')"; fi
 
 # 复原（测试改过仓库根的两个数据文件）

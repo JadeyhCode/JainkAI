@@ -199,3 +199,6 @@ circumfix|sh tests/circumfix.sh > circumfix.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || 
 
 # §6.764 说法映射存进图里（擅长 --[同义]--> 会），抽取器从图读，不靠 paraphrase.map
 graphmap|sh tests/graphmap.sh > graphmap.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat graphmap.log; tail -3 graphmap.log; [ "$rc" -eq 0 ]
+
+# §6.765-767 三种语言件都能存图里：框式模式 / 逻辑律 / 帧知识
+graphsink|sh tests/graphsink.sh > graphsink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat graphsink.log; tail -3 graphsink.log; [ "$rc" -eq 0 ]

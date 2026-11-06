@@ -1904,9 +1904,22 @@ int main(int argc, char **argv) {
                 /* §6.759 **规则从图里读**：关系名这个节点上如果有 `唯一` 这条事实
                  *   （例如：`吃 唯一 是`），就表示"每个主体恰好一个值、每个值至多一个主体"。
                  * 这样"解法"是**图里的通用逻辑律**，不是写死在命令里 —— 换一道题不用改代码。 */
-                int rule_unique = rule_unique_has(relname);   /* 从 laws.txt / ::law 读，不查图 */
+                /* §6.766 律先从**图里**读：`吃 --[有]--> 唯一性`（用 ::ingest 教进去），
+                 * 读不到再退回 laws.txt（`::law unique 吃`）。这样律也是数据、能随模型走。 */
+                int rule_unique = 0;
+                {
+                    Token *rt = pool_find(pl, relname);
+                    if (rt) {
+                        for (size_t j = 0; j < rt->count; ++j) {
+                            const AssocEntry *e = &token_assocs_ro(rt)[j];
+                            if (!e->main || !e->main->name) continue;
+                            if (!strcmp(e->main->name, "唯一性") || !strcmp(e->main->name, "唯一")) { rule_unique = 1; break; }
+                        }
+                    }
+                    if (!rule_unique) rule_unique = rule_unique_has(relname);
+                }
                 printf("[求解] 规则：%s\n", rule_unique
-                       ? "图里声明了「唯一」（每个主体恰好一个值、每个值至多一个主体）"
+                       ? "已声明「唯一」（图里的 `有 唯一性` 或 laws.txt；每行恰好一个、每列至多一个）"
                        : "没有声明「唯一」⇒ 只用事实做排除（可能推不出）");
                 /* 值域：显式给的优先；没给就取该关系"不"事实里出现过的值 */
                 Token *vals[32]; size_t nv = 0;
