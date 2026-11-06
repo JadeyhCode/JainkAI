@@ -4862,7 +4862,10 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
     /* §6.245 **选择不是并列**：`我 喜欢 猫 或 狗` 不能学成「猫或狗」一个宾语 ——
      * 并列（都成立）与选择（二选一）是**两种语义**，混着学会答错。选择句一律不学。 */
     if (strstr(bw, "或")) return NULL;
-    if (!agent_obj_ok(bw)) return NULL;       /* §6.229b 宾语同理（`猫 属于 很` 不该学）*/
+    /* §6.764 **关系词可以当宾语**：说法的映射（`擅长 同义 会`、`吃 同义 吃）需要把"关系词"当宾语存，
+     * 可 会/能/是 这些既是虚词又是关系词 ⇒ 被 §6.229b 的宾语守卫一刀拒掉（实测存不进图）。
+     * 放宽条件很窄：**必须是已知关系词**（`很/了/的` 这类纯虚词照样拒，`猫 属于 很` 不受影响）。 */
+    if (!agent_obj_ok(bw) && !rel_id_of(ai, bw, 0)) return NULL;
     /* §6.589 名字/谓语里不许夹标点：`错了 ， 猫 …` 曾被学成「，猫 属于 猫科」。
      * ⚠ **不能用 `strpbrk` 配多字节字符集**：它按**字节**比，中文字符的某个字节（如「猫」的 0x8C）
      * 会撞上「，」的字节 ⇒ 正常句子被无辜拒掉（实测 `猫 属于 动物` 直接掉到造词路）。 */
@@ -4882,7 +4885,8 @@ static inline char *agent_learn_relation(AI *ai, char *const *words, size_t n,
          * 核心关系（有/会/在）本身就是虚词，不能一视同仁。 */
         /* ⚠ 只查**谓语和宾语**：主语常是代词（我/他），代词本来就在虚词表里 ——
          * 第一版连 `aw` 一起查，把 `我 叫 小明`（名字介绍）也挡了，套件当场红。 */
-        if (fr_is_func(rw) || fr_is_func(bw)) return NULL;
+        /* §6.764 宾语是**已知关系词**时可以（映射 `擅长 同义 会`）；`了/个/中` 这类纯虚词照样拒。 */
+        if (fr_is_func(rw) || (fr_is_func(bw) && !rel_id_of(ai, bw, 0))) return NULL;
         if (ai_write_rel(ai, A, B, rid, is_neg, AI_WSRC_RELATION) != 0) return NULL;
         agent_teach_mark(ai, A, rid, B, is_neg);   /* §6.595 留痕：这条是用户教的 */
         {

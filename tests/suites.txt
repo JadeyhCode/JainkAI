@@ -196,3 +196,6 @@ induce|sh tests/induce.sh > induce.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat induc
 
 # §6.762 框式说法：以X为食/为主食/为生/为家（内置 + 归纳）
 circumfix|sh tests/circumfix.sh > circumfix.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat circumfix.log; tail -3 circumfix.log; [ "$rc" -eq 0 ]
+
+# §6.764 说法映射存进图里（擅长 --[同义]--> 会），抽取器从图读，不靠 paraphrase.map
+graphmap|sh tests/graphmap.sh > graphmap.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat graphmap.log; tail -3 graphmap.log; [ "$rc" -eq 0 ]

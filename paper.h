@@ -107,6 +107,26 @@ static inline void paper_map_load(const char *path) {
     fclose(f);
 }
 
+/* §6.764 **从图里读说法映射**：`擅长 --[同义]--> 会` 存进图后，抽取器直接用它，
+ * 不再依赖 `paraphrase.map`（文件只是"批量导入"的方便通道）。返回 1 = 图里查到了。 */
+static inline int paper_graph_canon(AI *ai, const char *w, char *out, size_t cap) {
+    if (!ai || !ai->pool || !w || !w[0] || !out || cap == 0) return 0;
+    Token *t = pool_find(ai->pool, w);
+    if (!t) return 0;
+    for (size_t j = 0; j < t->count; ++j) {
+        const AssocEntry *e = &token_assocs_ro(t)[j];
+        if (!e->main || !e->main->name || !e->dyn) continue;
+        const char *dn = rel_dyn_name(ai, (uint8_t)(REL_DYN_BASE + e->dyn - 1));
+        if (!dn) continue;
+        if (strcmp(dn, "同义") && strcmp(dn, "别名") && strcmp(dn, "等同")) continue;
+        size_t l = strlen(e->main->name);
+        if (l + 1 >= cap) continue;
+        memcpy(out, e->main->name, l + 1);
+        return 1;
+    }
+    return 0;
+}
+
 static inline const char *paper_canon_rel(const char *w) {
     if (!w || !w[0]) return w;
     for (int i = 0; i < g_pmap_n; ++i) if (!strcmp(w, g_pmap_from[i])) return g_pmap_to[i];
@@ -323,8 +343,11 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         char **tw = ai_tokenize(ai, first, &tn);
         if (!tw) return 0;
         size_t ri2 = tn;
+        char gcanon[64];
         for (size_t i = 1; i + 1 < tn; ++i) {
-            const char *cw = paper_canon_rel(tw[i]);        /* §6.757 说法归一 */
+            /* §6.764 先查图（`擅长 --[同义]--> 会`），再退回内置/外部说法表 */
+            const char *cw = paper_graph_canon(ai, tw[i], gcanon, sizeof gcanon)
+                             ? gcanon : paper_canon_rel(tw[i]);
             if (rel_id_of(ai, cw, 0)) { ri2 = i; break; }
         }
         if (ri2 == tn) { ai_free_words(tw, tn); return 0; }
@@ -358,7 +381,9 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         int okr = (ao2 >= 3 && bo2 >= 3);
         if (okr) {
             paper_trim_subj(a2); paper_trim_obj(b2); paper_trim_obj_prefix(b2);
-            const char *rr2 = paper_split_verb(paper_canon_rel(tw[ri2]), b2);
+            const char *rr2 = paper_graph_canon(ai, tw[ri2], gcanon, sizeof gcanon)
+                              ? gcanon : paper_canon_rel(tw[ri2]);
+            rr2 = paper_split_verb(rr2, b2);
             snprintf(out->a, sizeof out->a, "%.39s", a2);
             snprintf(out->r, sizeof out->r, "%.23s", rr2);
             snprintf(out->b, sizeof out->b, "%.39s", b2);
