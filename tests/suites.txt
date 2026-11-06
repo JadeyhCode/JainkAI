@@ -193,3 +193,6 @@ candy|sh tests/candy.sh > candy.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat candy.lo
 
 # §6.760 从例句归纳说法族（看两条 ⇒ 会一族）+ ::law 逻辑律进数据
 induce|sh tests/induce.sh > induce.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat induce.log; tail -3 induce.log; [ "$rc" -eq 0 ]
+
+# §6.762 框式说法：以X为食/为主食/为生/为家（内置 + 归纳）
+circumfix|sh tests/circumfix.sh > circumfix.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat circumfix.log; tail -3 circumfix.log; [ "$rc" -eq 0 ]

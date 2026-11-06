@@ -192,6 +192,100 @@ static inline void paper_normalize_text(const char *in, char *out, size_t cap) {
     out[o] = 0;
 }
 
+/* §6.762 **框式结构（circumfix）**：中文里有一类说法把宾语夹在关系词中间 ——
+ *   `以鱼为食` / `以肉为主食` / `以花蜜为生` / `以山洞为家`
+ * 顺序是 [以][宾语][为X]，抽取器（要求 主语-关系-宾语 顺序）必然抽不到。
+ * 做法：**分词之前**把它改写成正常顺序 —— 去掉"以"、把"为X"换成规范关系词：
+ *   以鱼为食   ⇒ 吃鱼      （吃/需要）
+ *   以山洞为家 ⇒ 在山洞    （在）
+ * 只要保留主体在句首，改写后的句子就落回原来的管道（分词 → 关系词匹配 → 主/宾）。
+ * ⚠ 只处理"以"字框式；"把/被/将"这类处置式不在这里（那是另一套改写，没做）。 */
+#define PAPER_CF_MAX 64
+static char g_cf_pre[PAPER_CF_MAX][16];
+static char g_cf_suf[PAPER_CF_MAX][16];
+static char g_cf_rel[PAPER_CF_MAX][16];
+static int  g_cf_n = 0;
+
+/* 外部框式表：`circumfix.map`，一行 `前缀<TAB>后缀<TAB>规范关系`（例如 `以<TAB>为业<TAB>吃`）。
+ * 和说法表一样是**数据**：`tools/induce_paraphrase.sh` 能从例句里把它归纳出来。 */
+static inline void paper_cf_load(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof line, f) && g_cf_n < PAPER_CF_MAX) {
+        char *t1 = strchr(line, '\t');
+        if (!t1) continue;
+        *t1 = 0;
+        char *t2 = strchr(t1 + 1, '\t');
+        if (!t2) continue;
+        *t2 = 0;
+        char *rel = t2 + 1;
+        size_t rl = strlen(rel);
+        while (rl && (rel[rl - 1] == '\n' || rel[rl - 1] == '\r')) rel[--rl] = 0;
+        if (!line[0] || !t1[1] || !rel[0]) continue;
+        if (strlen(line) >= sizeof g_cf_pre[0] || strlen(t1 + 1) >= sizeof g_cf_suf[0] ||
+            strlen(rel) >= sizeof g_cf_rel[0]) continue;
+        memcpy(g_cf_pre[g_cf_n], line, strlen(line) + 1);
+        memcpy(g_cf_suf[g_cf_n], t1 + 1, strlen(t1 + 1) + 1);
+        memcpy(g_cf_rel[g_cf_n], rel, strlen(rel) + 1);
+        g_cf_n++;
+    }
+    fclose(f);
+}
+
+static inline void paper_rewrite_yiwei(const char *in, char *out, size_t cap) {
+    /* 后缀表：`为X` ⇒ 规范关系词。⚠ **长后缀在前**（为主食 要先于 为食 匹配上）。
+     * 内置只留最常见的几条；其余靠 `circumfix.map`（"为生"就是留给归纳演示的）。 */
+    static const struct { const char *suf; const char *rel; } S[] = {
+        { "为主食", "吃" }, { "为食物", "吃" }, { "为食", "吃" },
+        { "为家", "在" }, { "为居", "在" },
+    };
+    size_t o = 0;
+    for (size_t i = 0; in[i] && o + 8 < cap; ) {
+        /* 找"以"（E4 BB A5）*/
+        /* 外部表：前缀匹配（通常是"以"，也可以归纳出别的前缀） */
+        int ext_hit = 0, ext_len = 0; const char *ext_rel = NULL; size_t ext_suflen = 0, ext_pos = 0;
+        for (int q = 0; q < g_cf_n; ++q) {
+            size_t pl = strlen(g_cf_pre[q]);
+            if (strncmp(in + i, g_cf_pre[q], pl) != 0) continue;
+            const char *hit = strstr(in + i + pl, g_cf_suf[q]);
+            if (!hit) continue;
+            size_t pos = (size_t)(hit - in);
+            if (pos <= i + pl) continue;
+            ext_hit = 1; ext_len = (int)pl; ext_rel = g_cf_rel[q];
+            ext_suflen = strlen(g_cf_suf[q]); ext_pos = pos;
+            break;
+        }
+        if (ext_hit && ext_rel) {
+            size_t rl = strlen(ext_rel);
+            if (o + rl + 1 < cap) { memcpy(out + o, ext_rel, rl); o += rl; }
+            for (size_t q = (size_t)i + (size_t)ext_len; q < ext_pos && o + 1 < cap; ++q) out[o++] = in[q];
+            i = ext_pos + ext_suflen;
+            continue;
+        }
+        if ((unsigned char)in[i] == 0xE4 && (unsigned char)in[i + 1] == 0xBB &&
+            (unsigned char)in[i + 2] == 0xA5) {
+            /* 从 i+3 起找最近的后缀 */
+            size_t best_pos = 0, best_len = 0; const char *best_rel = NULL;
+            for (size_t k = 0; k < sizeof S / sizeof S[0]; ++k) {
+                const char *hit = strstr(in + i + 3, S[k].suf);
+                if (!hit) continue;
+                size_t pos = (size_t)(hit - in);
+                if (!best_pos || pos < best_pos) { best_pos = pos; best_len = strlen(S[k].suf); best_rel = S[k].rel; }
+            }
+            if (best_rel && best_pos > i + 3) {
+                size_t rl = strlen(best_rel);
+                if (o + rl + 1 < cap) { memcpy(out + o, best_rel, rl); o += rl; }   /* 关系词提到前面 */
+                for (size_t q = i + 3; q < best_pos && o + 1 < cap; ++q) out[o++] = in[q]; /* 宾语跟在后面 */
+                i = best_pos + best_len;
+                continue;
+            }
+        }
+        out[o++] = in[i++];
+    }
+    out[o] = 0;
+}
+
 /* 从句子 [s, s+len) 里抽一条断言：**段数 3–6**、中间择一个关系词、两边各拼成主语/宾语（各 ≤2 段）。
  * 判据全在 `paper_segments` 的结果上做（切分与抽取分开，便于单测）。 */
 static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperClaim *out) {
@@ -202,6 +296,9 @@ static inline int paper_sentence_claim(AI *ai, const char *s, size_t len, PaperC
         char raw[512];
         memcpy(raw, s, len); raw[len] = 0;
         paper_normalize_text(raw, norm, sizeof norm);
+        char fix[512];
+        paper_rewrite_yiwei(norm, fix, sizeof fix);   /* §6.762 以X为食 ⇒ 吃X */
+        snprintf(norm, sizeof norm, "%s", fix);
         s = norm; len = strlen(norm);
     }
     char seg[8][64];

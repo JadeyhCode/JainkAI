@@ -1757,7 +1757,8 @@ int main(int argc, char **argv) {
     Agent *a = agent_new(stdin_perceive, stdout_act, NULL);
     if (!a) { fprintf(stderr, "agent_new 失败\n"); return 1; }
     laws_load("laws.txt");   /* §6.760 逻辑律（可选文件） */
-    paper_map_load("paraphrase.map");   /* §6.761 外部说法表（可选文件；归纳出来的映射放这里） */
+    paper_map_load("paraphrase.map");   /* §6.760 外部说法表（可选文件；归纳出来的映射放这里） */
+    paper_cf_load("circumfix.map");     /* §6.762 外部框式表（以…为X 这类，可归纳） */
     /* §6.571 初始脑就是 #0（`::brain new` 之后可以并存多个） */
     g_brains[0] = a; g_nbrains = 1; g_curbrain = 0;
 

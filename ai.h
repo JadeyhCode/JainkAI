@@ -2151,6 +2151,9 @@ static inline void ai_lexicon_load(AI *ai, const char *path) {
         if (!ai->lex_extra[ai->lex_n]) break;
         memcpy(ai->lex_extra[ai->lex_n], q, strlen(q) + 1);
         ai->lex_n++;
+        /* §6.763 **真下沉**：词表里的词也**建图节点**（不只当"匹配提示"）。
+         * 代价要量：每个词多一个节点 ⇒ 统计/存档/回读的节点数会变（audit §6.5xx 提醒过这笔账）。 */
+        if (ai->pool) (void)pool_token_intern(ai->pool, q);
     }
     fclose(f);
 }
