@@ -78,8 +78,38 @@ static inline size_t paper_segments(const char *s, size_t len, char seg[][64], s
  *      生活在/住在/栖息于/分布于/位于 → 在；依赖 → 需要；是 → 属于；
  *   ② 词的尾巴归一：宾语去掉「的一种/一类/之一」，主语去掉「生活/住」（`企鹅生活|在` → `企鹅|在`）。
  * 教一次这种说法，**所有同形句**都能用 —— 这就是"泛化"在白箱里的做法。 */
+/* §6.760 **外部说法表**（`paraphrase.map`，一行 `原说法<TAB>规范关系`）。
+ * 这是"教一族"的数据通道：`tools/induce_paraphrase.sh` 从例句里归纳出这种行，
+ * 追加进文件即可生效（不需要改 C 代码、不需要重编译）。 */
+#define PAPER_MAP_MAX 128
+static char g_pmap_from[PAPER_MAP_MAX][24];
+static char g_pmap_to[PAPER_MAP_MAX][16];
+static int  g_pmap_n = 0;
+
+static inline void paper_map_load(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof line, f) && g_pmap_n < PAPER_MAP_MAX) {
+        char *tab = strchr(line, '\t');
+        if (!tab) continue;
+        *tab = 0;
+        char *to = tab + 1;
+        size_t tl = strlen(to);
+        while (tl && (to[tl - 1] == '\n' || to[tl - 1] == '\r')) to[--tl] = 0;
+        if (!line[0] || !to[0]) continue;
+        /* 截断保护：超长就跳过（GCC 的 -Wformat-truncation 会拦直接 snprintf） */
+        if (strlen(line) >= sizeof g_pmap_from[0] || strlen(to) >= sizeof g_pmap_to[0]) continue;
+        memcpy(g_pmap_from[g_pmap_n], line, strlen(line) + 1);
+        memcpy(g_pmap_to[g_pmap_n], to, strlen(to) + 1);
+        g_pmap_n++;
+    }
+    fclose(f);
+}
+
 static inline const char *paper_canon_rel(const char *w) {
     if (!w || !w[0]) return w;
+    for (int i = 0; i < g_pmap_n; ++i) if (!strcmp(w, g_pmap_from[i])) return g_pmap_to[i];
     if (!strcmp(w, "可以") || !strcmp(w, "能够") || !strcmp(w, "能") || !strcmp(w, "会")) return "会";
     if (!strcmp(w, "害怕") || !strcmp(w, "惧怕") || !strcmp(w, "恐惧")) return "怕";
     if (!strcmp(w, "喜爱") || !strcmp(w, "爱好")) return "喜欢";

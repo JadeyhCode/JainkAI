@@ -190,3 +190,6 @@ zhgen|sh tests/zhgen.sh > zhgen.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat zhgen.lo
 
 # §6.758 糖果推理（排除法/约束求解）：::solve —— 3×3、两条已知、4×4 链式、约束不够不硬猜
 candy|sh tests/candy.sh > candy.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat candy.log; tail -3 candy.log; [ "$rc" -eq 0 ]
+
+# §6.760 从例句归纳说法族（看两条 ⇒ 会一族）+ ::law 逻辑律进数据
+induce|sh tests/induce.sh > induce.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat induce.log; tail -3 induce.log; [ "$rc" -eq 0 ]

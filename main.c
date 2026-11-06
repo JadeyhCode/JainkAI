@@ -574,6 +574,7 @@ typedef enum {
     CMD_LOCATIVE,           /* §6.596 地点学习（A V 在 B ⇒ A 在 B）开关 */
     CMD_CONTRADICT,         /* §6.602 全图扫一遍：独占关系里"互不包含"的矛盾（只报不改） */
     CMD_SOLVE,              /* §6.758 排除法求解（约束推理：糖果题这类） */
+    CMD_LAW,                /* §6.760 通用逻辑律进图（::law unique 吃）—— ⚠ 不能叫 rule：已有 ::rule 是前向链规则 */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -667,6 +668,10 @@ typedef struct {
 static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
       "这份帮助", CMD_HELP },
+    { "law", "[子命令]", 1, "基本",
+      "**逻辑律**（让推理不靠硬编码，区别于 ::rule 的前向链）：`::law unique <关系>` 声明"
+      "「每个主体恰好一个值、每个值至多一个主体」（糖果/标签题的前提）；`::law list` 看已声明的律；"
+      "`::law drop <关系>` 撤销。律存 `laws.txt`（数据，可审计）", CMD_LAW },
     { "solve", "[关系]", 1, "基本",
       "**排除法求解**（约束推理）：`::solve 吃` —— 把该关系上的「不」事实和唯一性当约束，"
       "推出没明说但必然成立的值（糖果题那种：小明/小红/小刚各吃一颗、颜色不重复）\n"
@@ -1691,6 +1696,42 @@ static int lang_rel_word_cb(const char *zh) {
 /* §6.711 打开着的语料分片（CLI 级状态）*/
 static C7B *g_c7b = NULL;
 
+/* §6.760 **逻辑律表**（数据，不是代码）：`rules.txt` 一行 `unique <关系>`。
+ * 为什么需要：`::solve` 的"每行恰好一个、每列至多一个"原来是写死的；
+ * 用户要求"图里放之大部分地方都准的逻辑"，于是把律做成数据 —— 换题/加律都不用改代码。
+ * ⚠ 试过用普通事实表达（`吃 唯一 是` / `规则:唯一 适用 吃`）：**都不进图**（关系名当主/宾会被拒）。 */
+#define N_RULES 64   /* laws.txt 里最多这么多条 */
+static char g_rule_unique[N_RULES][32];
+static int  g_nrule_unique = 0;
+
+static int rule_unique_has(const char *rel) {
+    for (int i = 0; i < g_nrule_unique; ++i) if (!strcmp(g_rule_unique[i], rel)) return 1;
+    return 0;
+}
+static void rule_unique_add(const char *rel) {
+    if (!rel || !*rel || rule_unique_has(rel)) return;
+    if (g_nrule_unique >= N_RULES) return;
+    snprintf(g_rule_unique[g_nrule_unique], sizeof g_rule_unique[0], "%s", rel);
+    g_nrule_unique++;
+}
+/* 从 rules.txt 读（可选文件；不存在就空表） */
+static void laws_load(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        char kind[32] = {0}, rel[32] = {0};
+        if (sscanf(line, "%31s %31s", kind, rel) == 2 && !strcmp(kind, "unique")) rule_unique_add(rel);
+    }
+    fclose(f);
+}
+static void laws_save(const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    for (int i = 0; i < g_nrule_unique; ++i) fprintf(f, "unique %s\n", g_rule_unique[i]);
+    fclose(f);
+}
+
 int main(int argc, char **argv) {
     /* §6.169 一进来报版本（唯一出处：ai.h 的 `AIP_VERSION`；不是存档格式版本）。 */
     printf("[JainkAI v%s · 白箱 AI 内核（C11）]\n", AIP_VERSION);
@@ -1715,6 +1756,8 @@ int main(int argc, char **argv) {
 
     Agent *a = agent_new(stdin_perceive, stdout_act, NULL);
     if (!a) { fprintf(stderr, "agent_new 失败\n"); return 1; }
+    laws_load("laws.txt");   /* §6.760 逻辑律（可选文件） */
+    paper_map_load("paraphrase.map");   /* §6.761 外部说法表（可选文件；归纳出来的映射放这里） */
     /* §6.571 初始脑就是 #0（`::brain new` 之后可以并存多个） */
     g_brains[0] = a; g_nbrains = 1; g_curbrain = 0;
 
@@ -1801,6 +1844,44 @@ int main(int argc, char **argv) {
             }
             switch (cd->id) {
             case CMD_HELP: { cmd_help(); continue; }
+            case CMD_LAW: {
+                /* §6.760 `::law unique <关系>` / `list` / `drop <关系>`
+                 * —— 把"推理前提"做成**数据**（laws.txt），而不是写死在 C 里。 */
+                const char *v = carg ? carg : "";
+                while (*v == ' ') v++;
+                if (!*v || !strncmp(v, "list", 4)) {
+                    printf("[逻辑律] 已声明 %d 条：\n", g_nrule_unique);
+                    for (int i = 0; i < g_nrule_unique; ++i)
+                        printf("  unique %s（每个主体恰好一个值、每个值至多一个主体）\n", g_rule_unique[i]);
+                    if (!g_nrule_unique) printf("  （空；用 ::law unique 吃 声明一条）\n");
+                    continue;
+                }
+                if (!strncmp(v, "unique", 6)) {
+                    const char *r = v + 6;
+                    while (*r == ' ') r++;
+                    if (!*r) { printf("[用法] ::law unique <关系>\n"); continue; }
+                    rule_unique_add(r);
+                    laws_save("laws.txt");
+                    printf("[逻辑律] 记下：unique %s（已写 laws.txt）\n", r);
+                    continue;
+                }
+                if (!strncmp(v, "drop", 4)) {
+                    const char *r = v + 4;
+                    while (*r == ' ') r++;
+                    int found = 0;
+                    for (int i = 0; i < g_nrule_unique; ++i)
+                        if (!strcmp(g_rule_unique[i], r)) {
+                            for (int j = i; j + 1 < g_nrule_unique; ++j)
+                                snprintf(g_rule_unique[j], sizeof g_rule_unique[0], "%s", g_rule_unique[j + 1]);
+                            g_nrule_unique--; found = 1; break;
+                        }
+                    laws_save("laws.txt");
+                    printf(found ? "[逻辑律] 撤销 unique %s\n" : "[逻辑律] 没有 unique %s\n", r);
+                    continue;
+                }
+                printf("[用法] ::law list | unique <关系> | drop <关系>\n");
+                continue;
+            }
             case CMD_SOLVE: {
                 /* §6.758 **糖果推理（排除法/约束求解）**：`::solve <关系> [值1 值2 …]`
                  * 模型：每个主体在该关系上**恰好取一个**值，每个值**至多被一个主体取**
@@ -1822,18 +1903,7 @@ int main(int argc, char **argv) {
                 /* §6.759 **规则从图里读**：关系名这个节点上如果有 `唯一` 这条事实
                  *   （例如：`吃 唯一 是`），就表示"每个主体恰好一个值、每个值至多一个主体"。
                  * 这样"解法"是**图里的通用逻辑律**，不是写死在命令里 —— 换一道题不用改代码。 */
-                int rule_unique = 0;
-                {
-                    Token *rt = pool_find(pl, relname);
-                    if (rt) {
-                        for (size_t j = 0; j < rt->count; ++j) {
-                            const AssocEntry *e = &token_assocs_ro(rt)[j];
-                            if (!e->dyn || !e->main || !e->main->name) continue;
-                            const char *dn = rel_dyn_name(a->brain, (uint8_t)(REL_DYN_BASE + e->dyn - 1));
-                            if (dn && !strcmp(dn, "唯一")) rule_unique = 1;
-                        }
-                    }
-                }
+                int rule_unique = rule_unique_has(relname);   /* 从 laws.txt / ::law 读，不查图 */
                 printf("[求解] 规则：%s\n", rule_unique
                        ? "图里声明了「唯一」（每个主体恰好一个值、每个值至多一个主体）"
                        : "没有声明「唯一」⇒ 只用事实做排除（可能推不出）");

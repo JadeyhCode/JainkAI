@@ -43,3 +43,5 @@ code/code_model_full.bin.work
 model_post*.bin
 code/code_model_taught.bin
 code/code_model_post*.bin
+paraphrase.map
+laws.txt
