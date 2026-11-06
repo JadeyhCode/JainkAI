@@ -72,6 +72,21 @@ printf '方糖 是 糖果\n奶糖 是 糖果\n小明 是 人\n小红 是 人\n::
 out=$("$ROOT/build_aip" --model "$W/m.bin" < "$W/in2.txt" 2>&1)
 if printf '%s' "$out" | grep -qa '约束不够\|没有能被排除法逼出来'; then ok "约束不够 ⇒ 明说推不出来"; else bad "该说推不出来" "$(printf '%s' "$out" | sed -n '/\[求解\]/,$p' | head -3 | tr '\n' ' ')"; fi
 
+
+echo "== ⑤ 标签全错（三个盒子全贴错 + 从「混合」盒摸出一颗薄荷）=="
+cp "$ROOT/model.bin" "$W/m.bin"
+{
+    printf '薄荷 是 糖果\n茴香 是 糖果\n混合 是 糖果\n甲盒 是 盒子\n乙盒 是 盒子\n丙盒 是 盒子\n'
+    printf '甲盒 不 属于 薄荷\n乙盒 不 属于 茴香\n丙盒 不 属于 混合\n丙盒 属于 薄荷\n'
+    printf '::solve 属于 薄荷 茴香 混合 -- 甲盒 乙盒 丙盒\n::quit\n'
+} > "$W/in3.txt"
+out3=$("$ROOT/build_aip" --model "$W/m.bin" < "$W/in3.txt" 2>&1)
+miss3=""
+for line in "甲盒：茴香" "乙盒：混合" "丙盒：薄荷"; do
+    printf '%s' "$out3" | grep -qa -- "$line" || miss3="$miss3 $line"
+done
+if [ -z "$miss3" ]; then ok "标签全错 ⇒ 甲=茴香 乙=混合 丙=薄荷"; else bad "标签全错（缺:$miss3）" "$(printf '%s' "$out3" | sed -n '/答案表/,$p' | head -5 | tr '\n' ' ')"; fi
+
 echo
 printf '糖果推理：通过 %d / 失败 %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] && printf 'PASS candy（排除法：3×3/两条已知/4×4 链式/约束不够不硬猜）\n' || printf 'FAIL candy\n'
