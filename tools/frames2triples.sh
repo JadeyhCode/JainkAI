@@ -24,7 +24,8 @@ path = sys.argv[1]
 cur = None
 out = []
 def enc(s):
-    s = s.replace('<X>', 'X').replace('<', '').replace('>', '')
+    # ⚠ **必须保留 <X>**：它是"槽位标记"，fr_split 靠它识别槽位。
+    # 早先把它替换成 X ⇒ 图装载出来的模板变成字面词「X」，提问一律匹配不上（实测：答「不太懂」）。
     return re.sub(r'\s+', '_', s.strip())
 for raw in open(path, encoding='utf-8', errors='ignore'):
     line = raw.rstrip('\n')

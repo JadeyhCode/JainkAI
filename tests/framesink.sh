@@ -52,7 +52,27 @@ else
     bad "图与文件不一致" "差 $(diff "$W/expect.sorted" "$W/graph.sorted" 2>/dev/null | grep -c '^[<>]' || true) 条"
 fi
 
-echo "== ④ 运行时校验命令 ::framesync 也说一致 =="
+echo "== ④ 行为对照：文件装载 vs 图装载，同一批问题答案必须一模一样 =="
+cat > "$W/qs.txt" <<'QEOF'
+你 害怕 黑 吗
+你 喜欢 猫 吗
+你 记得 我 吗
+你 吃 苹果 吗
+你 叫 什么
+QEOF
+: > "$W/ans_file.txt"; : > "$W/ans_graph.txt"
+while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    printf '%s\n::quit\n' "$q" | "$ROOT/build_aip" --model "$W/m2.bin" 2>/dev/null | sed -n 's/^.*AI > //p' >> "$W/ans_file.txt"
+    printf '%s\n::quit\n' "$q" | AIP_FRAMES_FROM_GRAPH=1 "$ROOT/build_aip" --model "$W/m2.bin" 2>/dev/null | sed -n 's/^.*AI > //p' >> "$W/ans_graph.txt"
+done < "$W/qs.txt"
+if [ -s "$W/ans_file.txt" ] && diff -q "$W/ans_file.txt" "$W/ans_graph.txt" > /dev/null 2>&1; then
+    ok "5 个问题两种装载答案完全一致（$(grep -c . "$W/ans_file.txt") 条）"
+else
+    bad "两种装载答案不一致" "文件: $(head -3 "$W/ans_file.txt" | tr '\n' '|') 图: $(head -3 "$W/ans_graph.txt" | tr '\n' '|')"
+fi
+
+echo "== ⑤ 运行时校验命令 ::framesync 也说一致 =="
 out_sync=$(printf '::framesync\n::quit\n' | "$ROOT/build_aip" --model "$W/m2.bin" 2>&1)
 if printf '%s' "$out_sync" | grep -qa '一致（图是内存的忠实镜像）'; then ok "::framesync 报一致"; else bad "::framesync 没报一致" "$(printf '%s' "$out_sync" | grep -a '帧镜像\|图里' | tr '\n' ' ')"; fi
 
