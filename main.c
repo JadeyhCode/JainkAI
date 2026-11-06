@@ -575,6 +575,7 @@ typedef enum {
     CMD_CONTRADICT,         /* §6.602 全图扫一遍：独占关系里"互不包含"的矛盾（只报不改） */
     CMD_SOLVE,              /* §6.758 排除法求解（约束推理：糖果题这类） */
     CMD_LAW,                /* §6.760 通用逻辑律进图（::law unique 吃）—— ⚠ 不能叫 rule：已有 ::rule 是前向链规则 */
+    CMD_FRAMESYNC,          /* §6.768 帧：内存里的 FrameSet 与图里的帧事实是否等价 */
     CMD_OP,                 /* 符号节点行为（图操作）：接线 / 插词 / 回收临时 */
     CMD_PREMISE,            /* 问：这两个词之间的前提符号节点是什么 */
     CMD_PREMISEOUT,         /* 前提说明是否追加进答复（默认关） */
@@ -668,6 +669,10 @@ typedef struct {
 static const CmdDef CMDS[] = {
     { "help", "?", 0, "基本",
       "这份帮助", CMD_HELP },
+    { "framesync", NULL, 0, "基本",
+      "**帧镜像校验**：把内存里的 FrameSet（运行时用的）和**图里的帧事实**（`帧库 --[帧]--> …`、"
+      "`帧:X --[问法/答法/填充]--> …`）对一遍，报帧数/模板数/填充数是否一致。"
+      "用 `tools/frames2triples.sh` + `::ingest` 把帧灌进图之后跑它，就知道镜像齐不齐", CMD_FRAMESYNC },
     { "law", "[子命令]", 1, "基本",
       "**逻辑律**（让推理不靠硬编码，区别于 ::rule 的前向链）：`::law unique <关系>` 声明"
       "「每个主体恰好一个值、每个值至多一个主体」（糖果/标签题的前提）；`::law list` 看已声明的律；"
@@ -1845,6 +1850,47 @@ int main(int argc, char **argv) {
             }
             switch (cd->id) {
             case CMD_HELP: { cmd_help(); continue; }
+            case CMD_FRAMESYNC: {
+                /* §6.768 帧镜像校验：内存 FrameSet vs 图里的帧事实 */
+                FrameSet *fs = (FrameSet *)a->brain->frames;
+                if (!fs) { printf("[帧] 内存里没有帧（frames.txt 没加载）\n"); continue; }
+                size_t mem_fr = fs->n_fr, mem_ask = 0, mem_ans = 0, mem_fill = 0;
+                for (size_t i = 0; i < fs->n_fr; ++i) {
+                    mem_ask += fs->fr[i].ask.n_tmpl;
+                    mem_ans += fs->fr[i].ans.n_tmpl;
+                    /* 图里每个帧的填充是**一条**逗号连起来的事实 ⇒ 这里按"有填充的帧数"比 */
+                    size_t words = 0;
+                    for (size_t k = 0; k < fs->fr[i].n_slot; ++k) words += fs->fr[i].slot[k].n_fill;
+                    if (words) mem_fill++;
+                }
+                Token *lib = pool_find(a->brain->pool, "帧库");
+                size_t g_fr = 0, g_ask = 0, g_ans = 0, g_fill = 0, g_fill_frames = 0;
+                if (lib) {
+                    for (size_t j = 0; j < lib->count; ++j) {
+                        const AssocEntry *e = &token_assocs_ro(lib)[j];
+                        if (!e->main || !e->main->name) continue;
+                        g_fr++;
+                        Token *fn = e->main;
+                        int has_fill = 0;
+                        for (size_t q = 0; q < fn->count; ++q) {
+                            const AssocEntry *fe = &token_assocs_ro(fn)[q];
+                            if (!fe->dyn || !fe->main) continue;
+                            const char *dn = rel_dyn_name(a->brain, (uint8_t)(REL_DYN_BASE + fe->dyn - 1));
+                            if (!dn) continue;
+                            if (!strcmp(dn, "问法")) g_ask++;
+                            else if (!strcmp(dn, "答法")) g_ans++;
+                            else if (!strcmp(dn, "填充")) { g_fill++; has_fill = 1; }
+                        }
+                        if (has_fill) g_fill_frames++;
+                    }
+                }
+                printf("[帧镜像] 内存：%zu 帧 / 问法 %zu / 答法 %zu / 有填充的帧 %zu\n", mem_fr, mem_ask, mem_ans, mem_fill);
+                printf("         图里：%zu 帧 / 问法 %zu / 答法 %zu / 有填充的帧 %zu\n", g_fr, g_ask, g_ans, g_fill_frames);
+                if (!lib) printf("         ⚠ 图里没有「帧库」节点：先 sh tools/frames2triples.sh + ::ingest\n");
+                printf("         结论：%s\n", (g_fr == mem_fr && g_ask == mem_ask && g_ans == mem_ans && g_fill_frames == mem_fill)
+                       ? "一致（图是内存的忠实镜像）" : "不一致（见上面四项）");
+                continue;
+            }
             case CMD_LAW: {
                 /* §6.760 `::law unique <关系>` / `list` / `drop <关系>`
                  * —— 把"推理前提"做成**数据**（laws.txt），而不是写死在 C 里。 */

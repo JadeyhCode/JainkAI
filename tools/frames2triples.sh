@@ -1,31 +1,65 @@
 #!/bin/sh
-# tools/frames2triples.sh — 把 `frames.txt`（帧/外壳）生成**图谱三元组**（§6.767）
+# tools/frames2triples.sh — 把 `frames.txt` 生成**完整**图谱三元组（§6.768）
 #
-# 为什么：帧现在是 `FrameSet` 结构（运行时快），图里查不到。生成三元组导进图后，
-#   `::rel 帧库` 就能列出所有帧、`::rel 帧:喜欢X吗` 能看到它的模板 —— 帧知识也在图里。
+# 一个帧在文件里长这样：
+#   [帧:害怕X吗]
+#   [问] 你 害怕 <X> 吗
+#   [答] 我 不 怕 <X>
+#   [填:X=<hex>,<hex>]        ← 槽位填充词（hex 编码的 UTF-8）
+#   ---
 #
-# 产出（stdout）：
-#   帧库\t帧\t<帧名>            每个帧一条
-#   帧:<帧名>\t问法\t<模板行>    该帧的问法模板（去掉 <X> 占位符，空格换下划线）
+# 生成（stdout，`::ingest` 能吃）：
+#   帧库\t帧\t帧:<名字>
+#   帧:<名字>\t问法\t<模板，空格→下划线，<X>→X>
+#   帧:<名字>\t答法\t<同上>
+#   帧:<名字>\t填充\t<解码后的词，逗号分隔>
 #
-# 用法：sh tools/frames2triples.sh > /tmp/frames.triples
+# 用法：sh tools/frames2triples.sh [frames.txt] > /tmp/frames.triples
 set -u
 F=${1:-frames.txt}
 [ -s "$F" ] || { echo "FAIL: 没有 $F" >&2; exit 1; }
-awk '
-  /^\[帧:/ {
-    name = $0
-    sub(/^\[帧:/, "", name); sub(/\].*$/, "", name)
-    print "帧库\t帧\t帧:" name
-    cur = name; next
-  }
-  /^\[槽:/ { next }
-  /^\[/ { cur = ""; next }
-  cur != "" && $0 != "" && $0 != "---" {
-    # 模板行：把空格换成下划线、去掉 <X>，避免三元组被空格打断
-    t = $0
-    gsub(/<X>/, "X", t)
-    gsub(/ /, "_", t)
-    print "帧:" cur "\t问法\t" t
-  }
-' "$F" | sort -u
+python3 - "$F" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+cur = None
+out = []
+def enc(s):
+    s = s.replace('<X>', 'X').replace('<', '').replace('>', '')
+    return re.sub(r'\s+', '_', s.strip())
+for raw in open(path, encoding='utf-8', errors='ignore'):
+    line = raw.rstrip('\n')
+    m = re.match(r'^\[帧:(.+)\]$', line)
+    if m:
+        cur = m.group(1)
+        out.append(('帧库', '帧', '帧:' + cur))
+        continue
+    if line.startswith('---') or not line.strip():
+        continue
+    if cur is None:
+        continue
+    if line.startswith('[问]'):
+        out.append(('帧:' + cur, '问法', enc(line[3:])))
+    elif line.startswith('[答]'):
+        out.append(('帧:' + cur, '答法', enc(line[3:])))
+    elif line.startswith('[填:'):
+        body = line[3:].rstrip(']')
+        if '=' in body:
+            body = body.split('=', 1)[1]
+        words = []
+        for h in body.split(','):
+            h = h.strip()
+            if not h: continue
+            try:
+                words.append(bytes.fromhex(h).decode('utf-8'))
+            except Exception:
+                pass
+        if words:
+            out.append(('帧:' + cur, '填充', ','.join(words)))
+# 去重但保序
+seen = set(); 
+for a, b, c in out:
+    k = (a, b, c)
+    if k in seen: continue
+    seen.add(k)
+    print(f'{a}\t{b}\t{c}')
+PYEOF

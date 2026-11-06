@@ -202,3 +202,6 @@ graphmap|sh tests/graphmap.sh > graphmap.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat
 
 # §6.765-767 三种语言件都能存图里：框式模式 / 逻辑律 / 帧知识
 graphsink|sh tests/graphsink.sh > graphsink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat graphsink.log; tail -3 graphsink.log; [ "$rc" -eq 0 ]
+
+# §6.768 帧定义完整进图 + ::framesync 校验（图 = 内存 FrameSet 的忠实镜像）
+framesink|sh tests/framesink.sh > framesink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat framesink.log; tail -3 framesink.log; [ "$rc" -eq 0 ]
