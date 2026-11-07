@@ -19,10 +19,12 @@ echo "== ① 造 / 互连 / 临时挂知识 =="
 out=$(printf '::freesym new 草稿1\n::freesym new 草稿2\n::freesym link 草稿1 草稿2\n::freesym anchor 草稿2 猫\n::freesym show 草稿1\n::freesym show 草稿2\n::freesym list\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)
 printf '%s' "$out" | grep -qa '草稿1 互连 草稿2' && ok "自由符号互连（想象边）" || bad "互连失败" ""
 printf '%s' "$out" | grep -qa '草稿2 临时挂到 猫' && ok "临时挂到知识（猫）" || bad "anchor 失败" ""
-printf '%s' "$out" | grep -qa '共 2 个' && ok "list 列出 2 个" || bad "list 不对" "$(printf '%s' "$out" | grep -a '共' | tail -1)"
+printf '%s' "$out" | grep -qa '池里有 2 个' && ok "list 列出 2 个（自由池）" || bad "list 不对" "$(printf '%s' "$out" | grep -a '池里' | tail -1)"
 
 echo "== ② 不污染知识 =="
-out2=$(printf '::freesym new 草稿9\n::freesym anchor 草稿9 猫\n::rel 猫\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)
+out2=$(printf '::freesym new 草稿9\n::freesym anchor 草稿9 猫\n::rel 猫\n::stats\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)
+# 主图节点数必须没变（自由符号在独立池里）
+if printf '%s' "$out2" | grep -a '符号节点=' | grep -qa '符号节点=1282'; then ok "主图节点数不变（1282）"; else bad "主图被自由符号撑大了" "$(printf '%s' "$out2" | grep -a '符号节点=' | head -1)"; fi
 if printf '%s' "$out2" | grep -a '猫 --\[' | grep -qa '草稿9'; then
     bad "自由符号污染了 ::rel 猫" "$(printf '%s' "$out2" | grep -a '草稿9' | head -2 | tr '\n' ' ')"
 else
@@ -30,9 +32,9 @@ else
 fi
 
 echo "== ③ 可回收 =="
-out3=$(printf '::freesym new 草稿7\n::freesym drop 草稿7\n::freesym list\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)
+out3=$(printf '::freesym new 草稿7\n::freesym new 草稿8\n::freesym drop 草稿7\n::freesym list\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)
 printf '%s' "$out3" | grep -qa '回收 草稿7' && ok "drop 回收" || bad "drop 失败" ""
-printf '%s' "$out3" | grep -qa '共 0 个' && ok "回收后 list 为空" || bad "回收后还在" "$(printf '%s' "$out3" | grep -a '共' | tail -1)"
+printf '%s' "$out3" | grep -qa '池里有 1 个' && ok "回收后自由池只剩 1 个（垃圾不算）" || bad "回收后还在" "$(printf '%s' "$out3" | grep -a '池里' | tail -1)"
 
 echo "== ④ 稀疏激活 =="
 out4=$(printf '::freesym new 草稿5\n::freesym activate 草稿5\n::quit\n' | "$ROOT/build_aip" --model "$W/m.bin" 2>&1)

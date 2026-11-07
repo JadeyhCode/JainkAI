@@ -211,3 +211,6 @@ freesym|sh tests/freesym.sh > freesym.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat fr
 
 # §6.771 出厂模型指纹：model.bin 是标定产物（加 2 条事实就会让行为套件红）
 factorymodel|sh tests/factorymodel.sh > factorymodel.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat factorymodel.log; tail -3 factorymodel.log; [ "$rc" -eq 0 ]
+
+# §6.774 行为基线重标定（出厂基线 + 帧模型核心探针一致）
+rebake|sh tests/rebake.sh > rebake.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat rebake.log; tail -3 rebake.log; [ "$rc" -eq 0 ]

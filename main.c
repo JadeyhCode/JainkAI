@@ -1712,6 +1712,18 @@ static C7B *g_c7b = NULL;
  * 为什么需要：`::solve` 的"每行恰好一个、每列至多一个"原来是写死的；
  * 用户要求"图里放之大部分地方都准的逻辑"，于是把律做成数据 —— 换题/加律都不用改代码。
  * ⚠ 试过用普通事实表达（`吃 唯一 是` / `规则:唯一 适用 吃`）：**都不进图**（关系名当主/宾会被拒）。 */
+/* §6.773 **自由符号池**：自由符号住在**独立的 TokenPool** 里 ——
+ * 主图的节点数/边数一点不变（`tests/factorymodel.sh` 的指纹不会被它扰动）。
+ * 代价（照实说）：
+ *   · 自由符号**不存盘**（`::save` 只存主池）⇒ 会话结束就没了，这正合"草稿"语义；
+ *   · 与知识的连接走**假设层**（`hypo_add`，pop 就撤），不写进主图边。
+ * 好处：这是"自由图符号"最干净的形态 —— 只跟自己人连，跟知识只临时沾一下。 */
+static TokenPool *g_freepool = NULL;
+static TokenPool *freepool_get(void) {
+    if (!g_freepool) g_freepool = pool_new();
+    return g_freepool;
+}
+
 #define N_RULES 64   /* laws.txt 里最多这么多条 */
 static char g_rule_unique[N_RULES][32];
 static int  g_nrule_unique = 0;
@@ -1858,92 +1870,88 @@ int main(int argc, char **argv) {
             switch (cd->id) {
             case CMD_HELP: { cmd_help(); continue; }
             case CMD_FREESYM: {
-                /* §6.770 **自由图符号**：可命名、可整组回收、可稀疏激活的"草稿记忆"。
-                 * 只用现成原语：节点 = pool_token_intern；边 = ai_write_assoc(…, AI_WSRC_IMAGINE)
-                 * 再把 role 标成 ASSOC_ROLE_IMAGINED（想象边：不占关系位、不进关系知识、会衰减）。
-                 * 与"知识"的唯一通道是 anchor（临时挂上去），随时 drop 回收。
-                 * 稀疏激活：只有被点名/activate 的自由符号进焦点环，其余不参与对话激活。 */
+                /* §6.773 自由图符号（**独立池**版）：主图零改动。
+                 *   new/link/show/list/drop/activate 都在自由池里；
+                 *   anchor 走**假设层**（临时，pop 就撤），不写主图边 ⇒ 不污染知识。 */
                 const char *v = carg ? carg : "";
                 while (*v == ' ') v++;
                 char sub[16] = {0};
                 { size_t k = 0; while (*v && *v != ' ' && k + 1 < sizeof sub) sub[k++] = *v++; }
                 while (*v == ' ') v++;
-                TokenPool *fp = a->brain->pool;
+                TokenPool *fp = freepool_get();
                 if (!strcmp(sub, "list")) {
-                    size_t n = 0;
+                    size_t alive = 0;
+                    for (size_t i = 0; i < fp->count; ++i)
+                        if (fp->tokens[i] && !fp->tokens[i]->is_garbage && fp->tokens[i]->name) alive++;
+                    printf("[自由符号] 池里有 %zu 个（主图 %zu 个，未受影响）：\n", alive, a->brain->pool->count);
                     for (size_t i = 0; i < fp->count; ++i) {
                         Token *t = fp->tokens[i];
                         if (!t || t->is_garbage || !t->name) continue;
-                        if (strncmp(t->name, "自由:", (size_t)strlen("自由:")) != 0) continue;
-                        printf("  %s（边 %zu）\n", t->name + strlen("自由:"), t->count);
-                        n++;
+                        printf("  %s（边 %zu）\n", t->name, t->count);
                     }
-                    printf("[自由符号] 共 %zu 个\n", n);
                     continue;
                 }
-                if (!*v) { printf("[用法] ::free new|link|anchor|show|drop|activate <名字> [<名字>]\n"); continue; }
-                /* 取名字（自由符号统一加前缀，避免与知识词撞名） */
-                char nm1[64] = "自由:";
-                { size_t k = strlen(nm1); while (*v && *v != ' ' && k + 1 < sizeof nm1) nm1[k++] = *v++; nm1[k] = 0; }
+                if (!*v) { printf("[用法] ::freesym new|link|anchor|show|drop|activate|list <名字> [<名字>]\n"); continue; }
+                char nm1[64] = {0};
+                { size_t k = 0; while (*v && *v != ' ' && k + 1 < sizeof nm1) nm1[k++] = *v++; nm1[k] = 0; }
                 while (*v == ' ') v++;
-                char nm2[64] = "自由:";
-                { size_t k = strlen(nm2); while (*v && *v != ' ' && k + 1 < sizeof nm2) nm2[k++] = *v++; nm2[k] = 0; }
+                char nm2[64] = {0};
+                { size_t k = 0; while (*v && *v != ' ' && k + 1 < sizeof nm2) nm2[k++] = *v++; nm2[k] = 0; }
                 if (!strcmp(sub, "new")) {
                     Token *t = pool_token_intern(fp, nm1);
-                    if (!t) { printf("[自由符号] 造不出来\n"); continue; }
-                    printf("[自由符号] 造了 %s（只跟自由符号互连，不影响对话知识）\n", nm1 + strlen("自由:"));
+                    printf("[自由符号] 造了 %s（在自由池，主图节点数不变）\n", t ? nm1 : "?");
                     continue;
                 }
-                if (!strcmp(sub, "link") || !strcmp(sub, "anchor")) {
-                    /* anchor 的第二个名字**不加前缀**（它就是知识词） */
-                    char nmx[64];
-                    snprintf(nmx, sizeof nmx, "%s", nm2);
-                    if (!strcmp(sub, "anchor")) {
-                        /* 去掉前缀，改指知识词 */
-                        const char *plain = nm2 + strlen("自由:");
-                        snprintf(nmx, sizeof nmx, "%s", plain);
-                    }
+                if (!strcmp(sub, "link")) {
                     Token *ta = pool_token_intern(fp, nm1);
-                    Token *tb = pool_find(fp, nmx);
-                    if (!tb) { printf("[自由符号] 图里没有「%s」（anchor 只能挂到已有知识上）\n", nmx); continue; }
-                    if (!ta) { printf("[自由符号] 造不出来\n"); continue; }
+                    Token *tb = pool_token_intern(fp, nm2);
+                    if (!ta || !tb) { printf("[自由符号] 造不出来\n"); continue; }
                     (void)ai_write_assoc(a->brain, ta, tb, AI_WSRC_IMAGINE);
                     (void)ai_write_assoc(a->brain, tb, ta, AI_WSRC_IMAGINE);
                     AssocEntry *e1 = token_find_assoc_action(ta, tb, NULL);
                     if (e1) e1->role = ASSOC_ROLE_IMAGINED;
                     AssocEntry *e2 = token_find_assoc_action(tb, ta, NULL);
                     if (e2) e2->role = ASSOC_ROLE_IMAGINED;
-                    printf("[自由符号] %s %s %s（想象边，不污染知识）\n", nm1 + strlen("自由:"),
-                           !strcmp(sub, "anchor") ? "临时挂到" : "互连", nmx + (!strcmp(sub, "anchor") ? 0 : strlen("自由:")));
+                    printf("[自由符号] %s 互连 %s（自由池内的想象边）\n", nm1, nm2);
+                    continue;
+                }
+                if (!strcmp(sub, "anchor")) {
+                    /* 只挂到**已有知识**上，而且是假设层（临时、不存盘、pop 就撤）*/
+                    Token *ta = pool_token_intern(fp, nm1);
+                    Token *tb = pool_find(a->brain->pool, nm2);
+                    if (!ta) { printf("[自由符号] 造不出来\n"); continue; }
+                    if (!tb) { printf("[自由符号] 图里没有「%s」（anchor 只能挂到已有知识上）\n", nm2); continue; }
+                    uint8_t rid = rel_id_of(a->brain, "属于", 0);
+                    if (!hypo_add(&a->brain->hypo, ta, tb, rid, 0)) { printf("[自由符号] 假设层满了，挂不上\n"); continue; }
+                    printf("[自由符号] %s 临时挂到 %s（假设层，pop/轮末就撤；主图不写边）\n", nm1, nm2);
                     continue;
                 }
                 if (!strcmp(sub, "show")) {
                     Token *t = pool_find(fp, nm1);
-                    if (!t) { printf("[自由符号] 没有「%s」\n", nm1 + strlen("自由:")); continue; }
-                    printf("[自由符号] %s 连了 %zu 个：\n", nm1 + strlen("自由:"), t->count);
+                    if (!t) { printf("[自由符号] 没有「%s」（它不在主图，只在自由池）\n", nm1); continue; }
+                    printf("[自由符号] %s 连了 %zu 个：\n", nm1, t->count);
                     for (size_t j = 0; j < t->count && j < 24; ++j) {
                         const AssocEntry *e = &token_assocs_ro(t)[j];
                         if (!e->main || !e->main->name) continue;
-                        const char *tag = (e->role == ASSOC_ROLE_IMAGINED) ? "（想象）" : "";
-                        printf("   → %s%s\n", e->main->name, tag);
+                        printf("   → %s%s\n", e->main->name, (e->role == ASSOC_ROLE_IMAGINED) ? "（想象）" : "");
                     }
                     continue;
                 }
                 if (!strcmp(sub, "drop")) {
                     Token *t = pool_find(fp, nm1);
-                    if (!t) { printf("[自由符号] 没有「%s」\n", nm1 + strlen("自由:")); continue; }
-                    t->is_garbage = 1;      /* 回收：标记垃圾，下次存盘就不带了 */
-                    printf("[自由符号] 回收 %s（标记垃圾；它的边在自然衰减里一起清）\n", nm1 + strlen("自由:"));
+                    if (!t) { printf("[自由符号] 没有「%s」\n", nm1); continue; }
+                    t->is_garbage = 1;
+                    printf("[自由符号] 回收 %s（自由池里标垃圾，不占主图）\n", nm1);
                     continue;
                 }
                 if (!strcmp(sub, "activate")) {
                     Token *t = pool_find(fp, nm1);
-                    if (!t) { printf("[自由符号] 没有「%s」\n", nm1 + strlen("自由:")); continue; }
-                    ai_focus_push(a->brain, t, 1.0f);   /* 稀疏激活：只把点名的放进焦点环 */
-                    printf("[自由符号] 激活 %s（只进焦点环，不动知识边）\n", nm1 + strlen("自由:"));
+                    if (!t) { printf("[自由符号] 没有「%s」\n", nm1); continue; }
+                    ai_focus_push(a->brain, t, 1.0f);
+                    printf("[自由符号] 激活 %s（进焦点环；不动主图）\n", nm1);
                     continue;
                 }
-                printf("[用法] ::free new|link|anchor|show|drop|activate|list\n");
+                printf("[用法] ::freesym new|link|anchor|show|drop|activate|list\n");
                 continue;
             }
             case CMD_FRAMESYNC: {
