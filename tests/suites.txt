@@ -208,3 +208,6 @@ framesink|sh tests/framesink.sh > framesink.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || 
 
 # §6.770 自由图符号（可命名/互连/临时挂知识/不污染/可回收/稀疏激活）
 freesym|sh tests/freesym.sh > freesym.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat freesym.log; tail -3 freesym.log; [ "$rc" -eq 0 ]
+
+# §6.771 出厂模型指纹：model.bin 是标定产物（加 2 条事实就会让行为套件红）
+factorymodel|sh tests/factorymodel.sh > factorymodel.log 2>&1; rc=$?; [ "$rc" -eq 0 ] || cat factorymodel.log; tail -3 factorymodel.log; [ "$rc" -eq 0 ]
