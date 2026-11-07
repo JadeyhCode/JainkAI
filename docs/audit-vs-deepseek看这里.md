@@ -28479,3 +28479,37 @@ FAIL [lead] 全关也不变 ⇒ 这条探针不依赖数据（「我 记 的 是
 ### 五、回归
 
 整包 **87 套 87 过**（新增 `factorymodel`）。
+
+---
+
+## §6.772 `tools/build_frames_model.sh`：帧进**另一份模型**（出厂模型保持冻结）
+
+上一节的结论是"`model.bin` 不能动"，但用户要的"帧进模型"仍然得有一条正经路径。于是做成脚本：
+
+```
+sh tools/build_frames_model.sh                    # 生成 model_frames.bin
+AIP_FRAMES_FROM_GRAPH=1 ./build_aip --model model_frames.bin
+```
+
+流程：`frames2triples.sh` → 248 条 → `::ingest` 进 `model.bin` 的**副本** → 存成 `model_frames.bin`
+→ 自动跑 `::framesync` 校验。
+
+实测：
+
+```
+[帧镜像] 内存：22 帧 / 问法 67 / 答法 132 / 有填充的帧 22
+         图里：22 帧 / 问法 67 / 答法 132 / 有填充的帧 22
+         结论：一致（图是内存的忠实镜像）
+生成：model_frames.bin（帧三元组 248 条）
+⚠ 出厂 model.bin 未改动（它是标定产物，见 tests/factorymodel.sh）
+```
+
+行为对照（出厂文件装载 vs 帧模型图装载）：
+
+| 问题 | 出厂 model.bin | 帧模型（图装载）|
+|---|---|---|
+| 你 害怕 黑 吗 | 我 怕 黑 | 我 怕 黑 |
+| 你 喜欢 猫 吗 | 我 喜欢 猫 | 我 喜欢 猫 |
+| 猫 属于 动物 吗 | 对 ， 猫 -[属于]-> 动物 | 对 ， 猫 -[属于]-> 动物 |
+
+`model_frames.bin` 是构建产物，已 gitignore。
