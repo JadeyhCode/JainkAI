@@ -20,7 +20,7 @@
  * ⚠ 它**不是**存档格式版本：二进制兼容看 `model_io.h` 的 `MODEL_VERSION`（现在是 v13），
  * 两个别混（一个是"哪一版程序"，一个是"哪一版文件格式"）。 */
 #ifndef AIP_VERSION
-#define AIP_VERSION "1.00"
+#define AIP_VERSION "1.00b"
 #endif
 
 #include "token.h"
